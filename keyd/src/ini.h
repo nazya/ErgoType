@@ -8,8 +8,8 @@
 
 #include <stdint.h>
 
-#define MAX_SECTIONS 32
-#define MAX_SECTION_ENTRIES 15 //here dynamic needed
+#define MAX_SECTIONS 16
+#define MAX_SECTION_ENTRIES 8 //here dynamic needed
 
 struct ini_entry {
 	char *key;
@@ -19,7 +19,8 @@ struct ini_entry {
 };
 
 struct ini_section {
-	char name[1024];
+	char name[128];
+	// char name[1024];
 
 	size_t nr_entries;
 	size_t lnum;

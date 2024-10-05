@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+
 #include "FreeRTOS.h"
 #include "ff.h"
 
@@ -124,13 +126,14 @@ static char *read_file()
 
     // Read file line by line
 	char *line = (char *)malloc((MAX_LINE_LEN + 1) * sizeof(char));
-    while (f_gets(line, sizeof line, &fh)) {
+    while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
         // Skip lines that start with '#'
         if (line[0] == '#') {
             continue;  // Ignore this line and go to the next one
         }
 
         int len = strlen(line);
+		// printf("line length %d\n", len);
 
         // Ensure the line ends with a newline character
         if (line[len-1] != '\n') {
@@ -154,7 +157,7 @@ static char *read_file()
                 goto fail;
             }
         } else {
-            buf_sz += len;  // Double the buffer size
+            buf_sz += len; 
             char *new_buf = realloc(buf, buf_sz);
             if (!new_buf) {
                 printf("failed to allocate more memory for buf\n");
@@ -276,20 +279,17 @@ static int set_layer_entry(const struct config *config,
 		//TODO: Handle aliases
 		char *tok;
 		struct descriptor *ld;
-		uint8_t *keys = malloc(ARRAY_SIZE(layer->chords[0].keys) * sizeof(uint8_t));
-
+		uint8_t keys[ARRAY_SIZE(layer->chords[0].keys)];
 		size_t n = 0;
 
 		for (tok = strtok(key, "+"); tok; tok = strtok(NULL, "+")) {
 			uint8_t code = lookup_keycode(tok);
 			if (!code) {
-				// printf("%s is not a valid key", tok);
 				err("%s is not a valid key", tok);
 				return -1;
 			}
 
 			if (n >= ARRAY_SIZE(keys)) {
-				// printf("chords cannot contain more than %ld keys", n);
 				err("chords cannot contain more than %ld keys", n);
 				return -1;
 			}
@@ -303,39 +303,36 @@ static int set_layer_entry(const struct config *config,
 		} else {
 			struct chord *chord;
 			if (layer->nr_chords >= ARRAY_SIZE(layer->chords)) {
-				// printf("max chords exceeded(%ld)", layer->nr_chords);
 				err("max chords exceeded(%ld)", layer->nr_chords);
 				return -1;
 			}
 
 			chord = &layer->chords[layer->nr_chords];
-			memcpy(chord->keys, keys, sizeof(keys));
+			memcpy(chord->keys, keys, sizeof keys);
 			chord->sz = n;
 			chord->d = *d;
 
 			layer->nr_chords++;
 		}
-		free(keys);
 	} else {
-		// for (i = 0; i < 256; i++) {
-		// 	if (!strcmp(config->aliases[i], key)) {
-		// 		layer->keymap[i] = *d;
-		// 		found = 1;
-		// 	}
-		// }
+		for (i = 0; i < 256; i++) {
+			if (!strcmp(config->aliases[i], key)) {
+				layer->keymap[i] = *d;
+				found = 1;
+			}
+		}
 
-		// if (!found) {
-		// 	uint8_t code;
+		if (!found) {
+			uint8_t code;
 
-		// 	if (!(code = lookup_keycode(key))) {
-		// 		printf("%s is not a valid key or alias", key);
-		// 		// err("%s is not a valid key or alias", key);
-		// 		return -1;
-		// 	}
+			if (!(code = lookup_keycode(key))) {
+				err("%s is not a valid key or alias", key);
+				return -1;
+			}
 
-		// 	layer->keymap[code] = *d;
+			layer->keymap[code] = *d;
 
-		// }
+		}
 	}
 
 	return 0;
@@ -583,7 +580,7 @@ int parse_macro_expression(const char *s, struct macro *macro)
 
 	size_t len = strlen(s);
 
-	char buf[32];
+	char buf[MAX_EXP_LEN];
 	char *ptr = buf;
 
 	if (len >= sizeof(buf)) {
@@ -600,32 +597,34 @@ int parse_macro_expression(const char *s, struct macro *macro)
 		str_escape(ptr);
 	} else if (parse_key_sequence(ptr, &code, &mods) && utf8_strlen(ptr) != 1) {
 		// printf("Invalid macro\n");
-		err("Invalid macro");
+		err("Invalid macro %s and %s", s, ptr);
 		return -1;
 	}
 
 	return macro_parse(ptr, macro) == 0 ? 0 : 1;
 }
 
+static int parse_command(const char *s)
 // static int parse_command(const char *s, struct command *command)
-// {
-// 	int len = strlen(s);
+{
+	return -1;
+	// int len = strlen(s);
 
-// 	if (len == 0 || strstr(s, "command(") != s || s[len-1] != ')')
-// 		return -1;
+	// if (len == 0 || strstr(s, "command(") != s || s[len-1] != ')')
+	// 	return -1;
 
-// 	if (len > (int)sizeof(command->cmd)) {
-// 		printf("max command length (%ld) exceeded\n", sizeof(command->cmd));
-// 		// err("max command length (%ld) exceeded\n", sizeof(command->cmd));
-// 		return 1;
-// 	}
+	// if (len > (int)sizeof(command->cmd)) {
+	// 	printf("max command length (%ld) exceeded\n", sizeof(command->cmd));
+	// 	// err("max command length (%ld) exceeded\n", sizeof(command->cmd));
+	// 	return 1;
+	// }
 
-// 	strcpy(command->cmd, s+8);
-// 	command->cmd[len-9] = 0;
-// 	str_escape(command->cmd);
+	// strcpy(command->cmd, s+8);
+	// command->cmd[len-9] = 0;
+	// str_escape(command->cmd);
 
-// 	return 0;
-// }
+	// return 0;
+}
 
 static int parse_descriptor(char *s,
 			    struct descriptor *d,
@@ -637,12 +636,17 @@ static int parse_descriptor(char *s,
 	uint8_t code, mods;
 	int ret;
 	struct macro macro;
-	// struct command cmd;
+	// struct command *cmd = NULL;
 
 	if (!s || !s[0]) {
 		d->op = 0;
+		printf("d->op = 0\n");
+
 		return 0;
 	}
+	printf("parsing dsc\n");
+	printf("s = %s\n", s);
+	
 
 	if (!parse_key_sequence(s, &code, &mods)) {
 		size_t i;
@@ -657,7 +661,7 @@ static int parse_descriptor(char *s,
 		}
 
 		if (layer) {
-			// warn("You should use b{layer(%s)} instead of assigning to b{%s} directly.", layer, KEY_NAME(code));
+			warn("You should use b{layer(%s)} instead of assigning to b{%s} directly.", layer, KEY_NAME(code));
 			d->op = OP_LAYER;
 			d->args[0].idx = config_get_layer_index(config, layer);
 
@@ -671,24 +675,25 @@ static int parse_descriptor(char *s,
 		d->args[1].mods = mods;
 
 		return 0;
-	// } else if ((ret=parse_command(s, &cmd)) >= 0) {
-	// 	if (ret) {
-	// 		return -1;
-	// 	}
+	} else if ((ret=parse_command(s)) >= 0) {
+	// } else if ((ret=parse_command(s, cmd)) >= 0) {
+		// if (ret) {
+		// 	return -1;
+		// }
 
-	// 	if (config->nr_commands >= ARRAY_SIZE(config->commands)) {
-	// 		// err("max commands (%d), exceeded", ARRAY_SIZE(config->commands));
-	// 		printf("max commands (%d), exceeded", ARRAY_SIZE(config->commands));
-	// 		return -1;
-	// 	}
+		// if (config->nr_commands >= ARRAY_SIZE(config->commands)) {
+		// 	// err("max commands (%d), exceeded", ARRAY_SIZE(config->commands));
+		// 	printf("max commands (%d), exceeded", ARRAY_SIZE(config->commands));
+		// 	return -1;
+		// }
 
 
-	// 	d->op = OP_COMMAND;
-	// 	d->args[0].idx = config->nr_commands;
+		// d->op = OP_COMMAND;
+		// d->args[0].idx = config->nr_commands;
 
-	// 	config->commands[config->nr_commands++] = cmd;
+		// config->commands[config->nr_commands++] = cmd;
 
-	// 	return 0;
+		return 0;
 	} else if ((ret=parse_macro_expression(s, &macro)) >= 0) {
 		if (ret)
 			return -1;
@@ -732,8 +737,8 @@ static int parse_descriptor(char *s,
 			if (!strcmp(actions[i].name, fn)) {
 				int j;
 
-				// if (actions[i].preferred_name)
-				// 	warn("%s is deprecated (renamed to %s).", actions[i].name, actions[i].preferred_name);
+				if (actions[i].preferred_name)
+					warn("%s is deprecated (renamed to %s).", actions[i].name, actions[i].preferred_name);
 
 				d->op = actions[i].op;
 
@@ -776,7 +781,7 @@ static int parse_descriptor(char *s,
 							(arg->idx != 0 && //Treat main as a valid layout
 							 config->layers[arg->idx].type != LT_LAYOUT)) {
 							printf("%s is not a valid layout", argstr);
-							// err("%s is not a valid layout", argstr); e
+							// err("%s is not a valid layout", argstr);
 							return -1;
 						}
 
@@ -864,78 +869,78 @@ static void parse_global_section(struct config *config, struct ini_section *sect
 	}
 }
 
-// static void parse_id_section(struct config *config, struct ini_section *section)
-// {
-// 	size_t i;
-// 	for (i = 0; i < section->nr_entries; i++) {
-// 		uint16_t product, vendor;
+static void parse_id_section(struct config *config, struct ini_section *section)
+{
+	size_t i;
+	for (i = 0; i < section->nr_entries; i++) {
+		uint16_t product, vendor;
 
-// 		struct ini_entry *ent = &section->entries[i];
-// 		const char *s = ent->key;
+		struct ini_entry *ent = &section->entries[i];
+		const char *s = ent->key;
 
-// 		if (!strcmp(s, "*")) {
-// 			config->wildcard = 1;
-// 		} else if (strstr(s, "m:") == s) {
-// 			assert(config->nr_ids < ARRAY_SIZE(config->ids));
-// 			config->ids[config->nr_ids].flags = ID_MOUSE;
+		// if (!strcmp(s, "*")) {
+		// 	config->wildcard = 1;
+		// } else if (strstr(s, "m:") == s) {
+		// 	assert(config->nr_ids < ARRAY_SIZE(config->ids));
+		// 	config->ids[config->nr_ids].flags = ID_MOUSE;
 
-// 			snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+2);
-// 		} else if (strstr(s, "k:") == s) {
-// 			assert(config->nr_ids < ARRAY_SIZE(config->ids));
-// 			config->ids[config->nr_ids].flags = ID_KEYBOARD;
+		// 	snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+2);
+		// } else if (strstr(s, "k:") == s) {
+		// 	assert(config->nr_ids < ARRAY_SIZE(config->ids));
+		// 	config->ids[config->nr_ids].flags = ID_KEYBOARD;
 
-// 			snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+2);
-// 		} else if (strstr(s, "-") == s) {
-// 			assert(config->nr_ids < ARRAY_SIZE(config->ids));
-// 			config->ids[config->nr_ids].flags = ID_EXCLUDED;
+		// 	snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+2);
+		// } else if (strstr(s, "-") == s) {
+		// 	assert(config->nr_ids < ARRAY_SIZE(config->ids));
+		// 	config->ids[config->nr_ids].flags = ID_EXCLUDED;
 
-// 			snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+1);
-// 		} else if (strlen(s) < sizeof(config->ids[config->nr_ids].id)-1) {
-// 			assert(config->nr_ids < ARRAY_SIZE(config->ids));
-// 			config->ids[config->nr_ids].flags = ID_KEYBOARD | ID_MOUSE;
+		// 	snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s+1);
+		// } else if (strlen(s) < sizeof(config->ids[config->nr_ids].id)-1) {
+		// 	assert(config->nr_ids < ARRAY_SIZE(config->ids));
+		// 	config->ids[config->nr_ids].flags = ID_KEYBOARD | ID_MOUSE;
 
-// 			snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s);
-// 		} else {
-// 			// warn("%s is not a valid device id", s);
-// 			printf("%s is not a valid device id", s);
-// 		}
-// 	}
-// }
+		// 	snprintf(config->ids[config->nr_ids++].id, sizeof(config->ids[0].id), "%s", s);
+		// } else {
+		// 	// warn("%s is not a valid device id", s);
+		// 	printf("%s is not a valid device id", s);
+		// }
+	}
+}
 
-// static void parse_alias_section(struct config *config, struct ini_section *section)
-// {
-// 	size_t i;
+static void parse_alias_section(struct config *config, struct ini_section *section)
+{
+	size_t i;
 
-// 	for (i = 0; i < section->nr_entries; i++) {
-// 		uint8_t code;
-// 		struct ini_entry *ent = &section->entries[i];
-// 		const char *name = ent->val;
+	for (i = 0; i < section->nr_entries; i++) {
+		uint8_t code;
+		struct ini_entry *ent = &section->entries[i];
+		const char *name = ent->val;
 
-// 		if ((code = lookup_keycode(ent->key))) {
-// 			ssize_t len = strlen(name);
+		if ((code = lookup_keycode(ent->key))) {
+			ssize_t len = strlen(name);
 
-// 			if (len >= (ssize_t)sizeof(config->aliases[0])) {
-// 				printf("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
-// 				// warn("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
-// 			} else {
-// 				uint8_t alias_code;
+			if (len >= (ssize_t)sizeof(config->aliases[0])) {
+				// printf("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
+				warn("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
+			} else {
+				uint8_t alias_code;
 
-// 				if ((alias_code = lookup_keycode(name))) {
-// 					struct descriptor *d = &config->layers[0].keymap[code];
+				if ((alias_code = lookup_keycode(name))) {
+					struct descriptor *d = &config->layers[0].keymap[code];
 
-// 					d->op = OP_KEYSEQUENCE;
-// 					d->args[0].code = alias_code;
-// 					d->args[1].mods = 0;
-// 				}
+					d->op = OP_KEYSEQUENCE;
+					d->args[0].code = alias_code;
+					d->args[1].mods = 0;
+				}
 
-// 				strcpy(config->aliases[code], name);
-// 			}
-// 		} else {
-// 			printf("failed to define alias %s, %s is not a valid keycode", name, ent->key);
-// 			// warn("failed to define alias %s, %s is not a valid keycode", name, ent->key);
-// 		}
-// 	}
-// }
+				strcpy(config->aliases[code], name);
+			}
+		} else {
+			printf("failed to define alias %s, %s is not a valid keycode", name, ent->key);
+			// warn("failed to define alias %s, %s is not a valid keycode", name, ent->key);
+		}
+	}
+}
 
 
 static int config_parse_string(struct config *config, char *content)
@@ -945,27 +950,23 @@ static int config_parse_string(struct config *config, char *content)
 
 	if (!(ini = ini_parse_string(content, NULL)))
 		return -1;
-	printf("config_parse_string 1 before init heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	/* First pass: create all layers based on section headers.  */
 	for (i = 0; i < ini->nr_sections; i++) {
 		struct ini_section *section = &ini->sections[i];
 
 		if (!strcmp(section->name, "ids")) {
-			// parse_id_section(config, section);
-				printf("id section is not supported\n");
-		// } else if (!strcmp(section->name, "aliases")) {
-		// 	parse_alias_section(config, section);
+			parse_id_section(config, section);
+			printf("id section is not supported\n");
+		} else if (!strcmp(section->name, "aliases")) {
+			parse_alias_section(config, section);
 		} else if (!strcmp(section->name, "global")) {
 			parse_global_section(config, section);
 		} else {
 			if (config_add_layer(config, section->name) < 0)
-				// warn("%s", errstr);
-				printf("some error\n");
-
+				warn("some warm");
 		}
 	}
-	printf("config_parse_string 2 before init heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	/* Populate each layer. */
 	for (i = 0; i < ini->nr_sections; i++) {
@@ -985,29 +986,177 @@ static int config_parse_string(struct config *config, char *content)
 			struct ini_entry *ent = &section->entries[j];
 
 			if (!ent->val) {
-				// printf("invalid binding on line %zd", ent->lnum);
 				warn("invalid binding on line %zd", ent->lnum);
 				continue;
 			}
 
 			snprintf(entry, sizeof entry, "%s.%s = %s", layername, ent->key, ent->val);
 
-			if (config_add_entry(config, entry) < 0)
-				// keyd_log("\tr{ERROR:} line m{%zd}: %s\n", ent->lnum, errstr);
-				printf("\tr{ERROR:} line m{%zd}\n", ent->lnum);
+			if (config_add_entry(config, entry) < 0) {
+				keyd_log("\tr{ERROR:} line m{%zd}\n", ent->lnum);
+				printf("%s failed\n", entry);
+			} else {
+				printf("%s entry add\n", entry);
+			}
 		}
 	}
 
 	return 0;
 }
 
+// static int config_parse_file(struct config *config)
+// {
+//     // First pass: create layers based on section headers
+//     FATFS filesystem;
+//     FIL fh;
+//     FRESULT res;
+
+//     res = f_mount(&filesystem, "/", 1);
+//     if (res != FR_OK) {
+//         printf("f_mount fail rc=%d\n", res);
+//         return -1;
+//     }
+
+//     res = f_open(&fh, "keyd.conf", FA_READ);
+//     if (res != FR_OK) {
+//         f_unmount("/");
+//         printf("failed to open keyd.conf\n");
+//         return -1;
+//     }
+
+//     char *line = (char *)malloc((MAX_LINE_LEN + 1) * sizeof(char));
+//     if (!line) {
+//         printf("failed to allocate memory for line buffer\n");
+//         f_close(&fh);
+//         f_unmount("/");
+//         return -1;
+//     }
+
+//     size_t ln = 0;
+
+//     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
+//         ln++;
+
+//         // Trim leading whitespace
+//         char *p = line;
+//         while (isspace(*p)) p++;
+
+//         // Skip empty lines and comments
+//         if (*p == '\0' || *p == '#') continue;
+
+//         // Remove trailing whitespace
+//         size_t len = strlen(p);
+//         while (len > 0 && isspace(p[len - 1])) {
+//             p[--len] = '\0';
+//         }
+
+//         if (p[0] == '[' && p[len - 1] == ']') {
+//             p[len - 1] = '\0';
+//             char *section_name = p + 1;
+
+//             if (!strcmp(section_name, "ids")) {
+//                 parse_id_section(config, NULL); // Adjust parameters as needed
+//                 printf("id section is not supported\n");
+//             } else if (!strcmp(section_name, "aliases")) {
+//                 parse_alias_section(config, NULL); // Adjust parameters as needed
+//             } else if (!strcmp(section_name, "global")) {
+//                 parse_global_section(config, NULL); // Adjust parameters as needed
+//             } else {
+//                 if (config_add_layer(config, section_name) < 0) {
+//                     warn("some warning");
+//                 }
+//             }
+//         }
+//     }
+
+//     f_close(&fh);
+
+//     // Second pass: populate each layer
+//     res = f_open(&fh, "keyd.conf", FA_READ);
+//     if (res != FR_OK) {
+//         f_unmount("/");
+//         printf("failed to open keyd.conf\n");
+//         free(line);
+//         return -1;
+//     }
+
+//     char current_section[MAX_LAYER_NAME_LEN] = {0};
+//     ln = 0;
+
+//     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
+//         ln++;
+
+//         // Trim leading whitespace
+//         char *p = line;
+//         while (isspace(*p)) p++;
+
+//         // Skip empty lines and comments
+//         if (*p == '\0' || *p == '#') continue;
+
+//         // Remove trailing whitespace
+//         size_t len = strlen(p);
+//         while (len > 0 && isspace(p[len - 1])) {
+//             p[--len] = '\0';
+//         }
+
+//         if (p[0] == '[' && p[len - 1] == ']') {
+//             p[len - 1] = '\0';
+//             strcpy(current_section, p + 1);
+//             continue;
+//         }
+
+//         if (!strcmp(current_section, "ids") ||
+//             !strcmp(current_section, "aliases") ||
+//             !strcmp(current_section, "global")) {
+//             // Already processed in the first pass
+//             continue;
+//         }
+
+//         if (current_section[0] == '\0') {
+//             // No current section
+//             continue;
+//         }
+
+//         // Handle layername: potentially split at ':'
+//         char layername[MAX_LAYER_NAME_LEN];
+//         strncpy(layername, current_section, sizeof(layername));
+//         char *colon = strchr(layername, ':');
+//         if (colon) *colon = '\0';
+
+//         char *key = NULL;
+//         char *val = NULL;
+
+//         parse_kvp(p, &key, &val);
+//         if (!val) {
+//             warn("invalid binding on line %zd", ln);
+//             continue;
+//         }
+
+//         char entry[MAX_EXP_LEN];
+//         snprintf(entry, sizeof entry, "%s.%s = %s", layername, key, val);
+
+//         if (config_add_entry(config, entry) < 0) {
+//             keyd_log("\tr{ERROR:} line m{%zd}\n", ln);
+//             printf("%s failed\n", entry);
+//         } else {
+//             printf("%s entry added\n", entry);
+//         }
+//     }
+
+//     f_close(&fh);
+//     f_unmount("/");
+//     free(line);
+
+//     return 0;
+// }
+
 static void config_init(struct config *config)
 {
 	size_t i;
-	printf("cinit bm heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("cinit bm heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	memset(config, 0, sizeof *config);
-	printf("cinit am heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("cinit am heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 	char default_config[] =
 	"[aliases]\n"
@@ -1038,7 +1187,7 @@ static void config_init(struct config *config)
 	"[alt:A]\n"
 	"[altgr:G]\n";
 
-	printf("before config_parse_string in config_init heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("before config_parse_string in config_init heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 
 	config_parse_string(config, default_config);
@@ -1055,20 +1204,25 @@ static void config_init(struct config *config)
 int config_parse(struct config *config)
 {
 	char *content = NULL;
-    // if (!(content = read_file())) {
-    //     printf("no content read\n");
-	// 	return -1;
-    // } else {
-    //     printf("Config\n");
-    //     printf("%s\n", content);
-    //     printf("\nConfig End\n");
-    // }
+    if (!(content = read_file())) {
+        printf("no content read\n");
+		return -1;
+    } else {
+        printf("Config\n");
+        printf("%s\n", content);
+        printf("\nConfig End\n");
+    }
 
-	config_init(config);
+	config_init(config); // invalid macro here
 	// snprintf(config->path, sizeof(config->path), "%s", "\0");
-	printf("befor parse string heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("befor parse string heap size: %u bytes\n", xPortGetFreeHeapSize());
 
-	return config_parse_string(config, content);
+	int res = config_parse_string(config, content);
+	free(content);
+
+	// int res = 0;
+	// int res = config_parse_file(config);
+	return res;
 }
 
 
@@ -1108,6 +1262,10 @@ int config_get_layer_index(const struct config *config, const char *name)
  * Adds a binding of the form [<layer>.]<key> = <descriptor expression>
  * to the given config.
  */
+/*
+ * Adds a binding of the form [<layer>.]<key> = <descriptor expression>
+ * to the given config.
+ */
 int config_add_entry(struct config *config, const char *exp)
 {
 	char *keyname, *descstr, *dot, *paren, *s;
@@ -1119,7 +1277,6 @@ int config_add_entry(struct config *config, const char *exp)
 	static char buf[MAX_EXP_LEN];
 
 	if (strlen(exp) >= MAX_EXP_LEN) {
-		// printf("%s exceeds maximum expression length (%d)", exp, MAX_EXP_LEN);
 		err("%s exceeds maximum expression length (%d)", exp, MAX_EXP_LEN);
 		return -1;
 	}
@@ -1141,14 +1298,15 @@ int config_add_entry(struct config *config, const char *exp)
 
 	if (idx == -1) {
 		err("%s is not a valid layer", layername);
-		// printf("%s is not a valid layer", layername);
 		return -1;
 	}
 
 	layer = &config->layers[idx];
 
-	if (parse_descriptor(descstr, &d, config) < 0)
+	if (parse_descriptor(descstr, &d, config) < 0) {
+		err("failed to parse descriptor");
 		return -1;
+	}
 
 	return set_layer_entry(config, layer, keyname, &d);
 }

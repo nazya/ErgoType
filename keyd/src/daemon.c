@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -15,7 +16,9 @@
 static void send_key(uint8_t code, uint8_t state)
 {
 	keystate[code] = state;
-	printf("keyd out: %u %u\n", code, state);
+	// printf("keyd out: %u %u\n", code, state);
+	dbg("keyd out %s %s\n", KEY_NAME(code), state ? "down" : "up");
+
 	// vkbd_send_key(vkbd, code, state);
 }
 
@@ -65,7 +68,6 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// }
 }
 
-static struct keyboard *active_kbd = NULL;
 static int event_handler(struct event *ev)
 {
 	static int last_time = 0;
@@ -93,6 +95,11 @@ static int event_handler(struct event *ev)
 			// struct keyboard *kbd = ev->dev->data;
 			// active_kbd = ev->dev->data; # now it is the only active kbd
 			struct keyboard *kbd = active_kbd;
+			if (!kbd) {
+				printf("no kbd present\n");
+
+				return 0;
+			}
 			switch (ev->devev->type) {
 			size_t i;
 			case DEV_KEY:
@@ -191,8 +198,6 @@ static int event_handler(struct event *ev)
 }
 
 
-// extern QueueHandle_t eventQueue; //  = xQueueCreate(10, sizeof(struct event));
-
 void generate_random_key_presses() {
     struct event ev;
     int key;
@@ -204,7 +209,7 @@ void generate_random_key_presses() {
 	printf("Entering keyssym loop\n");
     while (1) {
         // Generate a random key code between 'A' (65) and 'Z' (90)
-        key = rand() % (90 - 65 + 1) + 65;
+        key = rand() % (4) + 2;
 
         // Setup the device event
         devev.type = DEV_KEY;
@@ -217,18 +222,19 @@ void generate_random_key_presses() {
         ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
 
         // Send event to the queue
-		printf("keyd in: %u %u\n", key, 1);
+		// printf("keyd in: %u %u\n", key, 1);
+		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
         xQueueSend(eventQueue, &ev, portMAX_DELAY);
 
         // Delay to simulate the time between key presses
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
 
         // Change to key up event
         devev.pressed = 0; // Key up
         ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Update timestamp for key up event
 
         // Send the key up event to the queue
-		printf("keyd in: %u %u\n", key, 0);
+		dbg("sym ev %s %s", KEY_NAME(key), 0 ? "down" : "up");
         xQueueSend(eventQueue, &ev, portMAX_DELAY);
 
 
@@ -248,13 +254,13 @@ int evloop(int (*event_handler) (struct event *ev))
 	printf("Entering evloop\n");
     while (1) {
         if (xQueueReceive(eventQueue, &ev, xTicksToWait) == pdPASS) {
-			printf("Read from queue\n");
+			// printf("Read from queue\n");
 
             // Handle the event
             timeout = event_handler(&ev);
             xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
         } else {
-			printf("Handling timeout\n");
+			// printf("Handling timeout\n");
 
             // Timeout occurred
             ev.type = EV_TIMEOUT;
@@ -269,15 +275,207 @@ int evloop(int (*event_handler) (struct event *ev))
     return 0; // Never reached
 }
 
+
+
+// Helper function to convert enum op to string
+const char* op_to_string(enum op operation) {
+    switch (operation) {
+        case OP_KEYSEQUENCE: return "OP_KEYSEQUENCE";
+        case OP_ONESHOT: return "OP_ONESHOT";
+        case OP_ONESHOTM: return "OP_ONESHOTM";
+        case OP_LAYERM: return "OP_LAYERM";
+        case OP_SWAP: return "OP_SWAP";
+        case OP_SWAPM: return "OP_SWAPM";
+        case OP_LAYER: return "OP_LAYER";
+        case OP_LAYOUT: return "OP_LAYOUT";
+        case OP_CLEAR: return "OP_CLEAR";
+        case OP_CLEARM: return "OP_CLEARM";
+        case OP_OVERLOAD: return "OP_OVERLOAD";
+        case OP_OVERLOAD_TIMEOUT: return "OP_OVERLOAD_TIMEOUT";
+        case OP_OVERLOAD_TIMEOUT_TAP: return "OP_OVERLOAD_TIMEOUT_TAP";
+        case OP_OVERLOAD_IDLE_TIMEOUT: return "OP_OVERLOAD_IDLE_TIMEOUT";
+        case OP_TOGGLE: return "OP_TOGGLE";
+        case OP_TOGGLEM: return "OP_TOGGLEM";
+        case OP_MACRO: return "OP_MACRO";
+        case OP_MACRO2: return "OP_MACRO2";
+        case OP_COMMAND: return "OP_COMMAND";
+        case OP_TIMEOUT: return "OP_TIMEOUT";
+        case OP_SCROLL_TOGGLE: return "OP_SCROLL_TOGGLE";
+        case OP_SCROLL: return "OP_SCROLL";
+        default: return "UNKNOWN_OP";
+    }
+}
+
+// Function to print a descriptor
+void print_descriptor(const struct descriptor* desc) {
+    printf("    Descriptor:\n");
+    printf("      Operation: %s\n", op_to_string(desc->op));
+    for (int i = 0; i < MAX_DESCRIPTOR_ARGS; i++) {
+        printf("      Arg %d: ", i);
+        switch (desc->op) {
+            case OP_KEYSEQUENCE:
+                printf("Code: %u, Mods: %u\n", desc->args[i].code, desc->args[i].mods);
+                break;
+            case OP_LAYER:
+            case OP_LAYERM:
+            case OP_SWAP:
+            case OP_SWAPM:
+            case OP_TOGGLE:
+            case OP_TOGGLEM:
+                printf("Index: %d\n", desc->args[i].idx);
+                break;
+            case OP_OVERLOAD_TIMEOUT:
+            case OP_OVERLOAD_TIMEOUT_TAP:
+            case OP_OVERLOAD_IDLE_TIMEOUT:
+            case OP_TIMEOUT:
+                printf("Timeout: %u ms\n", desc->args[i].timeout);
+                break;
+            case OP_ONESHOT:
+            case OP_ONESHOTM:
+                printf("Size: %u\n", desc->args[i].sz);
+                break;
+            case OP_SCROLL:
+            case OP_SCROLL_TOGGLE:
+                printf("Sensitivity: %d\n", desc->args[i].sensitivity);
+                break;
+            case OP_MACRO:
+            case OP_MACRO2:
+            case OP_COMMAND:
+                printf("Index: %d\n", desc->args[i].idx);
+                break;
+            default:
+                printf("Data: %u\n", desc->args[i].code);
+                break;
+        }
+    }
+}
+
+// Function to print a chord
+void print_chord(const struct chord* ch) {
+    printf("    Chord:\n");
+    printf("      Keys: ");
+    for (size_t i = 0; i < ch->sz; i++) {
+        printf("%u ", ch->keys[i]);
+    }
+    printf("\n");
+    printf("      Number of Keys: %zu\n", ch->sz);
+    printf("      Descriptor:\n");
+    print_descriptor(&ch->d);
+}
+
+// Function to print a layer
+void print_layer(const struct layer* lay) {
+    printf("  Layer:\n");
+    printf("    Name: %s\n", lay->name);
+    printf("    Type: ");
+    switch (lay->type) {
+        case LT_NORMAL: printf("LT_NORMAL\n"); break;
+        case LT_LAYOUT: printf("LT_LAYOUT\n"); break;
+        case LT_COMPOSITE: printf("LT_COMPOSITE\n"); break;
+        default: printf("UNKNOWN_TYPE\n"); break;
+    }
+    printf("    Mods: %u\n", lay->mods);
+
+    // Print keymap (only non-zero descriptors for brevity)
+    printf("    Keymap:\n");
+    for (int i = 0; i < 256; i++) {
+        if (lay->keymap[i].op != 0) {
+            printf("      Keycode %d:\n", i);
+            print_descriptor(&lay->keymap[i]);
+        }
+    }
+
+    // Print chords
+    printf("    Chords (Total: %zu):\n", lay->nr_chords);
+    for (size_t i = 0; i < lay->nr_chords; i++) {
+        print_chord(&lay->chords[i]);
+    }
+
+    // Print constituents for composite layers
+    if (lay->type == LT_COMPOSITE) {
+        printf("    Constituents (Total: %zu): ", lay->nr_constituents);
+        for (size_t i = 0; i < lay->nr_constituents; i++) {
+            printf("%d ", lay->constituents[i]);
+        }
+        printf("\n");
+    }
+}
+
+// Function to print a macro
+void print_macro(const struct macro* m) {
+    printf("  Macro (Total Entries: %zu):\n", m->sz);
+    for (size_t i = 0; i < m->sz; i++) {
+        printf("    Entry %zu:\n", i);
+        printf("      Type: %s\n", op_to_string(m->entries[i].type));
+        printf("      Data: %u\n", m->entries[i].data);
+    }
+}
+
+// Function to print aliases
+void print_aliases(const struct config* cfg) {
+    // printf("  Aliases (Total: %zu):\n", MAX_ALIASES);
+    // for (size_t i = 0; i < MAX_ALIASES; i++) {
+    //     if (cfg->aliases[i][0] != '\0') {
+    //         printf("    Alias %zu: %s\n", i, cfg->aliases[i]);
+    //     }
+    // }
+}
+
+// Function to print descriptors
+void print_descriptors(const struct config* cfg) {
+    printf("  Descriptors (Total: %zu):\n", 10);
+    for (size_t i = 0; i < 6; i++) {
+        if (cfg->descriptors[i].op != 0) {
+            printf("    Descriptor %zu:\n", i);
+            print_descriptor(&cfg->descriptors[i]);
+        }
+    }
+}
+
+// Function to print the entire config
+void print_config(const struct config* cfg) {
+    printf("Config:\n");
+    printf("  Number of Layers: %zu\n", cfg->nr_layers);
+    for (size_t i = 0; i < cfg->nr_layers; i++) {
+        printf("  Layer %zu:\n", i);
+        print_layer(&cfg->layers[i]);
+    }
+
+    printf("  Number of Descriptors: %zu\n", cfg->nr_descriptors);
+    print_descriptors(cfg);
+
+    printf("  Number of Macros: %zu\n", cfg->nr_macros);
+    for (size_t i = 0; i < cfg->nr_macros; i++) {
+        print_macro(&cfg->macros[i]);
+    }
+
+    printf("  Aliases:\n");
+    print_aliases(cfg);
+
+    // Print other fields
+    printf("  Number of IDs: %zu\n", cfg->nr_ids);
+    // printf("  Number of Commands: %zu\n", cfg->nr_commands);
+    printf("  Macro Timeout: %ld ms\n", cfg->macro_timeout);
+    printf("  Macro Sequence Timeout: %ld ms\n", cfg->macro_sequence_timeout);
+    printf("  Macro Repeat Timeout: %ld ms\n", cfg->macro_repeat_timeout);
+    printf("  Oneshot Timeout: %ld ms\n", cfg->oneshot_timeout);
+    printf("  Overload Tap Timeout: %ld ms\n", cfg->overload_tap_timeout);
+    printf("  Chord Interkey Timeout: %ld ms\n", cfg->chord_interkey_timeout);
+    printf("  Chord Hold Timeout: %ld ms\n", cfg->chord_hold_timeout);
+    printf("  Layer Indicator: %u\n", cfg->layer_indicator);
+    printf("  Disable Modifier Guard: %u\n", cfg->disable_modifier_guard);
+    printf("  Default Layout: %s\n", cfg->default_layout);
+}
+
 void keyb_init() {
 	printf("before calloc: %u bytes\n", xPortGetFreeHeapSize());
-	printf("size of str conf: %u bytes\n", sizeof(struct config));
+	printf("size of struct conf: %u bytes\n", sizeof(struct config));
 
 	struct config *config = calloc(1, sizeof(struct config));
-	printf("before parse heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("before parse heap size: %u bytes\n", xPortGetFreeHeapSize());
 
     config_parse(config);
-	printf("after parse heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("after parse heap size: %u bytes\n", xPortGetFreeHeapSize());
 
     struct output output = {
 					.send_key = send_key,
@@ -288,6 +486,12 @@ void keyb_init() {
     active_kbd = new_keyboard(config, &output);
 	// tasks
 	printf("kbd initialized\n");
+	print_config(config);
+	printf("struct config printed\n");
+
+
+
+	
 
 }
 
@@ -298,8 +502,7 @@ void keys_task(void* pvParameters) {
 
 void keyd_task(void* pvParameters) {
     (void) pvParameters;
-	printf("before init heap size: %u bytes\n", xPortGetFreeHeapSize());
-    keyb_init();
-	printf("after keyd init heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("before init heap size: %u bytes\n", xPortGetFreeHeapSize());
+	// printf("after keyd init heap size: %u bytes\n", xPortGetFreeHeapSize());
     evloop(event_handler);
 }

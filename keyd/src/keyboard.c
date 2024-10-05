@@ -13,7 +13,6 @@
 
 #include "keyboard.h"
 #include "porting.h"
-
 static long process_event(struct keyboard *kbd, uint8_t code, int pressed, long time);
 
 /*
@@ -735,13 +734,13 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		}
 
 		break;
-	// case OP_COMMAND:
-	// 	if (pressed) {
-	// 		execute_command(kbd->config.commands[d->args[0].idx].cmd);
-	// 		clear_oneshot(kbd);
-	// 		update_mods(kbd, -1, 0);
-	// 	}
-	// 	break;
+	case OP_COMMAND:
+		if (pressed) {
+			// execute_command(kbd->config.commands[d->args[0].idx].cmd);
+			clear_oneshot(kbd);
+			update_mods(kbd, -1, 0);
+		}
+		break;
 	case OP_SWAP:
 	case OP_SWAPM:
 		idx = d->args[0].idx;
@@ -816,13 +815,9 @@ struct keyboard *new_keyboard(struct config *config, const struct output *output
 	struct keyboard *kbd;
 
 	kbd = calloc(1, sizeof(struct keyboard));
-	printf("after calloc in new keyboard heap size: %u bytes\n", xPortGetFreeHeapSize());
-
 
 	kbd->original_config = config;
 	memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
-	free(config);
-	kbd->original_config = NULL;
 
 	kbd->output = *output;
 	kbd->layer_state[0].active = 1;
@@ -1221,7 +1216,7 @@ long kbd_process_events(struct keyboard *kbd, const struct key_event *events, si
 int kbd_eval(struct keyboard *kbd, const char *exp)
 {
 	if (!strcmp(exp, "reset")) {
-		// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
+		memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
 		return 0;
 	} else {
 		return config_add_entry(&kbd->config, exp);

@@ -13,10 +13,10 @@
 // #define MAX_LAYER_NAME_LEN	64
 #define MAX_DESCRIPTOR_ARGS	3
 
-#define MAX_LAYERS		8
-// #define MAX_LAYERS		32
-#define MAX_EXP_LEN		32
-// #define MAX_EXP_LEN		512
+#define MAX_LAYERS		8 
+// #define MAX_LAYERS		32 //memory panic
+#define MAX_EXP_LEN		64 
+// #define MAX_EXP_LEN		512 //memory panic rightalt = overload(rightalt, enter)
 
 
 #ifndef PATH_MAX
@@ -107,37 +107,21 @@ struct layer {
 	int constituents[8];
 };
 
-// struct command {
-// 	char cmd[10];
-// 	// char cmd[256];
-// };
-
 struct config {
-	// char path[PATH_MAX];
 	struct layer layers[MAX_LAYERS];
 
 	/* Auxiliary descriptors used by layer bindings. */
-	struct descriptor descriptors[6];
-	// struct descriptor descriptors[256];
-	struct macro macros[32];
-	// struct command commands[1];
+	struct descriptor descriptors[256];
+	struct macro macros[128];
 	// struct command commands[64];
-	// char aliases[256][1];
-	// char aliases[256][32];
-
-	// uint8_t wildcard;
-	// struct {
-	// 	char id[64];
-	// 	uint8_t flags;
-	// } ids[64];
-
+	char aliases[128][8];
 
 	size_t nr_ids;
 
 	size_t nr_layers;
 	size_t nr_macros;
 	size_t nr_descriptors;
-	size_t nr_commands;
+	// size_t nr_commands;
 
 	long macro_timeout;
 	long macro_sequence_timeout;
@@ -158,6 +142,6 @@ int config_parse(struct config *config);
 int config_add_entry(struct config *config, const char *exp);
 int config_get_layer_index(const struct config *config, const char *name);
 
-int config_check_match(struct config *config, const char *id, uint8_t flags);
+// int config_check_match(struct config *config, const char *id, uint8_t flags);
 
 #endif

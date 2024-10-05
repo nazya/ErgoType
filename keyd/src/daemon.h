@@ -1,6 +1,7 @@
 #include <pico/stdlib.h> 
 
 extern QueueHandle_t eventQueue;
+extern struct keyboard *active_kbd;
 
 enum event_type {
 	EV_DEV_ADD,
