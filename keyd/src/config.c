@@ -19,9 +19,6 @@
 #include "stringutils.h"
 #include "porting.h"
 
-#define MAX_FILE_SZ 65536
-#define MAX_LINE_LEN 256
-
 
 const static struct {
 	const char *name;
@@ -871,12 +868,12 @@ static void parse_global_section(struct config *config, struct ini_section *sect
 
 static void parse_id_section(struct config *config, struct ini_section *section)
 {
-	size_t i;
-	for (i = 0; i < section->nr_entries; i++) {
-		uint16_t product, vendor;
+	// size_t i;
+	// for (i = 0; i < section->nr_entries; i++) {
+	// 	uint16_t product, vendor;
 
-		struct ini_entry *ent = &section->entries[i];
-		const char *s = ent->key;
+	// 	struct ini_entry *ent = &section->entries[i];
+	// 	const char *s = ent->key;
 
 		// if (!strcmp(s, "*")) {
 		// 	config->wildcard = 1;
@@ -904,324 +901,713 @@ static void parse_id_section(struct config *config, struct ini_section *section)
 		// 	// warn("%s is not a valid device id", s);
 		// 	printf("%s is not a valid device id", s);
 		// }
-	}
+	// }
 }
 
 static void parse_alias_section(struct config *config, struct ini_section *section)
 {
-	size_t i;
+    size_t i;
 
-	for (i = 0; i < section->nr_entries; i++) {
-		uint8_t code;
-		struct ini_entry *ent = &section->entries[i];
-		const char *name = ent->val;
+    for (i = 0; i < section->nr_entries; i++) {
+        uint8_t code;
+        struct ini_entry *ent = &section->entries[i];
+        const char *name = ent->val;
 
-		if ((code = lookup_keycode(ent->key))) {
-			ssize_t len = strlen(name);
+        if ((code = lookup_keycode(ent->key))) {
+            size_t len = strlen(name);
 
-			if (len >= (ssize_t)sizeof(config->aliases[0])) {
-				// printf("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
-				warn("%s exceeds the maximum alias length (%ld)", name, sizeof(config->aliases[0])-1);
-			} else {
-				uint8_t alias_code;
+            // Optionally enforce a maximum alias length
+            if (len >= MAX_ALIAS_LENGTH) {
+                warn("%s exceeds the maximum alias length (%d)", name, MAX_ALIAS_LENGTH - 1);
+                continue;  // Skip setting this alias
+            }
 
-				if ((alias_code = lookup_keycode(name))) {
-					struct descriptor *d = &config->layers[0].keymap[code];
+            uint8_t alias_code;
 
-					d->op = OP_KEYSEQUENCE;
-					d->args[0].code = alias_code;
-					d->args[1].mods = 0;
-				}
+            if ((alias_code = lookup_keycode(name))) {
+                struct descriptor *d = &config->layers[0].keymap[code];
 
-				strcpy(config->aliases[code], name);
-			}
-		} else {
-			printf("failed to define alias %s, %s is not a valid keycode", name, ent->key);
-			// warn("failed to define alias %s, %s is not a valid keycode", name, ent->key);
-		}
-	}
+                d->op = OP_KEYSEQUENCE;
+                d->args[0].code = alias_code;
+                d->args[1].mods = 0;
+            }
+
+            // Free existing alias if it exists to prevent memory leaks
+            if (config->aliases[code]) {
+                free(config->aliases[code]);
+                config->aliases[code] = NULL;
+            }
+
+            // Allocate memory for the new alias
+            config->aliases[code] = strdup(name);
+            if (!config->aliases[code]) {
+                warn("Failed to allocate memory for alias '%s'", name);
+            }
+        } else {
+            printf("Failed to define alias '%s', '%s' is not a valid keycode\n", name, ent->key);
+            // Optionally use warn instead of printf
+            // warn("Failed to define alias '%s', '%s' is not a valid keycode", name, ent->key);
+        }
+    }
 }
 
 
-static int config_parse_string(struct config *config, char *content)
-{
-	size_t i;
-	struct ini *ini;
-
-	if (!(ini = ini_parse_string(content, NULL)))
-		return -1;
-
-	/* First pass: create all layers based on section headers.  */
-	for (i = 0; i < ini->nr_sections; i++) {
-		struct ini_section *section = &ini->sections[i];
-
-		if (!strcmp(section->name, "ids")) {
-			parse_id_section(config, section);
-			printf("id section is not supported\n");
-		} else if (!strcmp(section->name, "aliases")) {
-			parse_alias_section(config, section);
-		} else if (!strcmp(section->name, "global")) {
-			parse_global_section(config, section);
-		} else {
-			if (config_add_layer(config, section->name) < 0)
-				warn("some warm");
-		}
-	}
-
-	/* Populate each layer. */
-	for (i = 0; i < ini->nr_sections; i++) {
-		size_t j;
-		char *layername;
-		struct ini_section *section = &ini->sections[i];
-
-		if (!strcmp(section->name, "ids") ||
-		    !strcmp(section->name, "aliases") ||
-		    !strcmp(section->name, "global"))
-			continue;
-
-		layername = strtok(section->name, ":");
-
-		for (j = 0; j < section->nr_entries;j++) {
-			char entry[MAX_EXP_LEN];
-			struct ini_entry *ent = &section->entries[j];
-
-			if (!ent->val) {
-				warn("invalid binding on line %zd", ent->lnum);
-				continue;
-			}
-
-			snprintf(entry, sizeof entry, "%s.%s = %s", layername, ent->key, ent->val);
-
-			if (config_add_entry(config, entry) < 0) {
-				keyd_log("\tr{ERROR:} line m{%zd}\n", ent->lnum);
-				printf("%s failed\n", entry);
-			} else {
-				printf("%s entry add\n", entry);
-			}
-		}
-	}
-
-	return 0;
-}
-
-// static int config_parse_file(struct config *config)
+// static int config_parse_string(struct config *config, char *content)
 // {
-//     // First pass: create layers based on section headers
-//     FATFS filesystem;
-//     FIL fh;
-//     FRESULT res;
+// 	size_t i;
+// 	struct ini *ini;
 
-//     res = f_mount(&filesystem, "/", 1);
-//     if (res != FR_OK) {
-//         printf("f_mount fail rc=%d\n", res);
-//         return -1;
-//     }
+// 	if (!(ini = ini_parse_string(content, NULL)))
+// 		return -1;
 
-//     res = f_open(&fh, "keyd.conf", FA_READ);
-//     if (res != FR_OK) {
-//         f_unmount("/");
-//         printf("failed to open keyd.conf\n");
-//         return -1;
-//     }
+// 	/* First pass: create all layers based on section headers.  */
+// 	for (i = 0; i < ini->nr_sections; i++) {
+// 		struct ini_section *section = &ini->sections[i];
 
-//     char *line = (char *)malloc((MAX_LINE_LEN + 1) * sizeof(char));
-//     if (!line) {
-//         printf("failed to allocate memory for line buffer\n");
-//         f_close(&fh);
-//         f_unmount("/");
-//         return -1;
-//     }
+// 		if (!strcmp(section->name, "ids")) {
+// 			parse_id_section(config, section);
+// 			printf("id section is not supported\n");
+// 		} else if (!strcmp(section->name, "aliases")) {
+// 			parse_alias_section(config, section);
+// 		} else if (!strcmp(section->name, "global")) {
+// 			parse_global_section(config, section);
+// 		} else {
+// 			if (config_add_layer(config, section->name) < 0)
+// 				warn("some warm");
+// 		}
+// 	}
 
-//     size_t ln = 0;
+// 	/* Populate each layer. */
+// 	for (i = 0; i < ini->nr_sections; i++) {
+// 		size_t j;
+// 		char *layername;
+// 		struct ini_section *section = &ini->sections[i];
 
-//     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
-//         ln++;
+// 		if (!strcmp(section->name, "ids") ||
+// 		    !strcmp(section->name, "aliases") ||
+// 		    !strcmp(section->name, "global"))
+// 			continue;
 
-//         // Trim leading whitespace
-//         char *p = line;
-//         while (isspace(*p)) p++;
+// 		layername = strtok(section->name, ":");
 
-//         // Skip empty lines and comments
-//         if (*p == '\0' || *p == '#') continue;
+// 		for (j = 0; j < section->nr_entries;j++) {
+// 			char entry[MAX_EXP_LEN];
+// 			struct ini_entry *ent = &section->entries[j];
 
-//         // Remove trailing whitespace
-//         size_t len = strlen(p);
-//         while (len > 0 && isspace(p[len - 1])) {
-//             p[--len] = '\0';
-//         }
+// 			if (!ent->val) {
+// 				warn("invalid binding on line %zd", ent->lnum);
+// 				continue;
+// 			}
 
-//         if (p[0] == '[' && p[len - 1] == ']') {
-//             p[len - 1] = '\0';
-//             char *section_name = p + 1;
+// 			snprintf(entry, sizeof entry, "%s.%s = %s", layername, ent->key, ent->val);
 
-//             if (!strcmp(section_name, "ids")) {
-//                 parse_id_section(config, NULL); // Adjust parameters as needed
-//                 printf("id section is not supported\n");
-//             } else if (!strcmp(section_name, "aliases")) {
-//                 parse_alias_section(config, NULL); // Adjust parameters as needed
-//             } else if (!strcmp(section_name, "global")) {
-//                 parse_global_section(config, NULL); // Adjust parameters as needed
-//             } else {
-//                 if (config_add_layer(config, section_name) < 0) {
-//                     warn("some warning");
-//                 }
-//             }
-//         }
-//     }
+// 			if (config_add_entry(config, entry) < 0) {
+// 				keyd_log("\tr{ERROR:} line m{%zd}\n", ent->lnum);
+// 				printf("%s failed\n", entry);
+// 			} else {
+// 				printf("%s entry add\n", entry);
+// 			}
+// 		}
+// 	}
 
-//     f_close(&fh);
-
-//     // Second pass: populate each layer
-//     res = f_open(&fh, "keyd.conf", FA_READ);
-//     if (res != FR_OK) {
-//         f_unmount("/");
-//         printf("failed to open keyd.conf\n");
-//         free(line);
-//         return -1;
-//     }
-
-//     char current_section[MAX_LAYER_NAME_LEN] = {0};
-//     ln = 0;
-
-//     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
-//         ln++;
-
-//         // Trim leading whitespace
-//         char *p = line;
-//         while (isspace(*p)) p++;
-
-//         // Skip empty lines and comments
-//         if (*p == '\0' || *p == '#') continue;
-
-//         // Remove trailing whitespace
-//         size_t len = strlen(p);
-//         while (len > 0 && isspace(p[len - 1])) {
-//             p[--len] = '\0';
-//         }
-
-//         if (p[0] == '[' && p[len - 1] == ']') {
-//             p[len - 1] = '\0';
-//             strcpy(current_section, p + 1);
-//             continue;
-//         }
-
-//         if (!strcmp(current_section, "ids") ||
-//             !strcmp(current_section, "aliases") ||
-//             !strcmp(current_section, "global")) {
-//             // Already processed in the first pass
-//             continue;
-//         }
-
-//         if (current_section[0] == '\0') {
-//             // No current section
-//             continue;
-//         }
-
-//         // Handle layername: potentially split at ':'
-//         char layername[MAX_LAYER_NAME_LEN];
-//         strncpy(layername, current_section, sizeof(layername));
-//         char *colon = strchr(layername, ':');
-//         if (colon) *colon = '\0';
-
-//         char *key = NULL;
-//         char *val = NULL;
-
-//         parse_kvp(p, &key, &val);
-//         if (!val) {
-//             warn("invalid binding on line %zd", ln);
-//             continue;
-//         }
-
-//         char entry[MAX_EXP_LEN];
-//         snprintf(entry, sizeof entry, "%s.%s = %s", layername, key, val);
-
-//         if (config_add_entry(config, entry) < 0) {
-//             keyd_log("\tr{ERROR:} line m{%zd}\n", ln);
-//             printf("%s failed\n", entry);
-//         } else {
-//             printf("%s entry added\n", entry);
-//         }
-//     }
-
-//     f_close(&fh);
-//     f_unmount("/");
-//     free(line);
-
-//     return 0;
+// 	return 0;
 // }
 
-static void config_init(struct config *config)
+void free_section_entries(struct ini_section *section)
 {
-	size_t i;
-	// printf("cinit bm heap size: %u bytes\n", xPortGetFreeHeapSize());
+    for (size_t i = 0; i < section->nr_entries; i++) {
+        free(section->entries[i].key);
+        free(section->entries[i].val);
+    }
+    section->nr_entries = 0;
+}
+int process_section(struct ini_section *section, struct config *config) {
+    if (!strcmp(section->name, "ids")) {
+        parse_id_section(config, section);
+        printf("ids section processed\n");
+    } else if (!strcmp(section->name, "aliases")) {
+        parse_alias_section(config, section);
+        printf("aliases section processed\n");
+    } else if (!strcmp(section->name, "global")) {
+        parse_global_section(config, section);
+        printf("global section processed\n");
+    } else {
+        if (config_add_layer(config, section->name) < 0) {
+            printf("Error adding layer '%s'\n", section->name);
+            return -1;
+        }
+        printf("Layer '%s' added\n", section->name);
+    }
+    return 0;
+}
+int config_parse_file(struct config *config)
+{
+    FATFS filesystem;
+    FRESULT res;
+    FIL fh;
+    char line[MAX_LINE_LEN + 1];
+    size_t ln = 0;
+    struct ini_section section;
+    memset(&section, 0, sizeof(section));
 
-	memset(config, 0, sizeof *config);
-	// printf("cinit am heap size: %u bytes\n", xPortGetFreeHeapSize());
+    // Mount the filesystem
+    res = f_mount(&filesystem, "/", 1);
+    if (res != FR_OK) {
+        printf("f_mount fail rc=%d\n", res);
+        return -1;
+    }
 
-	char default_config[] =
-	"[aliases]\n"
+    // First pass: Create all layers based on section headers
+    res = f_open(&fh, "keyd.conf", FA_READ);
+    if (res != FR_OK) {
+        f_unmount("/");
+        printf("failed to open keyd.conf\n");
+        return -1;
+    }
 
-	"leftshift = shift\n"
-	"rightshift = shift\n"
+    printf("Starting first pass...\n");
 
-	"leftalt = alt\n"
-	"rightalt = altgr\n"
+    while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
+        ln++;
 
-	"leftmeta = meta\n"
-	"rightmeta = meta\n"
+        // Remove leading whitespace
+        char *ptr = line;
+        while (isspace((unsigned char)*ptr))
+            ptr++;
 
-	"leftcontrol = control\n"
-	"rightcontrol = control\n"
+        size_t len = strlen(ptr);
 
-	"[main]\n"
+        // Remove trailing whitespace
+        while (len > 0 && isspace((unsigned char)ptr[len - 1]))
+            len--;
 
-	"shift = layer(shift)\n"
-	"alt = layer(alt)\n"
-	"altgr = layer(altgr)\n"
-	"meta = layer(meta)\n"
-	"control = layer(control)\n"
+        if (len == 0)
+            continue; // Empty line
 
-	"[control:C]\n"
-	"[shift:S]\n"
-	"[meta:M]\n"
-	"[alt:A]\n"
-	"[altgr:G]\n";
+        ptr[len] = '\0'; // Null-terminate the trimmed line
 
-	// printf("before config_parse_string in config_init heap size: %u bytes\n", xPortGetFreeHeapSize());
+        printf("Line %zd: '%s'\n", ln, ptr);
+
+        if (ptr[0] == '#')
+            continue; // Comment line
+
+        if (ptr[0] == '[') {
+            // Check if it's a valid section header
+            if (len > 2 && ptr[len - 1] == ']') {
+                // Process previous section if any
+                if (section.name[0] != '\0') {
+                    printf("Processing section '%s' at line %zd\n", section.name, section.lnum);
+
+                    if (process_section(&section, config) < 0) {
+                        free_section_entries(&section);
+                        f_close(&fh);
+                        f_unmount("/");
+                        return -1;
+                    }
+
+                    // Free duplicated entries
+                    free_section_entries(&section);
+
+                    // Reset section
+                    memset(&section, 0, sizeof(section));
+                }
+
+                // Start new section
+                memset(&section, 0, sizeof(section)); // Ensure section is reset
+                section.lnum = ln;
+                ptr[len - 1] = '\0'; // Remove closing ']'
+                strncpy(section.name, ptr + 1, sizeof(section.name) - 1);
+                section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
+
+                printf("New section: '%s' at line %zd\n", section.name, ln);
+
+                continue;
+            } else {
+                // Invalid section header
+                printf("Error: Invalid section header at line %zd\n", ln);
+                free_section_entries(&section);
+                f_close(&fh);
+                f_unmount("/");
+                return -1;
+            }
+        }
+
+        // Process entry
+        if (!strcmp(section.name, "ids") ||
+            !strcmp(section.name, "aliases") ||
+            !strcmp(section.name, "global")) {
+
+            if (section.nr_entries >= MAX_SECTION_ENTRIES) {
+                printf("Error: Too many entries in section '%s'\n", section.name);
+                free_section_entries(&section);
+                f_close(&fh);
+                f_unmount("/");
+                return -1;
+            }
+
+            // Parse key-value pair
+            char *key = NULL;
+            char *val = NULL;
+            parse_kvp(ptr, &key, &val);
+
+            if (!key) {
+                printf("Error parsing key at line %zd\n", ln);
+                free_section_entries(&section);
+                f_close(&fh);
+                f_unmount("/");
+                return -1;
+            }
+
+            // Duplicate key and val
+            struct ini_entry *ent = &section.entries[section.nr_entries++];
+            ent->lnum = ln;
+            ent->key = strdup(key);
+            ent->val = val ? strdup(val) : NULL;
+
+            if (!ent->key || (val && !ent->val)) {
+                printf("Memory allocation failed at line %zd\n", ln);
+                free_section_entries(&section);
+                f_close(&fh);
+                f_unmount("/");
+                return -1;
+            }
+
+            printf("Parsed entry: key='%s', val='%s' at line %zd\n", ent->key, ent->val ? ent->val : "(null)", ln);
+        } else {
+            // For other sections, we don't need to store entries in the first pass
+            // We can skip processing the entry
+        }
+    }
+
+    // Process the last section if any
+    if (section.name[0] != '\0') {
+        printf("Processing section '%s' at line %zd\n", section.name, section.lnum);
+
+        if (process_section(&section, config) < 0) {
+			free_section_entries(&section);
+			f_close(&fh);
+			f_unmount("/");
+			return -1;
+		}
+        free_section_entries(&section);
+        memset(&section, 0, sizeof(section));
+    }
+    f_close(&fh);
+
+    // Second pass: Populate each layer
+    ln = 0;
+    res = f_open(&fh, "keyd.conf", FA_READ);
+    if (res != FR_OK) {
+        f_unmount("/");
+        printf("failed to open keyd.conf\n");
+        return -1;
+    }
+
+    printf("Starting second pass...\n");
+
+    // memset(&section, 0, sizeof(section)); // Ensure section is reset
+
+	char section_name[MAX_SECTION_NAME_LEN+1];
+	section_name[0] = '\0';
+
+    while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
+        ln++;
+
+        // Remove leading whitespace
+        char *ptr = line;
+        while (isspace((unsigned char)*ptr))
+            ptr++;
+
+        size_t len = strlen(ptr);
+
+        // Remove trailing whitespace
+        while (len > 0 && isspace((unsigned char)ptr[len - 1]))
+            len--;
+
+        if (len == 0)
+            continue; // Empty line
+
+        ptr[len] = '\0'; // Null-terminate the trimmed line
+
+        printf("Line %zd: '%s'\n", ln, ptr);
+
+        if (ptr[0] == '#')
+            continue; // Comment line
+
+        if (ptr[0] == '[') {
+            // // Check if it's a valid section header
+            // if (len > 2 && ptr[len - 1] == ']') {
+                ptr[len - 1] = '\0'; // Remove closing ']'
+                snprintf(section_name, sizeof(section_name), "%s", ptr + 1);
+                printf("New section: '%s' at line %zd\n", section_name, ln);
+                continue;
+            // } else {
+            //     // Invalid section header
+            //     printf("Error: Invalid section header at line %zd\n", ln);
+            //     f_close(&fh);
+            //     f_unmount("/");
+            //     return -1;
+            // }
+        }
+
+        // Process entry
+        if (!strcmp(section_name, "ids") ||
+		    !strcmp(section_name, "aliases") ||
+		    !strcmp(section_name, "global") ||
+			section_name[0] == '\0')
+			continue;
+
+		// Parse key-value pair
+		char *key = NULL;
+		char *val = NULL;
+		parse_kvp(ptr, &key, &val);
+
+		char layername[MAX_SECTION_NAME_LEN + 1];
+		strncpy(layername, section_name, sizeof(layername) - 1);
+		layername[sizeof(layername) - 1] = '\0';
+
+		char *token = strtok(layername, ":");
+		char entry[MAX_EXP_LEN];
+		snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
+
+		if (config_add_entry(config, entry) < 0) {
+			printf("Error adding entry '%s' at line %zd\n", entry, ln);
+		} else {
+			printf("Added entry '%s'\n", entry);
+		}
+    }
+
+    f_close(&fh);
+    f_unmount("/");
+    printf("Configuration parsing completed successfully.\n");
+
+    return 0;
+}
+
+// static void config_init(struct config *config)
+// {
+// 	size_t i;
+// 	// printf("cinit bm heap size: %u bytes\n", xPortGetFreeHeapSize());
+
+// 	memset(config, 0, sizeof *config);
+// 	// printf("cinit am heap size: %u bytes\n", xPortGetFreeHeapSize());
+
+// 	char default_config[] =
+// 	"[aliases]\n"
+
+// 	"leftshift = shift\n"
+// 	"rightshift = shift\n"
+
+// 	"leftalt = alt\n"
+// 	"rightalt = altgr\n"
+
+// 	"leftmeta = meta\n"
+// 	"rightmeta = meta\n"
+
+// 	"leftcontrol = control\n"
+// 	"rightcontrol = control\n"
+
+// 	"[main]\n"
+
+// 	"shift = layer(shift)\n"
+// 	"alt = layer(alt)\n"
+// 	"altgr = layer(altgr)\n"
+// 	"meta = layer(meta)\n"
+// 	"control = layer(control)\n"
+
+// 	"[control:C]\n"
+// 	"[shift:S]\n"
+// 	"[meta:M]\n"
+// 	"[alt:A]\n"
+// 	"[altgr:G]\n";
+
+// 	// printf("before config_parse_string in config_init heap size: %u bytes\n", xPortGetFreeHeapSize());
 
 
-	config_parse_string(config, default_config);
+// 	config_parse_string(config, default_config);
 
-	/* In ms */
+// 	/* In ms */
+// 	config->chord_interkey_timeout = 50;
+// 	config->chord_hold_timeout = 0;
+// 	config->oneshot_timeout = 0;
+
+// 	config->macro_timeout = 600;
+// 	config->macro_repeat_timeout = 50;
+// }
+
+int config_init_(struct config *config) {
 	config->chord_interkey_timeout = 50;
 	config->chord_hold_timeout = 0;
 	config->oneshot_timeout = 0;
 
 	config->macro_timeout = 600;
 	config->macro_repeat_timeout = 50;
+
+	const char *config_lines[] = {
+		"[aliases]",
+		"leftshift = shift",
+		"rightshift = shift",
+		"",
+		"leftalt = alt",
+		"rightalt = altgr",
+		"",
+		"leftmeta = meta",
+		"rightmeta = meta",
+		"",
+		"leftcontrol = control",
+		"rightcontrol = control",
+		"",
+		"[main]",
+		"shift = layer(shift)",
+		"alt = layer(alt)",
+		"altgr = layer(altgr)",
+		"meta = layer(meta)",
+		"control = layer(control)",
+		"",
+		"[control:C]",
+		"[shift:S]",
+		"[meta:M]",
+		"[alt:A]",
+		"[altgr:G]",
+		NULL  // Sentinel to mark the end of the array
+	};
+    // First Pass: Create all layers based on section headers
+    printf("Starting first pass...\n");
+
+    struct ini_section section;
+    memset(&section, 0, sizeof(section));
+
+    size_t ln = 0;
+    for (size_t i = 0; config_lines[i] != NULL; i++) {
+        ln++;
+        char line_buffer[MAX_LINE_LEN + 1];
+        strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
+        line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
+        char *line = line_buffer;
+
+        // Remove leading whitespace
+        while (isspace((unsigned char)*line))
+            line++;
+
+        size_t len = strlen(line);
+
+        // Remove trailing whitespace
+        while (len > 0 && isspace((unsigned char)line[len - 1]))
+            len--;
+
+        if (len == 0)
+            continue; // Empty line
+
+        line[len] = '\0'; // Null-terminate the trimmed line
+
+        printf("Line %zu: '%s'\n", ln, line);
+
+        if (line[0] == '#')
+            continue; // Comment line
+
+        if (line[0] == '[') {
+            // Check if it's a valid section header
+            if (len > 2 && line[len - 1] == ']') {
+                // Process previous section if any
+                if (section.name[0] != '\0') {
+                    printf("Processing section '%s' at line %zu\n", section.name, section.lnum);
+
+                    if (process_section(&section, config) < 0) {
+                        free_section_entries(&section);
+                        return -1;
+                    }
+
+                    // Free duplicated entries
+                    free_section_entries(&section);
+
+                    // Reset section
+                    memset(&section, 0, sizeof(section));
+                }
+
+                // Start new section
+                memset(&section, 0, sizeof(section)); // Ensure section is reset
+                section.lnum = ln;
+                line[len - 1] = '\0'; // Remove closing ']'
+                strncpy(section.name, line + 1, sizeof(section.name) - 1);
+                section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
+
+                printf("New section: '%s' at line %zu\n", section.name, ln);
+
+                continue;
+            } else {
+                // Invalid section header
+                printf("Error: Invalid section header at line %zu\n", ln);
+                free_section_entries(&section);
+                return -1;
+            }
+        }
+
+        // Process entry
+        if (!strcmp(section.name, "ids") ||
+            !strcmp(section.name, "aliases") ||
+            !strcmp(section.name, "global")) {
+
+            if (section.nr_entries >= MAX_SECTION_ENTRIES) {
+                printf("Error: Too many entries in section '%s'\n", section.name);
+                free_section_entries(&section);
+                return -1;
+            }
+
+            // Parse key-value pair
+            char *key = NULL;
+            char *val = NULL;
+            parse_kvp(line, &key, &val);
+
+            if (!key) {
+                printf("Error parsing key at line %zu\n", ln);
+                free_section_entries(&section);
+                return -1;
+            }
+
+            // Duplicate key and val
+            struct ini_entry *ent = &section.entries[section.nr_entries++];
+            ent->lnum = ln;
+            ent->key = strdup(key);
+            ent->val = val ? strdup(val) : NULL;
+
+            if (!ent->key || (val && !ent->val)) {
+                printf("Memory allocation failed at line %zu\n", ln);
+                free_section_entries(&section);
+                return -1;
+            }
+
+            printf("Parsed entry: key='%s', val='%s' at line %zu\n", ent->key, ent->val ? ent->val : "(null)", ln);
+        } else {
+            // For other sections, we don't need to store entries in the first pass
+            // We can skip processing the entry
+        }
+    }
+
+    // Process the last section if any
+    if (section.name[0] != '\0') {
+        printf("Processing section '%s' at line %zu\n", section.name, section.lnum);
+
+        if (process_section(&section, config) < 0) {
+            free_section_entries(&section);
+            return -1;
+        }
+        free_section_entries(&section);
+        memset(&section, 0, sizeof(section));
+    }
+
+    // Second Pass: Populate each layer
+    printf("Starting second pass...\n");
+
+    ln = 0;
+    char section_name[MAX_SECTION_NAME_LEN + 1];
+    section_name[0] = '\0';
+
+    for (size_t i = 0; config_lines[i] != NULL; i++) {
+        ln++;
+        char line_buffer[MAX_LINE_LEN + 1];
+        strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
+        line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
+        char *line = line_buffer;
+
+        // Remove leading whitespace
+        while (isspace((unsigned char)*line))
+            line++;
+
+        size_t len = strlen(line);
+
+        // Remove trailing whitespace
+        while (len > 0 && isspace((unsigned char)line[len - 1]))
+            len--;
+
+        if (len == 0)
+            continue; // Empty line
+
+        line[len] = '\0'; // Null-terminate the trimmed line
+
+        printf("Line %zu: '%s'\n", ln, line);
+
+        if (line[0] == '#')
+            continue; // Comment line
+
+        if (line[0] == '[') {
+            // Check if it's a valid section header
+            if (len > 2 && line[len - 1] == ']') {
+                line[len - 1] = '\0'; // Remove closing ']'
+                snprintf(section_name, sizeof(section_name), "%s", line + 1);
+                printf("New section: '%s' at line %zu\n", section_name, ln);
+                continue;
+            } else {
+                // Invalid section header
+                printf("Error: Invalid section header at line %zu\n", ln);
+                return -1;
+            }
+        }
+
+        // Process entry
+        if (!strcmp(section_name, "ids") ||
+            !strcmp(section_name, "aliases") ||
+            !strcmp(section_name, "global") ||
+            section_name[0] == '\0')
+            continue;
+
+        // Parse key-value pair
+        char *key = NULL;
+        char *val = NULL;
+        parse_kvp(line, &key, &val);
+
+        if (!key) {
+            printf("Error parsing key at line %zu\n", ln);
+            return -1;
+        }
+
+        char layername[MAX_SECTION_NAME_LEN + 1];
+        strncpy(layername, section_name, sizeof(layername) - 1);
+        layername[sizeof(layername) - 1] = '\0';
+
+        char *token = strtok(layername, ":");
+        if (!token) {
+            printf("Error parsing layer name at line %zu\n", ln);
+            return -1;
+        }
+
+        char entry[MAX_EXP_LEN];
+        if (val)
+            snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
+        else
+            snprintf(entry, sizeof(entry), "%s.%s", token, key);
+
+        if (config_add_entry(config, entry) < 0) {
+            printf("Error adding entry '%s' at line %zu\n", entry, ln);
+        } else {
+            printf("Added entry '%s'\n", entry);
+        }
+    }
+
+    printf("Configuration parsing completed successfully.\n");
+
+    return 0;
 }
 
 int config_parse(struct config *config)
 {
-	char *content = NULL;
-    if (!(content = read_file())) {
-        printf("no content read\n");
-		return -1;
-    } else {
-        printf("Config\n");
-        printf("%s\n", content);
-        printf("\nConfig End\n");
-    }
+	// char *content = NULL;
+    // if (!(content = read_file())) {
+    //     printf("no content read\n");
+	// 	return -1;
+    // } else {
+    //     printf("Config\n");
+    //     printf("%s\n", content);
+    //     printf("\nConfig End\n");
+    // }
 
-	config_init(config); // invalid macro here
+	config_init_(config); // invalid macro here
 	// snprintf(config->path, sizeof(config->path), "%s", "\0");
 	// printf("befor parse string heap size: %u bytes\n", xPortGetFreeHeapSize());
 
-	int res = config_parse_string(config, content);
-	free(content);
+	// int res = config_parse_string(config, content);
+	// free(content);
 
-	// int res = 0;
-	// int res = config_parse_file(config);
+	int res = config_parse_file(config);
 	return res;
 }
 

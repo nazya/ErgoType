@@ -8,8 +8,9 @@
 
 #include <stdint.h>
 
-#define MAX_SECTIONS 16
-#define MAX_SECTION_ENTRIES 8 //here dynamic needed
+// #define MAX_SECTIONS 7 // only for the init config now
+#define MAX_SECTION_ENTRIES 1024
+#define MAX_SECTION_NAME_LEN 256
 
 struct ini_entry {
 	char *key;
@@ -19,7 +20,7 @@ struct ini_entry {
 };
 
 struct ini_section {
-	char name[128];
+	char name[MAX_SECTION_NAME_LEN];
 	// char name[1024];
 
 	size_t nr_entries;
@@ -28,11 +29,11 @@ struct ini_section {
 	struct ini_entry entries[MAX_SECTION_ENTRIES];
 };
 
-struct ini {
-	size_t nr_sections;
+// struct ini {
+// 	size_t nr_sections;
 
-	struct ini_section sections[MAX_SECTIONS];
-};
+// 	struct ini_section sections[MAX_SECTIONS];
+// };
 
 /*
  * Reads a string of the form:
@@ -62,7 +63,7 @@ struct ini {
  *  freed.
  */
 
-struct ini *ini_parse_string(char *s, const char *default_section_name);
+// struct ini *ini_parse_string(char *s, const char *default_section_name);
 
 void parse_kvp(char *s, char **key, char **value);
 

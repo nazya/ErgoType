@@ -9,19 +9,20 @@
 #include <limits.h>
 #include "macro.h"
 
-#define MAX_LAYER_NAME_LEN	32
-// #define MAX_LAYER_NAME_LEN	64
+#define MAX_FILE_SZ 65536
+#define MAX_LINE_LEN 512
+
 #define MAX_DESCRIPTOR_ARGS	3
 
+#define MAX_ALIAS_LENGTH 32
+#define MAX_LAYER_NAME_LEN	64
+#define MAX_EXP_LEN		512
 #define MAX_LAYERS		8 
 // #define MAX_LAYERS		32 //memory panic
-#define MAX_EXP_LEN		64 
-// #define MAX_EXP_LEN		512 //memory panic rightalt = overload(rightalt, enter)
 
-
-#ifndef PATH_MAX
-#define PATH_MAX 1024
-#endif
+// #ifndef PATH_MAX
+// #define PATH_MAX 1024
+// #endif
 
 #define ID_EXCLUDED	1
 #define ID_MOUSE	2
@@ -114,7 +115,9 @@ struct config {
 	struct descriptor descriptors[256];
 	struct macro macros[128];
 	// struct command commands[64];
-	char aliases[128][8];
+	
+	char *aliases[256];  // All entries are NULL by default fod saving 54064 bytes
+	// char aliases[128][8];
 
 	size_t nr_ids;
 

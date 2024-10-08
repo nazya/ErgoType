@@ -109,7 +109,7 @@ int main() {
         eventQueue = xQueueCreate(10, sizeof(struct event));
         // xTaskCreate(hid_app_task, "hid_app", 256, NULL, tskIDLE_PRIORITY + 2, NULL);
         BaseType_t taskCreated;
-        xTaskCreate(keys_task, "hid_app", 256, NULL, configMAX_PRIORITIES  - 4, NULL);
+        xTaskCreate(keys_task, "hid_appp", 256, NULL, configMAX_PRIORITIES  - 4, NULL);
         
         printf("before task free heap size: %u bytes\n", xPortGetFreeHeapSize());
         taskCreated = xTaskCreate(keyd_task, "hid_app", 8*1024, NULL, configMAX_PRIORITIES - 3, NULL);
