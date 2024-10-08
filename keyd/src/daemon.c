@@ -277,17 +277,18 @@ int evloop(int (*event_handler) (struct event *ev))
 void keyb_init() {
 	printf("size of struct conf: %u bytes\n", sizeof(struct config));
 
-	struct config *config = calloc(1, sizeof(struct config));
-    config_parse(config);
-
-    struct output output = {
+	struct output output = {
 					.send_key = send_key,
 					.on_layer_change = on_layer_change,
 				};
 
-    active_kbd = new_keyboard(config, &output);
+    active_kbd = new_keyboard(&output);
 	printf("kbd initialized. heap size: %u bytes\n", xPortGetFreeHeapSize());
 
+	// active_kbd->config = calloc(1, sizeof(struct config));
+    config_parse(&active_kbd->config);
+
+    
 }
 
 void keys_task(void* pvParameters) {

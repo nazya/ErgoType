@@ -809,15 +809,15 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 	return timeout;
 }
 
-struct keyboard *new_keyboard(struct config *config, const struct output *output)
+struct keyboard *new_keyboard(const struct output *output)
 {
 	size_t i;
 	struct keyboard *kbd;
 
 	kbd = calloc(1, sizeof(struct keyboard));
 
-	kbd->original_config = config;
-	memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
+	kbd->original_config = &kbd->config;
+	// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
 
 	kbd->output = *output;
 	kbd->layer_state[0].active = 1;

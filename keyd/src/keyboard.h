@@ -131,7 +131,7 @@ struct keyboard {
 	} scroll;
 };
 
-struct keyboard *new_keyboard(struct config *config, const struct output *output);
+struct keyboard *new_keyboard(const struct output *output);
 
 long kbd_process_events(struct keyboard *kbd, const struct key_event *events, size_t n);
 int kbd_eval(struct keyboard *kbd, const char *exp);

@@ -17,8 +17,7 @@
 #define MAX_ALIAS_LENGTH 32
 #define MAX_LAYER_NAME_LEN	64
 #define MAX_EXP_LEN		512
-#define MAX_LAYERS		8 
-// #define MAX_LAYERS		32 //memory panic
+#define MAX_LAYERS		32
 
 // #ifndef PATH_MAX
 // #define PATH_MAX 1024

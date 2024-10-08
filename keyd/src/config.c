@@ -97,124 +97,124 @@ const static struct {
 // }
 
 
-static char *read_file()
-{
-    char *buf = NULL;
-    // char line[MAX_LINE_LEN+1];
-    int buf_sz = MAX_LINE_LEN;     // Current size of the buffer
-    int total_sz = 0;   // Total size of the data read
+// static char *read_file()
+// {
+//     char *buf = NULL;
+//     // char line[MAX_LINE_LEN+1];
+//     int buf_sz = MAX_LINE_LEN;     // Current size of the buffer
+//     int total_sz = 0;   // Total size of the data read
 	
-	FATFS filesystem;
-    // Mount the filesystem
-    FRESULT res = f_mount(&filesystem, "/", 1);
-    if (res != FR_OK) {
-        printf("f_mount fail rc=%d\n", res);
-        return NULL;
-    }
+// 	FATFS filesystem;
+//     // Mount the filesystem
+//     FRESULT res = f_mount(&filesystem, "/", 1);
+//     if (res != FR_OK) {
+//         printf("f_mount fail rc=%d\n", res);
+//         return NULL;
+//     }
 
-    FIL fh;
-    // Open the file for reading
-    res = f_open(&fh, "keyd.conf", FA_READ);
-    if (res != FR_OK) {
-        f_unmount("/");
-        printf("failed to open keyd.conf\n");
-        return NULL;
-    }
+//     FIL fh;
+//     // Open the file for reading
+//     res = f_open(&fh, "keyd.conf", FA_READ);
+//     if (res != FR_OK) {
+//         f_unmount("/");
+//         printf("failed to open keyd.conf\n");
+//         return NULL;
+//     }
 
-    // Read file line by line
-	char *line = (char *)malloc((MAX_LINE_LEN + 1) * sizeof(char));
-    while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
-        // Skip lines that start with '#'
-        if (line[0] == '#') {
-            continue;  // Ignore this line and go to the next one
-        }
+//     // Read file line by line
+// 	char *line = (char *)malloc((MAX_LINE_LEN + 1) * sizeof(char));
+//     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
+//         // Skip lines that start with '#'
+//         if (line[0] == '#') {
+//             continue;  // Ignore this line and go to the next one
+//         }
 
-        int len = strlen(line);
-		// printf("line length %d\n", len);
+//         int len = strlen(line);
+// 		// printf("line length %d\n", len);
 
-        // Ensure the line ends with a newline character
-        if (line[len-1] != '\n') {
-            if (len >= MAX_LINE_LEN) {
-                printf("maximum line length exceeded (%d)\n", MAX_LINE_LEN);
-                goto fail;
-            } else {
-                line[len++] = '\n';
-            }
-        }
+//         // Ensure the line ends with a newline character
+//         if (line[len-1] != '\n') {
+//             if (len >= MAX_LINE_LEN) {
+//                 printf("maximum line length exceeded (%d)\n", MAX_LINE_LEN);
+//                 goto fail;
+//             } else {
+//                 line[len++] = '\n';
+//             }
+//         }
 
-        if ((len+total_sz) > MAX_FILE_SZ) {
-			printf("maximum file size exceed (%d)", MAX_FILE_SZ);
-			goto fail;
-		}
+//         if ((len+total_sz) > MAX_FILE_SZ) {
+// 			printf("maximum file size exceed (%d)", MAX_FILE_SZ);
+// 			goto fail;
+// 		}
         
-        if (!total_sz) {
-            buf = (char *)malloc(len);
-            if (!buf) {
-                printf("failed to allocate more memory for buf\n");
-                goto fail;
-            }
-        } else {
-            buf_sz += len; 
-            char *new_buf = realloc(buf, buf_sz);
-            if (!new_buf) {
-                printf("failed to allocate more memory for buf\n");
-                goto fail;
-            }
-            buf = new_buf;
-        }
+//         if (!total_sz) {
+//             buf = (char *)malloc(len);
+//             if (!buf) {
+//                 printf("failed to allocate more memory for buf\n");
+//                 goto fail;
+//             }
+//         } else {
+//             buf_sz += len; 
+//             char *new_buf = realloc(buf, buf_sz);
+//             if (!new_buf) {
+//                 printf("failed to allocate more memory for buf\n");
+//                 goto fail;
+//             }
+//             buf = new_buf;
+//         }
 
-        // str(line, include_prefix) == line) {
-		// 	FIL *fd;
-		// 	const char *resolved_path;
-		// 	char *include_path = line+sizeof(include_prefix)-1;
+//         // str(line, include_prefix) == line) {
+// 		// 	FIL *fd;
+// 		// 	const char *resolved_path;
+// 		// 	char *include_path = line+sizeof(include_prefix)-1;
 
-		// 	line[len-1] = 0;
+// 		// 	line[len-1] = 0;
 
-		// 	while (include_path[0] == ' ')
-		// 		include_path++;
+// 		// 	while (include_path[0] == ' ')
+// 		// 		include_path++;
 
-		// 	resolved_path = resolve_include_path(path, include_path);
+// 		// 	resolved_path = resolve_include_path(path, include_path);
 
-		// 	if (!resolved_path) {
-		// 		// warn("failed to resolve include path: %s", include_path);
-		// 		continue;
-		// 	}
+// 		// 	if (!resolved_path) {
+// 		// 		// warn("failed to resolve include path: %s", include_path);
+// 		// 		continue;
+// 		// 	}
 
-		// 	fd = f_open(resolved_path, O_RDONLY);
+// 		// 	fd = f_open(resolved_path, O_RDONLY);
 
-		// 	if (fd < 0) {
-		// 		// warn("failed to include %s", include_path);
-		// 		// perror("open");
-		// 	} else {
-		// 		int n;
-		// 		while ((n = f_read(fd, buf+sz, sizeof(buf)-sz)) > 0)
-		// 			sz += n;
-		// 		f_close(fd);
-		// 	}
-		// } else {
+// 		// 	if (fd < 0) {
+// 		// 		// warn("failed to include %s", include_path);
+// 		// 		// perror("open");
+// 		// 	} else {
+// 		// 		int n;
+// 		// 		while ((n = f_read(fd, buf+sz, sizeof(buf)-sz)) > 0)
+// 		// 			sz += n;
+// 		// 		f_close(fd);
+// 		// 	}
+// 		// } else {
 
-        // Copy the line to the buffer
-        strcpy(buf + total_sz, line);
-        total_sz += len;
-    }
+//         // Copy the line to the buffer
+//         strcpy(buf + total_sz, line);
+//         total_sz += len;
+//     }
 
-    f_close(&fh);
-    f_unmount("/");
-	free(line);
+//     f_close(&fh);
+//     f_unmount("/");
+// 	free(line);
 
-    if (!buf) {
-        buf[total_sz] = '\0';  // Null-terminate the buffer
-    }
-    return buf;
+//     if (!buf) {
+//         buf[total_sz] = '\0';  // Null-terminate the buffer
+//     }
+//     return buf;
 
-fail:
-    free(buf);  // Free the memory in case of failure
-	free(line);
+// fail:
+//     free(buf);  // Free the memory in case of failure
+// 	free(line);
 
-    f_close(&fh);
-    f_unmount("/");
-    return NULL;
-}
+//     f_close(&fh);
+//     f_unmount("/");
+//     return NULL;
+// }
 
 
 /* Return up to two keycodes associated with the given name. */
@@ -1599,7 +1599,7 @@ int config_parse(struct config *config)
     //     printf("%s\n", content);
     //     printf("\nConfig End\n");
     // }
-
+	memset(config, 0, sizeof *config);
 	config_init_(config); // invalid macro here
 	// snprintf(config->path, sizeof(config->path), "%s", "\0");
 	// printf("befor parse string heap size: %u bytes\n", xPortGetFreeHeapSize());
