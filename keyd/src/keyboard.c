@@ -181,37 +181,38 @@ static void execute_macro(struct keyboard *kbd, int dl, const struct macro *macr
 }
 
 static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
-			      struct descriptor *d, int *dl)
+                              struct descriptor *d, int *dl)
 {
-	size_t max;
-	size_t i;
+    size_t max;
+    size_t i;
 
-	d->op = 0;
+    d->op = 0;
+    *dl = -1;  // Initialize layer index
 
-	long maxts = 0;
+    long maxts = 0;
 
-	if (code >= KEYD_CHORD_1 && code <= KEYD_CHORD_MAX) {
-		size_t idx = code - KEYD_CHORD_1;
+    if (code >= KEYD_CHORD_1 && code <= KEYD_CHORD_MAX) {
+        size_t idx = code - KEYD_CHORD_1;
 
-		*d = kbd->active_chords[idx].chord.d;
-		*dl = kbd->active_chords[idx].layer;
+        *d = kbd->active_chords[idx].chord.d;
+        *dl = kbd->active_chords[idx].layer;
 
-		return;
-	}
+        return;
+    }
 
-	for (i = 0; i < kbd->config.nr_layers; i++) {
-		struct layer *layer = &kbd->config.layers[i];
+    for (i = 0; i < kbd->config.nr_layers; i++) {
+        struct layer *layer = &kbd->config.layers[i];
 
-		if (kbd->layer_state[i].active) {
-			long activation_time = kbd->layer_state[i].activation_time;
+        if (kbd->layer_state[i].active) {
+            long activation_time = kbd->layer_state[i].activation_time;
 
-			if (layer->keymap[code].op && activation_time >= maxts) {
-				maxts = activation_time;
-				*d = layer->keymap[code];
-				*dl = i;
-			}
-		}
-	}
+            if (layer->keymap[code] && layer->keymap[code]->op && activation_time >= maxts) {
+                maxts = activation_time;
+                *d = *(layer->keymap[code]);
+                *dl = i;
+            }
+        }
+    }
 
 	max = 0;
 	/* Scan for any composite matches (which take precedence). */
@@ -230,8 +231,8 @@ static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
 					match = 0;
 			}
 
-			if (match && layer->keymap[code].op && (layer->nr_constituents > max)) {
-				*d = layer->keymap[code];
+			if (match && layer->keymap[code] && layer->keymap[code]->op && (layer->nr_constituents > max)) {
+				*d = *(layer->keymap[code]);
 				*dl = i;
 
 				max = layer->nr_constituents;
@@ -491,318 +492,319 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 
 	if (pressed) {
 		struct macro *macro;
-
-		switch (d->op) {
-		case OP_LAYERM:
-		case OP_ONESHOTM:
-		case OP_TOGGLEM:
-			macro = &kbd->config.macros[d->args[1].idx];
-			execute_macro(kbd, dl, macro);
-			break;
-		default:
-			break;
+		if (d) {
+			switch (d->op) {
+			case OP_LAYERM:
+			case OP_ONESHOTM:
+			case OP_TOGGLEM:
+				macro = &kbd->config.macros[d->args[1].idx];
+				execute_macro(kbd, dl, macro);
+				break;
+			default:
+				break;
+			}
 		}
 	}
-
-	switch (d->op) {
-		int idx;
-		struct macro *macro;
-		struct descriptor *action;
-		uint8_t mods;
-		uint8_t new_code;
-
-	case OP_KEYSEQUENCE:
-		new_code = d->args[0].code;
-		mods = d->args[1].mods;
-
-		if (pressed) {
-			/*
-			 * Permit variations of the same key
-			 * to be actuated next to each other
-			 * E.G [/{
-			 */
-			if (kbd->keystate[new_code])
-				send_key(kbd, new_code, 0);
-
-			update_mods(kbd, dl, mods);
-
-			send_key(kbd, new_code, 1);
-			clear_oneshot(kbd);
-		} else {
-			send_key(kbd, new_code, 0);
-			update_mods(kbd, -1, 0);
-		}
-
-		if (!mods)
-			kbd->last_simple_key_time = time;
-
-		break;
-	case OP_SCROLL:
-		kbd->scroll.sensitivity = d->args[0].sensitivity;
-		if (pressed)
-			kbd->scroll.active = 1;
-		else
-			kbd->scroll.active = 0;
-		break;
-	case OP_SCROLL_TOGGLE:
-		kbd->scroll.sensitivity = d->args[0].sensitivity;
-		if (pressed)
-			kbd->scroll.active = !kbd->scroll.active;
-		break;
-	case OP_OVERLOAD_IDLE_TIMEOUT:
-		if (pressed) {
+	if (d) {
+		switch (d->op) {
+			int idx;
+			struct macro *macro;
 			struct descriptor *action;
-			long timeout = d->args[2].timeout;
+			uint8_t mods;
+			uint8_t new_code;
 
-			if (((time - kbd->last_simple_key_time) >= timeout))
-				action = &kbd->config.descriptors[d->args[1].idx];
+		case OP_KEYSEQUENCE:
+			new_code = d->args[0].code;
+			mods = d->args[1].mods;
+
+			if (pressed) {
+				/*
+				* Permit variations of the same key
+				* to be actuated next to each other
+				* E.G [/{
+				*/
+				if (kbd->keystate[new_code])
+					send_key(kbd, new_code, 0);
+
+				update_mods(kbd, dl, mods);
+
+				send_key(kbd, new_code, 1);
+				clear_oneshot(kbd);
+			} else {
+				send_key(kbd, new_code, 0);
+				update_mods(kbd, -1, 0);
+			}
+
+			if (!mods)
+				kbd->last_simple_key_time = time;
+
+			break;
+		case OP_SCROLL:
+			kbd->scroll.sensitivity = d->args[0].sensitivity;
+			if (pressed)
+				kbd->scroll.active = 1;
 			else
-				action = &kbd->config.descriptors[d->args[0].idx];
+				kbd->scroll.active = 0;
+			break;
+		case OP_SCROLL_TOGGLE:
+			kbd->scroll.sensitivity = d->args[0].sensitivity;
+			if (pressed)
+				kbd->scroll.active = !kbd->scroll.active;
+			break;
+		case OP_OVERLOAD_IDLE_TIMEOUT:
+			if (pressed) {
+				struct descriptor *action;
+				long timeout = d->args[2].timeout;
 
-			process_descriptor(kbd, code, action, dl, 1, time);
-			for (i = 0; i < CACHE_SIZE; i++) {
-				if (code == kbd->cache[i].code) {
-					kbd->cache[i].d = *action;
-					break;
-				}
-			}
-		}
-		break;
-	case OP_OVERLOAD_TIMEOUT_TAP:
-	case OP_OVERLOAD_TIMEOUT:
-		if (pressed) {
-			uint8_t layer = d->args[0].idx;
-			struct descriptor *action = &kbd->config.descriptors[d->args[1].idx];
+				if (((time - kbd->last_simple_key_time) >= timeout))
+					action = &kbd->config.descriptors[d->args[1].idx];
+				else
+					action = &kbd->config.descriptors[d->args[0].idx];
 
-			kbd->pending_key.code = code;
-			kbd->pending_key.behaviour =
-				d->op == OP_OVERLOAD_TIMEOUT_TAP ?
-					PK_UNINTERRUPTIBLE_TAP_ACTION2 :
-					PK_UNINTERRUPTIBLE;
-
-			kbd->pending_key.dl = dl;
-			kbd->pending_key.action1 = *action;
-			kbd->pending_key.action2.op = OP_LAYER;
-			kbd->pending_key.action2.args[0].idx = layer;
-			kbd->pending_key.expire = time+d->args[2].timeout;
-
-			schedule_timeout(kbd, kbd->pending_key.expire);
-		}
-
-		break;
-	case OP_LAYOUT:
-		if (pressed)
-			setlayout(kbd, d->args[0].idx);
-
-		break;
-	case OP_LAYERM:
-	case OP_LAYER:
-		idx = d->args[0].idx;
-
-		if (pressed) {
-			activate_layer(kbd, code, idx);
-		} else {
-			deactivate_layer(kbd, idx);
-		}
-
-		if (kbd->last_pressed_code == code) {
-			kbd->inhibit_modifier_guard = 1;
-			update_mods(kbd, -1, 0);
-			kbd->inhibit_modifier_guard = 0;
-		} else {
-			update_mods(kbd, -1, 0);
-		}
-
-		break;
-	case OP_CLEARM:
-		if(pressed) {
-			clear(kbd);
-			macro = &kbd->config.macros[d->args[0].idx];
-			execute_macro(kbd, dl, macro);
-		}
-		break;
-	case OP_CLEAR:
-		if(pressed)
-			clear(kbd);
-		break;
-	case OP_OVERLOAD:
-		idx = d->args[0].idx;
-		action = &kbd->config.descriptors[d->args[1].idx];
-
-		if (pressed) {
-			kbd->overload_start_time = time;
-			activate_layer(kbd, code, idx);
-			update_mods(kbd, -1, 0);
-		} else {
-			deactivate_layer(kbd, idx);
-			update_mods(kbd, -1, 0);
-
-			if (kbd->last_pressed_code == code &&
-			    (!kbd->config.overload_tap_timeout ||
-			     ((time - kbd->overload_start_time) < kbd->config.overload_tap_timeout))) {
-				if (action->op == OP_MACRO) {
-					/*
-					 * Macro release relies on event logic, so we can't just synthesize a
-					 * descriptor release.
-					 */
-					struct macro *macro = &kbd->config.macros[action->args[0].idx];
-					execute_macro(kbd, dl, macro);
-				} else {
-					process_descriptor(kbd, code, action, dl, 1, time);
-					process_descriptor(kbd, code, action, dl, 0, time);
-				}
-			}
-		}
-
-		break;
-	case OP_ONESHOTM:
-	case OP_ONESHOT:
-		idx = d->args[0].idx;
-
-		if (pressed) {
-			activate_layer(kbd, code, idx);
-			update_mods(kbd, dl, 0);
-			kbd->oneshot_latch = 1;
-		} else {
-			if (kbd->oneshot_latch) {
-				kbd->layer_state[idx].oneshot_depth++;
-				if (kbd->config.oneshot_timeout) {
-					kbd->oneshot_timeout = time + kbd->config.oneshot_timeout;
-					schedule_timeout(kbd, kbd->oneshot_timeout);
-				}
-			} else {
-				deactivate_layer(kbd, idx);
-				update_mods(kbd, -1, 0);
-			}
-		}
-
-		break;
-	case OP_MACRO2:
-	case OP_MACRO:
-		if (pressed) {
-			if (d->op == OP_MACRO2) {
-				macro = &kbd->config.macros[d->args[2].idx];
-
-				timeout = d->args[0].timeout;
-				kbd->macro_repeat_interval = d->args[1].timeout;
-			} else {
-				macro = &kbd->config.macros[d->args[0].idx];
-
-				timeout = kbd->config.macro_timeout;
-				kbd->macro_repeat_interval = kbd->config.macro_repeat_timeout;
-			}
-
-			clear_oneshot(kbd);
-
-			execute_macro(kbd, dl, macro);
-			kbd->active_macro = macro;
-			kbd->active_macro_layer = dl;
-
-			kbd->macro_timeout = time + timeout;
-			schedule_timeout(kbd, kbd->macro_timeout);
-		}
-
-		break;
-	case OP_TOGGLEM:
-	case OP_TOGGLE:
-		idx = d->args[0].idx;
-
-		if (pressed) {
-			kbd->layer_state[idx].toggled = !kbd->layer_state[idx].toggled;
-
-			if (kbd->layer_state[idx].toggled)
-				activate_layer(kbd, code, idx);
-			else
-				deactivate_layer(kbd, idx);
-
-			update_mods(kbd, -1, 0);
-			clear_oneshot(kbd);
-		}
-
-		break;
-	case OP_TIMEOUT:
-		if (pressed) {
-			kbd->pending_key.action1 = kbd->config.descriptors[d->args[0].idx];
-			kbd->pending_key.action2 = kbd->config.descriptors[d->args[2].idx];
-
-			kbd->pending_key.code = code;
-			kbd->pending_key.dl = dl;
-			kbd->pending_key.expire = time + d->args[1].timeout;
-			kbd->pending_key.behaviour = PK_INTERRUPT_ACTION1;
-
-			schedule_timeout(kbd, kbd->pending_key.expire);
-		}
-
-		break;
-	case OP_COMMAND:
-		if (pressed) {
-			// execute_command(kbd->config.commands[d->args[0].idx].cmd);
-			clear_oneshot(kbd);
-			update_mods(kbd, -1, 0);
-		}
-		break;
-	case OP_SWAP:
-	case OP_SWAPM:
-		idx = d->args[0].idx;
-		macro = d->op == OP_SWAPM ?  &kbd->config.macros[d->args[1].idx] : NULL;
-
-		if (pressed) {
-			size_t i;
-			struct cache_entry *ce = NULL;
-
-			if (kbd->layer_state[dl].toggled) {
-				deactivate_layer(kbd, dl);
-				kbd->layer_state[dl].toggled = 0;
-
-				activate_layer(kbd, 0, idx);
-				kbd->layer_state[idx].toggled = 1;
-				update_mods(kbd, -1, 0);
-			} else if (kbd->layer_state[dl].oneshot_depth) {
-				deactivate_layer(kbd, dl);
-				kbd->layer_state[dl].oneshot_depth--;
-
-				activate_layer(kbd, 0, idx);
-				kbd->layer_state[idx].oneshot_depth++;
-				update_mods(kbd, -1, 0);
-			} else {
+				process_descriptor(kbd, code, action, dl, 1, time);
 				for (i = 0; i < CACHE_SIZE; i++) {
-					uint8_t code = kbd->cache[i].code;
-					int layer = kbd->cache[i].layer;
-					int type = kbd->config.layers[layer].type;
-
-					if (code && layer == dl && type == LT_NORMAL && layer != 0) {
-						ce = &kbd->cache[i];
+					if (code == kbd->cache[i].code) {
+						kbd->cache[i].d = *action;
 						break;
 					}
 				}
+			}
+			break;
+		case OP_OVERLOAD_TIMEOUT_TAP:
+		case OP_OVERLOAD_TIMEOUT:
+			if (pressed) {
+				uint8_t layer = d->args[0].idx;
+				struct descriptor *action = &kbd->config.descriptors[d->args[1].idx];
 
-				if (ce) {
-					ce->d.op = OP_LAYER;
-					ce->d.args[0].idx = idx;
+				kbd->pending_key.code = code;
+				kbd->pending_key.behaviour =
+					d->op == OP_OVERLOAD_TIMEOUT_TAP ?
+						PK_UNINTERRUPTIBLE_TAP_ACTION2 :
+						PK_UNINTERRUPTIBLE;
 
-					deactivate_layer(kbd, dl);
-					activate_layer(kbd, ce->code, idx);
+				kbd->pending_key.dl = dl;
+				kbd->pending_key.action1 = *action;
+				kbd->pending_key.action2.op = OP_LAYER;
+				kbd->pending_key.action2.args[0].idx = layer;
+				kbd->pending_key.expire = time+d->args[2].timeout;
 
+				schedule_timeout(kbd, kbd->pending_key.expire);
+			}
+
+			break;
+		case OP_LAYOUT:
+			if (pressed)
+				setlayout(kbd, d->args[0].idx);
+
+			break;
+		case OP_LAYERM:
+		case OP_LAYER:
+			idx = d->args[0].idx;
+
+			if (pressed) {
+				activate_layer(kbd, code, idx);
+			} else {
+				deactivate_layer(kbd, idx);
+			}
+
+			if (kbd->last_pressed_code == code) {
+				kbd->inhibit_modifier_guard = 1;
+				update_mods(kbd, -1, 0);
+				kbd->inhibit_modifier_guard = 0;
+			} else {
+				update_mods(kbd, -1, 0);
+			}
+
+			break;
+		case OP_CLEARM:
+			if(pressed) {
+				clear(kbd);
+				macro = &kbd->config.macros[d->args[0].idx];
+				execute_macro(kbd, dl, macro);
+			}
+			break;
+		case OP_CLEAR:
+			if(pressed)
+				clear(kbd);
+			break;
+		case OP_OVERLOAD:
+			idx = d->args[0].idx;
+			action = &kbd->config.descriptors[d->args[1].idx];
+
+			if (pressed) {
+				kbd->overload_start_time = time;
+				activate_layer(kbd, code, idx);
+				update_mods(kbd, -1, 0);
+			} else {
+				deactivate_layer(kbd, idx);
+				update_mods(kbd, -1, 0);
+
+				if (kbd->last_pressed_code == code &&
+					(!kbd->config.overload_tap_timeout ||
+					((time - kbd->overload_start_time) < kbd->config.overload_tap_timeout))) {
+					if (action->op == OP_MACRO) {
+						/*
+						* Macro release relies on event logic, so we can't just synthesize a
+						* descriptor release.
+						*/
+						struct macro *macro = &kbd->config.macros[action->args[0].idx];
+						execute_macro(kbd, dl, macro);
+					} else {
+						process_descriptor(kbd, code, action, dl, 1, time);
+						process_descriptor(kbd, code, action, dl, 0, time);
+					}
+				}
+			}
+
+			break;
+		case OP_ONESHOTM:
+		case OP_ONESHOT:
+			idx = d->args[0].idx;
+
+			if (pressed) {
+				activate_layer(kbd, code, idx);
+				update_mods(kbd, dl, 0);
+				kbd->oneshot_latch = 1;
+			} else {
+				if (kbd->oneshot_latch) {
+					kbd->layer_state[idx].oneshot_depth++;
+					if (kbd->config.oneshot_timeout) {
+						kbd->oneshot_timeout = time + kbd->config.oneshot_timeout;
+						schedule_timeout(kbd, kbd->oneshot_timeout);
+					}
+				} else {
+					deactivate_layer(kbd, idx);
 					update_mods(kbd, -1, 0);
 				}
 			}
 
-			if (macro)
-				execute_macro(kbd, dl, macro);
-		} else {
-			if (macro &&
-			    macro->sz == 1 &&
-			    macro->entries[0].type == MACRO_KEYSEQUENCE) {
-				uint8_t code = macro->entries[0].data;
+			break;
+		case OP_MACRO2:
+		case OP_MACRO:
+			if (pressed) {
+				if (d->op == OP_MACRO2) {
+					macro = &kbd->config.macros[d->args[2].idx];
 
-				send_key(kbd, code, 0);
+					timeout = d->args[0].timeout;
+					kbd->macro_repeat_interval = d->args[1].timeout;
+				} else {
+					macro = &kbd->config.macros[d->args[0].idx];
+
+					timeout = kbd->config.macro_timeout;
+					kbd->macro_repeat_interval = kbd->config.macro_repeat_timeout;
+				}
+
+				clear_oneshot(kbd);
+
+				execute_macro(kbd, dl, macro);
+				kbd->active_macro = macro;
+				kbd->active_macro_layer = dl;
+
+				kbd->macro_timeout = time + timeout;
+				schedule_timeout(kbd, kbd->macro_timeout);
+			}
+
+			break;
+		case OP_TOGGLEM:
+		case OP_TOGGLE:
+			idx = d->args[0].idx;
+
+			if (pressed) {
+				kbd->layer_state[idx].toggled = !kbd->layer_state[idx].toggled;
+
+				if (kbd->layer_state[idx].toggled)
+					activate_layer(kbd, code, idx);
+				else
+					deactivate_layer(kbd, idx);
+
+				update_mods(kbd, -1, 0);
+				clear_oneshot(kbd);
+			}
+
+			break;
+		case OP_TIMEOUT:
+			if (pressed) {
+				kbd->pending_key.action1 = kbd->config.descriptors[d->args[0].idx];
+				kbd->pending_key.action2 = kbd->config.descriptors[d->args[2].idx];
+
+				kbd->pending_key.code = code;
+				kbd->pending_key.dl = dl;
+				kbd->pending_key.expire = time + d->args[1].timeout;
+				kbd->pending_key.behaviour = PK_INTERRUPT_ACTION1;
+
+				schedule_timeout(kbd, kbd->pending_key.expire);
+			}
+
+			break;
+		case OP_COMMAND:
+			if (pressed) {
+				// execute_command(kbd->config.commands[d->args[0].idx].cmd);
+				clear_oneshot(kbd);
 				update_mods(kbd, -1, 0);
 			}
+			break;
+		case OP_SWAP:
+		case OP_SWAPM:
+			idx = d->args[0].idx;
+			macro = d->op == OP_SWAPM ?  &kbd->config.macros[d->args[1].idx] : NULL;
+
+			if (pressed) {
+				size_t i;
+				struct cache_entry *ce = NULL;
+
+				if (kbd->layer_state[dl].toggled) {
+					deactivate_layer(kbd, dl);
+					kbd->layer_state[dl].toggled = 0;
+
+					activate_layer(kbd, 0, idx);
+					kbd->layer_state[idx].toggled = 1;
+					update_mods(kbd, -1, 0);
+				} else if (kbd->layer_state[dl].oneshot_depth) {
+					deactivate_layer(kbd, dl);
+					kbd->layer_state[dl].oneshot_depth--;
+
+					activate_layer(kbd, 0, idx);
+					kbd->layer_state[idx].oneshot_depth++;
+					update_mods(kbd, -1, 0);
+				} else {
+					for (i = 0; i < CACHE_SIZE; i++) {
+						uint8_t code = kbd->cache[i].code;
+						int layer = kbd->cache[i].layer;
+						int type = kbd->config.layers[layer].type;
+
+						if (code && layer == dl && type == LT_NORMAL && layer != 0) {
+							ce = &kbd->cache[i];
+							break;
+						}
+					}
+
+					if (ce) {
+						ce->d.op = OP_LAYER;
+						ce->d.args[0].idx = idx;
+
+						deactivate_layer(kbd, dl);
+						activate_layer(kbd, ce->code, idx);
+
+						update_mods(kbd, -1, 0);
+					}
+				}
+
+				if (macro)
+					execute_macro(kbd, dl, macro);
+			} else {
+				if (macro &&
+					macro->sz == 1 &&
+					macro->entries[0].type == MACRO_KEYSEQUENCE) {
+					uint8_t code = macro->entries[0].data;
+
+					send_key(kbd, code, 0);
+					update_mods(kbd, -1, 0);
+				}
+			}
+
+			break;
 		}
-
-		break;
 	}
-
 	if (pressed)
 		kbd->last_pressed_code = code;
 

@@ -17,7 +17,7 @@
 #define MAX_ALIAS_LENGTH 32
 #define MAX_LAYER_NAME_LEN	64
 #define MAX_EXP_LEN		512
-#define MAX_LAYERS		32
+#define MAX_LAYERS		64
 
 // #ifndef PATH_MAX
 // #define PATH_MAX 1024
@@ -97,9 +97,9 @@ struct layer {
 	} type;
 
 	uint8_t mods;
-	struct descriptor keymap[256];
+	struct descriptor *keymap[256];
 
-	struct chord chords[4];
+	struct chord *chords;
 	size_t nr_chords;
 
 	/* Used for composite layers. */
@@ -115,7 +115,7 @@ struct config {
 	struct macro macros[128];
 	// struct command commands[64];
 	
-	char *aliases[256];  // All entries are NULL by default fod saving 54064 bytes
+	char *aliases[256];  // All entries are NULL by default
 	// char aliases[128][8];
 
 	size_t nr_ids;

@@ -237,164 +237,198 @@ static uint8_t lookup_keycode(const char *name)
 
 static struct descriptor *layer_lookup_chord(struct layer *layer, uint8_t *keys, size_t n)
 {
-	size_t i;
+    size_t i;
 
-	for (i = 0; i < layer->nr_chords; i++) {
-		size_t j;
-		size_t nm = 0;
-		struct chord *chord = &layer->chords[i];
+    for (i = 0; i < layer->nr_chords; i++) {
+        size_t j;
+        size_t nm = 0;
+        struct chord *chord = &layer->chords[i];
 
-		for (j = 0; j < n; j++) {
-			size_t k;
-			for (k = 0; k < chord->sz; k++)
-				if (keys[j] == chord->keys[k]) {
-					nm++;
-					break;
-				}
-		}
+        for (j = 0; j < n; j++) {
+            size_t k;
+            for (k = 0; k < chord->sz; k++)
+                if (keys[j] == chord->keys[k]) {
+                    nm++;
+                    break;
+                }
+        }
 
-		if (nm == n)
-			return &chord->d;
-	}
+        if (nm == n)
+            return &chord->d;  // No change needed
+    }
 
-	return NULL;
+    return NULL;
 }
 
+static int add_chord_to_layer(struct layer *layer, const struct chord *new_chord)
+{
+    struct chord *temp = realloc(layer->chords, (layer->nr_chords + 1) * sizeof(struct chord));
+    if (!temp) {
+        err("Failed to allocate memory for chords");
+        return -1;
+    }
+
+    layer->chords = temp;
+    layer->chords[layer->nr_chords++] = *new_chord;
+
+    return 0;
+}
 /*
  * Consumes a string of the form `[<layer>.]<key> = <descriptor>` and adds the
  * mapping to the corresponding layer in the config.
  */
-
 static int set_layer_entry(const struct config *config,
-			   struct layer *layer, char *key,
-			   const struct descriptor *d)
+                           struct layer *layer, char *key,
+                           const struct descriptor *d)
 {
-	size_t i;
-	int found = 0;
+    size_t i;
+    int found = 0;
 
-	if (strchr(key, '+')) {
-		//TODO: Handle aliases
-		char *tok;
-		struct descriptor *ld;
-		uint8_t keys[ARRAY_SIZE(layer->chords[0].keys)];
-		size_t n = 0;
+    if (strchr(key, '+')) {
+        // Handle chorded keys
+        char *tok;
+        struct descriptor *ld;
+        uint8_t keys[ARRAY_SIZE(layer->chords[0].keys)];
+        size_t n = 0;
 
-		for (tok = strtok(key, "+"); tok; tok = strtok(NULL, "+")) {
-			uint8_t code = lookup_keycode(tok);
-			if (!code) {
-				err("%s is not a valid key", tok);
-				return -1;
-			}
+        for (tok = strtok(key, "+"); tok; tok = strtok(NULL, "+")) {
+            uint8_t code = lookup_keycode(tok);
+            if (!code) {
+                err("%s is not a valid key", tok);
+                return -1;
+            }
 
-			if (n >= ARRAY_SIZE(keys)) {
-				err("chords cannot contain more than %ld keys", n);
-				return -1;
-			}
+            if (n >= ARRAY_SIZE(keys)) {
+                err("chords cannot contain more than %ld keys", n);
+                return -1;
+            }
 
-			keys[n++] = code;
-		}
+            keys[n++] = code;
+        }
 
+        if ((ld = layer_lookup_chord(layer, keys, n))) {
+            *ld = *d;
+        } else {
+            struct chord new_chord;
+            if (n > ARRAY_SIZE(new_chord.keys)) {
+                err("chords cannot contain more than %ld keys", ARRAY_SIZE(new_chord.keys));
+                return -1;
+            }
 
-		if ((ld = layer_lookup_chord(layer, keys, n))) {
-			*ld = *d;
-		} else {
-			struct chord *chord;
-			if (layer->nr_chords >= ARRAY_SIZE(layer->chords)) {
-				err("max chords exceeded(%ld)", layer->nr_chords);
-				return -1;
-			}
+            memcpy(new_chord.keys, keys, n * sizeof(uint8_t));
+            new_chord.sz = n;
+            new_chord.d = *d;
 
-			chord = &layer->chords[layer->nr_chords];
-			memcpy(chord->keys, keys, sizeof keys);
-			chord->sz = n;
-			chord->d = *d;
+            if (add_chord_to_layer(layer, &new_chord) < 0)
+                return -1;
+        }
+    } else {
+        for (i = 0; i < 256; i++) {
+            if (config->aliases[i] && !strcmp(config->aliases[i], key)) {
+                // Allocate memory if not already allocated
+                if (layer->keymap[i] == NULL) {
+                    layer->keymap[i] = malloc(sizeof(struct descriptor));
+                    if (!layer->keymap[i]) {
+                        err("Memory allocation failed for keymap[%zu]", i);
+                        return -1;
+                    }
+                }
+                *(layer->keymap[i]) = *d;
+                found = 1;
+            }
+        }
 
-			layer->nr_chords++;
-		}
-	} else {
-		for (i = 0; i < 256; i++) {
-			if (!strcmp(config->aliases[i], key)) {
-				layer->keymap[i] = *d;
-				found = 1;
-			}
-		}
+        if (!found) {
+            uint8_t code;
 
-		if (!found) {
-			uint8_t code;
+            if (!(code = lookup_keycode(key))) {
+                err("%s is not a valid key or alias", key);
+                return -1;
+            }
 
-			if (!(code = lookup_keycode(key))) {
-				err("%s is not a valid key or alias", key);
-				return -1;
-			}
+            // Allocate memory if not already allocated
+            if (layer->keymap[code] == NULL) {
+                layer->keymap[code] = malloc(sizeof(struct descriptor));
+                if (!layer->keymap[code]) {
+                    err("Memory allocation failed for keymap[%u]", code);
+                    return -1;
+                }
+            }
 
-			layer->keymap[code] = *d;
+            *(layer->keymap[code]) = *d;
+        }
+    }
 
-		}
-	}
-
-	return 0;
+    return 0;
 }
 
 static int new_layer(char *s, const struct config *config, struct layer *layer)
 {
-	uint8_t mods;
-	char *name;
-	char *type;
+    uint8_t mods;
+    char *name;
+    char *type;
+    size_t i;
 
-	name = strtok(s, ":");
-	type = strtok(NULL, ":");
+    name = strtok(s, ":");
+    type = strtok(NULL, ":");
 
-	strcpy(layer->name, name);
+    strcpy(layer->name, name);
 
-	layer->nr_chords = 0;
+    layer->nr_chords = 0;
 
-	if (strchr(name, '+')) {
-		char *layername;
-		int n = 0;
+    // Initialize keymap pointers to NULL
+    for (i = 0; i < 256; i++) {
+        layer->keymap[i] = NULL;
+    }
+    layer->nr_chords = 0;
+    layer->chords = NULL;
 
-		layer->type = LT_COMPOSITE;
-		layer->nr_constituents = 0;
+    if (strchr(name, '+')) {
+        char *layername;
+        int n = 0;
 
-		if (type) {
-			// printf("composite layers cannot have a type.");
-			err("composite layers cannot have a type.");
-			return -1;
-		}
+        layer->type = LT_COMPOSITE;
+        layer->nr_constituents = 0;
 
-		for (layername = strtok(name, "+"); layername; layername = strtok(NULL, "+")) {
-			int idx = config_get_layer_index(config, layername);
+        if (type) {
+            // printf("composite layers cannot have a type.");
+            err("composite layers cannot have a type.");
+            return -1;
+        }
 
-			if (idx < 0) {
-				// printf("%s is not a valid layer", layername);
-				err("%s is not a valid layer", layername);
-				return -1;
-			}
+        for (layername = strtok(name, "+"); layername; layername = strtok(NULL, "+")) {
+            int idx = config_get_layer_index(config, layername);
 
-			if (n >= ARRAY_SIZE(layer->constituents)) {
-				err("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
-				// printf("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
-				return -1;
-			}
+            if (idx < 0) {
+                // printf("%s is not a valid layer", layername);
+                err("%s is not a valid layer", layername);
+                return -1;
+            }
 
-			layer->constituents[layer->nr_constituents++] = idx;
-		}
+            if (n >= ARRAY_SIZE(layer->constituents)) {
+                err("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
+                // printf("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
+                return -1;
+            }
 
-	} else if (type && !strcmp(type, "layout")) {
-			layer->type = LT_LAYOUT;
-	} else if (type && !parse_modset(type, &mods)) {
-			layer->type = LT_NORMAL;
-			layer->mods = mods;
-	} else {
-		if (type)
-			warn("\"%s\" is not a valid layer type, ignoring\n", type);
-			// printf("\"%s\" is not a valid layer type, ignoring\n", type);
+            layer->constituents[layer->nr_constituents++] = idx;
+        }
 
-		layer->type = LT_NORMAL;
-		layer->mods = 0;
-	}
+    } else if (type && !strcmp(type, "layout")) {
+            layer->type = LT_LAYOUT;
+    } else if (type && !parse_modset(type, &mods)) {
+            layer->type = LT_NORMAL;
+            layer->mods = mods;
+    } else {
+        if (type)
+            warn("\"%s\" is not a valid layer type, ignoring\n", type);
+            // printf("\"%s\" is not a valid layer type, ignoring\n", type);
 
+        layer->type = LT_NORMAL;
+        layer->mods = 0;
+    }
 
-	return 0;
+    return 0;
 }
 
 /*
@@ -925,8 +959,16 @@ static void parse_alias_section(struct config *config, struct ini_section *secti
             uint8_t alias_code;
 
             if ((alias_code = lookup_keycode(name))) {
-                struct descriptor *d = &config->layers[0].keymap[code];
+                // Allocate memory if not already allocated
+                if (config->layers[0].keymap[code] == NULL) {
+                    config->layers[0].keymap[code] = malloc(sizeof(struct descriptor));
+                    if (!config->layers[0].keymap[code]) {
+                        warn("Memory allocation failed for alias keymap[%u]", code);
+                        continue;
+                    }
+                }
 
+                struct descriptor *d = config->layers[0].keymap[code];
                 d->op = OP_KEYSEQUENCE;
                 d->args[0].code = alias_code;
                 d->args[1].mods = 0;
@@ -945,8 +987,6 @@ static void parse_alias_section(struct config *config, struct ini_section *secti
             }
         } else {
             printf("Failed to define alias '%s', '%s' is not a valid keycode\n", name, ent->key);
-            // Optionally use warn instead of printf
-            // warn("Failed to define alias '%s', '%s' is not a valid keycode", name, ent->key);
         }
     }
 }

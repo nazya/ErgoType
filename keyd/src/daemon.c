@@ -239,6 +239,61 @@ void generate_random_key_presses() {
 
         // Random delay between 1000 ms and 2000 ms before next key press
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+		//simulate chord
+		//simulate chord
+		//simulate chord
+		//simulate chord
+		//simulate chord
+		// Setup the device event
+        devev.type = DEV_KEY;
+        devev.code = 1;
+        devev.pressed = 1; // Key down
+
+        ev.type = EV_DEV_EVENT;
+        ev.devev = &devev; // Assign the address of devev to ev.devev
+        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
+
+		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
+        xQueueSend(eventQueue, &ev, portMAX_DELAY);
+
+
+		devev.type = DEV_KEY;
+        devev.code = 2;
+        devev.pressed = 1; // Key down
+
+        ev.type = EV_DEV_EVENT;
+        ev.devev = &devev; // Assign the address of devev to ev.devev
+        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
+
+		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
+        xQueueSend(eventQueue, &ev, portMAX_DELAY);
+
+
+		devev.type = DEV_KEY;
+        devev.code = 1;
+        devev.pressed = 0; // Key down
+
+        ev.type = EV_DEV_EVENT;
+        ev.devev = &devev; // Assign the address of devev to ev.devev
+        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
+
+		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
+        xQueueSend(eventQueue, &ev, portMAX_DELAY);
+
+
+		devev.type = DEV_KEY;
+        devev.code = 2;
+        devev.pressed = 0; // Key down
+
+        ev.type = EV_DEV_EVENT;
+        ev.devev = &devev; // Assign the address of devev to ev.devev
+        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
+
+		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
+        xQueueSend(eventQueue, &ev, portMAX_DELAY);
+
+
     }
 }
 
