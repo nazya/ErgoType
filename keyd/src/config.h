@@ -12,12 +12,15 @@
 #define MAX_FILE_SZ 65536
 #define MAX_LINE_LEN 512
 
+#define MAX_SECTION_NAME_LEN 256
+#define MAX_SECTION_ENTRIES 1024
+
 #define MAX_DESCRIPTOR_ARGS	3
 
-#define MAX_ALIAS_LENGTH 32
+#define MAX_ALIAS_LENGTH    32
+#define MAX_EXP_LEN		    512
 #define MAX_LAYER_NAME_LEN	64
-#define MAX_EXP_LEN		512
-#define MAX_LAYERS		64
+#define MAX_LAYERS		    96
 
 // #ifndef PATH_MAX
 // #define PATH_MAX 1024

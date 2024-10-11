@@ -6,6 +6,7 @@
 
 
 #include "FreeRTOS.h" // tmp for heap size
+#include "portable.h" // tmp for heap size
 
 #include <string.h>
 #include <stdio.h>
@@ -814,9 +815,18 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 struct keyboard *new_keyboard(const struct output *output)
 {
 	size_t i;
-	struct keyboard *kbd;
+	// struct keyboard *kbd;
 
-	kbd = calloc(1, sizeof(struct keyboard));
+	// kbd = calloc(1, sizeof(struct keyboard));
+	printf("size of struct kbd: %u bytes\n", sizeof(struct keyboard));
+
+
+	struct keyboard *kbd = pvPortMalloc(sizeof(struct keyboard));
+    if (kbd != NULL) {
+        memset(kbd, 0, sizeof(struct keyboard));
+    } else {
+		return NULL;
+	}
 
 	kbd->original_config = &kbd->config;
 	// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
@@ -847,6 +857,8 @@ struct keyboard *new_keyboard(const struct output *output)
 
 	kbd->chord.queue_sz = 0;
 	kbd->chord.state = CHORD_INACTIVE;
+
+	config_parse(&kbd->config);
 
 	return kbd;
 }

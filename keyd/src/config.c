@@ -14,11 +14,27 @@
 #include "ff.h"
 
 #include "config.h"
-#include "ini.h"
+// #include "ini.h"
 #include "keys.h"
 #include "stringutils.h"
 #include "porting.h"
 
+struct ini_entry {
+	char *key;
+	char *val;
+
+	size_t lnum;		// The line number in the original source file.
+};
+
+struct ini_section {
+	char name[MAX_SECTION_NAME_LEN];
+	// char name[1024];
+
+	size_t nr_entries;
+	size_t lnum;
+
+	struct ini_entry entries[MAX_SECTION_ENTRIES];
+};
 
 const static struct {
 	const char *name;
@@ -273,6 +289,7 @@ static int add_chord_to_layer(struct layer *layer, const struct chord *new_chord
 
     return 0;
 }
+
 /*
  * Consumes a string of the form `[<layer>.]<key> = <descriptor>` and adds the
  * mapping to the corresponding layer in the config.
@@ -638,12 +655,13 @@ int parse_macro_expression(const char *s, struct macro *macro)
 static int parse_command(const char *s)
 // static int parse_command(const char *s, struct command *command)
 {
-	return -1;
-	// int len = strlen(s);
+	// return -1;
+	int len = strlen(s);
 
-	// if (len == 0 || strstr(s, "command(") != s || s[len-1] != ')')
-	// 	return -1;
+	if (len == 0 || strstr(s, "command(") != s || s[len-1] != ')')
+		return -1;
 
+    // TODO: potential way to format flash storage
 	// if (len > (int)sizeof(command->cmd)) {
 	// 	printf("max command length (%ld) exceeded\n", sizeof(command->cmd));
 	// 	// err("max command length (%ld) exceeded\n", sizeof(command->cmd));
@@ -654,7 +672,7 @@ static int parse_command(const char *s)
 	// command->cmd[len-9] = 0;
 	// str_escape(command->cmd);
 
-	// return 0;
+	return 0;
 }
 
 static int parse_descriptor(char *s,
@@ -708,9 +726,9 @@ static int parse_descriptor(char *s,
 		return 0;
 	} else if ((ret=parse_command(s)) >= 0) {
 	// } else if ((ret=parse_command(s, cmd)) >= 0) {
-		// if (ret) {
-		// 	return -1;
-		// }
+		if (ret) {
+			return -1;
+		}
 
 		// if (config->nr_commands >= ARRAY_SIZE(config->commands)) {
 		// 	// err("max commands (%d), exceeded", ARRAY_SIZE(config->commands));
@@ -1080,6 +1098,44 @@ int process_section(struct ini_section *section, struct config *config) {
     }
     return 0;
 }
+
+void parse_kvp(char *s, char **key, char **value)
+{
+	char *last_space = NULL;
+	char *c = s;
+
+	/* Allow the first character to be = as a special case. */
+	if (*c == '=')
+		c++;
+
+	*key = s;
+	*value = NULL;
+	while (*c) {
+		switch (*c) {
+		case '=':
+			if (last_space)
+				*last_space = 0;
+			else
+				*c = 0;
+
+			while (*++c == ' ' || *c == '\t');
+
+			*value = c;
+			return;
+		case ' ':
+		case '\t':
+			if (!last_space)
+				last_space = c;
+			break;
+		default:
+			last_space = NULL;
+			break;
+		}
+
+		c++;
+	}
+}
+
 int config_parse_file(struct config *config)
 {
     FATFS filesystem;
@@ -1162,13 +1218,6 @@ int config_parse_file(struct config *config)
                 printf("New section: '%s' at line %zd\n", section.name, ln);
 
                 continue;
-            } else {
-                // Invalid section header
-                printf("Error: Invalid section header at line %zd\n", ln);
-                free_section_entries(&section);
-                f_close(&fh);
-                f_unmount("/");
-                return -1;
             }
         }
 
@@ -1276,18 +1325,12 @@ int config_parse_file(struct config *config)
 
         if (ptr[0] == '[') {
             // // Check if it's a valid section header
-            // if (len > 2 && ptr[len - 1] == ']') {
+            if (len > 2 && ptr[len - 1] == ']') {
                 ptr[len - 1] = '\0'; // Remove closing ']'
                 snprintf(section_name, sizeof(section_name), "%s", ptr + 1);
                 printf("New section: '%s' at line %zd\n", section_name, ln);
                 continue;
-            // } else {
-            //     // Invalid section header
-            //     printf("Error: Invalid section header at line %zd\n", ln);
-            //     f_close(&fh);
-            //     f_unmount("/");
-            //     return -1;
-            // }
+            }
         }
 
         // Process entry
@@ -1474,11 +1517,6 @@ int config_init_(struct config *config) {
                 printf("New section: '%s' at line %zu\n", section.name, ln);
 
                 continue;
-            } else {
-                // Invalid section header
-                printf("Error: Invalid section header at line %zu\n", ln);
-                free_section_entries(&section);
-                return -1;
             }
         }
 
@@ -1576,10 +1614,6 @@ int config_init_(struct config *config) {
                 snprintf(section_name, sizeof(section_name), "%s", line + 1);
                 printf("New section: '%s' at line %zu\n", section_name, ln);
                 continue;
-            } else {
-                // Invalid section header
-                printf("Error: Invalid section header at line %zu\n", ln);
-                return -1;
             }
         }
 

@@ -14,7 +14,7 @@ include_directories("${CMAKE_CURRENT_LIST_DIR}/../../")
 
 add_library(keyd
   ${CMAKE_CURRENT_LIST_DIR}/config.c
-  ${CMAKE_CURRENT_LIST_DIR}/ini.c
+  # ${CMAKE_CURRENT_LIST_DIR}/ini.c
   ${CMAKE_CURRENT_LIST_DIR}/macro.c
   ${CMAKE_CURRENT_LIST_DIR}/keys.c
   ${CMAKE_CURRENT_LIST_DIR}/stringutils.c

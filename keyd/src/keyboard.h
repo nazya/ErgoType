@@ -8,7 +8,6 @@
 
 #include "keys.h"
 #include "config.h"
-// #include "porting.h"
 
 #define MAX_ACTIVE_KEYS	32
 #define CACHE_SIZE	16 //Effectively nkro

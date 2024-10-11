@@ -6,6 +6,9 @@
 #include "task.h"
 #include "queue.h"
 
+#include "tusb.h"
+#include "usb_descriptors.h"
+
 #include <time.h>   // For time(
 
 // tmp REMOVE IT
@@ -13,13 +16,84 @@
 #include "porting.h"
 #include "daemon.h"
 
+// HID Keyboard Report
+static hid_keyboard_report_t hid_report = {0};
+
+static uint8_t get_modifier(int code)
+{
+	switch (code) {
+	case KEYD_LEFTSHIFT:
+		return HID_SHIFT;
+		break;
+	case KEYD_RIGHTSHIFT:
+		return HID_RIGHTSHIFT;
+		break;
+	case KEYD_LEFTCTRL:
+		return HID_CTRL;
+		break;
+	case KEYD_RIGHTCTRL:
+		return HID_RIGHTCTRL;
+		break;
+	case KEYD_LEFTALT:
+		return HID_ALT;
+		break;
+	case KEYD_RIGHTALT:
+		return HID_ALT_GR;
+		break;
+	case KEYD_LEFTMETA:
+		return HID_SUPER;
+		break;
+	case KEYD_RIGHTMETA:
+		return HID_RIGHTSUPER;
+		break;
+	default:
+		return 0;
+		break;
+	}
+
+}
+
 static void send_key(uint8_t code, uint8_t state)
 {
 	keystate[code] = state;
 	// printf("keyd out: %u %u\n", code, state);
 	dbg("keyd out %s %s\n", KEY_NAME(code), state ? "down" : "up");
 
-	// vkbd_send_key(vkbd, code, state);
+	uint8_t hid_code = hid_table[code];
+    uint8_t mod = get_modifier(code);
+
+    // Handle modifier keys
+    if (mod) {
+        if (state)
+            hid_report.modifier |= mod;
+        else
+            hid_report.modifier &= ~mod;
+    } else {
+        if (state) {
+            // Add key to the keycode array
+            for (int i = 0; i < 6; i++) {
+                if (hid_report.keycode[i] == 0x00) {
+                    hid_report.keycode[i] = hid_code;
+                    break;
+                }
+            }
+        } else {
+            // Remove key from the keycode array
+            for (int i = 0; i < 6; i++) {
+                if (hid_report.keycode[i] == hid_code) {
+                    hid_report.keycode[i] = 0x00;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Send the updated HID report
+	while (!tud_hid_ready()) {
+        // Optionally, handle USB background tasks
+        tud_task();
+    }
+    tud_hid_keyboard_report(REPORT_ID_KEYBOARD, hid_report.modifier, hid_report.keycode);
 }
 
 static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t state)
@@ -66,6 +140,21 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// 	nr_listeners = n;
 	// 	memcpy(listeners, keep, n * sizeof(int));
 	// }
+}
+
+
+void keyb_init() {
+	printf("size of struct conf: %u bytes\n", sizeof(struct config));
+
+	struct output output = {
+					.send_key = send_key,
+					.on_layer_change = on_layer_change,
+				};
+
+    active_kbd = new_keyboard(&output);
+	printf("kbd initialized. heap size: %u bytes\n", xPortGetFreeHeapSize());
+
+    // config_parse(&active_kbd->config);    
 }
 
 static int event_handler(struct event *ev)
@@ -196,6 +285,36 @@ static int event_handler(struct event *ev)
 
 	return timeout;
 }
+int evloop(int (*event_handler) (struct event *ev))
+{
+	size_t i;
+	int timeout = 0;
+
+	struct event ev;
+
+	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
+	printf("Entering evloop\n");
+    while (1) {
+        if (xQueueReceive(eventQueue, &ev, xTicksToWait) == pdPASS) {
+            timeout = event_handler(&ev);
+            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+        } else {
+            // Timeout occurred
+            ev.type = EV_TIMEOUT;
+			ev.devev = NULL;
+            int timeout = event_handler(&ev);
+            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+        }
+    }
+
+    return 0; // Never reached
+}
+void keyd_task(void* pvParameters) {
+    (void) pvParameters;
+    evloop(event_handler);
+}
+
+
 
 void generate_random_key_presses() {
     struct event ev;
@@ -296,64 +415,7 @@ void generate_random_key_presses() {
 
     }
 }
-
-int evloop(int (*event_handler) (struct event *ev))
-{
-	size_t i;
-	int timeout = 0;
-
-	struct event ev;
-
-	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
-	printf("Entering evloop\n");
-    while (1) {
-        if (xQueueReceive(eventQueue, &ev, xTicksToWait) == pdPASS) {
-			// printf("Read from queue\n");
-
-            // Handle the event
-            timeout = event_handler(&ev);
-            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-        } else {
-			// printf("Handling timeout\n");
-
-            // Timeout occurred
-            ev.type = EV_TIMEOUT;
-			// ev.dev = NULL;
-			ev.devev = NULL;
-            int 
-			timeout = event_handler(&ev);
-            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-        }
-    }
-
-    return 0; // Never reached
-}
-
-void keyb_init() {
-	printf("size of struct conf: %u bytes\n", sizeof(struct config));
-
-	struct output output = {
-					.send_key = send_key,
-					.on_layer_change = on_layer_change,
-				};
-
-    active_kbd = new_keyboard(&output);
-	printf("kbd initialized. heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-	// active_kbd->config = calloc(1, sizeof(struct config));
-    config_parse(&active_kbd->config);
-
-    
-}
-
 void keys_task(void* pvParameters) {
     (void) pvParameters;
     generate_random_key_presses();
-}
-
-void keyd_task(void* pvParameters) {
-    (void) pvParameters;
-	// printf("before init heap size: %u bytes\n", xPortGetFreeHeapSize());
-	// printf("after keyd init heap size: %u bytes\n", xPortGetFreeHeapSize());
-    evloop(event_handler);
 }

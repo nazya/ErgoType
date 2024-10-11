@@ -27,15 +27,7 @@
 
 
 #define TUD_TASK_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
-// #define MAIN_TASK_STACK_SIZE 1024
 #define HID_STACK_SZIE      configMINIMAL_STACK_SIZE
-
-// static FATFS filesystem;
-
-// static void test_and_init_filesystem(void) {
-//     f_mount(&filesystem, "/", 1);
-//     f_unmount("/");
-// }
 
 // Mode selection variable
 uint32_t mode = 1; // 0: HID mode, 1: MSC mode
@@ -84,24 +76,8 @@ int main() {
     }
     tusb_init();
     printf("Initialized\n");
-
-    keyd_log("keyd_log test");
-    dbg("dbg test");
-    dbg2("dbg2 test");
-    err("err test");
-    warn("warn test");
-
-    // test_and_init_filesystem();
-    printf("Filesystem tested\n");
-
-    
-    
-    printf("Starting os\n");
-
-
-
     //--------------------------------------------------------------------------------
-
+    printf("Starting os\n");
     if (mode == 0) { // HID mode
         keyb_init();
         printf("Enter HID mode\n");
@@ -111,7 +87,7 @@ int main() {
         BaseType_t taskCreated;
         xTaskCreate(keys_task, "hid_appp", 256, NULL, configMAX_PRIORITIES  - 4, NULL);
         
-        printf("before task free heap size: %u bytes\n", xPortGetFreeHeapSize());
+        // printf("before task free heap size: %u bytes\n", xPortGetFreeHeapSize());
         taskCreated = xTaskCreate(keyd_task, "hid_app", 8*1024, NULL, configMAX_PRIORITIES - 3, NULL);
 
         // Check if the task was created successfully and print the result
@@ -122,9 +98,7 @@ int main() {
         }
     }
     else {
-
         xTaskCreate(usb_device_task, "usb_device_task", TUD_TASK_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, NULL);
-
     }
 
     xTaskCreate(led_task, "led", 128, NULL, tskIDLE_PRIORITY + 1, NULL);
