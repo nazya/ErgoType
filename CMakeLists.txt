@@ -71,14 +71,17 @@ add_compile_definitions(FF_USE_STRFUNC=1)
 add_subdirectory(tusb)
 add_subdirectory(pico-usb-flash-drive)
 add_subdirectory(keyd/src)
+# add_subdirectory(quantum)
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_msc_driver.c
         ${CMAKE_CURRENT_LIST_DIR}/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led.c
-        ${CMAKE_CURRENT_LIST_DIR}/hid.c
+        # ${CMAKE_CURRENT_LIST_DIR}/hid.c
         ${CMAKE_CURRENT_LIST_DIR}/tud.c
+        ${CMAKE_CURRENT_LIST_DIR}/matrix.c
+        ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         )
 
 # Make sure TinyUSB can find tusb_config.h
@@ -92,6 +95,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         usbd
         fsd
         keyd
+        # q
 
         pico_async_context_freertos
         FreeRTOS-Kernel

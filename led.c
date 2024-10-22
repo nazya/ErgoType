@@ -1,6 +1,6 @@
 #include "bsp/board.h"
-// #include "FreeRTOS.h"
-// #include "task.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 //--------------------------------------------------------------------+
 // BLINKING TASK
@@ -25,6 +25,6 @@ void led_task(void* pvParameters) {
 
     while (1) {
         led_blinking_task();
-        // vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

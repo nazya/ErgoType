@@ -16,6 +16,11 @@
 #include "porting.h"
 #include "daemon.h"
 
+// #include "quantum/keyboard.h"
+// #include "quantum/matrix.h"
+#include "matrix.h"
+
+
 
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTYPES
@@ -32,6 +37,7 @@
 // Mode selection variable
 uint32_t mode = 1; // 0: HID mode, 1: MSC mode
 QueueHandle_t eventQueue;
+QueueHandle_t key_event_queue;
 struct keyboard *active_kbd;
 
 // FreeRTOS tasks
@@ -39,6 +45,7 @@ void led_task(void* pvParameters); // led.c
 void hid_app_task(void* pvParameters); // hid.c
 void msc_app_task(void* pvParameters); // msc.c
 void usb_device_task(void* pvParameters); // tud.c
+void matrix_task(void* pvParameters); // keyscan.c
 
 int main() {
 
@@ -69,6 +76,7 @@ int main() {
         while (1) { };
     }
     printf("Mode selected: %s\n", mode == 0 ? "HID" : "MSC");
+    
 
     tud_init(BOARD_TUD_RHPORT);
     if (board_init_after_tusb) {
@@ -76,21 +84,26 @@ int main() {
     }
     tusb_init();
     printf("Initialized\n");
-    //--------------------------------------------------------------------------------
-    printf("Starting os\n");
-    if (mode == 0) { // HID mode
-        keyb_init();
-        printf("Enter HID mode\n");
-        xTaskCreate(usb_device_task, "usb_device_task", HID_STACK_SZIE, NULL, configMAX_PRIORITIES - 2, NULL);
-        eventQueue = xQueueCreate(10, sizeof(struct event));
-        // xTaskCreate(hid_app_task, "hid_app", 256, NULL, tskIDLE_PRIORITY + 2, NULL);
-        BaseType_t taskCreated;
-        xTaskCreate(keys_task, "hid_appp", 256, NULL, configMAX_PRIORITIES  - 4, NULL);
-        
-        // printf("before task free heap size: %u bytes\n", xPortGetFreeHeapSize());
-        taskCreated = xTaskCreate(keyd_task, "hid_app", 8*1024, NULL, configMAX_PRIORITIES - 3, NULL);
 
-        // Check if the task was created successfully and print the result
+    
+    printf("Starting os\n");
+    BaseType_t taskCreated;
+    xTaskCreate(led_task, "led", 128, NULL, tskIDLE_PRIORITY + 1, NULL);
+    if (mode == 0) { // HID mode
+        printf("Enter HID mode\n");
+
+        eventQueue = xQueueCreate(16, sizeof(struct event));
+        key_event_queue = xQueueCreate(256, sizeof(key_event_t));
+        keyb_init();
+
+        matrix_t matrix;
+        parse_matrix_file(&matrix);
+
+        xTaskCreate(key_event_processor_task, "KeyProcessor", HID_STACK_SZIE, NULL, tskIDLE_PRIORITY + 3, NULL);
+        xTaskCreate(matrix_task, "MT", 1024, &matrix, configMAX_PRIORITIES - 1, NULL);
+        xTaskCreate(usb_device_task, "tud", HID_STACK_SZIE, NULL, tskIDLE_PRIORITY + 2, NULL);
+
+        taskCreated = xTaskCreate(keyd_task, "keyd", 8*1024, NULL, configMAX_PRIORITIES - 2, NULL);
         if(taskCreated == pdPASS) {
             printf("Keyd task created successfully!\n");
         } else {
@@ -98,146 +111,11 @@ int main() {
         }
     }
     else {
-        xTaskCreate(usb_device_task, "usb_device_task", TUD_TASK_STACK_SIZE, NULL, configMAX_PRIORITIES - 2, NULL);
+        xTaskCreate(usb_device_task, "usb_device_task", TUD_TASK_STACK_SIZE, NULL, configMAX_PRIORITIES - 3, NULL);
     }
 
-    xTaskCreate(led_task, "led", 128, NULL, tskIDLE_PRIORITY + 1, NULL);
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
 
     while (1) { };
-    // task_read_conf();
-    // TODO: flash format mechanism by calling flash_fat_initialize();
-    // todo: sdk/2.0.0/lib/tinyusb/lib/fatfs/source/ffconf.h
     return 0;
 }
-
-
-// static char *read_file()
-// {
-//     char *buf = NULL;
-//     char line[MAX_LINE_LEN+1];
-//     int buf_sz = MAX_LINE_LEN;     // Current size of the buffer
-//     int total_sz = 0;   // Total size of the data read
-
-//     // Mount the filesystem
-//     FRESULT res = f_mount(&filesystem, "/", 1);
-//     if (res != FR_OK) {
-//         printf("f_mount fail rc=%d\n", res);
-//         return NULL;
-//     }
-
-//     FIL fh;
-//     // Open the file for reading
-//     res = f_open(&fh, "keyd.conf", FA_READ);
-//     if (res != FR_OK) {
-//         f_unmount("/");
-//         printf("failed to open keyd.conf\n");
-//         return NULL;
-//     }
-
-//     // Read file line by line
-//     while (f_gets(line, sizeof line, &fh)) {
-//         // Skip lines that start with '#'
-//         if (line[0] == '#') {
-//             continue;  // Ignore this line and go to the next one
-//         }
-
-//         int len = strlen(line);
-
-//         // Ensure the line ends with a newline character
-//         if (line[len-1] != '\n') {
-//             if (len >= MAX_LINE_LEN) {
-//                 printf("maximum line length exceeded (%d)\n", MAX_LINE_LEN);
-//                 goto fail;
-//             } else {
-//                 line[len++] = '\n';
-//             }
-//         }
-
-//         if ((len+total_sz) > MAX_FILE_SZ) {
-// 			printf("maximum file size exceed (%d)", MAX_FILE_SZ);
-// 			goto fail;
-// 		}
-        
-//         if (!total_sz) {
-//             buf = (char *)malloc(len);
-//             if (!buf) {
-//                 printf("failed to allocate more memory for buf\n");
-//                 goto fail;
-//             }
-//         } else {
-//             buf_sz += len;  // Double the buffer size
-//             char *new_buf = realloc(buf, buf_sz);
-//             if (!new_buf) {
-//                 printf("failed to allocate more memory for buf\n");
-//                 goto fail;
-//             }
-//             buf = new_buf;
-//         }
-
-//         // str(line, include_prefix) == line) {
-// 		// 	FIL *fd;
-// 		// 	const char *resolved_path;
-// 		// 	char *include_path = line+sizeof(include_prefix)-1;
-
-// 		// 	line[len-1] = 0;
-
-// 		// 	while (include_path[0] == ' ')
-// 		// 		include_path++;
-
-// 		// 	resolved_path = resolve_include_path(path, include_path);
-
-// 		// 	if (!resolved_path) {
-// 		// 		// warn("failed to resolve include path: %s", include_path);
-// 		// 		continue;
-// 		// 	}
-
-// 		// 	fd = f_open(resolved_path, O_RDONLY);
-
-// 		// 	if (fd < 0) {
-// 		// 		// warn("failed to include %s", include_path);
-// 		// 		// perror("open");
-// 		// 	} else {
-// 		// 		int n;
-// 		// 		while ((n = f_read(fd, buf+sz, sizeof(buf)-sz)) > 0)
-// 		// 			sz += n;
-// 		// 		f_close(fd);
-// 		// 	}
-// 		// } else {
-
-//         // Copy the line to the buffer
-//         strcpy(buf + total_sz, line);
-//         total_sz += len;
-//     }
-
-//     f_close(&fh);
-//     f_unmount("/");
-
-//     if (!buf) {
-//         buf[total_sz] = '\0';  // Null-terminate the buffer
-//     }
-//     return buf;
-
-// fail:
-//     free(buf);  // Free the memory in case of failure
-//     f_close(&fh);
-//     f_unmount("/");
-//     return NULL;
-// }
-
-// int config_parse(struct config *config)
-// {
-// 	char *content;
-//     if (!(content = read_file())) {
-//         printf("no content read\n");
-// 		return -1;
-//     } else {
-//         printf("Config\n");
-//         printf("%s\n", content);
-//         printf("\nConfig End\n");
-//     }
-
-// 	config_init(config);
-// 	snprintf(config->path, sizeof(config->path), "%s", "\0");
-// 	return config_parse_string(config, content);
-// }

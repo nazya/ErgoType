@@ -1,8 +1,7 @@
 #include <ctype.h>
-#include <bsp/board.h>
+// #include <bsp/board.h>
 #include <tusb.h>
 #include "flash.h"
-
 
 #define  DISK_BLOCK_NUM  128
 #define  DISK_BLOCK_SIZE 512

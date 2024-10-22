@@ -11,7 +11,13 @@
 #define HID_SUPER 0x8
 
 extern QueueHandle_t eventQueue;
+extern QueueHandle_t key_event_queue;
 extern struct keyboard *active_kbd;
+
+typedef struct {
+    uint8_t code;  // Key code
+    uint8_t state; // Key state: 1 for down, 0 for up
+} key_event_t;
 
 enum event_type {
 	EV_DEV_ADD,
@@ -54,6 +60,7 @@ static uint8_t keystate[256];
 void keyb_init();
 void keys_task(void* pvParameters);
 void keyd_task(void* pvParameters); 
+void key_event_processor_task(void *pvParameters);
 
 
 

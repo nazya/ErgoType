@@ -67,6 +67,7 @@ const static struct {
 	{ "overload", 	NULL,	OP_OVERLOAD,			{ ARG_LAYER, ARG_DESCRIPTOR } },
 	{ "overloadt", 	NULL,	OP_OVERLOAD_TIMEOUT,		{ ARG_LAYER, ARG_DESCRIPTOR, ARG_TIMEOUT } },
 	{ "overloadt2", NULL,	OP_OVERLOAD_TIMEOUT_TAP,	{ ARG_LAYER, ARG_DESCRIPTOR, ARG_TIMEOUT } },
+    { "overloadtm", NULL,   OP_OVERLOAD_TIMEOUT_MACRO, { ARG_LAYER, ARG_MACRO, ARG_DESCRIPTOR} },
 
 	{ "overloadi",	NULL,	OP_OVERLOAD_IDLE_TIMEOUT, { ARG_DESCRIPTOR, ARG_DESCRIPTOR, ARG_TIMEOUT } },
 	{ "timeout", 	NULL,	OP_TIMEOUT,	{ ARG_DESCRIPTOR, ARG_TIMEOUT, ARG_DESCRIPTOR } },
@@ -234,7 +235,7 @@ const static struct {
 
 
 /* Return up to two keycodes associated with the given name. */
-static uint8_t lookup_keycode(const char *name)
+uint8_t lookup_keycode(const char *name)
 {
 	size_t i;
 
@@ -913,6 +914,8 @@ static void parse_global_section(struct config *config, struct ini_section *sect
 			config->layer_indicator = atoi(ent->val);
 		else if (!strcmp(ent->key, "overload_tap_timeout"))
 			config->overload_tap_timeout = atoi(ent->val);
+        else if (!strcmp(ent->key, "overloadtm_timeout"))
+            config->overloadtm_timeout = atoi(ent->val);
 		else
 			printf("line %zd: %s is not a valid global option\n", ent->lnum, ent->key);
 	}
@@ -1425,6 +1428,7 @@ int config_init_(struct config *config) {
 
 	config->macro_timeout = 600;
 	config->macro_repeat_timeout = 50;
+    config->overloadtm_timeout = 300;
 
 	const char *config_lines[] = {
 		"[aliases]",
@@ -1549,7 +1553,7 @@ int config_init_(struct config *config) {
             ent->val = val ? strdup(val) : NULL;
 
             if (!ent->key || (val && !ent->val)) {
-                printf("Memory allocation failed at line %zu\n", ln);
+                printf("strdup failed at line %zu\n", ln);
                 free_section_entries(&section);
                 return -1;
             }

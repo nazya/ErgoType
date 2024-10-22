@@ -20,7 +20,7 @@
 #define MAX_ALIAS_LENGTH    32
 #define MAX_EXP_LEN		    512
 #define MAX_LAYER_NAME_LEN	64
-#define MAX_LAYERS		    96
+#define MAX_LAYERS		    64
 
 // #ifndef PATH_MAX
 // #define PATH_MAX 1024
@@ -44,6 +44,7 @@ enum op {
 	OP_CLEARM,
 	OP_OVERLOAD,
 	OP_OVERLOAD_TIMEOUT,
+	OP_OVERLOAD_TIMEOUT_MACRO,
 	OP_OVERLOAD_TIMEOUT_TAP,
 	OP_OVERLOAD_IDLE_TIMEOUT,
 	OP_TOGGLE,
@@ -76,7 +77,7 @@ struct descriptor {
 };
 
 struct chord {
-	uint8_t keys[8];
+	uint8_t keys[6];
 	size_t sz;
 
 	struct descriptor d;
@@ -115,7 +116,7 @@ struct config {
 
 	/* Auxiliary descriptors used by layer bindings. */
 	struct descriptor descriptors[256];
-	struct macro macros[128];
+	struct macro macros[256];
 	// struct command commands[64];
 	
 	char *aliases[256];  // All entries are NULL by default
@@ -134,6 +135,7 @@ struct config {
 	long oneshot_timeout;
 
 	long overload_tap_timeout;
+	long overloadtm_timeout;
 
 	long chord_interkey_timeout;
 	long chord_hold_timeout;
@@ -143,6 +145,7 @@ struct config {
 	char default_layout[MAX_LAYER_NAME_LEN];
 };
 
+uint8_t lookup_keycode(const char *name);
 int config_parse(struct config *config);
 int config_add_entry(struct config *config, const char *exp);
 int config_get_layer_index(const struct config *config, const char *name);

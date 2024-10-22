@@ -17,7 +17,30 @@
 #include "daemon.h"
 
 // HID Keyboard Report
-static hid_keyboard_report_t hid_report = {0};
+
+static uint8_t mods = 0;
+static uint8_t keys[6] = {0};
+
+static void send_hid_report()
+{
+	struct hid_report {
+		uint8_t hid_mods;
+		uint8_t reserved;
+		uint8_t hid_code[6];
+	};
+	struct hid_report report;
+
+	for (int i = 0; i < 6; i++)
+		report.hid_code[i] = keys[i];
+
+	report.hid_mods = mods;
+
+	while (!tud_hid_ready()) {
+		// Handle USB background tasks
+		tud_task();
+	}
+	tud_hid_keyboard_report(REPORT_ID_KEYBOARD, report.hid_mods, report.hid_code);
+}
 
 static uint8_t get_modifier(int code)
 {
@@ -50,74 +73,120 @@ static uint8_t get_modifier(int code)
 		return 0;
 		break;
 	}
-
 }
+
+static void update_key_state(uint16_t code, int state)
+{
+	int i;
+	int set = 0;
+	uint8_t hid_code = hid_table[code];
+
+	for (i = 0; i < 6; i++) {
+		if (keys[i] == hid_code) {
+			set = 1;
+			if (state == 0)
+				keys[i] = 0;
+		}
+	}
+	if (state && !set) {
+		for (i = 0; i < 6; i++) {
+			if (keys[i] == 0) {
+				keys[i] = hid_code;
+				break;
+			}
+		}
+	}
+}
+
+static int update_modifier_state(int code, int state)
+{
+	uint16_t mod = get_modifier(code);
+
+	if (mod) {
+		if (state)
+			mods |= mod;
+		else
+			mods &= ~mod;
+		return 0;
+	}
+
+	return -1;
+}
+
+void vkbd_send_key(uint8_t code, int state)
+{
+	if (update_modifier_state(code, state) < 0)
+		update_key_state(code, state);
+
+	send_hid_report();
+}
+
+void key_event_processor_task(void *pvParameters)
+{
+    key_event_t event;
+
+    while(1) {
+        // Wait indefinitely for a key event
+        if (xQueueReceive(key_event_queue, &event, portMAX_DELAY) == pdPASS) {
+			vkbd_send_key(event.code, event.state);
+        }
+    }
+}
+
+// static void clear_hid_state() {
+// 	size_t i;
+// 	key_event_t event;
+
+// 	for (i = 0; i < 256; i++)
+// 		if (keystate[i]) {
+// 			keystate[i] = 0;
+// 			event.code = i;
+// 			event.state = 0;
+// 			xQueueSendToBack(key_event_queue, &event, portMAX_DELAY);
+// 		}
+// }
 
 static void send_key(uint8_t code, uint8_t state)
 {
 	keystate[code] = state;
-	// printf("keyd out: %u %u\n", code, state);
-	dbg("keyd out %s %s\n", KEY_NAME(code), state ? "down" : "up");
 
-	uint8_t hid_code = hid_table[code];
-    uint8_t mod = get_modifier(code);
+	key_event_t event;
+    event.code = code;
+    event.state = state;
 
-    // Handle modifier keys
-    if (mod) {
-        if (state)
-            hid_report.modifier |= mod;
-        else
-            hid_report.modifier &= ~mod;
-    } else {
-        if (state) {
-            // Add key to the keycode array
-            for (int i = 0; i < 6; i++) {
-                if (hid_report.keycode[i] == 0x00) {
-                    hid_report.keycode[i] = hid_code;
-                    break;
-                }
-            }
-        } else {
-            // Remove key from the keycode array
-            for (int i = 0; i < 6; i++) {
-                if (hid_report.keycode[i] == hid_code) {
-                    hid_report.keycode[i] = 0x00;
-                    break;
-                }
-            }
-        }
+    // Enqueue the key event
+    if (xQueueSendToBack(key_event_queue, &event, pdMS_TO_TICKS(3)) != pdPASS) {
+        // Handle queue full condition if necessary
+        dbg("Failed to enqueue key event (queue full)");
     }
-
-    // Send the updated HID report
-	while (!tud_hid_ready()) {
-        // Optionally, handle USB background tasks
-        tud_task();
-    }
-    tud_hid_keyboard_report(REPORT_ID_KEYBOARD, hid_report.modifier, hid_report.keycode);
+	// else {
+	// 	clear_hid_state();
+	// }
 }
 
 static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t state)
 {
-	// size_t i;
-	// char buf[MAX_LAYER_NAME_LEN+2];
-	// ssize_t bufsz;
+	size_t i;
+	char buf[MAX_LAYER_NAME_LEN+2];
+	ssize_t bufsz;
 
 	// int keep[ARRAY_SIZE(listeners)];
-	// size_t n = 0;
+	size_t n = 0;
 
-	// if (kbd->config.layer_indicator) {
-	// 	int active_layers = 0;
+	if (kbd->config.layer_indicator) {
+		int active_layers = 0;
 
-	// 	for (i = 1; i < kbd->config.nr_layers; i++)
-	// 		if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
-	// 			active_layers = 1;
-	// 			break;
-	// 		}
+		for (i = 1; i < kbd->config.nr_layers; i++)
+			if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
+				active_layers = 1;
+				break;
+			}
 
-	// 	for (i = 0; i < device_table_sz; i++)
-	// 		if (device_table[i].data == kbd)
-	// 			device_set_led(&device_table[i], 1, active_layers);
-	// }
+		// for (i = 0; i < device_table_sz; i++)
+		// 	if (device_table[i].data == kbd){
+		// 		device_set_led(&device_table[i], 1, active_layers);
+		// 	}
+	}
 
 	// if (!nr_listeners)
 	// 	return;
@@ -163,11 +232,11 @@ static int event_handler(struct event *ev)
 	static int timeout = 0;
 	struct key_event kev = {0};
 
-	timeout -= ev->timestamp - last_time;
-	last_time = ev->timestamp;
+	// timeout -= ev->timestamp - last_time;
+	// last_time = ev->timestamp;
 
-	timeout = timeout < 0 ? 0 : timeout;
-
+	// timeout = timeout < 0 ? 0 : timeout;
+	
 	switch (ev->type) {
 	case EV_TIMEOUT:
 		if (!active_kbd)
@@ -177,6 +246,7 @@ static int event_handler(struct event *ev)
 		kev.timestamp = ev->timestamp;
 
 		timeout = kbd_process_events(active_kbd, &kev, 1);
+		dbg("input ev timeout\n");
 		break;
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
@@ -282,7 +352,6 @@ static int event_handler(struct event *ev)
 	default:
 		break;
 	}
-
 	return timeout;
 }
 int evloop(int (*event_handler) (struct event *ev))
@@ -297,12 +366,15 @@ int evloop(int (*event_handler) (struct event *ev))
     while (1) {
         if (xQueueReceive(eventQueue, &ev, xTicksToWait) == pdPASS) {
             timeout = event_handler(&ev);
+			timeout = timeout < 0 ? 0 : timeout;
             xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
         } else {
             // Timeout occurred
             ev.type = EV_TIMEOUT;
 			ev.devev = NULL;
-            int timeout = event_handler(&ev);
+			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            timeout = event_handler(&ev);
+			timeout = timeout < 0 ? 0 : timeout;
             xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
         }
     }
@@ -312,110 +384,4 @@ int evloop(int (*event_handler) (struct event *ev))
 void keyd_task(void* pvParameters) {
     (void) pvParameters;
     evloop(event_handler);
-}
-
-
-
-void generate_random_key_presses() {
-    struct event ev;
-    int key;
-    struct device_event devev; // Local struct to hold event details
-
-	// eventQueue = xQueueCreate(10, sizeof(struct event));
-
-    srand(time(NULL)); // Seed the random number generator
-	printf("Entering keyssym loop\n");
-    while (1) {
-        // Generate a random key code between 'A' (65) and 'Z' (90)
-        key = rand() % (4) + 2;
-
-        // Setup the device event
-        devev.type = DEV_KEY;
-        devev.code = key;
-        devev.pressed = 1; // Key down
-
-        // Prepare the main event structure
-        ev.type = EV_DEV_EVENT;
-        ev.devev = &devev; // Assign the address of devev to ev.devev
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
-
-        // Send event to the queue
-		// printf("keyd in: %u %u\n", key, 1);
-		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-        // Delay to simulate the time between key presses
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        // Change to key up event
-        devev.pressed = 0; // Key up
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Update timestamp for key up event
-
-        // Send the key up event to the queue
-		dbg("sym ev %s %s", KEY_NAME(key), 0 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-
-        // Random delay between 1000 ms and 2000 ms before next key press
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-		//simulate chord
-		//simulate chord
-		//simulate chord
-		//simulate chord
-		//simulate chord
-		// Setup the device event
-        devev.type = DEV_KEY;
-        devev.code = 1;
-        devev.pressed = 1; // Key down
-
-        ev.type = EV_DEV_EVENT;
-        ev.devev = &devev; // Assign the address of devev to ev.devev
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
-
-		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-
-		devev.type = DEV_KEY;
-        devev.code = 2;
-        devev.pressed = 1; // Key down
-
-        ev.type = EV_DEV_EVENT;
-        ev.devev = &devev; // Assign the address of devev to ev.devev
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
-
-		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-
-		devev.type = DEV_KEY;
-        devev.code = 1;
-        devev.pressed = 0; // Key down
-
-        ev.type = EV_DEV_EVENT;
-        ev.devev = &devev; // Assign the address of devev to ev.devev
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
-
-		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-
-		devev.type = DEV_KEY;
-        devev.code = 2;
-        devev.pressed = 0; // Key down
-
-        ev.type = EV_DEV_EVENT;
-        ev.devev = &devev; // Assign the address of devev to ev.devev
-        ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS; // Convert ticks to milliseconds
-
-		dbg("sym ev %s %s", KEY_NAME(key), 1 ? "down" : "up");
-        xQueueSend(eventQueue, &ev, portMAX_DELAY);
-
-
-    }
-}
-void keys_task(void* pvParameters) {
-    (void) pvParameters;
-    generate_random_key_presses();
 }

@@ -593,6 +593,26 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			}
 
 			break;
+		case OP_OVERLOAD_TIMEOUT_MACRO: // New case
+			if (pressed) {
+				uint8_t layer = d->args[0].idx;
+				int macro_idx = d->args[1].idx;
+				struct descriptor *action = &kbd->config.descriptors[d->args[2].idx];
+				kbd->pending_key.code = code;
+				kbd->pending_key.behaviour =
+					d->op == OP_OVERLOAD_TIMEOUT_TAP ?
+					PK_UNINTERRUPTIBLE_TAP_ACTION2 :
+					PK_UNINTERRUPTIBLE;
+				kbd->pending_key.dl = dl;
+				kbd->pending_key.action1 = *action;
+				kbd->pending_key.action2.op = OP_LAYERM;
+				kbd->pending_key.action2.args[0].idx = layer;
+				kbd->pending_key.action2.args[1].idx = macro_idx;
+				//kbd->pending_key.expire = time+d->args[3].timeout;
+				kbd->pending_key.expire = time+kbd->config.oneshot_timeout;
+				schedule_timeout(kbd, kbd->pending_key.expire);
+			}
+			break;
 		case OP_LAYOUT:
 			if (pressed)
 				setlayout(kbd, d->args[0].idx);
@@ -818,8 +838,6 @@ struct keyboard *new_keyboard(const struct output *output)
 	// struct keyboard *kbd;
 
 	// kbd = calloc(1, sizeof(struct keyboard));
-	printf("size of struct kbd: %u bytes\n", sizeof(struct keyboard));
-
 
 	struct keyboard *kbd = pvPortMalloc(sizeof(struct keyboard));
     if (kbd != NULL) {
@@ -1214,6 +1232,7 @@ long kbd_process_events(struct keyboard *kbd, const struct key_event *events, si
 	while (i != n) {
 		const struct key_event *ev = &events[i];
 
+		// if (timeout > 0 && timeout_ts < ev->timestamp) {
 		if (timeout > 0 && timeout_ts <= ev->timestamp) {
 			timeout = process_event(kbd, 0, 0, timeout_ts);
 			timeout_ts = timeout_ts + timeout;

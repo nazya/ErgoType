@@ -8,7 +8,7 @@
 // #include <time.h>   // For time(
 
 void usleep(uint32_t timeout_us) {
-    // Convert milliseconds to ticks
+    // Convert microseconds to ticks
     TickType_t ticks = pdMS_TO_TICKS((timeout_us / 1000) + (timeout_us % 1000 ? 1 : 0));
     
     // Delay the task for the calculated number of ticks
