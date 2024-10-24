@@ -54,7 +54,6 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led.c
         ${CMAKE_CURRENT_LIST_DIR}/tud.c
-        ${CMAKE_CURRENT_LIST_DIR}/matrix.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         )

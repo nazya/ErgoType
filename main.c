@@ -17,7 +17,6 @@
 #include "porting.h"
 #include "daemon.h"
 
-#include "matrix.h"
 #include "jconfig.h"
 
 

@@ -1,6 +1,27 @@
 #ifndef CONFIG_H
 #define CONFIG_H
-#include "matrix.h"
+
+
+#define MAX_GPIOS 16 
+
+#if (MAX_GPIOS <= 8)
+typedef uint8_t matrix_row_t;
+#elif (MAX_GPIOS <= 16)
+typedef uint16_t matrix_row_t;
+#elif (MAX_GPIOS <= 32)
+typedef uint32_t matrix_row_t;
+#else
+#    error "MAX_GPIOS: invalid value"
+#endif
+
+
+typedef struct {
+    int gpio_cols[MAX_GPIOS];      // GPIO pins for columns
+    int gpio_rows[MAX_GPIOS];      // GPIO pins for rows
+    uint8_t keymap[MAX_GPIOS][MAX_GPIOS]; // Keycode mapping [row][col]
+    uint8_t nr_cols;                  // Number of columns
+    uint8_t nr_rows;                  // Number of rows
+} matrix_t;
 
 typedef enum {
     SUCCESS,         // Default value: 0
