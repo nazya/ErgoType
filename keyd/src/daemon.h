@@ -52,7 +52,7 @@ struct event {
 	// struct device *dev;
 	struct device_event *devev;
 	int timestamp;
-	int fd;
+	// int fd;
 };
 
 // daemon.c part

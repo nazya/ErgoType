@@ -2,6 +2,7 @@
 #include "bsp/board.h"
 #include "pico/stdlib.h"
 #include "pico/stdio.h"
+
 #include "tusb.h"
 #include "ff.h"
 // #include "ffconf.h"
@@ -16,9 +17,8 @@
 #include "porting.h"
 #include "daemon.h"
 
-// #include "quantum/keyboard.h"
-// #include "quantum/matrix.h"
 #include "matrix.h"
+#include "jconfig.h"
 
 
 
@@ -43,31 +43,65 @@ struct keyboard *active_kbd;
 // FreeRTOS tasks
 void led_task(void* pvParameters); // led.c
 void hid_app_task(void* pvParameters); // hid.c
-void msc_app_task(void* pvParameters); // msc.c
 void usb_device_task(void* pvParameters); // tud.c
 void matrix_task(void* pvParameters); // keyscan.c
 
 int main() {
-
-    mode = 1;
     board_init();
     stdio_init_all();
 
+    cfg config;
+    ParseStatus status;
+    status = parse(&config, "config.json");
 
-    // Read mode selection button
-    gpio_init(MODE_PIN);
-    gpio_pull_up(MODE_PIN);
-    gpio_set_dir(MODE_PIN, GPIO_IN);
+    switch (status) {
+        case SUCCESS:
+            printf("Config parsed successfully.\n");
+            mode = 0;
+            break;
+        case NO_JSON:
+            printf("Error: No JSON provided. Triggers formating filesystem.\n");
+            // flash_fat_initialize();
+            break;
+        case NO_GPIO_COLS:
+            printf("Error: gpio_cols field is missing.\n");
+            break;
+        case NO_GPIO_ROWS:
+            printf("Error: gpio_rows field is missing.\n");
+            break;
+        case INVALID_JSON:
+            printf("Error: Invalid JSON.\n");
+            break;
+        case KEYMAP_ERROR:
+            printf("Keymap error.\n");
+            break;
+        default:
+            printf("Error occurred, entering MSC mode\n");
+            break;
+    }
+
+    // Print the final configuration
+    printf("LED Pin: %d\n", config.led_pin);
+
+    #define FIELD(name, type, default_value) \
+        printf(#name ": %d\n", config.name);
+    CONFIG_FIELDS
+    #undef FIELD
+
+    printf("nr_cols: %d\n", config.matrix.nr_cols);
+    printf("cols: %d\n", config.matrix.gpio_cols[0]);
+    printf("cols: %d\n", config.matrix.gpio_cols[2]);
+    printf("cols: %d\n", config.matrix.gpio_cols[4]);
+
+    printf("nr_rows: %d\n", config.matrix.nr_rows);
+    printf("keymap: %d\n", config.matrix.keymap[0][0]);
+    printf("keymap: %d\n", config.matrix.keymap[3][4]);
+
 
     gpio_init(ERASE_PIN);
     gpio_pull_up(ERASE_PIN);
     gpio_set_dir(ERASE_PIN, GPIO_IN);
-
-    // Read the button state (active low)
-    mode = gpio_get(MODE_PIN) ? 0 : 1;
-
     int erase = gpio_get(ERASE_PIN) ? 0 : 1;
-    
     if (erase) {
         printf("Filesystem reinit\n");
         flash_fat_initialize();
@@ -75,6 +109,15 @@ int main() {
 
         while (1) { };
     }
+
+    
+    // Read mode selection button
+    gpio_init(MODE_PIN);
+    gpio_pull_up(MODE_PIN);
+    gpio_set_dir(MODE_PIN, GPIO_IN);
+    // Read the button state (active low)
+    mode += gpio_get(MODE_PIN) ? 0 : 1; // avoid HID mode if errors occured
+    mode = (mode > 0) ? 1 : mode;
     printf("Mode selected: %s\n", mode == 0 ? "HID" : "MSC");
     
 
@@ -93,14 +136,14 @@ int main() {
         printf("Enter HID mode\n");
 
         eventQueue = xQueueCreate(16, sizeof(struct event));
+        // eventQueue = xQueueCreate(16, sizeof(struct device_event));
         key_event_queue = xQueueCreate(256, sizeof(key_event_t));
         keyb_init();
 
-        matrix_t matrix;
-        parse_matrix_file(&matrix);
+        // parse_matrix_file(&config.matrix);
 
         xTaskCreate(key_event_processor_task, "KeyProcessor", HID_STACK_SZIE, NULL, tskIDLE_PRIORITY + 3, NULL);
-        xTaskCreate(matrix_task, "MT", 1024, &matrix, configMAX_PRIORITIES - 1, NULL);
+        xTaskCreate(matrix_task, "MT", 1024, &config, configMAX_PRIORITIES - 1, NULL);
         xTaskCreate(usb_device_task, "tud", HID_STACK_SZIE, NULL, tskIDLE_PRIORITY + 2, NULL);
 
         taskCreated = xTaskCreate(keyd_task, "keyd", 8*1024, NULL, configMAX_PRIORITIES - 2, NULL);

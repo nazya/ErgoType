@@ -1,3 +1,4 @@
+#include "hardware/watchdog.h"
 #include "tusb.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -21,6 +22,7 @@ void tud_mount_cb(void)
 void tud_umount_cb(void)
 {
     blink_interval_ms = BLINK_NOT_MOUNTED;
+    // watchdog_reboot(0, 0, 0); does not work here
 }
 
 // Invoked when USB bus is suspended

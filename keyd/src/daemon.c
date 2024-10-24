@@ -246,7 +246,7 @@ static int event_handler(struct event *ev)
 		kev.timestamp = ev->timestamp;
 
 		timeout = kbd_process_events(active_kbd, &kev, 1);
-		dbg("input ev timeout\n");
+		// dbg("input ev timeout\n");
 		break;
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
@@ -361,10 +361,16 @@ int evloop(int (*event_handler) (struct event *ev))
 
 	struct event ev;
 
+	struct device_event devev;
+
+
 	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
 	printf("Entering evloop\n");
     while (1) {
-        if (xQueueReceive(eventQueue, &ev, xTicksToWait) == pdPASS) {
+        if (xQueueReceive(eventQueue, &devev, xTicksToWait) == pdPASS) {
+			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
+			ev.type = EV_DEV_EVENT;
+			ev.devev = &devev;
             timeout = event_handler(&ev);
 			timeout = timeout < 0 ? 0 : timeout;
             xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;

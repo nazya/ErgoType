@@ -23,70 +23,46 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(PICO_BOARD pico CACHE STRING "Board type")
 set(FAMILY rp2040)
 
-
-# Initialise pico_sdk from installed location
-# (note this can come from environment, CMake cache etc)
-
-# == DO NEVER EDIT THE NEXT LINES for Raspberry Pi Pico VS Code Extension to work ==
-if(WIN32)
-    set(USERHOME $ENV{USERPROFILE})
-else()
-    set(USERHOME $ENV{HOME})
-endif()
-set(sdkVersion 2.0.0)
-set(toolchainVersion 13_2_Rel1)
-set(picotoolVersion 2.0.0)
-include(${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
-# ====================================================================================
-# set(PICO_BOARD pimoroni_picolipo_16mb CACHE STRING "Board type")
-
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
-
-# set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # include(FreeRTOS_Kernel_import.cmake)
 SET(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel)
 include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/coreJSON/jsonFilePaths.cmake)
 
 set(PROJECT_NAME ErgoType)
 project(${PROJECT_NAME} C CXX ASM)
-
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Map=output.map")
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-
 cmake_minimum_required(VERSION 3.13)
-
-# Define the flash size
-# add_definitions(-DPICO_FLASH_SIZE_BYTES=4194304)
-
 add_executable(${PROJECT_NAME})
 add_compile_definitions(FF_USE_STRFUNC=1)
 
 add_subdirectory(tusb)
 add_subdirectory(pico-usb-flash-drive)
 add_subdirectory(keyd/src)
-# add_subdirectory(quantum)
 
 target_sources(${PROJECT_NAME} PUBLIC
+        ${JSON_SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_msc_driver.c
         ${CMAKE_CURRENT_LIST_DIR}/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led.c
-        # ${CMAKE_CURRENT_LIST_DIR}/hid.c
         ${CMAKE_CURRENT_LIST_DIR}/tud.c
         ${CMAKE_CURRENT_LIST_DIR}/matrix.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
+        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         )
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}
+        ${JSON_INCLUDE_PUBLIC_DIRS}
 ) 
 
 # In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_device
@@ -95,7 +71,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         usbd
         fsd
         keyd
-        # q
 
         pico_async_context_freertos
         FreeRTOS-Kernel
@@ -113,7 +88,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         hardware_flash
 
         # pico_cyw43_arch_none
-
    )
 
 
