@@ -1,0 +1,57 @@
+name: Build and Test ErgoType Firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Ubuntu VM to build the firmware
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      with:
+        submodules: true  # Ensure all submodules are cloned
+
+    - name: Install Dependencies
+      run: |
+        sudo apt update
+        sudo apt install cmake gcc-arm-none-eabi build-essential -y
+
+    - name: Setup Pico SDK
+      run: |
+        mkdir -p ~/.pico-sdk
+        git clone https://github.com/raspberrypi/pico-sdk.git --branch 2.0.0 --depth=1 ~/.pico-sdk
+
+    - name: Configure Pico SDK Path
+      run: echo "PICO_SDK_PATH=$HOME/.pico-sdk" >> $GITHUB_ENV
+
+    - name: Build Project
+      env:
+        PICO_SDK_PATH: ${{ env.PICO_SDK_PATH }}
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make -j$(nproc)
+
+    - name: Verify Firmware Binary
+      run: |
+        test -f build/ErgoType.uf2
+
+  upload:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Upload Firmware Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: firmware-uf2
+        path: build/ErgoType.uf2
