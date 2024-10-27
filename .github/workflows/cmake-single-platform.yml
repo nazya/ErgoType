@@ -6,15 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read  # Required by actions/checkout
+
 jobs:
   build:
-    runs-on: ubuntu-latest  # Ubuntu VM to build the firmware
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Ensure compatibility with Node.js 20
       with:
-        submodules: true  # Ensure all submodules are cloned
+        submodules: recursive  # Clone submodules recursively
 
     - name: Install Dependencies
       run: |
@@ -48,7 +51,7 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Upload Firmware Artifact
       uses: actions/upload-artifact@v3
