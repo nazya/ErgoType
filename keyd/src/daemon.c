@@ -1,4 +1,3 @@
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,11 +8,8 @@
 #include "tusb.h"
 #include "usb_descriptors.h"
 
-#include <time.h>   // For time(
-
-// tmp REMOVE IT
 #include "keyboard.h"
-#include "porting.h"
+#include "log.h"
 #include "daemon.h"
 
 // HID Keyboard Report
@@ -121,13 +117,13 @@ void vkbd_send_key(uint8_t code, int state)
 	send_hid_report();
 }
 
-void key_event_processor_task(void *pvParameters)
+void key_event_hid_task(void *pvParameters)
 {
     key_event_t event;
 
     while(1) {
         // Wait indefinitely for a key event
-        if (xQueueReceive(key_event_queue, &event, portMAX_DELAY) == pdPASS) {
+        if (xQueueReceive(keyd_queue, &event, portMAX_DELAY) == pdPASS) {
 			vkbd_send_key(event.code, event.state);
         }
     }
@@ -155,7 +151,7 @@ static void send_key(uint8_t code, uint8_t state)
     event.state = state;
 
     // Enqueue the key event
-    if (xQueueSendToBack(key_event_queue, &event, pdMS_TO_TICKS(3)) != pdPASS) {
+    if (xQueueSendToBack(keyd_queue, &event, pdMS_TO_TICKS(3)) != pdPASS) {
         // Handle queue full condition if necessary
         dbg("Failed to enqueue key event (queue full)");
     }
@@ -213,7 +209,7 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 
 
 void keyb_init() {
-	printf("size of struct conf: %u bytes\n", sizeof(struct config));
+	dbg3("size of struct conf: %u bytes", sizeof(struct config));
 
 	struct output output = {
 					.send_key = send_key,
@@ -221,9 +217,8 @@ void keyb_init() {
 				};
 
     active_kbd = new_keyboard(&output);
-	printf("kbd initialized. heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-    // config_parse(&active_kbd->config);    
+	dbg3("kbd initialized");
+	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
 }
 
 static int event_handler(struct event *ev)
@@ -246,7 +241,7 @@ static int event_handler(struct event *ev)
 		kev.timestamp = ev->timestamp;
 
 		timeout = kbd_process_events(active_kbd, &kev, 1);
-		// dbg("input ev timeout\n");
+		dbg3("input ev timeout");
 		break;
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
@@ -255,8 +250,7 @@ static int event_handler(struct event *ev)
 			// active_kbd = ev->dev->data; # now it is the only active kbd
 			struct keyboard *kbd = active_kbd;
 			if (!kbd) {
-				printf("no kbd present\n");
-
+				dbg("no kbd set");
 				return 0;
 			}
 			switch (ev->devev->type) {
@@ -365,9 +359,9 @@ int evloop(int (*event_handler) (struct event *ev))
 
 
 	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
-	printf("Entering evloop\n");
+	dbg3("entering evloop");
     while (1) {
-        if (xQueueReceive(eventQueue, &devev, xTicksToWait) == pdPASS) {
+        if (xQueueReceive(keyscan_queue, &devev, xTicksToWait) == pdPASS) {
 			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
 			ev.type = EV_DEV_EVENT;
 			ev.devev = &devev;

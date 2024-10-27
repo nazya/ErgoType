@@ -18,7 +18,7 @@ add_library(keyd
   ${CMAKE_CURRENT_LIST_DIR}/macro.c
   ${CMAKE_CURRENT_LIST_DIR}/keys.c
   ${CMAKE_CURRENT_LIST_DIR}/stringutils.c
-  ${CMAKE_CURRENT_LIST_DIR}/porting.c
+  ${CMAKE_CURRENT_LIST_DIR}/log.c
   ${CMAKE_CURRENT_LIST_DIR}/keyboard.c
   ${CMAKE_CURRENT_LIST_DIR}/daemon.c
 )

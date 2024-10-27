@@ -1,9 +1,14 @@
 #include <string.h>
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "stringutils.h"
 #include "config.h"
 #include "keys.h"
-#include "porting.h"
+#include "log.h"
+
+#define SLEEP_MS(x) vTaskDelay(pdMS_TO_TICKS(x))
 
 #define ADD_ENTRY(t, d) do { \
 		if (macro->sz >= ARRAY_SIZE(macro->entries)) { \
@@ -146,7 +151,7 @@ void macro_execute(void (*output)(uint8_t, uint8_t),
 			}
 
 			if (mods && timeout)
-				usleep(timeout);
+				SLEEP_MS(timeout);
 			output(code, 1);
 			output(code, 0);
 
@@ -161,11 +166,11 @@ void macro_execute(void (*output)(uint8_t, uint8_t),
 
 			break;
 		case MACRO_TIMEOUT:
-			usleep(ent->data * 1E3);
+			SLEEP_MS(ent->data);
 			break;
 		}
 
 		if (timeout)
-			usleep(timeout);
+			SLEEP_MS(timeout);
 	}
 }

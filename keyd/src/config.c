@@ -4,9 +4,7 @@
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
 
-#include <assert.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -14,10 +12,9 @@
 #include "ff.h"
 
 #include "config.h"
-// #include "ini.h"
 #include "keys.h"
 #include "stringutils.h"
-#include "porting.h"
+#include "log.h"
 
 struct ini_entry {
 	char *key;
@@ -51,18 +48,18 @@ const static struct {
 		ARG_DESCRIPTOR,
 	} args[MAX_DESCRIPTOR_ARGS];
 } actions[] =  {
-	{ "swap", 	NULL,	OP_SWAP,	{ ARG_LAYER } },
-	{ "clear", 	NULL,	OP_CLEAR,	{} },
+	{ "swap",   	NULL,	OP_SWAP,	{ ARG_LAYER } },
+	{ "clear",  	NULL,	OP_CLEAR,	{} },
 	{ "oneshot", 	NULL,	OP_ONESHOT,	{ ARG_LAYER } },
 	{ "toggle", 	NULL,	OP_TOGGLE,	{ ARG_LAYER } },
 
 	{ "clearm", 	NULL,	OP_CLEARM,	{ ARG_MACRO } },
-	{ "swapm", 	NULL,	OP_SWAPM,	{ ARG_LAYER, ARG_MACRO } },
+	{ "swapm",    	NULL,	OP_SWAPM,	{ ARG_LAYER, ARG_MACRO } },
 	{ "togglem", 	NULL,	OP_TOGGLEM,	{ ARG_LAYER, ARG_MACRO } },
 	{ "layerm", 	NULL,	OP_LAYERM,	{ ARG_LAYER, ARG_MACRO } },
 	{ "oneshotm", 	NULL,	OP_ONESHOTM,	{ ARG_LAYER, ARG_MACRO } },
 
-	{ "layer", 	NULL,	OP_LAYER,	{ ARG_LAYER } },
+	{ "layer",  	NULL,	OP_LAYER,	{ ARG_LAYER } },
 
 	{ "overload", 	NULL,	OP_OVERLOAD,			{ ARG_LAYER, ARG_DESCRIPTOR } },
 	{ "overloadt", 	NULL,	OP_OVERLOAD_TIMEOUT,		{ ARG_LAYER, ARG_DESCRIPTOR, ARG_TIMEOUT } },
@@ -271,19 +268,53 @@ static struct descriptor *layer_lookup_chord(struct layer *layer, uint8_t *keys,
         }
 
         if (nm == n)
-            return &chord->d;  // No change needed
+            return &chord->d;
     }
 
     return NULL;
 }
 
+void* vRealloc(void* ptr, size_t old_size, size_t new_size) {
+    // If new_size is 0, free the memory and return NULL
+    if (new_size <= old_size) {
+        vPortFree(ptr);
+        return NULL;
+    }
+
+    // Allocate new memory block of the requested size
+    void* new_ptr = pvPortMalloc(new_size);
+    if (new_ptr == NULL) {
+        // Allocation failed, return NULL
+        return NULL;
+    }
+
+    // If the original pointer is NULL, behave like pvPortMalloc
+    if (ptr == NULL) {
+        return new_ptr;
+    }
+
+    // Copy data from the old block to the new block
+    memcpy(new_ptr, ptr, new_size);
+
+    // Free the old memory block
+    vPortFree(ptr);
+
+    return new_ptr;
+}
+
 static int add_chord_to_layer(struct layer *layer, const struct chord *new_chord)
 {
-    struct chord *temp = realloc(layer->chords, (layer->nr_chords + 1) * sizeof(struct chord));
+    // struct chord *temp = realloc(layer->chords, (layer->nr_chords + 1) * sizeof(struct chord));
+    struct chord *temp = pvPortMalloc((layer->nr_chords + 1) * sizeof(struct chord));
+
     if (!temp) {
         err("Failed to allocate memory for chords");
         return -1;
     }
+
+    memcpy(temp, layer->chords, layer->nr_chords * sizeof(struct chord));
+
+    vPortFree(layer->chords);
 
     layer->chords = temp;
     layer->chords[layer->nr_chords++] = *new_chord;
@@ -345,7 +376,7 @@ static int set_layer_entry(const struct config *config,
             if (config->aliases[i] && !strcmp(config->aliases[i], key)) {
                 // Allocate memory if not already allocated
                 if (layer->keymap[i] == NULL) {
-                    layer->keymap[i] = malloc(sizeof(struct descriptor));
+                    layer->keymap[i] = pvPortMalloc(sizeof(struct descriptor));
                     if (!layer->keymap[i]) {
                         err("Memory allocation failed for keymap[%zu]", i);
                         return -1;
@@ -366,7 +397,7 @@ static int set_layer_entry(const struct config *config,
 
             // Allocate memory if not already allocated
             if (layer->keymap[code] == NULL) {
-                layer->keymap[code] = malloc(sizeof(struct descriptor));
+                layer->keymap[code] = pvPortMalloc(sizeof(struct descriptor));
                 if (!layer->keymap[code]) {
                     err("Memory allocation failed for keymap[%u]", code);
                     return -1;
@@ -409,7 +440,6 @@ static int new_layer(char *s, const struct config *config, struct layer *layer)
         layer->nr_constituents = 0;
 
         if (type) {
-            // printf("composite layers cannot have a type.");
             err("composite layers cannot have a type.");
             return -1;
         }
@@ -418,14 +448,12 @@ static int new_layer(char *s, const struct config *config, struct layer *layer)
             int idx = config_get_layer_index(config, layername);
 
             if (idx < 0) {
-                // printf("%s is not a valid layer", layername);
                 err("%s is not a valid layer", layername);
                 return -1;
             }
 
             if (n >= ARRAY_SIZE(layer->constituents)) {
                 err("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
-                // printf("max composite layers (%d) exceeded", ARRAY_SIZE(layer->constituents));
                 return -1;
             }
 
@@ -439,8 +467,7 @@ static int new_layer(char *s, const struct config *config, struct layer *layer)
             layer->mods = mods;
     } else {
         if (type)
-            warn("\"%s\" is not a valid layer type, ignoring\n", type);
-            // printf("\"%s\" is not a valid layer type, ignoring\n", type);
+            warn("\"%s\" is not a valid layer type, ignoring", type);
 
         layer->type = LT_NORMAL;
         layer->mods = 0;
@@ -473,7 +500,6 @@ static int config_add_layer(struct config *config, const char *s)
 			return 1;
 
 	if (config->nr_layers >= MAX_LAYERS) {
-		// printf("max layers (%d) exceeded", MAX_LAYERS);
 		err("max layers (%d) exceeded", MAX_LAYERS);
 		return -1;
 	}
@@ -619,7 +645,7 @@ int parse_macro_expression(const char *s, struct macro *macro)
 
 	#define ADD_ENTRY(t, d) do { \
 		if (macro->sz >= ARRAY_SIZE(macro->entries)) { \
-			printf("maximum macro size (%d) exceeded\n", ARRAY_SIZE(macro->entries)); \
+			err("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries)); \
 			return 1; \
 		} \
 		macro->entries[macro->sz].type = t; \
@@ -633,8 +659,7 @@ int parse_macro_expression(const char *s, struct macro *macro)
 	char *ptr = buf;
 
 	if (len >= sizeof(buf)) {
-		// printf("macro size exceeded maximum size (%ld)\n", sizeof(buf));
-		err("macro size exceeded maximum size (%ld)\n", sizeof(buf));
+		err("macro size exceeded maximum size (%ld)", sizeof(buf));
 		return -1;
 	}
 
@@ -645,7 +670,6 @@ int parse_macro_expression(const char *s, struct macro *macro)
 		ptr += 6;
 		str_escape(ptr);
 	} else if (parse_key_sequence(ptr, &code, &mods) && utf8_strlen(ptr) != 1) {
-		// printf("Invalid macro\n");
 		err("Invalid macro %s and %s", s, ptr);
 		return -1;
 	}
@@ -690,12 +714,10 @@ static int parse_descriptor(char *s,
 
 	if (!s || !s[0]) {
 		d->op = 0;
-		printf("d->op = 0\n");
-
 		return 0;
 	}
-	printf("parsing dsc\n");
-	printf("s = %s\n", s);
+    dbg3("parsing dsc: s = %s", s);
+
 	
 
 	if (!parse_key_sequence(s, &code, &mods)) {
@@ -749,7 +771,6 @@ static int parse_descriptor(char *s,
 			return -1;
 
 		if (config->nr_macros >= ARRAY_SIZE(config->macros)) {
-			// printf("max macros (%d), exceeded\n", ARRAY_SIZE(config->macros));
 			err("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
 			return -1;
 		}
@@ -768,7 +789,6 @@ static int parse_descriptor(char *s,
 
 			if (nargs != 4) {
 				err("%s requires 4 arguments", fn);
-				// printf("%s requires 4 arguments\n", fn);
 				return -1;
 			}
 
@@ -778,7 +798,6 @@ static int parse_descriptor(char *s,
 
 			if (parse_fn(buf, &fn, args, &nargs)) {
 				err("failed to parse %s", buf);
-				// printf("failed to parse %s\n", buf);
 				return -1;
 			}
 		}
@@ -798,7 +817,6 @@ static int parse_descriptor(char *s,
 				}
 
 				if ((int)nargs != j) {
-					// printf("%s requires %d %s\n", actions[i].name, j, j == 1 ? "argument" : "arguments");
 					err("%s requires %d %s", actions[i].name, j, j == 1 ? "argument" : "arguments");
 					return -1;
 				}
@@ -812,14 +830,12 @@ static int parse_descriptor(char *s,
 					switch (type) {
 					case ARG_LAYER:
 						if (!strcmp(argstr, "main")) {
-							// printf("the main layer cannot be toggled\n");
 							err("the main layer cannot be toggled");
 							return -1;
 						}
 
 						arg->idx = config_get_layer_index(config, argstr);
 						if (arg->idx == -1 || config->layers[arg->idx].type == LT_LAYOUT) {
-							// printf("%s is not a valid layer", argstr);
 							err("%s is not a valid layer", argstr);
 							return -1;
 						}
@@ -830,8 +846,7 @@ static int parse_descriptor(char *s,
 						if (arg->idx == -1 ||
 							(arg->idx != 0 && //Treat main as a valid layout
 							 config->layers[arg->idx].type != LT_LAYOUT)) {
-							printf("%s is not a valid layout", argstr);
-							// err("%s is not a valid layout", argstr);
+							err("%s is not a valid layout", argstr);
 							return -1;
 						}
 
@@ -841,7 +856,6 @@ static int parse_descriptor(char *s,
 							return -1;
 
 						if (config->nr_descriptors >= ARRAY_SIZE(config->descriptors)) {
-							// printf("maximum descriptors exceeded");
 							err("maximum descriptors exceeded");
 							return -1;
 						}
@@ -857,7 +871,6 @@ static int parse_descriptor(char *s,
 						break;
 					case ARG_MACRO:
 						if (config->nr_macros >= ARRAY_SIZE(config->macros)) {
-							// printf("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
 							err("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
 							return -1;
 						}
@@ -880,9 +893,7 @@ static int parse_descriptor(char *s,
 			}
 		}
 	}
-
-	printf("invalid key or action");
-	// err("invalid key or action");
+	err("invalid key or action");
 	return -1;
 }
 
@@ -917,7 +928,7 @@ static void parse_global_section(struct config *config, struct ini_section *sect
         else if (!strcmp(ent->key, "overloadtm_timeout"))
             config->overloadtm_timeout = atoi(ent->val);
 		else
-			printf("line %zd: %s is not a valid global option\n", ent->lnum, ent->key);
+			warn("line %zd: %s is not a valid global option", ent->lnum, ent->key);
 	}
 }
 
@@ -959,6 +970,25 @@ static void parse_id_section(struct config *config, struct ini_section *section)
 	// }
 }
 
+char *strdup_port(const char *src) {
+    if (src == NULL) {
+        return NULL;  // Handle NULL input gracefully
+    }
+
+    // Allocate memory using pvPortMalloc
+    size_t len = strlen(src) + 1;  // +1 for null terminator
+    char *copy = (char *)pvPortMalloc(len);
+
+    if (copy == NULL) {
+        return NULL;  // Return NULL if memory allocation fails
+    }
+
+    // Copy the string to the new memory block
+    strcpy(copy, src);
+
+    return copy;
+}
+
 static void parse_alias_section(struct config *config, struct ini_section *section)
 {
     size_t i;
@@ -982,7 +1012,7 @@ static void parse_alias_section(struct config *config, struct ini_section *secti
             if ((alias_code = lookup_keycode(name))) {
                 // Allocate memory if not already allocated
                 if (config->layers[0].keymap[code] == NULL) {
-                    config->layers[0].keymap[code] = malloc(sizeof(struct descriptor));
+                    config->layers[0].keymap[code] = pvPortMalloc(sizeof(struct descriptor));
                     if (!config->layers[0].keymap[code]) {
                         warn("Memory allocation failed for alias keymap[%u]", code);
                         continue;
@@ -997,107 +1027,46 @@ static void parse_alias_section(struct config *config, struct ini_section *secti
 
             // Free existing alias if it exists to prevent memory leaks
             if (config->aliases[code]) {
-                free(config->aliases[code]);
+                vPortFree(config->aliases[code]);
                 config->aliases[code] = NULL;
             }
 
             // Allocate memory for the new alias
-            config->aliases[code] = strdup(name);
+            config->aliases[code] = strdup_port(name);
             if (!config->aliases[code]) {
                 warn("Failed to allocate memory for alias '%s'", name);
             }
         } else {
-            printf("Failed to define alias '%s', '%s' is not a valid keycode\n", name, ent->key);
+            warn("failed to define alias %s, %s is not a valid keycode", name, ent->key);
         }
     }
 }
-
-
-// static int config_parse_string(struct config *config, char *content)
-// {
-// 	size_t i;
-// 	struct ini *ini;
-
-// 	if (!(ini = ini_parse_string(content, NULL)))
-// 		return -1;
-
-// 	/* First pass: create all layers based on section headers.  */
-// 	for (i = 0; i < ini->nr_sections; i++) {
-// 		struct ini_section *section = &ini->sections[i];
-
-// 		if (!strcmp(section->name, "ids")) {
-// 			parse_id_section(config, section);
-// 			printf("id section is not supported\n");
-// 		} else if (!strcmp(section->name, "aliases")) {
-// 			parse_alias_section(config, section);
-// 		} else if (!strcmp(section->name, "global")) {
-// 			parse_global_section(config, section);
-// 		} else {
-// 			if (config_add_layer(config, section->name) < 0)
-// 				warn("some warm");
-// 		}
-// 	}
-
-// 	/* Populate each layer. */
-// 	for (i = 0; i < ini->nr_sections; i++) {
-// 		size_t j;
-// 		char *layername;
-// 		struct ini_section *section = &ini->sections[i];
-
-// 		if (!strcmp(section->name, "ids") ||
-// 		    !strcmp(section->name, "aliases") ||
-// 		    !strcmp(section->name, "global"))
-// 			continue;
-
-// 		layername = strtok(section->name, ":");
-
-// 		for (j = 0; j < section->nr_entries;j++) {
-// 			char entry[MAX_EXP_LEN];
-// 			struct ini_entry *ent = &section->entries[j];
-
-// 			if (!ent->val) {
-// 				warn("invalid binding on line %zd", ent->lnum);
-// 				continue;
-// 			}
-
-// 			snprintf(entry, sizeof entry, "%s.%s = %s", layername, ent->key, ent->val);
-
-// 			if (config_add_entry(config, entry) < 0) {
-// 				keyd_log("\tr{ERROR:} line m{%zd}\n", ent->lnum);
-// 				printf("%s failed\n", entry);
-// 			} else {
-// 				printf("%s entry add\n", entry);
-// 			}
-// 		}
-// 	}
-
-// 	return 0;
-// }
 
 void free_section_entries(struct ini_section *section)
 {
     for (size_t i = 0; i < section->nr_entries; i++) {
-        free(section->entries[i].key);
-        free(section->entries[i].val);
+        vPortFree(section->entries[i].key);
+        vPortFree(section->entries[i].val);
     }
     section->nr_entries = 0;
 }
+
 int process_section(struct ini_section *section, struct config *config) {
     if (!strcmp(section->name, "ids")) {
         parse_id_section(config, section);
-        printf("ids section processed\n");
+        dbg3("ids section processed");
     } else if (!strcmp(section->name, "aliases")) {
         parse_alias_section(config, section);
-        printf("aliases section processed\n");
+        dbg3("aliases section processed");
     } else if (!strcmp(section->name, "global")) {
         parse_global_section(config, section);
-        printf("global section processed\n");
+        dbg3("global section processed");
     } else {
         if (config_add_layer(config, section->name) < 0) {
-            printf("Error adding layer '%s'\n", section->name);
+            warn("%s", errstr);
             return -1;
         }
-        printf("Layer '%s' added\n", section->name);
+        dbg3("layer '%s' added", section->name);
     }
     return 0;
 }
@@ -1139,6 +1108,33 @@ void parse_kvp(char *s, char **key, char **value)
 	}
 }
 
+int trim_whitespace(char **line) {
+    // Skip leading whitespace
+    while (isspace(**line)) {
+        (*line)++;
+    }
+
+    size_t len = strlen(*line);
+
+    // If the string is already empty after trimming leading spaces, return 0
+    if (len == 0) {
+        return 0;
+    }
+
+    // Trim trailing whitespace in-place
+    while (len > 0 && isspace((*line)[len - 1])) {
+        len--;
+    }
+
+    // Null-terminate only if len > 0 (avoids accessing invalid memory)
+    if (len > 0) {
+        (*line)[len] = '\0';
+    }
+
+    return len;
+}
+
+
 int config_parse_file(struct config *config)
 {
     FATFS filesystem;
@@ -1152,7 +1148,7 @@ int config_parse_file(struct config *config)
     // Mount the filesystem
     res = f_mount(&filesystem, "/", 1);
     if (res != FR_OK) {
-        printf("f_mount fail rc=%d\n", res);
+        err("f_mount fail rc=%d", res);
         return -1;
     }
 
@@ -1160,32 +1156,22 @@ int config_parse_file(struct config *config)
     res = f_open(&fh, "keyd.conf", FA_READ);
     if (res != FR_OK) {
         f_unmount("/");
-        printf("failed to open keyd.conf\n");
+        err("failed to open keyd.conf");
         return -1;
     }
 
-    printf("Starting first pass...\n");
+    dbg3("starting first pass");
 
     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
         ln++;
 
         // Remove leading whitespace
         char *ptr = line;
-        while (isspace((unsigned char)*ptr))
-            ptr++;
 
-        size_t len = strlen(ptr);
-
-        // Remove trailing whitespace
-        while (len > 0 && isspace((unsigned char)ptr[len - 1]))
-            len--;
-
+        size_t len = trim_whitespace(&ptr);
         if (len == 0)
             continue; // Empty line
-
-        ptr[len] = '\0'; // Null-terminate the trimmed line
-
-        printf("Line %zd: '%s'\n", ln, ptr);
+        dbg3("line %zd: '%s'", ln, ptr);
 
         if (ptr[0] == '#')
             continue; // Comment line
@@ -1195,7 +1181,7 @@ int config_parse_file(struct config *config)
             if (len > 2 && ptr[len - 1] == ']') {
                 // Process previous section if any
                 if (section.name[0] != '\0') {
-                    printf("Processing section '%s' at line %zd\n", section.name, section.lnum);
+                    dbg3("processing section '%s' at line %zd", section.name, section.lnum);
 
                     if (process_section(&section, config) < 0) {
                         free_section_entries(&section);
@@ -1218,7 +1204,7 @@ int config_parse_file(struct config *config)
                 strncpy(section.name, ptr + 1, sizeof(section.name) - 1);
                 section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
 
-                printf("New section: '%s' at line %zd\n", section.name, ln);
+                dbg3("new section: '%s' at line %zd", section.name, ln);
 
                 continue;
             }
@@ -1230,7 +1216,7 @@ int config_parse_file(struct config *config)
             !strcmp(section.name, "global")) {
 
             if (section.nr_entries >= MAX_SECTION_ENTRIES) {
-                printf("Error: Too many entries in section '%s'\n", section.name);
+                err("too many entries in section '%s'", section.name);
                 free_section_entries(&section);
                 f_close(&fh);
                 f_unmount("/");
@@ -1243,7 +1229,7 @@ int config_parse_file(struct config *config)
             parse_kvp(ptr, &key, &val);
 
             if (!key) {
-                printf("Error parsing key at line %zd\n", ln);
+                err("error parsing key at line %zd", ln);
                 free_section_entries(&section);
                 f_close(&fh);
                 f_unmount("/");
@@ -1253,18 +1239,18 @@ int config_parse_file(struct config *config)
             // Duplicate key and val
             struct ini_entry *ent = &section.entries[section.nr_entries++];
             ent->lnum = ln;
-            ent->key = strdup(key);
-            ent->val = val ? strdup(val) : NULL;
+            ent->key = strdup_port(key);
+            ent->val = val ? strdup_port(val) : NULL;
 
             if (!ent->key || (val && !ent->val)) {
-                printf("Memory allocation failed at line %zd\n", ln);
+                err("memory allocation failed at line %zd", ln);
                 free_section_entries(&section);
                 f_close(&fh);
                 f_unmount("/");
                 return -1;
             }
 
-            printf("Parsed entry: key='%s', val='%s' at line %zd\n", ent->key, ent->val ? ent->val : "(null)", ln);
+            dbg3("parsed entry: key='%s', val='%s' at line %zd", ent->key, ent->val ? ent->val : "(null)", ln);
         } else {
             // For other sections, we don't need to store entries in the first pass
             // We can skip processing the entry
@@ -1273,7 +1259,7 @@ int config_parse_file(struct config *config)
 
     // Process the last section if any
     if (section.name[0] != '\0') {
-        printf("Processing section '%s' at line %zd\n", section.name, section.lnum);
+        dbg3("processing section '%s' at line %zd", section.name, section.lnum);
 
         if (process_section(&section, config) < 0) {
 			free_section_entries(&section);
@@ -1291,14 +1277,11 @@ int config_parse_file(struct config *config)
     res = f_open(&fh, "keyd.conf", FA_READ);
     if (res != FR_OK) {
         f_unmount("/");
-        printf("failed to open keyd.conf\n");
+        err("failed to open keyd.conf");
         return -1;
     }
 
-    printf("Starting second pass...\n");
-
-    // memset(&section, 0, sizeof(section)); // Ensure section is reset
-
+    dbg3("starting a second pass");
 	char section_name[MAX_SECTION_NAME_LEN+1];
 	section_name[0] = '\0';
 
@@ -1307,21 +1290,10 @@ int config_parse_file(struct config *config)
 
         // Remove leading whitespace
         char *ptr = line;
-        while (isspace((unsigned char)*ptr))
-            ptr++;
-
-        size_t len = strlen(ptr);
-
-        // Remove trailing whitespace
-        while (len > 0 && isspace((unsigned char)ptr[len - 1]))
-            len--;
-
+        size_t len = trim_whitespace(&ptr);
         if (len == 0)
             continue; // Empty line
-
-        ptr[len] = '\0'; // Null-terminate the trimmed line
-
-        printf("Line %zd: '%s'\n", ln, ptr);
+        dbg3("line %zd: '%s'", ln, ptr);
 
         if (ptr[0] == '#')
             continue; // Comment line
@@ -1331,7 +1303,7 @@ int config_parse_file(struct config *config)
             if (len > 2 && ptr[len - 1] == ']') {
                 ptr[len - 1] = '\0'; // Remove closing ']'
                 snprintf(section_name, sizeof(section_name), "%s", ptr + 1);
-                printf("New section: '%s' at line %zd\n", section_name, ln);
+                dbg3("new section: '%s' at line %zd", section_name, ln);
                 continue;
             }
         }
@@ -1357,71 +1329,20 @@ int config_parse_file(struct config *config)
 		snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
 
 		if (config_add_entry(config, entry) < 0) {
-			printf("Error adding entry '%s' at line %zd\n", entry, ln);
+			dbg3("error adding entry '%s' at line %zd", entry, ln);
 		} else {
-			printf("Added entry '%s'\n", entry);
+			dbg3("added entry '%s'", entry);
 		}
     }
 
     f_close(&fh);
     f_unmount("/");
-    printf("Configuration parsing completed successfully.\n");
+    dbg3("configuration parsing completed successfully");
 
     return 0;
 }
 
-// static void config_init(struct config *config)
-// {
-// 	size_t i;
-// 	// printf("cinit bm heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-// 	memset(config, 0, sizeof *config);
-// 	// printf("cinit am heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-// 	char default_config[] =
-// 	"[aliases]\n"
-
-// 	"leftshift = shift\n"
-// 	"rightshift = shift\n"
-
-// 	"leftalt = alt\n"
-// 	"rightalt = altgr\n"
-
-// 	"leftmeta = meta\n"
-// 	"rightmeta = meta\n"
-
-// 	"leftcontrol = control\n"
-// 	"rightcontrol = control\n"
-
-// 	"[main]\n"
-
-// 	"shift = layer(shift)\n"
-// 	"alt = layer(alt)\n"
-// 	"altgr = layer(altgr)\n"
-// 	"meta = layer(meta)\n"
-// 	"control = layer(control)\n"
-
-// 	"[control:C]\n"
-// 	"[shift:S]\n"
-// 	"[meta:M]\n"
-// 	"[alt:A]\n"
-// 	"[altgr:G]\n";
-
-// 	// printf("before config_parse_string in config_init heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-
-// 	config_parse_string(config, default_config);
-
-// 	/* In ms */
-// 	config->chord_interkey_timeout = 50;
-// 	config->chord_hold_timeout = 0;
-// 	config->oneshot_timeout = 0;
-
-// 	config->macro_timeout = 600;
-// 	config->macro_repeat_timeout = 50;
-// }
-
-int config_init_(struct config *config) {
+int config_init(struct config *config) {
 	config->chord_interkey_timeout = 50;
 	config->chord_hold_timeout = 0;
 	config->oneshot_timeout = 0;
@@ -1459,7 +1380,7 @@ int config_init_(struct config *config) {
 		NULL  // Sentinel to mark the end of the array
 	};
     // First Pass: Create all layers based on section headers
-    printf("Starting first pass...\n");
+    dbg3("starting a first pass");
 
     struct ini_section section;
     memset(&section, 0, sizeof(section));
@@ -1473,21 +1394,10 @@ int config_init_(struct config *config) {
         char *line = line_buffer;
 
         // Remove leading whitespace
-        while (isspace((unsigned char)*line))
-            line++;
-
-        size_t len = strlen(line);
-
-        // Remove trailing whitespace
-        while (len > 0 && isspace((unsigned char)line[len - 1]))
-            len--;
-
+        size_t len = trim_whitespace(&line);
         if (len == 0)
             continue; // Empty line
-
-        line[len] = '\0'; // Null-terminate the trimmed line
-
-        printf("Line %zu: '%s'\n", ln, line);
+        dbg3("line %zu: '%s'", ln, line);
 
         if (line[0] == '#')
             continue; // Comment line
@@ -1497,7 +1407,7 @@ int config_init_(struct config *config) {
             if (len > 2 && line[len - 1] == ']') {
                 // Process previous section if any
                 if (section.name[0] != '\0') {
-                    printf("Processing section '%s' at line %zu\n", section.name, section.lnum);
+                    dbg3("processing section '%s' at line %zu", section.name, section.lnum);
 
                     if (process_section(&section, config) < 0) {
                         free_section_entries(&section);
@@ -1518,7 +1428,7 @@ int config_init_(struct config *config) {
                 strncpy(section.name, line + 1, sizeof(section.name) - 1);
                 section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
 
-                printf("New section: '%s' at line %zu\n", section.name, ln);
+                dbg3("new section: '%s' at line %zu", section.name, ln);
 
                 continue;
             }
@@ -1530,7 +1440,7 @@ int config_init_(struct config *config) {
             !strcmp(section.name, "global")) {
 
             if (section.nr_entries >= MAX_SECTION_ENTRIES) {
-                printf("Error: Too many entries in section '%s'\n", section.name);
+                err("too many entries in section '%s'", section.name);
                 free_section_entries(&section);
                 return -1;
             }
@@ -1541,7 +1451,7 @@ int config_init_(struct config *config) {
             parse_kvp(line, &key, &val);
 
             if (!key) {
-                printf("Error parsing key at line %zu\n", ln);
+                err("error parsing key at line %zu", ln);
                 free_section_entries(&section);
                 return -1;
             }
@@ -1549,16 +1459,16 @@ int config_init_(struct config *config) {
             // Duplicate key and val
             struct ini_entry *ent = &section.entries[section.nr_entries++];
             ent->lnum = ln;
-            ent->key = strdup(key);
-            ent->val = val ? strdup(val) : NULL;
+            ent->key = strdup_port(key);
+            ent->val = val ? strdup_port(val) : NULL;
 
             if (!ent->key || (val && !ent->val)) {
-                printf("strdup failed at line %zu\n", ln);
+                err("strdup_port failed at line %zu", ln);
                 free_section_entries(&section);
                 return -1;
             }
 
-            printf("Parsed entry: key='%s', val='%s' at line %zu\n", ent->key, ent->val ? ent->val : "(null)", ln);
+            dbg3("parsed entry: key='%s', val='%s' at line %zu", ent->key, ent->val ? ent->val : "(null)", ln);
         } else {
             // For other sections, we don't need to store entries in the first pass
             // We can skip processing the entry
@@ -1567,7 +1477,7 @@ int config_init_(struct config *config) {
 
     // Process the last section if any
     if (section.name[0] != '\0') {
-        printf("Processing section '%s' at line %zu\n", section.name, section.lnum);
+        dbg3("processing section '%s' at line %zu", section.name, section.lnum);
 
         if (process_section(&section, config) < 0) {
             free_section_entries(&section);
@@ -1578,7 +1488,7 @@ int config_init_(struct config *config) {
     }
 
     // Second Pass: Populate each layer
-    printf("Starting second pass...\n");
+    dbg3("starting a second pass");
 
     ln = 0;
     char section_name[MAX_SECTION_NAME_LEN + 1];
@@ -1592,21 +1502,10 @@ int config_init_(struct config *config) {
         char *line = line_buffer;
 
         // Remove leading whitespace
-        while (isspace((unsigned char)*line))
-            line++;
-
-        size_t len = strlen(line);
-
-        // Remove trailing whitespace
-        while (len > 0 && isspace((unsigned char)line[len - 1]))
-            len--;
-
+        size_t len = trim_whitespace(&line);
         if (len == 0)
             continue; // Empty line
-
-        line[len] = '\0'; // Null-terminate the trimmed line
-
-        printf("Line %zu: '%s'\n", ln, line);
+        dbg3("line %zu: '%s'", ln, line);
 
         if (line[0] == '#')
             continue; // Comment line
@@ -1616,7 +1515,7 @@ int config_init_(struct config *config) {
             if (len > 2 && line[len - 1] == ']') {
                 line[len - 1] = '\0'; // Remove closing ']'
                 snprintf(section_name, sizeof(section_name), "%s", line + 1);
-                printf("New section: '%s' at line %zu\n", section_name, ln);
+                dbg3("new section: '%s' at line %zu", section_name, ln);
                 continue;
             }
         }
@@ -1634,7 +1533,7 @@ int config_init_(struct config *config) {
         parse_kvp(line, &key, &val);
 
         if (!key) {
-            printf("Error parsing key at line %zu\n", ln);
+            err("error parsing key at line %zu", ln);
             return -1;
         }
 
@@ -1644,7 +1543,7 @@ int config_init_(struct config *config) {
 
         char *token = strtok(layername, ":");
         if (!token) {
-            printf("Error parsing layer name at line %zu\n", ln);
+            err("error parsing layer name at line %zu", ln);
             return -1;
         }
 
@@ -1655,38 +1554,22 @@ int config_init_(struct config *config) {
             snprintf(entry, sizeof(entry), "%s.%s", token, key);
 
         if (config_add_entry(config, entry) < 0) {
-            printf("Error adding entry '%s' at line %zu\n", entry, ln);
+            err("error adding entry '%s' at line %zu", entry, ln);
         } else {
-            printf("Added entry '%s'\n", entry);
+            dbg3("added entry '%s'", entry);
         }
     }
 
-    printf("Configuration parsing completed successfully.\n");
+    dbg3("configuration parsing completed successfully");
 
     return 0;
 }
 
 int config_parse(struct config *config)
 {
-	// char *content = NULL;
-    // if (!(content = read_file())) {
-    //     printf("no content read\n");
-	// 	return -1;
-    // } else {
-    //     printf("Config\n");
-    //     printf("%s\n", content);
-    //     printf("\nConfig End\n");
-    // }
 	memset(config, 0, sizeof *config);
-	config_init_(config); // invalid macro here
-	// snprintf(config->path, sizeof(config->path), "%s", "\0");
-	// printf("befor parse string heap size: %u bytes\n", xPortGetFreeHeapSize());
-
-	// int res = config_parse_string(config, content);
-	// free(content);
-
-	int res = config_parse_file(config);
-	return res;
+	config_init(config); // invalid macro here
+	return config_parse_file(config);
 }
 
 

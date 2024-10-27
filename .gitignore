@@ -2,3 +2,4 @@ build
 qmatrix.*
 quantum
 qmk
+.github/workflows
