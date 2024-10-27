@@ -3,6 +3,7 @@
 
 
 #define MAX_GPIOS 16 
+#define TOTAL_GPIOS 25 
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -14,6 +15,16 @@ typedef uint32_t matrix_row_t;
 #    error "MAX_GPIOS: invalid value"
 #endif
 
+// Include the config field definitions
+#define CONFIG_FIELDS \
+    FIELD(uart_rx_pin, int, 0)  \
+    FIELD(uart_tx_pin, int, 1)  \
+    FIELD(led_pin, int, -1)  \
+    FIELD(scan_period, int, 5)  \
+    FIELD(debounce, int, 5)  \
+    FIELD(has_diodes, int, 1)
+
+extern int log_level;
 
 typedef struct {
     int gpio_cols[MAX_GPIOS];      // GPIO pins for columns
@@ -22,6 +33,14 @@ typedef struct {
     uint8_t nr_cols;                  // Number of columns
     uint8_t nr_rows;                  // Number of rows
 } matrix_t;
+
+// Define the config_t struct using the X-Macro
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    CONFIG_FIELDS
+    #undef FIELD
+    matrix_t matrix;
+} config_t;
 
 typedef enum {
     SUCCESS,         // Default value: 0
@@ -32,26 +51,7 @@ typedef enum {
     KEYMAP_ERROR
 } ParseStatus;
 
-// Include the config field definitions
-#define CONFIG_FIELDS \
-    FIELD(uart_rx_pin, int, 0)  \
-    FIELD(uart_tx_pin, int, 1)  \
-    FIELD(led_pin, int, -1)  \
-    FIELD(scan_period, int, 5)  \
-    FIELD(debounce, int, 5)  \
-    FIELD(has_diodes, int, 1)
-
-// Define the cfg struct using the X-Macro
-typedef struct {
-    #define FIELD(name, type, default_value) type name;
-    CONFIG_FIELDS
-    #undef FIELD
-    matrix_t matrix;
-} cfg;
-
 // Function prototypes
-int parse(cfg *config, const char *filename);
-// void init_default_cfg(cfg *config);
-// int set_cfg_value(cfg *config, const char *field_name, int value);
+int parse(config_t *config, const char *filename);
 
 #endif // CONFIG_H

@@ -31,6 +31,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "jconfig.h"
 #include "daemon.h"
 #include "keys.h"
+#include "log.h"
 
 #define SCAN_PERIOD 5
 #define DEBOUNCE 9
@@ -38,8 +39,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
 // Separate variables for diode direction
-uint8_t row2col = 0;  // ROW2COL configuration
-uint8_t col2row = 1;  // COL2ROW configuration
+static uint8_t row2col = 0;  // ROW2COL configuration
+static uint8_t col2row = 1;  // COL2ROW configuration
 
 // Debounce time in milliseconds
 
@@ -244,8 +245,8 @@ bool debounce(matrix_row_t* raw_matrix, matrix_row_t* debounced_matrix, uint8_t 
 }
 
 // Main matrix scanning task
-void matrix_task(void* pvParameters) {
-    cfg* config = (cfg*)pvParameters;
+void keyscan_task(void* pvParameters) {
+    config_t* config = (config_t*)pvParameters;
     // matrix_t* matrix = (matrix_t*)pvParameters;
     static matrix_row_t raw_matrix[MAX_GPIOS] = {0};
     static matrix_row_t debounced_matrix[MAX_GPIOS] = {0};
@@ -261,7 +262,6 @@ void matrix_task(void* pvParameters) {
         TickType_t last_wake_time = xTaskGetTickCount();
         // Scan the matrix
         matrix_scan(&config->matrix, raw_matrix);
-        // ev.timestamp = last_wake_time * portTICK_PERIOD_MS;
 
         // Debounce the matrix
         bool debounced_changed = debounce(raw_matrix, debounced_matrix, config->matrix.nr_rows);
@@ -282,12 +282,11 @@ void matrix_task(void* pvParameters) {
                                 devev.pressed = (debounced_matrix[row] & col_mask) != 0;
                                 devev.code = config->matrix.keymap[row][col];
 
-                                BaseType_t xStatus = xQueueSendToBack(eventQueue, &devev, portMAX_DELAY);
+                                BaseType_t xStatus = xQueueSendToBack(keyscan_queue, &devev, portMAX_DELAY);
 
-                                if (xStatus != pdPASS) {
-                                    // Handle the error (queue full)
-                                    printf("Failed to send event to queue\n");
-                                }
+                                // if (xStatus != pdPASS) {
+                                //     err("Failed to send event to queue");
+                                // }
                             }
                         }
                     }

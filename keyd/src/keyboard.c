@@ -3,17 +3,14 @@
  *
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
-
-
-#include "FreeRTOS.h" // tmp for heap size
-#include "portable.h" // tmp for heap size
-
 #include <string.h>
 #include <stdio.h>
-#include <assert.h>
+
+#include "FreeRTOS.h"
 
 #include "keyboard.h"
-#include "porting.h"
+#include "log.h"
+
 static long process_event(struct keyboard *kbd, uint8_t code, int pressed, long time);
 
 /*
@@ -836,7 +833,6 @@ struct keyboard *new_keyboard(const struct output *output)
 {
 	size_t i;
 	// struct keyboard *kbd;
-
 	// kbd = calloc(1, sizeof(struct keyboard));
 
 	struct keyboard *kbd = pvPortMalloc(sizeof(struct keyboard));

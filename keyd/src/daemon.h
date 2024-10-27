@@ -10,8 +10,8 @@
 #define HID_RIGHTSUPER 0x80
 #define HID_SUPER 0x8
 
-extern QueueHandle_t eventQueue;
-extern QueueHandle_t key_event_queue;
+extern QueueHandle_t keyd_queue;
+extern QueueHandle_t keyscan_queue;
 extern struct keyboard *active_kbd;
 
 typedef struct {
@@ -58,9 +58,8 @@ struct event {
 // daemon.c part
 static uint8_t keystate[256];
 void keyb_init();
-void keys_task(void* pvParameters);
 void keyd_task(void* pvParameters); 
-void key_event_processor_task(void *pvParameters);
+void key_event_hid_task(void *pvParameters);
 
 
 
