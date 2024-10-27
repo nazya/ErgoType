@@ -15,7 +15,7 @@ jobs:
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4  # Ensure compatibility with Node.js 20
+      uses: actions/checkout@v4
       with:
         submodules: recursive  # Clone submodules recursively
 
@@ -27,7 +27,7 @@ jobs:
     - name: Setup Pico SDK
       run: |
         mkdir -p ~/.pico-sdk
-        git clone https://github.com/raspberrypi/pico-sdk.git --branch 2.0.0 --depth=1 ~/.pico-sdk
+        git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git --branch 2.0.0 ~/.pico-sdk
 
     - name: Configure Pico SDK Path
       run: echo "PICO_SDK_PATH=$HOME/.pico-sdk" >> $GITHUB_ENV
