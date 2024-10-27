@@ -50,16 +50,8 @@ jobs:
       run: |
         test -f build/ErgoType.uf2
 
-  upload:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
     - name: Upload Firmware Artifact
-      uses: actions/upload-artifact@v4  # Use the latest version
+      uses: actions/upload-artifact@v4
       with:
         name: firmware-uf2
         path: build/ErgoType.uf2
