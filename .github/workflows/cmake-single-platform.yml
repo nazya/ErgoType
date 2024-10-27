@@ -59,7 +59,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Upload Firmware Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # Use the latest version
       with:
         name: firmware-uf2
         path: build/ErgoType.uf2
