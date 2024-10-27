@@ -42,7 +42,8 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 cmake_minimum_required(VERSION 3.13)
 add_executable(${PROJECT_NAME})
-target_compile_definitions(${PROJECT_NAME} PUBLIC FF_USE_STRFUNC=1)
+# target_compile_definitions(${PROJECT_NAME} PUBLIC FF_USE_STRFUNC=1)
+add_definitions(-DFF_USE_STRFUNC=1)
 
 add_subdirectory(tusb)
 add_subdirectory(pico-usb-flash-drive)
