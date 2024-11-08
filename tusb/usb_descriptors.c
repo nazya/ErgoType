@@ -1,5 +1,8 @@
-/* usb_descriptors.c */
-
+ /*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+ */
 #include "tusb.h"
 #include "usb_descriptors.h"
 #include <string.h>
@@ -215,12 +218,12 @@ enum
 char const* string_desc_arr [] =
 {
     (const char[]) { 0x09, 0x04 }, // 0: Language ID (0x0409 for English)
-    "nazya",                      // 1: Manufacturer
-    "HID/CDC+MSC Device",         // 2: Product
-    "123456",                     // 3: Serial Number
-    "TinyUSB CDC",                // 4: CDC Interface
-    "TinyUSB MSC",                // 5: MSC Interface
-    "TinyUSB HID"                 // 6: HID Interface
+    "ErgoType",                      // 1: Manufacturer
+    "HID/CDC+MSC Device",          // 2: Product
+    "1",                           // 3: Serial Number
+    "TinyUSB CDC",                 // 4: CDC Interface
+    "TinyUSB MSC",                 // 5: MSC Interface
+    "TinyUSB HID"                  // 6: HID Interface
 };
 
 static uint16_t _desc_str[32 + 1];

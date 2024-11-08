@@ -1,3 +1,15 @@
+/*
+ * keyd - A key remapping daemon.
+ *
+ * © 2019 Raheman Vaiya (see also: LICENSE).
+ */
+ 
+/*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+*/
+
 #include <pico/stdlib.h> 
 #include "keys.h" 
 
@@ -10,9 +22,8 @@
 #define HID_RIGHTSUPER 0x80
 #define HID_SUPER 0x8
 
-extern QueueHandle_t keyd_queue;
+// extern QueueHandle_t keyd_queue;
 extern QueueHandle_t keyscan_queue;
-extern struct keyboard *active_kbd;
 
 typedef struct {
     uint8_t code;  // Key code
@@ -57,7 +68,6 @@ struct event {
 
 // daemon.c part
 static uint8_t keystate[256];
-void keyb_init();
 void keyd_task(void* pvParameters); 
 void key_event_hid_task(void *pvParameters);
 

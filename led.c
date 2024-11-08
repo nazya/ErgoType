@@ -1,6 +1,9 @@
-#include "bsp/board.h"
+#include "hardware/gpio.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
+
+#include "jconfig.h"
 
 //--------------------------------------------------------------------+
 // BLINKING TASK
@@ -8,23 +11,22 @@
 
 extern uint32_t blink_interval_ms;
 
-void led_blinking_task(void) {
-    static uint32_t start_ms = 0;
-    static bool led_state = false;
-
-    // Blink every interval ms
-    if ( board_millis() - start_ms < blink_interval_ms) return; // Not enough time
-    start_ms += blink_interval_ms;
-
-    board_led_write(led_state);
-    led_state = !led_state; // Toggle
+static void led_init(int pin) {
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_OUT);  // Set as output
+    gpio_put(pin, false);         // Start with the LED off
 }
 
 void led_task(void* pvParameters) {
-    (void) pvParameters;
+    config_t* config = (config_t*)pvParameters;  // Cast parameter to config_t pointer
+
+    led_init(config->led_pin);
+
+    bool led_state = false;  // Initial LED state
 
     while (1) {
-        led_blinking_task();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_put(config->led_pin, led_state);  // Set LED state
+        led_state = !led_state;                // Toggle state
+        vTaskDelay(pdMS_TO_TICKS(blink_interval_ms));
     }
 }
