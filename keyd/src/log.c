@@ -3,10 +3,10 @@
  *
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
-#include "log.h"
 #include <time.h>
+#include "log.h"
 
-// char errstr[2048];
+extern char errstr[2048];
 
 int log_level = 0;
 // int suppress_colours = 0;

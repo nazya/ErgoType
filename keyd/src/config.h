@@ -3,11 +3,19 @@
  *
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
+
+  /*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+ */
 #ifndef CONFIG_H
 #define CONFIG_H
 
 #include <limits.h>
 #include "macro.h"
+
+#define ARRAY_SIZE(x) (int)(sizeof(x)/sizeof(x[0]))
 
 #define MAX_FILE_SZ 65536
 #define MAX_LINE_LEN 512
