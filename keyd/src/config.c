@@ -4,6 +4,12 @@
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
 
+ /*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>

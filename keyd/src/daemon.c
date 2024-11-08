@@ -1,3 +1,16 @@
+/*
+ * keyd - A key remapping daemon.
+ *
+ * © 2019 Raheman Vaiya (see also: LICENSE).
+ * © 2021 Giorgi Chavchanidze
+*/
+ 
+/*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+*/
+
 #include <stdio.h>
 #include <string.h>
 
@@ -16,6 +29,8 @@
 
 static uint8_t mods = 0;
 static uint8_t keys[6] = {0};
+static struct keyboard *active_kbd;
+static QueueHandle_t keyd_queue;
 
 static void send_hid_report()
 {
@@ -207,20 +222,6 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// }
 }
 
-
-void keyb_init() {
-	dbg3("size of struct conf: %u bytes", sizeof(struct config));
-
-	struct output output = {
-					.send_key = send_key,
-					.on_layer_change = on_layer_change,
-				};
-
-    active_kbd = new_keyboard(&output);
-	dbg3("kbd initialized");
-	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
-}
-
 static int event_handler(struct event *ev)
 {
 	static int last_time = 0;
@@ -348,7 +349,7 @@ static int event_handler(struct event *ev)
 	}
 	return timeout;
 }
-int evloop(int (*event_handler) (struct event *ev))
+static int evloop(int (*event_handler) (struct event *ev))
 {
 	size_t i;
 	int timeout = 0;
@@ -381,7 +382,23 @@ int evloop(int (*event_handler) (struct event *ev))
 
     return 0; // Never reached
 }
+
+static void keyd_init() {
+	keyd_queue = xQueueCreate(256, sizeof(key_event_t));
+	dbg3("size of struct conf: %u bytes", sizeof(struct config));
+
+	struct output output = {
+					.send_key = send_key,
+					.on_layer_change = on_layer_change,
+				};
+
+    active_kbd = new_keyboard(&output);
+	dbg3("kbd initialized");
+	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
+}
+
 void keyd_task(void* pvParameters) {
     (void) pvParameters;
+	keyd_init();
     evloop(event_handler);
 }

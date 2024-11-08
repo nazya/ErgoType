@@ -1,14 +1,27 @@
-#include <stdio.h>
-// #include <stdlib.h>
+ /*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+ */
+ #include <stdio.h>
 #include <string.h>
 #include "FreeRTOS.h"
 #include "ff.h" // FatFS header
 #include "core_json.h"
 #include "jconfig.h"
 #include "keys.h"
-#include "log.h"
 
 #include "pico/stdlib.h"
+
+#undef err
+#define err(fmt, ...) \
+    do { \
+        int _err_avail = ERRSTR_LENGTH - strlen(errstr) - 1; \
+        int _err_len = snprintf(NULL, 0, fmt "\n", ##__VA_ARGS__); \
+        if (_err_len > 0 && _err_len < _err_avail) { \
+            snprintf(errstr + strlen(errstr), _err_avail, fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while (0)
 
 
 #define GPIO_PULL_UP(pin)       \
@@ -35,7 +48,7 @@ static int load(char **buffer, const char *filename) {
     // Mount the filesystem
     res = f_mount(&filesystem, "/", 1);
     if (res != FR_OK) {
-        err("f_mount failed with error code: %d", res);
+        err("f_mount failed");
         return -1;
     }
 
@@ -100,7 +113,7 @@ static void init_default_cfg(config_t *config) {
 }
 
 // Set a configuration value based on the field name
-static int set_cfg_value(config_t *config, const char *field_name, int value) {
+static int set_cfg_value(config_t *config, const char *field_name, int8_t value) {
     #define FIELD(name, type, default_value) \
         if (strcmp(field_name, #name) == 0) { \
             config->name = value; \
@@ -109,7 +122,7 @@ static int set_cfg_value(config_t *config, const char *field_name, int value) {
     CONFIG_FIELDS
     #undef FIELD
 
-    warn("Unknown field: %s", field_name);
+    err("Unknown field: %s", field_name);
     return -1;  // Field not found
 }
 
@@ -165,7 +178,7 @@ static uint8_t lookup_keycode(const char *name)
             return i;
         }
     }
-    return KEYD_NOOP; // Assuming KEYD_NOOP is defined as 0 in keyd.h
+    return KEYD_NOOP;
 }
 
 static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
@@ -176,7 +189,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
     // Search for the "keymap" array in the JSON
     result = JSON_SearchConst(json, json_len, "keymap", strlen("keymap"), &array_start, &array_length, NULL);
     if (result != JSONSuccess) {
-        err("Failed to find 'keymap' in JSON.");
+        err("Failed to find 'keymap' in JSON");
         return -1;
     }
 
@@ -214,7 +227,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
                 keycode = (uint8_t)atoi(pair.value);  // Convert string to integer
                 ((char *)pair.value)[pair.valueLength] = save;  // Restore original character
             } else {
-                warn("Unexpected type for keymap element at [%zu][%zu].", row, col);
+                err("Unexpected type for keymap element at [%zu][%zu].", row, col);
                 continue;
             }
 
@@ -241,7 +254,7 @@ static void pull_pins(const char *json_data) {
                               &array_start, &array_length, NULL);
 
     if (result != JSONSuccess) {
-        dbg("Failed to find 'pull_up_pins' array in JSON");
+        // dbg("Failed to find 'pull_up_pins' array in JSON");
         found = false;
     }
 
@@ -263,10 +276,14 @@ static void pull_pins(const char *json_data) {
             ((char *)pair.value)[pair.valueLength] = '\0';
             int pin = atoi(pair.value);
             ((char *)pair.value)[pair.valueLength] = save;
-            GPIO_PULL_UP(pin);
-            dbg3("GPIO %d: Pulled up", pin);
+            if (IS_GPIO_PIN(pin)) {
+                GPIO_PULL_UP(pin);
+                // dbg3("GPIO %d: Pulled up", pin);
+            } else {
+                err("Not a valid pin in 'pull_up_pins'");
+            }
         } else {
-            dbg3("Skipping non-integer value.");
+            err("Skipping non-integer value in 'pull_up_pins'");
         }
     }
 
@@ -275,7 +292,7 @@ static void pull_pins(const char *json_data) {
                               &array_start, &array_length, NULL);
 
     if (result != JSONSuccess) {
-        dbg("Failed to find 'pull_down_pins' array in JSON");
+        // dbg("Failed to find 'pull_down_pins' array in JSON");
         return;
     }
 
@@ -293,10 +310,14 @@ static void pull_pins(const char *json_data) {
             ((char *)pair.value)[pair.valueLength] = '\0';
             int pin = atoi(pair.value);
             ((char *)pair.value)[pair.valueLength] = save;
-            GPIO_PULL_DOWN(pin);
-            dbg3("GPIO %d: Pulled down", pin);
+            if (IS_GPIO_PIN(pin)) {
+                GPIO_PULL_DOWN(pin);
+                // dbg3("GPIO %d: Pulled down", pin);
+            } else {
+                err("Not a valid pin in 'pull_down_pins'");
+            }
         } else {
-            dbg3("Skipping non-integer value.");
+            err("Skipping non-integer value in 'pull_down_pins'");
         }
     }
 }
@@ -308,16 +329,16 @@ int parse(config_t *config, const char *filename) {
     int json_len = load(&json, filename);
 
     if (json_len < 0) {
-        err("Could not find 'config.json'");
+        err("No 'config.json'");
         vPortFree(json);
-        return NO_JSON;
+        return -1;
     }
 
     JSONStatus_t result = JSON_Validate(json, json_len);
     if (result != JSONSuccess) {
         err("Invalid JSON format.");
         vPortFree(json);  // Free the buffer before returning
-        return INVALID_JSON;
+        return -1;
     }
 
     pull_pins(json);
@@ -332,9 +353,9 @@ int parse(config_t *config, const char *filename) {
         log_level = atoi(value);          // Convert the value to an integer
 
         value[value_length] = save;       // Restore the original character
-        dbg3("log_level: %d", log_level);
+        // dbg3("log_level: %d", log_level);
     } else {
-        dbg3("Field not found: %s", "log_level");
+        // dbg3("Field not found: %s", "log_level");
     }
 
     // Iterate over fields using the X-Macro
@@ -350,7 +371,7 @@ int parse(config_t *config, const char *filename) {
                 set_cfg_value(config, #name, atoi(value));         \
                 value[value_length] = save;                        \
             } else {                                               \
-                dbg3("Field not found: %s", #name);            \
+                printf("Field not found: %s\n", #name);            \
             }                                                      \
         }
     CONFIG_FIELDS
@@ -363,7 +384,7 @@ int parse(config_t *config, const char *filename) {
     if (nr < 0) {
         err("Failed to parse gpio_rows.");
         vPortFree(json);
-        return NO_GPIO_ROWS;
+        return -1;
     }
     config->matrix.nr_rows = nr;
 
@@ -372,17 +393,17 @@ int parse(config_t *config, const char *filename) {
     if (nr < 0) {
         err("Failed to parse gpio_cols.");
         vPortFree(json);
-        return NO_GPIO_COLS;
+        return -1;
     }
     config->matrix.nr_cols = nr;
 
     if (parse_keymap(json, json_len, &config->matrix)) {
         err("Failed to parse keymap.");
         vPortFree(json);
-        return KEYMAP_ERROR;
+        return -1;
     }
 
     // Free the JSON buffer after parsing
     vPortFree(json);
-    return SUCCESS;
+    return 0;
 }

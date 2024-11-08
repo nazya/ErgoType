@@ -15,6 +15,27 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+/*
+Copyright 2017 Alex Ong<the.onga@gmail.com>
+Copyright 2021 Simon Arlott
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+/*
+ * ErgoType - Keyboard Solutions
+ *
+ * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -24,29 +45,23 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/timer.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-// #include "matrix.h"
+
 #include "jconfig.h"
 #include "daemon.h"
 #include "keys.h"
-#include "log.h"
 
-#define SCAN_PERIOD 5
-#define DEBOUNCE 9
-
+// Debounce time in milliseconds
+static uint8_t debouncing_time; 
+static bool debouncing = false;
 
 
 // Separate variables for diode direction
-static uint8_t row2col = 0;  // ROW2COL configuration
+static const uint8_t row2col = 0;  // ROW2COL configuration
 static uint8_t col2row = 1;  // COL2ROW configuration
-
-// Debounce time in milliseconds
-
-// Variables for debouncing
-static bool debouncing = false;
-static uint32_t debouncing_time;
 
 // Variables for FreeRTOS queue
 extern QueueHandle_t eventQueue;
@@ -231,7 +246,7 @@ bool debounce(matrix_row_t* raw_matrix, matrix_row_t* debounced_matrix, uint8_t 
         }
     }
 
-    if (debouncing && ((xTaskGetTickCount() - last_update) * portTICK_PERIOD_MS > DEBOUNCE)) {
+    if (debouncing && ((xTaskGetTickCount() - last_update) * portTICK_PERIOD_MS > debouncing_time)) {
         for (uint8_t i = 0; i < nr_rows; i++) {
             if (debounced_matrix[i] != matrix_debouncing[i]) {
                 debounced_matrix[i] = matrix_debouncing[i];
@@ -244,9 +259,31 @@ bool debounce(matrix_row_t* raw_matrix, matrix_row_t* debounced_matrix, uint8_t 
     return changed;
 }
 
+uint8_t count_pressed_keys(matrix_t* matrix) {
+    matrix_row_t raw_matrix[MAX_GPIOS] = {0};
+    uint8_t pressed_count = 0;
+
+    // Scan the matrix once
+    matrix_init(matrix);
+    matrix_scan(matrix, raw_matrix);
+
+    // Count the pressed keys
+    for (uint8_t row = 0; row < matrix->nr_rows; row++) {
+        for (uint8_t col = 0; col < matrix->nr_cols; col++) {
+            if (raw_matrix[row] & ((matrix_row_t)1 << col)) {
+                pressed_count++;
+            }
+        }
+    }
+
+    return pressed_count;
+}
+
 // Main matrix scanning task
 void keyscan_task(void* pvParameters) {
     config_t* config = (config_t*)pvParameters;
+    debouncing_time = config->debounce;
+    debouncing = (debouncing_time > 0);
     // matrix_t* matrix = (matrix_t*)pvParameters;
     static matrix_row_t raw_matrix[MAX_GPIOS] = {0};
     static matrix_row_t debounced_matrix[MAX_GPIOS] = {0};
@@ -281,9 +318,7 @@ void keyscan_task(void* pvParameters) {
                             if (changed_keys & col_mask) {
                                 devev.pressed = (debounced_matrix[row] & col_mask) != 0;
                                 devev.code = config->matrix.keymap[row][col];
-
                                 BaseType_t xStatus = xQueueSendToBack(keyscan_queue, &devev, portMAX_DELAY);
-
                                 // if (xStatus != pdPASS) {
                                 //     err("Failed to send event to queue");
                                 // }
@@ -294,6 +329,6 @@ void keyscan_task(void* pvParameters) {
                 previous_debounced_matrix[row] = debounced_matrix[row];
             }
         }
-        vTaskDelayUntil(&last_wake_time, SCAN_PERIOD);
+        vTaskDelayUntil(&last_wake_time, config->scan_period);
     }
 }
