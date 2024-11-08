@@ -11,7 +11,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define ARRAY_SIZE(x) (int)(sizeof(x)/sizeof(x[0]))
+#define ERRSTR_LENGTH 2048
+extern char errstr[ERRSTR_LENGTH];
 
 #define keyd_log(fmt, ...) _keyd_log(0, fmt, ##__VA_ARGS__);
 
@@ -29,6 +30,6 @@
 void _keyd_log(int level, const char *fmt, ...);
 
 extern int log_level;
-extern char errstr[2048];
+
 
 #endif
