@@ -1,4 +1,8 @@
 build
+.vscode/
+pmw3360/
+pointer.c
+test.c
 qmatrix.*
 quantum
 qmk

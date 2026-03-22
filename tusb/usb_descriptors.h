@@ -6,6 +6,7 @@
 enum
 {
     REPORT_ID_KEYBOARD = 1,
+    REPORT_ID_MOUSE = 2,
 };
 
 #endif /* USB_DESCRIPTORS_H_ */
