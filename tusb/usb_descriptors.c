@@ -83,7 +83,8 @@ tusb_desc_device_t const desc_device_cdc_msc =
 // HID Report Descriptor for Keyboard
 uint8_t const desc_hid_report[] =
 {
-    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBOARD))
+    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBOARD)),
+    TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE))
 };
 
 //--------------------------------------------------------------------+

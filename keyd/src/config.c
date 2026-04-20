@@ -1140,6 +1140,178 @@ int trim_whitespace(char **line) {
     return len;
 }
 
+static int process_first_pass_line(char *line, size_t ln, struct ini_section *section, struct config *config, int init_mode)
+{
+    char *ptr = line;
+    size_t len = trim_whitespace(&ptr);
+
+    if (len == 0)
+        return 0;
+
+    if (init_mode) {
+        dbg3("line %zu: '%s'", ln, ptr);
+    } else {
+        dbg3("line %zd: '%s'", ln, ptr);
+    }
+
+    if (ptr[0] == '#')
+        return 0;
+
+    if (ptr[0] == '[') {
+        if (len > 2 && ptr[len - 1] == ']') {
+            if (section->name[0] != '\0') {
+                if (init_mode) {
+                    dbg3("processing section '%s' at line %zu", section->name, section->lnum);
+                } else {
+                    dbg3("processing section '%s' at line %zd", section->name, section->lnum);
+                }
+
+                if (process_section(section, config) < 0) {
+                    free_section_entries(section);
+                    return -1;
+                }
+
+                free_section_entries(section);
+                memset(section, 0, sizeof(*section));
+            }
+
+            memset(section, 0, sizeof(*section));
+            section->lnum = ln;
+            ptr[len - 1] = '\0';
+            strncpy(section->name, ptr + 1, sizeof(section->name) - 1);
+            section->name[sizeof(section->name) - 1] = '\0';
+
+            if (init_mode) {
+                dbg3("new section: '%s' at line %zu", section->name, ln);
+            } else {
+                dbg3("new section: '%s' at line %zd", section->name, ln);
+            }
+        }
+
+        return 0;
+    }
+
+    if (!strcmp(section->name, "ids") ||
+        !strcmp(section->name, "aliases") ||
+        !strcmp(section->name, "global")) {
+
+        if (section->nr_entries >= MAX_SECTION_ENTRIES) {
+            err("too many entries in section '%s'", section->name);
+            free_section_entries(section);
+            return -1;
+        }
+
+        char *key = NULL;
+        char *val = NULL;
+        parse_kvp(ptr, &key, &val);
+
+        if (!key) {
+            if (init_mode) {
+                err("error parsing key at line %zu", ln);
+            } else {
+                err("error parsing key at line %zd", ln);
+            }
+            free_section_entries(section);
+            return -1;
+        }
+
+        struct ini_entry *ent = &section->entries[section->nr_entries++];
+        ent->lnum = ln;
+        ent->key = strdup_port(key);
+        ent->val = val ? strdup_port(val) : NULL;
+
+        if (!ent->key || (val && !ent->val)) {
+            if (init_mode) {
+                err("strdup_port failed at line %zu", ln);
+            } else {
+                err("memory allocation failed at line %zd", ln);
+            }
+            free_section_entries(section);
+            return -1;
+        }
+
+        if (init_mode) {
+            dbg3("parsed entry: key='%s', val='%s' at line %zu", ent->key, ent->val ? ent->val : "(null)", ln);
+        } else {
+            dbg3("parsed entry: key='%s', val='%s' at line %zd", ent->key, ent->val ? ent->val : "(null)", ln);
+        }
+    }
+
+    return 0;
+}
+
+static int process_second_pass_line(char *line, size_t ln, char *section_name, struct config *config, int init_mode)
+{
+    char *ptr = line;
+    size_t len = trim_whitespace(&ptr);
+
+    if (len == 0)
+        return 0;
+
+    if (init_mode) {
+        dbg3("line %zu: '%s'", ln, ptr);
+    } else {
+        dbg3("line %zd: '%s'", ln, ptr);
+    }
+
+    if (ptr[0] == '#')
+        return 0;
+
+    if (ptr[0] == '[') {
+        if (len > 2 && ptr[len - 1] == ']') {
+            ptr[len - 1] = '\0';
+            snprintf(section_name, MAX_SECTION_NAME_LEN + 1, "%s", ptr + 1);
+
+            if (init_mode) {
+                dbg3("new section: '%s' at line %zu", section_name, ln);
+            } else {
+                dbg3("new section: '%s' at line %zd", section_name, ln);
+            }
+        }
+
+        return 0;
+    }
+
+    if (!strcmp(section_name, "ids") ||
+        !strcmp(section_name, "aliases") ||
+        !strcmp(section_name, "global") ||
+        section_name[0] == '\0')
+        return 0;
+
+    char *key = NULL;
+    char *val = NULL;
+    parse_kvp(ptr, &key, &val);
+
+    if (!key) {
+        err("error parsing key at line %zu", ln);
+        return -1;
+    }
+
+    char layername[MAX_SECTION_NAME_LEN + 1];
+    strncpy(layername, section_name, sizeof(layername) - 1);
+    layername[sizeof(layername) - 1] = '\0';
+
+    char *token = strtok(layername, ":");
+    if (!token) {
+        err("error parsing layer name at line %zu", ln);
+        return -1;
+    }
+
+    char entry[MAX_EXP_LEN];
+    if (val)
+        snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
+    else
+        snprintf(entry, sizeof(entry), "%s.%s", token, key);
+
+    if (config_add_entry(config, entry) < 0) {
+        err("error adding entry '%s' at line %zu", entry, ln);
+    } else {
+        dbg3("added entry '%s'", entry);
+    }
+
+    return 0;
+}
+
 
 int config_parse_file(struct config *config)
 {
@@ -1170,96 +1342,10 @@ int config_parse_file(struct config *config)
 
     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
         ln++;
-
-        // Remove leading whitespace
-        char *ptr = line;
-
-        size_t len = trim_whitespace(&ptr);
-        if (len == 0)
-            continue; // Empty line
-        dbg3("line %zd: '%s'", ln, ptr);
-
-        if (ptr[0] == '#')
-            continue; // Comment line
-
-        if (ptr[0] == '[') {
-            // Check if it's a valid section header
-            if (len > 2 && ptr[len - 1] == ']') {
-                // Process previous section if any
-                if (section.name[0] != '\0') {
-                    dbg3("processing section '%s' at line %zd", section.name, section.lnum);
-
-                    if (process_section(&section, config) < 0) {
-                        free_section_entries(&section);
-                        f_close(&fh);
-                        f_unmount("/");
-                        return -1;
-                    }
-
-                    // Free duplicated entries
-                    free_section_entries(&section);
-
-                    // Reset section
-                    memset(&section, 0, sizeof(section));
-                }
-
-                // Start new section
-                memset(&section, 0, sizeof(section)); // Ensure section is reset
-                section.lnum = ln;
-                ptr[len - 1] = '\0'; // Remove closing ']'
-                strncpy(section.name, ptr + 1, sizeof(section.name) - 1);
-                section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
-
-                dbg3("new section: '%s' at line %zd", section.name, ln);
-
-                continue;
-            }
-        }
-
-        // Process entry
-        if (!strcmp(section.name, "ids") ||
-            !strcmp(section.name, "aliases") ||
-            !strcmp(section.name, "global")) {
-
-            if (section.nr_entries >= MAX_SECTION_ENTRIES) {
-                err("too many entries in section '%s'", section.name);
-                free_section_entries(&section);
-                f_close(&fh);
-                f_unmount("/");
-                return -1;
-            }
-
-            // Parse key-value pair
-            char *key = NULL;
-            char *val = NULL;
-            parse_kvp(ptr, &key, &val);
-
-            if (!key) {
-                err("error parsing key at line %zd", ln);
-                free_section_entries(&section);
-                f_close(&fh);
-                f_unmount("/");
-                return -1;
-            }
-
-            // Duplicate key and val
-            struct ini_entry *ent = &section.entries[section.nr_entries++];
-            ent->lnum = ln;
-            ent->key = strdup_port(key);
-            ent->val = val ? strdup_port(val) : NULL;
-
-            if (!ent->key || (val && !ent->val)) {
-                err("memory allocation failed at line %zd", ln);
-                free_section_entries(&section);
-                f_close(&fh);
-                f_unmount("/");
-                return -1;
-            }
-
-            dbg3("parsed entry: key='%s', val='%s' at line %zd", ent->key, ent->val ? ent->val : "(null)", ln);
-        } else {
-            // For other sections, we don't need to store entries in the first pass
-            // We can skip processing the entry
+        if (process_first_pass_line(line, ln, &section, config, 0) < 0) {
+            f_close(&fh);
+            f_unmount("/");
+            return -1;
         }
     }
 
@@ -1293,52 +1379,11 @@ int config_parse_file(struct config *config)
 
     while (f_gets(line, MAX_LINE_LEN + 1, &fh)) {
         ln++;
-
-        // Remove leading whitespace
-        char *ptr = line;
-        size_t len = trim_whitespace(&ptr);
-        if (len == 0)
-            continue; // Empty line
-        dbg3("line %zd: '%s'", ln, ptr);
-
-        if (ptr[0] == '#')
-            continue; // Comment line
-
-        if (ptr[0] == '[') {
-            // // Check if it's a valid section header
-            if (len > 2 && ptr[len - 1] == ']') {
-                ptr[len - 1] = '\0'; // Remove closing ']'
-                snprintf(section_name, sizeof(section_name), "%s", ptr + 1);
-                dbg3("new section: '%s' at line %zd", section_name, ln);
-                continue;
-            }
+        if (process_second_pass_line(line, ln, section_name, config, 0) < 0) {
+            f_close(&fh);
+            f_unmount("/");
+            return -1;
         }
-
-        // Process entry
-        if (!strcmp(section_name, "ids") ||
-		    !strcmp(section_name, "aliases") ||
-		    !strcmp(section_name, "global") ||
-			section_name[0] == '\0')
-			continue;
-
-		// Parse key-value pair
-		char *key = NULL;
-		char *val = NULL;
-		parse_kvp(ptr, &key, &val);
-
-		char layername[MAX_SECTION_NAME_LEN + 1];
-		strncpy(layername, section_name, sizeof(layername) - 1);
-		layername[sizeof(layername) - 1] = '\0';
-
-		char *token = strtok(layername, ":");
-		char entry[MAX_EXP_LEN];
-		snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
-
-		if (config_add_entry(config, entry) < 0) {
-			dbg3("error adding entry '%s' at line %zd", entry, ln);
-		} else {
-			dbg3("added entry '%s'", entry);
-		}
     }
 
     f_close(&fh);
@@ -1397,88 +1442,8 @@ int config_init(struct config *config) {
         char line_buffer[MAX_LINE_LEN + 1];
         strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
         line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
-        char *line = line_buffer;
-
-        // Remove leading whitespace
-        size_t len = trim_whitespace(&line);
-        if (len == 0)
-            continue; // Empty line
-        dbg3("line %zu: '%s'", ln, line);
-
-        if (line[0] == '#')
-            continue; // Comment line
-
-        if (line[0] == '[') {
-            // Check if it's a valid section header
-            if (len > 2 && line[len - 1] == ']') {
-                // Process previous section if any
-                if (section.name[0] != '\0') {
-                    dbg3("processing section '%s' at line %zu", section.name, section.lnum);
-
-                    if (process_section(&section, config) < 0) {
-                        free_section_entries(&section);
-                        return -1;
-                    }
-
-                    // Free duplicated entries
-                    free_section_entries(&section);
-
-                    // Reset section
-                    memset(&section, 0, sizeof(section));
-                }
-
-                // Start new section
-                memset(&section, 0, sizeof(section)); // Ensure section is reset
-                section.lnum = ln;
-                line[len - 1] = '\0'; // Remove closing ']'
-                strncpy(section.name, line + 1, sizeof(section.name) - 1);
-                section.name[sizeof(section.name) - 1] = '\0'; // Ensure null termination
-
-                dbg3("new section: '%s' at line %zu", section.name, ln);
-
-                continue;
-            }
-        }
-
-        // Process entry
-        if (!strcmp(section.name, "ids") ||
-            !strcmp(section.name, "aliases") ||
-            !strcmp(section.name, "global")) {
-
-            if (section.nr_entries >= MAX_SECTION_ENTRIES) {
-                err("too many entries in section '%s'", section.name);
-                free_section_entries(&section);
-                return -1;
-            }
-
-            // Parse key-value pair
-            char *key = NULL;
-            char *val = NULL;
-            parse_kvp(line, &key, &val);
-
-            if (!key) {
-                err("error parsing key at line %zu", ln);
-                free_section_entries(&section);
-                return -1;
-            }
-
-            // Duplicate key and val
-            struct ini_entry *ent = &section.entries[section.nr_entries++];
-            ent->lnum = ln;
-            ent->key = strdup_port(key);
-            ent->val = val ? strdup_port(val) : NULL;
-
-            if (!ent->key || (val && !ent->val)) {
-                err("strdup_port failed at line %zu", ln);
-                free_section_entries(&section);
-                return -1;
-            }
-
-            dbg3("parsed entry: key='%s', val='%s' at line %zu", ent->key, ent->val ? ent->val : "(null)", ln);
-        } else {
-            // For other sections, we don't need to store entries in the first pass
-            // We can skip processing the entry
-        }
+        if (process_first_pass_line(line_buffer, ln, &section, config, 1) < 0)
+            return -1;
     }
 
     // Process the last section if any
@@ -1505,65 +1470,8 @@ int config_init(struct config *config) {
         char line_buffer[MAX_LINE_LEN + 1];
         strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
         line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
-        char *line = line_buffer;
-
-        // Remove leading whitespace
-        size_t len = trim_whitespace(&line);
-        if (len == 0)
-            continue; // Empty line
-        dbg3("line %zu: '%s'", ln, line);
-
-        if (line[0] == '#')
-            continue; // Comment line
-
-        if (line[0] == '[') {
-            // Check if it's a valid section header
-            if (len > 2 && line[len - 1] == ']') {
-                line[len - 1] = '\0'; // Remove closing ']'
-                snprintf(section_name, sizeof(section_name), "%s", line + 1);
-                dbg3("new section: '%s' at line %zu", section_name, ln);
-                continue;
-            }
-        }
-
-        // Process entry
-        if (!strcmp(section_name, "ids") ||
-            !strcmp(section_name, "aliases") ||
-            !strcmp(section_name, "global") ||
-            section_name[0] == '\0')
-            continue;
-
-        // Parse key-value pair
-        char *key = NULL;
-        char *val = NULL;
-        parse_kvp(line, &key, &val);
-
-        if (!key) {
-            err("error parsing key at line %zu", ln);
+        if (process_second_pass_line(line_buffer, ln, section_name, config, 1) < 0)
             return -1;
-        }
-
-        char layername[MAX_SECTION_NAME_LEN + 1];
-        strncpy(layername, section_name, sizeof(layername) - 1);
-        layername[sizeof(layername) - 1] = '\0';
-
-        char *token = strtok(layername, ":");
-        if (!token) {
-            err("error parsing layer name at line %zu", ln);
-            return -1;
-        }
-
-        char entry[MAX_EXP_LEN];
-        if (val)
-            snprintf(entry, sizeof(entry), "%s.%s = %s", token, key, val);
-        else
-            snprintf(entry, sizeof(entry), "%s.%s", token, key);
-
-        if (config_add_entry(config, entry) < 0) {
-            err("error adding entry '%s' at line %zu", entry, ln);
-        } else {
-            dbg3("added entry '%s'", entry);
-        }
     }
 
     dbg3("configuration parsing completed successfully");
