@@ -28,7 +28,11 @@ enum mode {
     HID = 0,
     MSC = 1
 };
+
 uint8_t mode; // 0: HID mode, 1: MSC mode
+TaskHandle_t xMotionTaskHandle = NULL;
+
+
 char errstr[ERRSTR_LENGTH] = {0}; 
 
 QueueHandle_t keyscan_queue;
@@ -37,6 +41,8 @@ QueueHandle_t keyscan_queue;
 void led_task(void* pvParameters); // led.c
 void usb_device_task(void* pvParameters); // tud.c
 void keyscan_task(void* pvParameters); // keyscan.c
+void vMouseTask(void* pvParameters); // pointer.c
+void mot_gpio_init(void); // pointer.c
 
 uint8_t count_pressed_keys(matrix_t* matrix); // keyscan.c
 
@@ -149,6 +155,10 @@ int main() {
 
         xTaskCreate(keyd_task,          NULL,    8*1024,      NULL,    configMAX_PRIORITIES - 2, NULL);
         xTaskCreate(key_event_hid_task, NULL, MIN_STACK_SZIE, NULL,    tskIDLE_PRIORITY + 3, NULL);
+        
+        xTaskCreate(vMouseTask,         NULL, MIN_STACK_SZIE, NULL,    tskIDLE_PRIORITY + 1, &xMotionTaskHandle);
+        mot_gpio_init();
+
         xTaskCreate(keyscan_task,       NULL, MIN_STACK_SZIE, &config, configMAX_PRIORITIES - 1, NULL);
         xTaskCreate(usb_device_task,    NULL, MIN_STACK_SZIE, NULL,    tskIDLE_PRIORITY + 2, NULL);
     }
