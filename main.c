@@ -78,7 +78,7 @@ int init_and_read_pin(int pin) {
     gpio_init(pin);
     gpio_pull_up(pin);
     gpio_set_dir(pin, GPIO_IN);
-    sleep_us(30);
+    sleep_us(1000);
     return gpio_get(pin);
 }
 
@@ -118,13 +118,14 @@ int main() {
     }
     printf("Mode selected: %s\n", mode == HID ? "HID" : "MSC");
     if (mode == HID) {
-        switch(init_and_read_pin(config.msc_pin)) { // Read the button state (active low)
+        int msc_pin_state = init_and_read_pin(config.msc_pin);
+        switch(msc_pin_state) { // Read the button state (active low)
         case 0:
-            printf("msc %d\n", init_and_read_pin(config.msc_pin)  );
+            printf("msc %d\n", msc_pin_state);
             mode = MSC; 
             break;
         case 1:
-            printf("msc %d\n", init_and_read_pin(config.msc_pin)  );
+            printf("msc %d\n", msc_pin_state);
             mode = HID;
             break;
         default:
@@ -135,7 +136,7 @@ int main() {
             }
         }
     }    
-    printf("Mode selected: %s\n", mode == HID ? "HID" : "MSC");
+    printf("Mode after MSC startup check: %s\n", mode == HID ? "HID" : "MSC");
     
     tud_init(BOARD_TUD_RHPORT);
     if (board_init_after_tusb) {
