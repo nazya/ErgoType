@@ -23,13 +23,11 @@ extern char errstr[ERRSTR_LENGTH];
 #define dbg3(fmt, ...) _keyd_log(3, "r{INFO:} b{%s:%d:} " fmt "\n", \
     strstr(__FILE__, "ErgoType") ? strstr(__FILE__, "ErgoType") : __FILE__, __LINE__, ##__VA_ARGS__)
 
-
 #define err(fmt, ...) snprintf(errstr, sizeof(errstr), fmt, ##__VA_ARGS__);
 #define warn(fmt, ...) keyd_log("\ty{WARNING:} "fmt"\n", ##__VA_ARGS__)
 
 void _keyd_log(int level, const char *fmt, ...);
 
 extern int log_level;
-
 
 #endif

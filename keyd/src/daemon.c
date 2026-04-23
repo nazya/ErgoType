@@ -21,16 +21,21 @@
 #include "tusb.h"
 #include "usb_descriptors.h"
 
+#include "led/plain.h"
+
 #include "keyboard.h"
 #include "log.h"
 #include "daemon.h"
 
 // HID Keyboard Report
 
+#define HID_READY_WAIT_TICKS 2
+
 static uint8_t mods = 0;
 static uint8_t keys[6] = {0};
 static struct keyboard *active_kbd;
 static QueueHandle_t keyd_queue;
+static const TickType_t keyd_queue_send_timeout_ticks = pdMS_TO_TICKS(3);
 
 static void send_hid_report()
 {
@@ -47,8 +52,8 @@ static void send_hid_report()
 	report.hid_mods = mods;
 
 	while (!tud_hid_ready()) {
-		// Handle USB background tasks
-		tud_task();
+		// tud_task(); // Handle USB background tasks
+		vTaskDelay(HID_READY_WAIT_TICKS);
 	}
 	tud_hid_keyboard_report(REPORT_ID_KEYBOARD, report.hid_mods, report.hid_code);
 }
@@ -166,9 +171,9 @@ static void send_key(uint8_t code, uint8_t state)
     event.state = state;
 
     // Enqueue the key event
-    if (xQueueSendToBack(keyd_queue, &event, pdMS_TO_TICKS(3)) != pdPASS) {
+    if (xQueueSendToBack(keyd_queue, &event, keyd_queue_send_timeout_ticks) != pdPASS) {
         // Handle queue full condition if necessary
-        dbg("Failed to enqueue key event (queue full)");
+        warn("Failed to enqueue key event (queue full)");
     }
 	// else {
 	// 	clear_hid_state();
@@ -184,19 +189,20 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// int keep[ARRAY_SIZE(listeners)];
 	size_t n = 0;
 
-	if (kbd->config.layer_indicator) {
-		int active_layers = 0;
+		if (kbd->config.layer_indicator) {
+			int active_layers = 0;
 
-		for (i = 1; i < kbd->config.nr_layers; i++)
-			if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
-				active_layers = 1;
-				break;
-			}
+			for (i = 1; i < kbd->config.nr_layers; i++)
+				if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
+					active_layers = 1;
+					break;
+				}
+			// gpio_led_set_pattern(active_layers ? 0xFFFFFFFFu : 0);
 
-		// for (i = 0; i < device_table_sz; i++)
-		// 	if (device_table[i].data == kbd){
-		// 		device_set_led(&device_table[i], 1, active_layers);
-		// 	}
+			// for (i = 0; i < device_table_sz; i++)
+			// 	if (device_table[i].data == kbd){
+			// 		device_set_led(&device_table[i], 1, active_layers);
+			// 	}
 	}
 
 	// if (!nr_listeners)
@@ -349,23 +355,25 @@ static int event_handler(struct event *ev)
 	}
 	return timeout;
 }
-static int evloop(int (*event_handler) (struct event *ev))
+static int evloop(QueueHandle_t keyscan_event_queue, int (*event_handler) (struct event *ev))
 {
 	size_t i;
 	int timeout = 0;
-
 	struct event ev;
-
 	struct device_event devev;
-
-
+	
 	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
 	dbg3("entering evloop");
-    while (1) {
-        if (xQueueReceive(keyscan_queue, &devev, xTicksToWait) == pdPASS) {
-			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
-			ev.type = EV_DEV_EVENT;
-			ev.devev = &devev;
+
+	// UBaseType_t keyd_stack_min_free_words = uxTaskGetStackHighWaterMark(NULL);
+	// dbg3("keyd_task stack initial free watermark: %u words (%u bytes)",
+	//      (unsigned)keyd_stack_min_free_words,
+	//      (unsigned)(keyd_stack_min_free_words * sizeof(StackType_t)));
+	    while (1) {
+	        if (xQueueReceive(keyscan_event_queue, &devev, xTicksToWait) == pdPASS) {
+				ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
+				ev.type = EV_DEV_EVENT;
+				ev.devev = &devev;
             timeout = event_handler(&ev);
 			timeout = timeout < 0 ? 0 : timeout;
             xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
@@ -375,13 +383,21 @@ static int evloop(int (*event_handler) (struct event *ev))
 			ev.devev = NULL;
 			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
             timeout = event_handler(&ev);
-			timeout = timeout < 0 ? 0 : timeout;
-            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-        }
-    }
+				timeout = timeout < 0 ? 0 : timeout;
+	            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+	        }
 
-    return 0; // Never reached
-}
+			// UBaseType_t keyd_stack_free_words = uxTaskGetStackHighWaterMark(NULL);
+			// if (keyd_stack_free_words < keyd_stack_min_free_words) {
+			// 	keyd_stack_min_free_words = keyd_stack_free_words;
+			// 	dbg3("keyd_task stack new min free watermark: %u words (%u bytes)",
+			// 	     (unsigned)keyd_stack_min_free_words,
+			// 	     (unsigned)(keyd_stack_min_free_words * sizeof(StackType_t)));
+			// }
+	    }
+
+	    return 0; // Never reached
+	}
 
 static void keyd_init() {
 	keyd_queue = xQueueCreate(256, sizeof(key_event_t));
@@ -392,13 +408,16 @@ static void keyd_init() {
 					.on_layer_change = on_layer_change,
 				};
 
-    active_kbd = new_keyboard(&output);
+	active_kbd = new_keyboard(&output);
+	// if (active_kbd && active_kbd->config.layer_indicator) {
+	// 	gpio_led_set_pattern(0);
+	// }
 	dbg3("kbd initialized");
 	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
 }
 
 void keyd_task(void* pvParameters) {
-    (void) pvParameters;
+	QueueHandle_t keyscan_event_queue = (QueueHandle_t)pvParameters;
 	keyd_init();
-    evloop(event_handler);
+    evloop(keyscan_event_queue, event_handler);
 }

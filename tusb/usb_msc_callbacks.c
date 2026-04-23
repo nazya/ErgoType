@@ -2,6 +2,8 @@
 // #include <bsp/board.h>
 #include <tusb.h>
 #include "flash.h"
+#include "led/plain.h"
+#include "led/ws2812.h"
 
 #define  DISK_BLOCK_NUM  128
 #define  DISK_BLOCK_SIZE 512
@@ -9,6 +11,7 @@
 
 // whether host does safe-eject
 static bool ejected = false;
+static uint32_t last_ws2812_color = 0xFFFFFFFFu;
 
 static void print_block(uint8_t *buffer, size_t l) {
     for (size_t i = 0; i < l; ++i) {
@@ -40,6 +43,13 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 // return true allowing host to read/write this LUN e.g SD card inserted
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
     (void) lun;
+
+    uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
+    if (color != last_ws2812_color) {
+        ws2812_set(color, 0xFFFFFFFFu);
+        last_ws2812_color = color;
+    }
+
     // RAM disk is ready until ejected
     if (ejected) {
         // Additional Sense 3A-00 is NOT_FOUND
@@ -67,10 +77,19 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
     if (load_eject) {
         if (start) {
             // load disk storage
+            ejected = false;
+            gpio_led_set_pattern(LED_PATTERN_MEDIUM);
         } else {
             // unload disk storage
             ejected = true;
+            gpio_led_set_pattern(LED_PATTERN_FAST);
         }
+    }
+
+    uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
+    if (color != last_ws2812_color) {
+        ws2812_set(color, 0xFFFFFFFFu);
+        last_ws2812_color = color;
     }
     return true;
 }
