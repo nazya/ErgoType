@@ -5,7 +5,7 @@
  */
 #include <assert.h>
 
-#include "stringutils.h"
+#include "string.h"
 
 int utf8_read_char(const char *_s, uint32_t *code)
 {
@@ -105,4 +105,3 @@ size_t str_escape(char *s)
 
 	return n;
 }
-

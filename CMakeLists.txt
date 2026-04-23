@@ -28,7 +28,7 @@ include(pico_sdk_import.cmake)
 
 # set(FREERTOS_HEAP 2)
 SET(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel)
-include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/rtos/FreeRTOS_Kernel_import.cmake)
 
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/coreJSON/jsonFilePaths.cmake)
@@ -58,29 +58,43 @@ pico_sdk_init()
 cmake_minimum_required(VERSION 3.13)
 add_executable(${PROJECT_NAME})
 
+pico_generate_pio_header(${PROJECT_NAME}
+        ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.pio
+)
+
 add_subdirectory(tusb)
 add_subdirectory(pico-usb-flash-drive)
 add_subdirectory(keyd/src)
-add_subdirectory(pmw3360)
+add_subdirectory(pointing/pmw3360)
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
         # ${CMAKE_CURRENT_LIST_DIR}/test.c
         ${CMAKE_CURRENT_LIST_DIR}/main.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_msc_driver.c
-        ${CMAKE_CURRENT_LIST_DIR}/freertos_hook.c
-        ${CMAKE_CURRENT_LIST_DIR}/led.c
-        ${CMAKE_CURRENT_LIST_DIR}/tud.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
+        ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
+        ${CMAKE_CURRENT_LIST_DIR}/led/plain.c
+        ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
-        ${CMAKE_CURRENT_LIST_DIR}/pointer.c
+        ${CMAKE_CURRENT_LIST_DIR}/log.c
+        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
         )
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/rtos
         ${JSON_INCLUDE_PUBLIC_DIRS}
 ) 
+
+# Expose keyd headers to this target via quote-only search path so system
+# headers like <string.h> are never shadowed by keyd/src/string.h.
+target_compile_options(${PROJECT_NAME} PRIVATE
+        -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/src
+)
 
 # In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_device
 # for TinyUSB device support and tinyusb_board for the additional board support library used by the example
@@ -104,6 +118,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 
         hardware_sync
         hardware_flash
+        hardware_pio
+        hardware_clocks
 
         # pico_cyw43_arch_none
    )

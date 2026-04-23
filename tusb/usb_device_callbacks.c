@@ -1,12 +1,9 @@
-#include "hardware/watchdog.h"
 #include "tusb.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "led/plain.h"
+#include "led/ws2812.h"
+#include "usb_descriptors.h"
 
-#include "led.h"
-
-
-uint32_t blink_interval_ms = BLINK_NOT_MOUNTED; // blink_patterh.c
+extern uint8_t mode;
 
 //--------------------------------------------------------------------+
 // Device callbacks
@@ -15,13 +12,19 @@ uint32_t blink_interval_ms = BLINK_NOT_MOUNTED; // blink_patterh.c
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
-    blink_interval_ms = BLINK_MOUNTED;
+    gpio_led_set_pattern(0);
+    if (mode == MSC) {
+        ws2812_set(WS2812_RED, 0xFFFFFFFFu);
+    }
 }
 
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
-    blink_interval_ms = BLINK_NOT_MOUNTED;
+    gpio_led_set_pattern(LED_PATTERN_FAST);
+    if (mode == MSC) {
+        ws2812_set(WS2812_BLUE, 0xFFFFFFFFu);
+    }
     // watchdog_reboot(0, 0, 0); does not work here
 }
 
@@ -29,13 +32,13 @@ void tud_umount_cb(void)
 void tud_suspend_cb(bool remote_wakeup_en)
 {
     (void) remote_wakeup_en;
-    blink_interval_ms = BLINK_SUSPENDED;
+    gpio_led_set_pattern(0x00000001u);
 }
 
 // Invoked when USB bus is resumed
 void tud_resume_cb(void)
 {
-    blink_interval_ms = tud_mounted() ? BLINK_MOUNTED : BLINK_NOT_MOUNTED;
+    gpio_led_set_pattern(0);
 }
 
 // Invoked when sent REPORT successfully to host
@@ -63,19 +66,12 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
                            uint8_t const* buffer, uint16_t bufsize)
 {
-    // Not implemented
     (void) instance;
-    (void) report_id;
-    (void) report_type;
-    (void) buffer;
-    (void) bufsize;
-}
+    if (report_type != HID_REPORT_TYPE_OUTPUT || bufsize < 1)
+        return;
+    if (report_id != 0 && report_id != REPORT_ID_KEYBOARD)
+        return;
 
-void usb_device_task(void* pvParameters) {
-    (void) pvParameters;
-
-    while (1) {
-        tud_task(); // TinyUSB device task
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
+    uint8_t leds = buffer[0];
+    gpio_led_set_pattern((leds & 0x02u) ? 0xFFFFFFFFu : 0u);
 }

@@ -3,7 +3,7 @@
  *
  * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
  */
- #include <stdio.h>
+#include <stdio.h>
 #include <string.h>
 #include "FreeRTOS.h"
 #include "ff.h" // FatFS header
@@ -12,17 +12,6 @@
 #include "keys.h"
 
 #include "pico/stdlib.h"
-
-#undef err
-#define err(fmt, ...) \
-    do { \
-        int _err_avail = ERRSTR_LENGTH - strlen(errstr) - 1; \
-        int _err_len = snprintf(NULL, 0, fmt "\n", ##__VA_ARGS__); \
-        if (_err_len > 0 && _err_len < _err_avail) { \
-            snprintf(errstr + strlen(errstr), _err_avail, fmt "\n", ##__VA_ARGS__); \
-        } \
-    } while (0)
-
 
 #define GPIO_PULL_UP(pin)       \
     do {                        \
@@ -126,7 +115,7 @@ static int set_cfg_value(config_t *config, const char *field_name, int8_t value)
     return -1;  // Field not found
 }
 
-static int parse_int_array(const char *json, size_t json_len, const char *key, int *array, size_t max_size) {
+static int parse_int_array(const char *json, size_t json_len, const char *key, uint8_t *array, size_t max_size) {
     JSONStatus_t result;
     const char *array_start;
     size_t array_length;
@@ -157,7 +146,7 @@ static int parse_int_array(const char *json, size_t json_len, const char *key, i
             ((char *)pair.value)[pair.valueLength] = '\0';
 
             // Convert the value to an integer and store it in the array
-            array[element_count++] = atoi(pair.value);
+            array[element_count++] = (uint8_t)atoi(pair.value);
 
             // Restore the original character
             ((char *)pair.value)[pair.valueLength] = save;
@@ -166,7 +155,7 @@ static int parse_int_array(const char *json, size_t json_len, const char *key, i
         }
     }
 
-    return element_count;  // Return the number of elements parsed
+    return (int)element_count;  // Return the number of elements parsed
 }
 
 static uint8_t lookup_keycode(const char *name)
@@ -343,40 +332,28 @@ int parse(config_t *config, const char *filename) {
 
     pull_pins(json);
     
-    char *value;
-    size_t value_length;
-    result = JSON_Search(json, json_len, "log_level", strlen("log_level"), &value, &value_length);
-    if (result == JSONSuccess) {
-        char save = value[value_length];  // Save the original character
-        value[value_length] = '\0';       // Null-terminate the string
-
-        log_level = atoi(value);          // Convert the value to an integer
-
-        value[value_length] = save;       // Restore the original character
-        // dbg3("log_level: %d", log_level);
-    } else {
-        // dbg3("Field not found: %s", "log_level");
-    }
-
     // Iterate over fields using the X-Macro
     #define FIELD(name, type, default_value)                       \
         {                                                          \
             char *value;                                           \
             size_t value_length;                                   \
-            result = JSON_Search(json, json_len, #name, strlen(#name), \
-                                 &value, &value_length);           \
+            result = JSON_Search(json, json_len, #name,            \
+                strlen(#name), &value, &value_length);             \
             if (result == JSONSuccess) {                           \
                 char save = value[value_length];                   \
                 value[value_length] = '\0';                        \
-                set_cfg_value(config, #name, atoi(value));         \
+                set_cfg_value(config, #name, (int8_t)atoi(value)); \
+                dbg3("Parsed field: %s=%s", #name, value);         \
                 value[value_length] = save;                        \
             } else {                                               \
-                printf("Field not found: %s\n", #name);            \
+                dbg3("Field not found: %s", #name);                \
             }                                                      \
         }
     CONFIG_FIELDS
     #undef FIELD
 
+    log_level = config->log_level;
+    dbg3("log_level: %d", log_level);
 
     // Parse the integer array from the JSON
     int nr;

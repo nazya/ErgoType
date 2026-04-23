@@ -1,13 +1,18 @@
+#include <stdbool.h>
+#include <string.h>
+
 #include "hardware/gpio.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
 #include "pmw3360.h"
+#include "pointer.h"
 
 #define PIN_MOT   7
+#define HID_READY_WAIT_TICKS 2
 
-extern TaskHandle_t xMotionTaskHandle;
+static TaskHandle_t motion_task_handle = NULL;
 
 /*******************************************************************
  * 1.  GPIO + IRQ initialisation  (run once, before scheduler starts)
@@ -15,17 +20,22 @@ extern TaskHandle_t xMotionTaskHandle;
 static void mot_irq_handler(uint gpio, uint32_t events) {
     if (gpio == PIN_MOT && (events & GPIO_IRQ_EDGE_FALL)) {
         BaseType_t xHPTW = pdFALSE;
-        vTaskNotifyGiveFromISR(xMotionTaskHandle, &xHPTW);
+        vTaskNotifyGiveFromISR(motion_task_handle, &xHPTW);
         portYIELD_FROM_ISR(xHPTW);
     }
 }
 
-void mot_gpio_init(void) {
+static void mot_gpio_init(void) {
     gpio_init(PIN_MOT);
     gpio_set_dir(PIN_MOT, GPIO_IN);
     gpio_pull_up(PIN_MOT);                         // idle HIGH
     gpio_set_irq_enabled_with_callback(
         PIN_MOT, GPIO_IRQ_EDGE_FALL, true, mot_irq_handler);
+}
+
+void pointing_motion_irq_init(TaskHandle_t task_handle) {
+    motion_task_handle = task_handle;
+    mot_gpio_init();
 }
 
 
@@ -53,17 +63,11 @@ void report_init(void) {
     memset(&report, 0, sizeof(report));
 }
 
-void vMouseTask(void *pvParameters)
+void pointing_device_task(void *pvParameters)
 {
+    (void)pvParameters;
     int16_t dx = 5;
     int16_t dy = 3;
-    int16_t wheel = 1;
-    int16_t pan = 1;
-    uint8_t buttons = 0;
-
-    static int count = 0;
-    static int current_button = 0;
-    static bool pressing = true;
 
     // stdio_init_all();
     // board_init();
@@ -93,7 +97,8 @@ void vMouseTask(void *pvParameters)
         // tud_hid_mouse_report(REPORT_ID_MOUSE, buttons, dx, dy, wheel, pan);
         pmw3360_get_deltas(&dx, &dy);
         while (!tud_hid_ready()) {
-            tud_task();
+            // tud_task();
+            vTaskDelay(HID_READY_WAIT_TICKS);
         }
         tud_hid_mouse_report(REPORT_ID_MOUSE, 0, dx, dy, 0, 0);
 

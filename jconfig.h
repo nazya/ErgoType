@@ -6,14 +6,12 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdint.h>
 #include "log.h"
-
-extern char errstr[ERRSTR_LENGTH];
-extern int log_level;
 
 #define IS_GPIO_PIN(pin) ((pin) >= 0 && (pin) <= 29)
 
-#define MAX_GPIOS 16 
+#define MAX_GPIOS 8 
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -31,18 +29,17 @@ typedef uint32_t matrix_row_t;
     FIELD(uart_tx_pin, int8_t, -1)  \
     FIELD(log_level, int8_t, 0)  \
     FIELD(led_pin, int8_t, -1)  \
+    FIELD(ws2812_pin, int8_t, -1)  \
     FIELD(erase_pin, int8_t, -1)  \
     FIELD(nr_pressed_erase, int8_t, 9)  \
     FIELD(msc_pin, int8_t, -1)  \
     FIELD(nr_pressed_msc, int8_t, 3)  \
     FIELD(scan_period, int8_t, 5)  \
-    FIELD(debounce, int8_t, 9)  \
-    FIELD(has_diodes, int8_t, 1)
-
+    FIELD(debounce, int8_t, 9)
 
 typedef struct {
-    int gpio_cols[MAX_GPIOS];      // GPIO pins for columns
-    int gpio_rows[MAX_GPIOS];      // GPIO pins for rows
+    uint8_t gpio_cols[MAX_GPIOS];      // GPIO pins for columns
+    uint8_t gpio_rows[MAX_GPIOS];      // GPIO pins for rows
     uint8_t keymap[MAX_GPIOS][MAX_GPIOS]; // Keycode mapping [row][col]
     uint8_t nr_cols;                  // Number of columns
     uint8_t nr_rows;                  // Number of rows

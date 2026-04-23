@@ -19,7 +19,7 @@
 
 #include "config.h"
 #include "keys.h"
-#include "stringutils.h"
+#include "string.h"
 #include "log.h"
 
 struct ini_entry {
