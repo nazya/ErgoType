@@ -63,9 +63,6 @@ static bool debouncing = false;
 static const uint8_t row2col = 0;  // ROW2COL configuration
 static uint8_t col2row = 1;  // COL2ROW configuration
 
-// Variables for FreeRTOS queue
-extern QueueHandle_t eventQueue;
-
 // Functions for selecting and unselecting rows and columns
 static void select_row(matrix_t* matrix, uint8_t row) {
     uint8_t pin = matrix->gpio_rows[row];
@@ -281,7 +278,9 @@ uint8_t count_pressed_keys(matrix_t* matrix) {
 
 // Main matrix scanning task
 void keyscan_task(void* pvParameters) {
-    config_t* config = (config_t*)pvParameters;
+    void **task_params = (void **)pvParameters;
+    config_t *config = (config_t *)task_params[0];
+    QueueHandle_t keyscan_event_queue = (QueueHandle_t)task_params[1];
     debouncing_time = config->debounce;
     debouncing = (debouncing_time > 0);
     // matrix_t* matrix = (matrix_t*)pvParameters;
@@ -318,7 +317,7 @@ void keyscan_task(void* pvParameters) {
                             if (changed_keys & col_mask) {
                                 devev.pressed = (debounced_matrix[row] & col_mask) != 0;
                                 devev.code = config->matrix.keymap[row][col];
-                                BaseType_t xStatus = xQueueSendToBack(keyscan_queue, &devev, portMAX_DELAY);
+                                (void)xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
                                 // if (xStatus != pdPASS) {
                                 //     err("Failed to send event to queue");
                                 // }

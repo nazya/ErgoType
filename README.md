@@ -49,20 +49,20 @@ The `config.json` file allows you to set the following parameters:
 | `uart_tx_pin`      | `int8`     | `-1`    | GPIO pin number for UART TX. Set to `-1` if not used. Supported pins: 0, 12, 16, 28 |
 | `log_level`        | `int8`     | `0`     | Specifies the verbosity level of logging output. |
 | `led_pin`          | `int8`     | `-1`    | GPIO pin number for the status LED. |
+| `ws2812_pin`       | `int8`     | `-1`    | GPIO pin number for a WS2812/NeoPixel data line. Set to `-1` to disable. |
 | `erase_pin`        | `int8`     | `-1`    | GPIO pin used to trigger settings erase (active low). |
 | `nr_pressed_erase` | `int8`     | `9`     | Number of simultaneously pressed keys on start up to trigger file system reinit. Only for the default `erase_pin` set.|
 | `msc_pin`          | `int8`     | `-1`    | GPIO pin to switch to MSC mode (active low). |
 | `nr_pressed_msc`   | `int8`     | `3`     | Number of simultaneously pressed keys on start up to switch to MSC mode. Only for the default `msc_pin` set.|
 | `scan_period`      | `int8`     | `5`     | Time in milliseconds between scans for key state changes. |
 | `debounce`         | `int8`     | `9`     | Time in milliseconds to stabilize key states, mitigating bouncing effects. |
-| `has_diodes`       | `int8`     | `1`     | Indicates if the key matrix is diode-protected (`1` for col2rows, `0` for no). |
 | `gpio_rows`        | `int[]`    | N/A     | Array of GPIO pins configured as rows in the key matrix. |
 | `gpio_cols`        | `int[]`    | N/A     | Array of GPIO pins configured as columns in the key matrix. |
 | `keymap`           | `string(int)[][]`| N/A | Two-dimensional array specifying the key codes or key names for each matrix position. |
 | `pull_up_pins`     | `int[]`    | N/A     | Array of GPIO pins configured with internal pull-up resistors. |
 | `pull_down_pins`   | `int[]`    | N/A     | Array of GPIO pins configured with internal pull-down resistors. |
 
-Supported diodes direction -- col2row, but one can always flip `gpio_row` and `gpio_cols` and transpose a `keymap`.
+Current firmware uses a hardcoded `col2row` scan direction. One can flip `gpio_row` and `gpio_cols` and transpose `keymap` if needed.
 
 ### keyd
 The `keyd.conf` is compatible with standard keyd configuration syntax, with the exception of **IPC**, **Unicode**, **File Inclusion**, **[ids]** section (parsed, but skipped) and **command**s (parsed, but skipped).
@@ -79,7 +79,6 @@ Using the RP2040 ProMicro I configured the left-hand part of the keyboard. Check
     "led_pin": 17,
     "scan_period": 5,
     "debounce": 9,
-    "has_diodes": 1,
     "pull_up_pins": [28, 29],
     "pull_down_pins": [0],
     "gpio_rows": [5, 6, 7, 9],
@@ -138,6 +137,12 @@ Led blinking patterns indicate device status:
 - **mounted**: 1000 ms
 - **suspended**: 2500 ms (not implemented)
 
+If `ws2812_pin` is set, a single WS2812/NeoPixel can be used as a status LED:
+- **HID mode** (startup only): **green** = `config.json` parsed OK, **red** = parse errors (then turns off).
+- **MSC mode**: **blue** = not mounted/idle, **red** = mounted/active, **green** = safe-ejected.
+
+WS2812 brightness is currently fixed in code via the hardcoded color constants in `led/ws2812.h` (`WS2812_RED/GREEN/BLUE`).
+
 ## TODO
 - split keyboards and compatibility with qmk communication protocol 
 - pointing devices
@@ -152,4 +157,3 @@ I also welcome your feedback and suggestions! Check [`ErgoType Discord server`](
 
 ## Acknowledgments
 A big thank you to all the keyd developers and contributors, especially @rvaiya and @gkbd. Special thanks to @oyama and @hakanrw for their contributions to integrating MSC USB, FatFs operations on PICO flash memory, and FreeRTOS. I also appreciate the efforts of the FreeRTOS, TinyUSB, coreJSON, and QMK developers and contributors for enhancing this project's capabilities.
-

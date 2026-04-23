@@ -5,6 +5,7 @@
  */
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include <stdint.h>
 #include <string.h>
 
 // USB Vendor ID and Product IDs
@@ -13,8 +14,8 @@
 #define USB_PID_CDC_MSC 0x1002 // Example PID for CDC + MSC mode
 #define USB_BCD        0x0200
 
-// Mode selection variable from main.c
-extern uint32_t mode;
+// Mode selection variable defined in main.c.
+extern uint8_t mode;
 
 // Define MSC subclass and protocol constants
 #define MSC_SUBCLASS_SCSI 0x06
@@ -271,7 +272,7 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 // Device Descriptor Callback
 uint8_t const * tud_descriptor_device_cb(void)
 {
-    if (mode == 0)
+    if (mode == HID)
     {
         // HID Mode
         return (uint8_t const *) &desc_device_hid;
@@ -286,7 +287,7 @@ uint8_t const * tud_descriptor_device_cb(void)
 // Configuration Descriptor Callback
 uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 {
-    if (mode == 0)
+    if (mode == HID)
     {
         // HID Mode
         return desc_configuration_hid;
@@ -306,7 +307,7 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 uint8_t const * tud_hid_descriptor_report_cb(uint8_t instance)
 {
     (void) instance;
-    if (mode == 0)
+    if (mode == HID)
     {
         return desc_hid_report;
     }
