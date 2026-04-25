@@ -154,10 +154,13 @@ int main() {
     tusb_init();
     stdio_usb_init();
 
+    for (int i = 0; i < 1000 && !tud_cdc_connected(); ++i) {
+        tud_task();
+        sleep_ms(1);
+    }
     for (int i = 0; i < CDC_SETTLE_MS; ++i) {
         tud_task();
         sleep_ms(1);
-        // if (!tud_cdc_connected()) --i;
     }
     dbg("CDC ready");
     if (base_mode != HID) {
@@ -167,6 +170,7 @@ int main() {
         mode_resolution.mode == HID ? "HID" : "MSC", mode_resolution.reason);
     print_parse_errors();
     dbg3config(&config);
+    
 
     if (IS_GPIO_PIN(config.led_pin)) {
         xTaskCreate(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin,    IDLE_PRIORITY, NULL);
@@ -186,7 +190,7 @@ int main() {
 
         xTaskCreate(keyscan_task,         NULL, MIN_STACK_SIZE, keyscan_task_params,  IDLE_PRIORITY + 5, NULL);
         xTaskCreate(keyd_task,            NULL, 8192,           keyscan_queue_handle, IDLE_PRIORITY + 4, NULL); // empirically: min free watermark was 3408 words
-        xTaskCreate(tusb_device_task,     NULL, MIN_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 3, NULL);
+        xTaskCreate(tusb_device_task,     NULL, MIN_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 6, NULL);
         xTaskCreate(key_event_hid_task,   NULL, MIN_STACK_SIZE, NULL,                  IDLE_PRIORITY + 2, NULL);
 
         TaskHandle_t pointing_task_handle = NULL;
@@ -196,12 +200,7 @@ int main() {
         dbg("entered MSC mode");
         xTaskCreate(tusb_device_task,     NULL, TUD_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 1, NULL);
     }
-    dbg("starting os");
-    // stdio_flush();
-    // for (int i = 0; i < 100; ++i) {
-    //     tud_task();
-    //     sleep_ms(1);
-    // }
+    // dbg("starting os"); // broken: xTaskCreate disables irq
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
 
     while (1) { };
