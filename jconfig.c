@@ -8,10 +8,14 @@
 #include "FreeRTOS.h"
 #include "ff.h" // FatFS header
 #include "core_json.h"
+#include "flash.h"
 #include "jconfig.h"
 #include "keys.h"
 
+#include "pico/stdio.h"
 #include "pico/stdlib.h"
+
+#define ERRSTR_LENGTH 2048
 
 #define GPIO_PULL_UP(pin)       \
     do {                        \
@@ -25,6 +29,69 @@
         gpio_pull_down(pin);    \
     } while (0)
 
+static char errstr[ERRSTR_LENGTH] = {0};
+
+static void append_errstr(const char *fmt, ...) {
+    size_t len = strlen(errstr);
+    if (len >= ERRSTR_LENGTH - 1) {
+        return;
+    }
+
+    if (len > 0 && errstr[len - 1] != '\n') {
+        errstr[len++] = '\n';
+        errstr[len] = '\0';
+    }
+
+    va_list ap;
+    va_start(ap, fmt);
+    int written = vsnprintf(errstr + len, ERRSTR_LENGTH - len, fmt, ap);
+    va_end(ap);
+
+    if (written < 0) {
+        return;
+    }
+
+    if ((size_t)written >= ERRSTR_LENGTH - len) {
+        errstr[ERRSTR_LENGTH - 1] = '\0';
+    }
+}
+
+#undef err
+#define err(fmt, ...) append_errstr(fmt, ##__VA_ARGS__)
+
+void print_parse_errors(void)
+{
+    const char *suffix = "";
+
+    if (errstr[0] == '\0')
+        return;
+
+    if (errstr[strlen(errstr) - 1] != '\n')
+        suffix = "\n";
+
+    msg("Errors in parsing 'config.json':\n%s%s", errstr, suffix);
+}
+
+void dbg3config(const config_t *config)
+{
+    #define FIELD(name, type, default_value) dbg3("config.%s=%d", #name, (int)config->name);
+    CONFIG_FIELDS
+    #undef FIELD
+
+    dbg3("config.matrix.nr_rows=%u", config->matrix.nr_rows);
+    dbg3("config.matrix.nr_cols=%u", config->matrix.nr_cols);
+
+    for (uint8_t i = 0; i < config->matrix.nr_rows; ++i)
+        dbg3("config.matrix.gpio_rows[%u]=%u", i, config->matrix.gpio_rows[i]);
+
+    for (uint8_t i = 0; i < config->matrix.nr_cols; ++i)
+        dbg3("config.matrix.gpio_cols[%u]=%u", i, config->matrix.gpio_cols[i]);
+
+    for (uint8_t row = 0; row < config->matrix.nr_rows; ++row)
+        for (uint8_t col = 0; col < config->matrix.nr_cols; ++col)
+            dbg3("config.matrix.keymap[%u][%u]=%u", row, col, config->matrix.keymap[row][col]);
+}
+
 
 // Function to load cfguration from JSON file
 static int load(char **buffer, const char *filename) {
@@ -37,8 +104,12 @@ static int load(char **buffer, const char *filename) {
     // Mount the filesystem
     res = f_mount(&filesystem, "/", 1);
     if (res != FR_OK) {
-        err("f_mount failed");
-        return -1;
+        flash_fat_initialize();
+        res = f_mount(&filesystem, "/", 1);
+        if (res != FR_OK) {
+            err("f_mount failed (FRESULT: %d)", res);
+            return -1;
+        }
     }
 
     // Open the configuration file
@@ -313,6 +384,7 @@ static void pull_pins(const char *json_data) {
 
 int parse(config_t *config, const char *filename) {
     init_default_cfg(config);
+    errstr[0] = '\0';
 
     char *json = NULL;
     int json_len = load(&json, filename);
@@ -343,17 +415,13 @@ int parse(config_t *config, const char *filename) {
                 char save = value[value_length];                   \
                 value[value_length] = '\0';                        \
                 set_cfg_value(config, #name, (int8_t)atoi(value)); \
-                dbg3("Parsed field: %s=%s", #name, value);         \
                 value[value_length] = save;                        \
-            } else {                                               \
-                dbg3("Field not found: %s", #name);                \
             }                                                      \
         }
     CONFIG_FIELDS
     #undef FIELD
 
     log_level = config->log_level;
-    dbg3("log_level: %d", log_level);
 
     // Parse the integer array from the JSON
     int nr;

@@ -11,23 +11,22 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define ERRSTR_LENGTH 2048
-extern char errstr[ERRSTR_LENGTH];
+#define msg(fmt, ...) _msg(0, fmt, ##__VA_ARGS__);
 
-#define keyd_log(fmt, ...) _keyd_log(0, fmt, ##__VA_ARGS__);
-
-#define dbg(fmt, ...) _keyd_log(1, "r{INFO:} b{%s:%d:} " fmt "\n", \
+#define dbg(fmt, ...) _msg(1, "r{INFO:} b{%s:%d:} " fmt "\n", \
     strstr(__FILE__, "ErgoType") ? strstr(__FILE__, "ErgoType") : __FILE__, __LINE__, ##__VA_ARGS__)
-#define dbg2(fmt, ...) _keyd_log(2, "r{INFO:} b{%s:%d:} " fmt "\n", \
+#define dbg2(fmt, ...) _msg(2, "r{INFO:} b{%s:%d:} " fmt "\n", \
     strstr(__FILE__, "ErgoType") ? strstr(__FILE__, "ErgoType") : __FILE__, __LINE__, ##__VA_ARGS__)
-#define dbg3(fmt, ...) _keyd_log(3, "r{INFO:} b{%s:%d:} " fmt "\n", \
+#define dbg3(fmt, ...) _msg(3, "r{INFO:} b{%s:%d:} " fmt "\n", \
     strstr(__FILE__, "ErgoType") ? strstr(__FILE__, "ErgoType") : __FILE__, __LINE__, ##__VA_ARGS__)
 
-#define err(fmt, ...) snprintf(errstr, sizeof(errstr), fmt, ##__VA_ARGS__);
-#define warn(fmt, ...) keyd_log("\ty{WARNING:} "fmt"\n", ##__VA_ARGS__)
+#define err(fmt, ...) msg("\tr{ERROR:} " fmt "\n", ##__VA_ARGS__)
+#define warn(fmt, ...) msg("\ty{WARNING:} "fmt"\n", ##__VA_ARGS__)
 
-void _keyd_log(int level, const char *fmt, ...);
+void _msg(int level, const char *fmt, ...);
+void die(const char *fmt, ...);
 
 extern int log_level;
+extern int suppress_colours;
 
 #endif

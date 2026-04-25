@@ -1069,7 +1069,6 @@ int process_section(struct ini_section *section, struct config *config) {
         dbg3("global section processed");
     } else {
         if (config_add_layer(config, section->name) < 0) {
-            warn("%s", errstr);
             return -1;
         }
         dbg3("layer '%s' added", section->name);
