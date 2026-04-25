@@ -6,6 +6,8 @@
 #include "bsp/board.h"
 #include "pico/stdlib.h"
 #include "pico/stdio.h"
+#include "pico/stdio_uart.h"
+#include "pico/stdio_usb.h"
 // #include "pico/cyw43_arch.h"
 
 #include "tusb.h"
@@ -24,6 +26,7 @@
 #include "pointing/pointer.h"
 
 #define TUD_TASK_DELAY_MS 1
+#define CDC_SETTLE_MS 50
 #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
@@ -47,17 +50,15 @@ void _uart_init(const config_t *config) {
 
     if (uart0_tx_ok && uart0_rx_ok) {
         dbg("uart: using uart0 tx=%d rx=%d", tx, rx);
-        uart_init(uart0, 115200);
-        gpio_set_function(tx, GPIO_FUNC_UART);
-        gpio_set_function(rx, GPIO_FUNC_UART);
+        stdio_uart_deinit();
+        stdio_uart_init_full(uart0, 115200, tx, rx);
         return;
     }
 
     if (uart1_tx_ok && uart1_rx_ok) {
         dbg("uart: using uart1 tx=%d rx=%d", tx, rx);
-        uart_init(uart1, 115200);
-        gpio_set_function(tx, GPIO_FUNC_UART);
-        gpio_set_function(rx, GPIO_FUNC_UART);
+        stdio_uart_deinit();
+        stdio_uart_init_full(uart1, 115200, tx, rx);
         return;
     }
 
@@ -65,17 +66,9 @@ void _uart_init(const config_t *config) {
         warn("uart: invalid pin pair tx=%d rx=%d", tx, rx);
     }
 
+    stdio_uart_deinit();
     uart_deinit(uart0);
     uart_deinit(uart1);
-}
-
-void check_reinit_filesystem() {
-    FATFS filesystem;
-    FRESULT res = f_mount(&filesystem, "/", 1);
-    if (res != FR_OK) {
-        flash_fat_initialize();
-    }
-    f_unmount("/");
 }
 
 int8_t init_and_read_pin(int pin) {
@@ -89,83 +82,91 @@ int8_t init_and_read_pin(int pin) {
     return gpio_get(pin);
 }
 
-static uint8_t resolve_mode(config_t *config, uint8_t base_mode) {
-    if (base_mode == HID) {
-        dbg("base mode=HID");
-    } else {
-        warn("base mode=MSC: config parse failed");
-    }
+typedef struct {
+    uint8_t mode;
+    const char *reason;
+} mode_resolution_t;
 
-    uint8_t mode = base_mode;
+static mode_resolution_t resolve_mode(config_t *config, uint8_t base_mode) {
+    mode_resolution_t resolution = {
+        .mode = base_mode,
+        .reason = base_mode == HID ? "base HID" : "config parse failed",
+    };
     uint8_t nr_pressed = count_pressed_keys(&config->matrix);
-    dbg3("pressed keys at startup: %d", nr_pressed);
 
-    if (mode == HID) {
+    if (resolution.mode == HID) {
 
         int erase_pin_state = init_and_read_pin(config->erase_pin);
-        dbg("erase pin=%d state=%d", config->erase_pin, erase_pin_state);
         switch (erase_pin_state) { // Read the button state (active low)
         case 0:
-            dbg("switching to MSC: erase pin active");
             flash_fat_initialize();
-            mode = MSC;
+            resolution.mode = MSC;
+            resolution.reason = "erase pin active";
             break;
         case 1:
             break;
         default:
             if (config->nr_pressed_erase > 0 && nr_pressed >= config->nr_pressed_erase) {
-                dbg("switching to MSC: nr_pressed(%u) >= nr_pressed_erase(%d)",
-                    (unsigned)nr_pressed, config->nr_pressed_erase);
                 flash_fat_initialize();
-                mode = MSC;
+                resolution.mode = MSC;
+                resolution.reason = "nr_pressed >= nr_pressed_erase";
             }
         }
     }
 
-    if (mode == HID) {
+    if (resolution.mode == HID) {
         int msc_pin_state = init_and_read_pin(config->msc_pin);
         switch (msc_pin_state) { // Read the button state (active low)
         case 0:
-            dbg("switching to MSC: msc pin active");
-            mode = MSC;
+            resolution.mode = MSC;
+            resolution.reason = "msc pin active";
             break;
         case 1:
             break;
         default:
             if (config->nr_pressed_msc > 0 && nr_pressed >= config->nr_pressed_msc) {
-                mode = MSC;
-                dbg("switching to MSC: nr_pressed(%u) >= nr_pressed_msc(%d)",
-                    (unsigned)nr_pressed, config->nr_pressed_msc);
+                resolution.mode = MSC;
+                resolution.reason = "nr_pressed >= nr_pressed_msc";
             }
         }
     }
 
-    dbg("mode resolved: %s", mode == HID ? "HID" : "MSC");
-    return mode;
+    return resolution;
 }
 
 int main() {
     board_init();
-    stdio_init_all();
-    check_reinit_filesystem();
+    stdio_uart_init();
 
     static config_t config;
     int parse_rc = parse(&config, "config.json");
     uint8_t base_mode = (parse_rc == 0) ? HID : MSC; // HID by default; if config parse failed -> start MSC
 
-    if (strlen(errstr) > 0) {
-        warn("Errors in parsing 'config.json':\n%s", errstr);
-    }
-
     _uart_init(&config); // until initialization no debugging outtput.
-
-    mode = resolve_mode(&config, base_mode);
+    
+    mode_resolution_t mode_resolution = resolve_mode(&config, base_mode);
+    mode = mode_resolution.mode;
 
     tud_init(BOARD_TUD_RHPORT);
     if (board_init_after_tusb) {
         board_init_after_tusb();
     }
     tusb_init();
+    stdio_usb_init();
+
+    for (int i = 0; i < CDC_SETTLE_MS; ++i) {
+        tud_task();
+        sleep_ms(1);
+        // if (!tud_cdc_connected()) --i;
+    }
+    dbg("CDC ready");
+    if (base_mode != HID) {
+        warn("base mode=MSC: config parse failed");
+    }
+    msg("mode resolved: %s (%s)\n",
+        mode_resolution.mode == HID ? "HID" : "MSC", mode_resolution.reason);
+    print_parse_errors();
+    dbg3config(&config);
 
     if (IS_GPIO_PIN(config.led_pin)) {
         xTaskCreate(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin,    IDLE_PRIORITY, NULL);
@@ -177,26 +178,30 @@ int main() {
     static TickType_t tusb_task_delay = pdMS_TO_TICKS(TUD_TASK_DELAY_MS);
     if (mode == HID) {
         dbg("entered HID mode");
-        
+
         QueueHandle_t keyscan_queue_handle = xQueueCreate(16, sizeof(struct device_event));
         static void *keyscan_task_params[2];
-        keyscan_task_params[0] = &config;              // config_t*
-        keyscan_task_params[1] = keyscan_queue_handle; // QueueHandle_t
-        
+        keyscan_task_params[0] = &config;               // config_t*
+        keyscan_task_params[1] = keyscan_queue_handle;  // QueueHandle_t
+
         xTaskCreate(keyscan_task,         NULL, MIN_STACK_SIZE, keyscan_task_params,  IDLE_PRIORITY + 5, NULL);
         xTaskCreate(keyd_task,            NULL, 8192,           keyscan_queue_handle, IDLE_PRIORITY + 4, NULL); // empirically: min free watermark was 3408 words
         xTaskCreate(tusb_device_task,     NULL, MIN_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 3, NULL);
-        xTaskCreate(key_event_hid_task,   NULL, MIN_STACK_SIZE, NULL,                 IDLE_PRIORITY + 2, NULL);
-        
+        xTaskCreate(key_event_hid_task,   NULL, MIN_STACK_SIZE, NULL,                  IDLE_PRIORITY + 2, NULL);
 
         TaskHandle_t pointing_task_handle = NULL;
-        xTaskCreate(pointing_device_task, NULL, MIN_STACK_SIZE, NULL,                 IDLE_PRIORITY + 1, &pointing_task_handle);
+        xTaskCreate(pointing_device_task, NULL, MIN_STACK_SIZE, NULL,                  IDLE_PRIORITY + 1, &pointing_task_handle);
         pointing_motion_irq_init(pointing_task_handle);
     } else {
         dbg("entered MSC mode");
         xTaskCreate(tusb_device_task,     NULL, TUD_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 1, NULL);
     }
     dbg("starting os");
+    // stdio_flush();
+    // for (int i = 0; i < 100; ++i) {
+    //     tud_task();
+    //     sleep_ms(1);
+    // }
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
 
     while (1) { };

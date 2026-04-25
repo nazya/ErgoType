@@ -870,10 +870,10 @@ struct keyboard *new_keyboard(const struct output *output)
 			}
 		}
 
-		if (!found)
-			keyd_log("\tWARNING: could not find default layout %s.\n",
-				kbd->config.default_layout);
-	}
+			if (!found)
+				msg("\tWARNING: could not find default layout %s.\n",
+					kbd->config.default_layout);
+		}
 
 	kbd->chord.queue_sz = 0;
 	kbd->chord.state = CHORD_INACTIVE;

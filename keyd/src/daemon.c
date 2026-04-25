@@ -336,7 +336,7 @@ static int event_handler(struct event *ev)
 	// 	manage_device(ev->dev);
 	// 	break;
 	// case EV_DEV_REMOVE:
-	// 	keyd_log("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
+	// 	msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
 
 	// 	break;
 	// case EV_FD_ACTIVITY:

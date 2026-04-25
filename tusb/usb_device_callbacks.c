@@ -12,6 +12,7 @@ extern uint8_t mode;
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
+    // msg("usb mounted (%s)\n", usb_mode_name());
     gpio_led_set_pattern(0);
     if (mode == MSC) {
         ws2812_set(WS2812_RED, 0xFFFFFFFFu);
@@ -21,6 +22,7 @@ void tud_mount_cb(void)
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
+    // msg("usb unmounted (%s)\n", usb_mode_name());
     gpio_led_set_pattern(LED_PATTERN_FAST);
     if (mode == MSC) {
         ws2812_set(WS2812_BLUE, 0xFFFFFFFFu);
@@ -31,6 +33,7 @@ void tud_umount_cb(void)
 // Invoked when USB bus is suspended
 void tud_suspend_cb(bool remote_wakeup_en)
 {
+    // msg("usb suspended (%s, remote_wakeup=%d)\n", usb_mode_name(), remote_wakeup_en);
     (void) remote_wakeup_en;
     gpio_led_set_pattern(0x00000001u);
 }
@@ -38,6 +41,7 @@ void tud_suspend_cb(bool remote_wakeup_en)
 // Invoked when USB bus is resumed
 void tud_resume_cb(void)
 {
+    // msg("usb resumed (%s)\n", usb_mode_name());
     gpio_led_set_pattern(0);
 }
 
@@ -73,5 +77,6 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
         return;
 
     uint8_t leds = buffer[0];
+    // msg("hid led report: 0x%02X\n", leds);
     gpio_led_set_pattern((leds & 0x02u) ? 0xFFFFFFFFu : 0u);
 }
