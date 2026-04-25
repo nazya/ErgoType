@@ -55,5 +55,7 @@ typedef struct {
 
 // Function prototypes
 int parse(config_t *config, const char *filename);
+void print_parse_errors(void);
+void dbg3config(const config_t *config);
 
 #endif // CONFIG_H

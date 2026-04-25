@@ -12,23 +12,12 @@
 // whether host does safe-eject
 static bool ejected = false;
 static uint32_t last_ws2812_color = 0xFFFFFFFFu;
-
-static void print_block(uint8_t *buffer, size_t l) {
-    for (size_t i = 0; i < l; ++i) {
-        printf("%02x", buffer[i]);
-        if (i % 16 == 15)
-            printf("\n");
-        else
-            printf(", ");
-    }
-}
-
-
 // Invoked when received SCSI_CMD_INQUIRY
 // Application fill vendor id, product id and revision with string up to 8, 16, 4 characters respectively
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4])
 {
     (void) lun;
+    // dbg("msc inquiry");
 
     const char vid[] = "TinyUSB";
     const char pid[] = "Mass Storage";
@@ -65,6 +54,7 @@ void tud_msc_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_siz
     (void) lun;
     *block_count = DISK_BLOCK_NUM;
     *block_size  = DISK_BLOCK_SIZE;
+    // dbg("msc capacity: blocks=%u block_size=%u", *block_count, *block_size);
 }
 
 // Invoked when received Start Stop Unit command
@@ -78,19 +68,19 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
         if (start) {
             // load disk storage
             ejected = false;
+            // msg("msc loaded\n");
             gpio_led_set_pattern(LED_PATTERN_MEDIUM);
         } else {
             // unload disk storage
             ejected = true;
+            // msg("msc ejected\n");
             gpio_led_set_pattern(LED_PATTERN_FAST);
         }
     }
 
     uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
-    if (color != last_ws2812_color) {
-        ws2812_set(color, 0xFFFFFFFFu);
-        last_ws2812_color = color;
-    }
+    ws2812_set(color, 0xFFFFFFFFu);
+    
     return true;
 }
 
@@ -98,9 +88,10 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
 // Copy disk's data to buffer (up to bufsize) and return number of copied bytes.
 int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     (void) lun;
+    (void) offset;
     // out of ramdisk
     if (lba >= DISK_BLOCK_NUM) {
-        printf("read10 out of ramdisk: lba=%u\n", lba);
+        // warn("read10 out of ramdisk: lba=%u", lba);
         return -1;
     }
     flash_fat_read(lba, buffer);
