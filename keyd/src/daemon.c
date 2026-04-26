@@ -12,142 +12,24 @@
 */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 
-#include "tusb.h"
-#include "usb_descriptors.h"
-
 #include "led/plain.h"
 
 #include "keyboard.h"
+#include "vkbd.h"
 #include "log.h"
 #include "daemon.h"
 
-// HID Keyboard Report
-
-#define HID_READY_WAIT_TICKS 2
-
-static uint8_t mods = 0;
-static uint8_t keys[6] = {0};
 static struct keyboard *active_kbd;
-static QueueHandle_t keyd_queue;
-static const TickType_t keyd_queue_send_timeout_ticks = pdMS_TO_TICKS(3);
+QueueHandle_t keyd_queue;
 
-static void send_hid_report()
-{
-	struct hid_report {
-		uint8_t hid_mods;
-		uint8_t reserved;
-		uint8_t hid_code[6];
-	};
-	struct hid_report report;
-
-	for (int i = 0; i < 6; i++)
-		report.hid_code[i] = keys[i];
-
-	report.hid_mods = mods;
-
-	while (!tud_hid_ready()) {
-		// tud_task(); // Handle USB background tasks
-		vTaskDelay(HID_READY_WAIT_TICKS);
-	}
-	tud_hid_keyboard_report(REPORT_ID_KEYBOARD, report.hid_mods, report.hid_code);
-}
-
-static uint8_t get_modifier(int code)
-{
-	switch (code) {
-	case KEYD_LEFTSHIFT:
-		return HID_SHIFT;
-		break;
-	case KEYD_RIGHTSHIFT:
-		return HID_RIGHTSHIFT;
-		break;
-	case KEYD_LEFTCTRL:
-		return HID_CTRL;
-		break;
-	case KEYD_RIGHTCTRL:
-		return HID_RIGHTCTRL;
-		break;
-	case KEYD_LEFTALT:
-		return HID_ALT;
-		break;
-	case KEYD_RIGHTALT:
-		return HID_ALT_GR;
-		break;
-	case KEYD_LEFTMETA:
-		return HID_SUPER;
-		break;
-	case KEYD_RIGHTMETA:
-		return HID_RIGHTSUPER;
-		break;
-	default:
-		return 0;
-		break;
-	}
-}
-
-static void update_key_state(uint16_t code, int state)
-{
-	int i;
-	int set = 0;
-	uint8_t hid_code = hid_table[code];
-
-	for (i = 0; i < 6; i++) {
-		if (keys[i] == hid_code) {
-			set = 1;
-			if (state == 0)
-				keys[i] = 0;
-		}
-	}
-	if (state && !set) {
-		for (i = 0; i < 6; i++) {
-			if (keys[i] == 0) {
-				keys[i] = hid_code;
-				break;
-			}
-		}
-	}
-}
-
-static int update_modifier_state(int code, int state)
-{
-	uint16_t mod = get_modifier(code);
-
-	if (mod) {
-		if (state)
-			mods |= mod;
-		else
-			mods &= ~mod;
-		return 0;
-	}
-
-	return -1;
-}
-
-void vkbd_send_key(uint8_t code, int state)
-{
-	if (update_modifier_state(code, state) < 0)
-		update_key_state(code, state);
-
-	send_hid_report();
-}
-
-void key_event_hid_task(void *pvParameters)
-{
-    key_event_t event;
-
-    while(1) {
-        // Wait indefinitely for a key event
-        if (xQueueReceive(keyd_queue, &event, portMAX_DELAY) == pdPASS) {
-			vkbd_send_key(event.code, event.state);
-        }
-    }
-}
+static struct vkbd *vkbd;
 
 // static void clear_hid_state() {
 // 	size_t i;
@@ -166,18 +48,27 @@ static void send_key(uint8_t code, uint8_t state)
 {
 	keystate[code] = state;
 
-	key_event_t event;
-    event.code = code;
-    event.state = state;
-
-    // Enqueue the key event
-    if (xQueueSendToBack(keyd_queue, &event, keyd_queue_send_timeout_ticks) != pdPASS) {
-        // Handle queue full condition if necessary
-        warn("Failed to enqueue key event (queue full)");
-    }
-	// else {
-	// 	clear_hid_state();
-	// }
+	switch (code) {
+		case KEYD_SCROLL_DOWN:
+			if (state)
+				vkbd_mouse_scroll(vkbd, 0, -1);
+			break;
+		case KEYD_SCROLL_UP:
+			if (state)
+				vkbd_mouse_scroll(vkbd, 0, 1);
+			break;
+		case KEYD_SCROLL_RIGHT:
+			if (state)
+				vkbd_mouse_scroll(vkbd, 1, 0);
+			break;
+		case KEYD_SCROLL_LEFT:
+			if (state)
+				vkbd_mouse_scroll(vkbd, -1, 0);
+			break;
+		default:
+			vkbd_send_key(vkbd, code, state);
+			break;
+	}
 }
 
 static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t state)
@@ -408,6 +299,7 @@ static void keyd_init() {
 					.on_layer_change = on_layer_change,
 				};
 
+	vkbd = vkbd_init("ErgoType");
 	active_kbd = new_keyboard(&output);
 	// if (active_kbd && active_kbd->config.layer_indicator) {
 	// 	gpio_led_set_pattern(0);
@@ -416,7 +308,7 @@ static void keyd_init() {
 	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
 }
 
-void keyd_task(void* pvParameters) {
+void keyd_task(void *pvParameters) {
 	QueueHandle_t keyscan_event_queue = (QueueHandle_t)pvParameters;
 	keyd_init();
     evloop(keyscan_event_queue, event_handler);

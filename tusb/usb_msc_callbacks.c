@@ -4,6 +4,7 @@
 #include "flash.h"
 #include "led/plain.h"
 #include "led/ws2812.h"
+#include "log.h"
 
 #define  DISK_BLOCK_NUM  128
 #define  DISK_BLOCK_SIZE 512
@@ -17,7 +18,7 @@ static uint32_t last_ws2812_color = 0xFFFFFFFFu;
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4])
 {
     (void) lun;
-    // dbg("msc inquiry");
+    dbg("msc inquiry");
 
     const char vid[] = "TinyUSB";
     const char pid[] = "Mass Storage";
@@ -54,7 +55,7 @@ void tud_msc_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_siz
     (void) lun;
     *block_count = DISK_BLOCK_NUM;
     *block_size  = DISK_BLOCK_SIZE;
-    // dbg("msc capacity: blocks=%u block_size=%u", *block_count, *block_size);
+    dbg("msc capacity: blocks=%u block_size=%u", *block_count, *block_size);
 }
 
 // Invoked when received Start Stop Unit command
@@ -68,12 +69,12 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
         if (start) {
             // load disk storage
             ejected = false;
-            // msg("msc loaded\n");
+            dbg("msc loaded");
             gpio_led_set_pattern(LED_PATTERN_MEDIUM);
         } else {
             // unload disk storage
             ejected = true;
-            // msg("msc ejected\n");
+            dbg("msc ejected");
             gpio_led_set_pattern(LED_PATTERN_FAST);
         }
     }

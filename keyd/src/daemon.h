@@ -22,13 +22,44 @@
 #define HID_RIGHTSUPER 0x80
 #define HID_SUPER 0x8
 
-// extern QueueHandle_t keyd_queue;
+/*
+ * keyd upstream has internal "virtual" codes for scroll actions.
+ * Our current keys table doesn't define them yet, but daemon.c wants
+ * send_key() semantics that can special-case them.
+ *
+ * Keep these in the "unused tail" of the 0..255 space so they don't
+ * overlap with linux input codes we're already using (currently up to 248).
+ */
+#ifndef KEYD_SCROLL_DOWN
+#define KEYD_SCROLL_DOWN  249
+#endif
+#ifndef KEYD_SCROLL_UP
+#define KEYD_SCROLL_UP    250
+#endif
+#ifndef KEYD_SCROLL_RIGHT
+#define KEYD_SCROLL_RIGHT 251
+#endif
+#ifndef KEYD_SCROLL_LEFT
+#define KEYD_SCROLL_LEFT  252
+#endif
+
+extern QueueHandle_t keyd_queue;
 extern QueueHandle_t keyscan_queue;
 
 typedef struct {
-    uint8_t code;  // Key code
-    uint8_t state; // Key state: 1 for down, 0 for up
+	uint8_t type;
+	uint8_t code;   /* Key code */
+	uint8_t state;  /* Key state: 1 for down, 0 for up */
+	uint8_t buttons;
+	int16_t x;
+	int16_t y;
 } key_event_t;
+
+enum key_event_type {
+	KEY_EVENT_KEY = 0,
+	KEY_EVENT_MOUSE_MOVE = 1,
+	KEY_EVENT_MOUSE_MOVE_ABS = 2,
+};
 
 enum event_type {
 	EV_DEV_ADD,
@@ -68,7 +99,7 @@ struct event {
 
 // daemon.c part
 static uint8_t keystate[256];
-void keyd_task(void* pvParameters); 
+void keyd_task(void *pvParameters);
 void key_event_hid_task(void *pvParameters);
 
 
