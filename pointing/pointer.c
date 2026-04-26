@@ -4,10 +4,9 @@
 #include "hardware/gpio.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "tusb.h"
-#include "usb_descriptors.h"
 #include "pmw3360.h"
 #include "pointer.h"
+#include "vkbd.h"
 
 #define PIN_MOT   7
 #define HID_READY_WAIT_TICKS 2
@@ -78,9 +77,9 @@ void pointing_device_task(void *pvParameters)
 
     pmw3360_set_cpi(800);    
 
-    while (1)
-    {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	    while (1)
+	    {
+	        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         // Wait until the HID interface is ready
         
 
@@ -94,16 +93,12 @@ void pointing_device_task(void *pvParameters)
         //     pan = -pan;
         //     count = 0;
         // } 
-        // tud_hid_mouse_report(REPORT_ID_MOUSE, buttons, dx, dy, wheel, pan);
-        pmw3360_get_deltas(&dx, &dy);
-        while (!tud_hid_ready()) {
-            // tud_task();
-            vTaskDelay(HID_READY_WAIT_TICKS);
-        }
-        tud_hid_mouse_report(REPORT_ID_MOUSE, 0, dx, dy, 0, 0);
+	        // tud_hid_mouse_report(REPORT_ID_MOUSE, buttons, dx, dy, wheel, pan);
+	        pmw3360_get_deltas(&dx, &dy);
+	        vkbd_mouse_move(NULL, dx, dy);
 
-        // // Cycle through pressing and releasing 8 buttons one at a time
-        // if (pressing)
+	        // // Cycle through pressing and releasing 8 buttons one at a time
+	        // if (pressing)
         // {
         //     buttons = (1 << current_button);
         //     pressing = false;
