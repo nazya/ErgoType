@@ -31,6 +31,9 @@
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
+#define CORE0 ( ( UBaseType_t ) ( 1u << 0 ) )
+#define CORE1 ( ( UBaseType_t ) ( 1u << 1 ) )
+
 // Shared runtime symbols (owned by main.c).
 uint8_t mode; // read by USB descriptor callbacks
 
@@ -173,10 +176,12 @@ int main() {
     
 
     if (IS_GPIO_PIN(config.led_pin)) {
-        xTaskCreate(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin,    IDLE_PRIORITY, NULL);
+        xTaskCreateAffinitySet(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin, IDLE_PRIORITY,
+                               CORE1, NULL);
     }
     if (IS_GPIO_PIN(config.ws2812_pin)) {
-        xTaskCreate(ws2812_task,   NULL, MIN_STACK_SIZE, &config.ws2812_pin, IDLE_PRIORITY, NULL);
+        xTaskCreateAffinitySet(ws2812_task, NULL, MIN_STACK_SIZE, &config.ws2812_pin, IDLE_PRIORITY,
+                               CORE1, NULL);
     }
 
     static TickType_t tusb_task_delay = pdMS_TO_TICKS(TUD_TASK_DELAY_MS);
@@ -188,19 +193,24 @@ int main() {
         keyscan_task_params[0] = &config;               // config_t*
         keyscan_task_params[1] = keyscan_queue_handle;  // QueueHandle_t
 
-        xTaskCreate(keyscan_task,         NULL, MIN_STACK_SIZE, keyscan_task_params,  IDLE_PRIORITY + 5, NULL);
-        xTaskCreate(keyd_task,            NULL, 8192,           keyscan_queue_handle, IDLE_PRIORITY + 4, NULL); // empirically: min free watermark was 3408 words
-        xTaskCreate(tusb_device_task,     NULL, MIN_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 6, NULL);
-        xTaskCreate(key_event_hid_task,   NULL, MIN_STACK_SIZE, NULL,                  IDLE_PRIORITY + 2, NULL);
+        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 5, CORE1,
+                               NULL);
+        xTaskCreateAffinitySet(keyd_task, NULL, 8192, keyscan_queue_handle, IDLE_PRIORITY + 4, CORE1,
+                               NULL); // empirically: min free watermark was 3408 words
+        xTaskCreateAffinitySet(tusb_device_task, NULL, MIN_STACK_SIZE, &tusb_task_delay, IDLE_PRIORITY + 3,
+                               CORE0, NULL);
+        xTaskCreateAffinitySet(key_event_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2,
+                               CORE0, NULL);
 
         TaskHandle_t pointing_task_handle = NULL;
-        xTaskCreate(pointing_device_task, NULL, MIN_STACK_SIZE, NULL,                  IDLE_PRIORITY + 1, &pointing_task_handle);
+        xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 1,
+                               CORE0, &pointing_task_handle);
         pointing_motion_irq_init(pointing_task_handle);
     } else {
         dbg("entered MSC mode");
-        xTaskCreate(tusb_device_task,     NULL, TUD_STACK_SIZE, &tusb_task_delay,     IDLE_PRIORITY + 1, NULL);
+        xTaskCreateAffinitySet(tusb_device_task, NULL, TUD_STACK_SIZE, &tusb_task_delay, IDLE_PRIORITY + 1,
+                               CORE0, NULL);
     }
-    // dbg("starting os"); // broken: xTaskCreate disables irq
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
 
     while (1) { };

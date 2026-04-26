@@ -78,10 +78,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         ${CMAKE_CURRENT_LIST_DIR}/log.c
-        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
-        )
+	        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
+	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
+	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
+	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
+	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+	        )
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC

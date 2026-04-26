@@ -21,6 +21,8 @@ add_library(keyd
   ${CMAKE_CURRENT_LIST_DIR}/string.c
   ${CMAKE_CURRENT_LIST_DIR}/keyboard.c
   ${CMAKE_CURRENT_LIST_DIR}/daemon.c
+  ${CMAKE_CURRENT_LIST_DIR}/vkbd.c
+  ${CMAKE_CURRENT_LIST_DIR}/vkbd_tusb_backend.c
 )
 target_link_libraries(keyd
   PRIVATE
@@ -31,4 +33,10 @@ target_link_libraries(keyd
   pico_stdlib
   FreeRTOS-Kernel
 
+)
+
+# Keep keyd/src compatible with upstream include style without shadowing
+# standard library headers like <string.h>.
+target_compile_options(keyd PRIVATE
+  -iquote${CMAKE_CURRENT_LIST_DIR}
 )
