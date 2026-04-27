@@ -15,8 +15,6 @@
 #include "pico/stdio.h"
 #include "pico/stdlib.h"
 
-#define ERRSTR_LENGTH 2048
-
 #define GPIO_PULL_UP(pin)       \
     do {                        \
         gpio_init(pin);         \
@@ -28,49 +26,6 @@
         gpio_init(pin);         \
         gpio_pull_down(pin);    \
     } while (0)
-
-static char errstr[ERRSTR_LENGTH] = {0};
-
-static void append_errstr(const char *fmt, ...) {
-    size_t len = strlen(errstr);
-    if (len >= ERRSTR_LENGTH - 1) {
-        return;
-    }
-
-    if (len > 0 && errstr[len - 1] != '\n') {
-        errstr[len++] = '\n';
-        errstr[len] = '\0';
-    }
-
-    va_list ap;
-    va_start(ap, fmt);
-    int written = vsnprintf(errstr + len, ERRSTR_LENGTH - len, fmt, ap);
-    va_end(ap);
-
-    if (written < 0) {
-        return;
-    }
-
-    if ((size_t)written >= ERRSTR_LENGTH - len) {
-        errstr[ERRSTR_LENGTH - 1] = '\0';
-    }
-}
-
-#undef err
-#define err(fmt, ...) append_errstr(fmt, ##__VA_ARGS__)
-
-void print_parse_errors(void)
-{
-    const char *suffix = "";
-
-    if (errstr[0] == '\0')
-        return;
-
-    if (errstr[strlen(errstr) - 1] != '\n')
-        suffix = "\n";
-
-    msg("Errors in parsing 'config.json':\n%s%s", errstr, suffix);
-}
 
 void dbg3config(const config_t *config)
 {
@@ -384,7 +339,7 @@ static void pull_pins(const char *json_data) {
 
 int parse(config_t *config, const char *filename) {
     init_default_cfg(config);
-    errstr[0] = '\0';
+    // errstr[0] = '\0';
 
     char *json = NULL;
     int json_len = load(&json, filename);

@@ -1,4 +1,5 @@
 #include "flash.h"
+#include "log.h"
 
 // raw disk image with an empty config.json -- easiest way to hack 8.3 Filename Format
 uint8_t disk_image[4][512] = {
@@ -157,8 +158,7 @@ uint8_t disk_image[4][512] = {
 
 
 void flash_fat_initialize(void) {
-    printf("ffInit started\n");
-
+    warn("flash: init FAT12 image");
     // taskENTER_CRITICAL();
     // uint32_t ints = save_and_disable_interrupts();
 
@@ -171,8 +171,6 @@ void flash_fat_initialize(void) {
     // taskEXIT_CRITICAL();
 
     // restore_interrupts(ints);
-    printf("ffInit finished\n");
-
 }
 
 bool flash_fat_read(int block, uint8_t *buffer) {

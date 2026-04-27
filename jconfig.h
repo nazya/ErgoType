@@ -38,11 +38,11 @@ typedef uint32_t matrix_row_t;
     FIELD(debounce, int8_t, 9)
 
 typedef struct {
-    uint8_t gpio_cols[MAX_GPIOS];      // GPIO pins for columns
-    uint8_t gpio_rows[MAX_GPIOS];      // GPIO pins for rows
+    uint8_t gpio_cols[MAX_GPIOS];         // GPIO pins for columns
+    uint8_t gpio_rows[MAX_GPIOS];         // GPIO pins for rows
     uint8_t keymap[MAX_GPIOS][MAX_GPIOS]; // Keycode mapping [row][col]
-    uint8_t nr_cols;                  // Number of columns
-    uint8_t nr_rows;                  // Number of rows
+    uint8_t nr_cols;                      // Number of columns
+    uint8_t nr_rows;                      // Number of rows
 } matrix_t;
 
 // Define the config_t struct using the X-Macro
@@ -53,9 +53,7 @@ typedef struct {
     matrix_t matrix;
 } config_t;
 
-// Function prototypes
 int parse(config_t *config, const char *filename);
-void print_parse_errors(void);
 void dbg3config(const config_t *config);
 
 #endif // CONFIG_H
