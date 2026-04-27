@@ -11,6 +11,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+// Logging uses a mutex initialized by main() before scheduler starts.
+
 #define msg(fmt, ...) _msg(0, fmt, ##__VA_ARGS__);
 
 #define dbg(fmt, ...) _msg(1, "r{INFO:} b{%s:%d:} " fmt "\n", \
@@ -25,6 +27,8 @@
 
 void _msg(int level, const char *fmt, ...);
 void die(const char *fmt, ...);
+
+// Initialized by main() before scheduler starts.
 
 extern int log_level;
 extern int suppress_colours;

@@ -49,6 +49,18 @@
 // Enable Device stack
 #define CFG_TUD_ENABLED           1
 
+// TinyUSB device task event queue depth (used when CFG_TUSB_OS != OPT_OS_NONE).
+// Default in TinyUSB is 16. With FreeRTOS OSAL on RP2040 (SMP) + multiple classes
+// (CDC+HID or CDC+MSC) + occasional long callbacks (e.g. flash I/O in MSC), the
+// DCD ISR can temporarily outpace `tud_task_ext()` and overflow this queue,
+// dropping XFER_COMPLETE events and causing "missing/disappearing" CDC output.
+//
+// Raising this is the smallest, most targeted fix: it increases burst tolerance
+// without changing task structure or adding wait/notify experiments.
+#ifndef CFG_TUD_TASK_QUEUE_SZ
+#define CFG_TUD_TASK_QUEUE_SZ     64
+#endif
+
 // Default is max speed that hardware controller could support with on-chip PHY
 #define CFG_TUD_MAX_SPEED         BOARD_TUD_MAX_SPEED
 
@@ -94,9 +106,11 @@
 
 
 
-// CDC FIFO size of TX and RX
-#define CFG_TUD_CDC_RX_BUFSIZE   (TUD_OPT_HIGH_SPEED ? 512 : 64)
-#define CFG_TUD_CDC_TX_BUFSIZE   (TUD_OPT_HIGH_SPEED ? 512 : 64)
+// CDC FIFO size of TX and RX.
+// 64 bytes at full-speed is easy to saturate with bursts of printf/logs and can lead to
+// partial/discarded output when the stdio backend hits its stdout timeout.
+#define CFG_TUD_CDC_RX_BUFSIZE   512
+#define CFG_TUD_CDC_TX_BUFSIZE   512
 
 
 #ifdef __cplusplus

@@ -22,6 +22,8 @@ target_include_directories(${PROJECT_NAME}
   PUBLIC
   ${PICO_SDK_PATH}/lib/tinyusb/lib/fatfs/source
   ${CMAKE_CURRENT_LIST_DIR}
+  # Allow this support library to reuse ErgoType's logging macros (log.h).
+  ${CMAKE_CURRENT_LIST_DIR}/..
 )
 target_link_libraries(${PROJECT_NAME}
   PRIVATE
