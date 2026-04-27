@@ -13,6 +13,6 @@ void tud_cdc_rx_cb(uint8_t itf)
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void) itf;
-    (void) dtr;
     (void) rts;
+    (void) dtr;
 }

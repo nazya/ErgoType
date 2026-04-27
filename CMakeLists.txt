@@ -51,6 +51,10 @@ execute_process(
 message(STATUS "FF_USE_STRFUNC line: ${grep_output}")
 
 
+# Ensure Pico SDK's TinyUSB is built with the FreeRTOS OSAL (CFG_TUSB_OS).
+# This must be set before pico_sdk_init() (where tinyusb_device/tinyusb_board targets are created).
+set(TINYUSB_OPT_OS OPT_OS_FREERTOS)
+
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
@@ -76,13 +80,15 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/led/plain.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
-        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
-        ${CMAKE_CURRENT_LIST_DIR}/log.c
-	        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
-	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
-	        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+	        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
+	        ${CMAKE_CURRENT_LIST_DIR}/log.c
+	        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
+	        ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
+		        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
+		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
+		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
+		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
+		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
 	        )
 
 # Make sure TinyUSB can find tusb_config.h
@@ -135,7 +141,9 @@ pico_add_extra_outputs(${PROJECT_NAME})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         PICO_STDIO_STACK_BUFFER_SIZE=256 # use a small printf on stack buffer
+        PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000000 # avoid discarding long CDC bursts under load
 )
 
 # add url via pico_set_program_url
-pico_enable_stdio_usb(${PROJECT_NAME} 1)
+pico_enable_stdio_usb(${PROJECT_NAME} 0)
+pico_enable_stdio_uart(${PROJECT_NAME} 1)

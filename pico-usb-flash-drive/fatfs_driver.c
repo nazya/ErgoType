@@ -2,6 +2,7 @@
 #include "diskio.h"
 
 #include "flash.h"
+#include "log.h"
 
 #define FAT_MAGIC  (0x55AA)
 
@@ -46,7 +47,7 @@ DSTATUS disk_initialize(BYTE drv) {
         return Stat;
     }
 
-    printf("initialize flash FAT12\n");
+    dbg("fatfs: disk image not formatted, initializing FAT12");
     flash_fat_initialize();
 
     Stat = RES_OK;
