@@ -24,12 +24,13 @@ static const char *colorize(const char *s)
 {
 	int i;
 
-	static char buf[1984];
+	static char buf[BUFSIZE];
 	// static char buf[4096];
 	size_t n = 0;
 	int inside_escape = 0;
 
-	for (i = 0; s[i] != 0 && n < sizeof(buf); i++) {
+	// for (i = 0; s[i] != 0 && n < sizeof(buf); i++) {
+	for (i = 0; s[i] != 0 && (sizeof(buf) - n) > 1; i++) {
 		if (s[i + 1] == '{') {
 			int escape_num = 0;
 
@@ -76,65 +77,37 @@ static const char *colorize(const char *s)
 	return buf;
 }
 
-static void log_write_bytes(const char *buf, size_t len)
-{
-	if (!buf || !len)
-		return;
-
-	// CDC: buffer only (no tud_* calls here).
-	// Convert LF to CRLF for serial terminals that don't treat '\n' as newline.
-	// Preserve existing CRLF if caller already provided '\r\n' (including across chunks).
-	static bool last_was_cr;
-	size_t start = 0;
-
-	for (size_t i = 0; i < len; ++i) {
-		char c = buf[i];
-		if (c == '\n') {
-			if (i > start)
-				stdio_tusb_cdc_write(buf + start, (int)(i - start));
-
-			if (last_was_cr) {
-				stdio_tusb_cdc_write("\n", 1);
-			} else {
-				stdio_tusb_cdc_write("\r\n", 2);
-			}
-
-			start = i + 1;
-			last_was_cr = false;
-			continue;
-		}
-
-		last_was_cr = (c == '\r');
-	}
-
-	if (start < len)
-		stdio_tusb_cdc_write(buf + start, (int)(len - start));
-}
-
 typedef struct {
-	char buf[128];
+	char buf[BUFSIZE];
 	size_t len;
 } log_sink_t;
 
 static void sink_flush(log_sink_t *sink)
 {
-	if (!sink || !sink->len)
-		return;
-
-	log_write_bytes(sink->buf, sink->len);
+	if (sink->len)
+		stdio_tusb_cdc_write(sink->buf, sink->len);
 	sink->len = 0;
 }
 
 static void sink_out(char character, void *arg)
 {
 	log_sink_t *sink = (log_sink_t *)arg;
-	if (!sink)
-		return;
-
-	sink->buf[sink->len++] = character;
-	if (sink->len == sizeof(sink->buf)) {
+	if (character == '\n' && (sizeof(sink->buf) - sink->len) > 1) {
+		sink->buf[sink->len++] = '\r';
+		sink->buf[sink->len++] = '\n';
 		sink_flush(sink);
+		return;
 	}
+
+	if ((sizeof(sink->buf) - sink->len) == 2) {
+		// Very long line: drop incoming bytes
+		sink->buf[sink->len++] = '\r';
+		sink->buf[sink->len++] = '\n';
+		sink_flush(sink);
+		return;
+	}
+	
+	sink->buf[sink->len++] = character;
 }
 
 void _msg(int level, const char *fmt, ...)
@@ -147,28 +120,24 @@ void _msg(int level, const char *fmt, ...)
 	xSemaphoreTake(log_mutex, portMAX_DELAY);
 	log_sink_t sink = {0};
 	vfctprintf(sink_out, &sink, colorize(fmt), ap);
-	sink_flush(&sink);
 	xSemaphoreGive(log_mutex);
 	va_end(ap);
 }
 
-void die(const char *fmt, ...)
-{
-	va_list ap;
+// void die(const char *fmt, ...)
+// {
+// 	va_list ap;
 
-	xSemaphoreTake(log_mutex, portMAX_DELAY);
+// 	xSemaphoreTake(log_mutex, portMAX_DELAY);
 
-	const char *prefix = colorize("r{FATAL ERROR:} ");
-	log_write_bytes(prefix, strlen(prefix));
+// 	const char *prefix = colorize("r{FATAL ERROR:} ");
+// 	stdio_tusb_cdc_write(prefix, strlen(prefix));
 
-	va_start(ap, fmt);
-	log_sink_t sink = {0};
-	vfctprintf(sink_out, &sink, colorize(fmt), ap);
-	va_end(ap);
-
-	sink_out('\n', &sink);
-	sink_flush(&sink);
-
-	xSemaphoreGive(log_mutex);
-	// exit(-1);
-}
+// 	va_start(ap, fmt);
+// 	log_sink.len = 0;
+// 	vfctprintf(sink_out, &log_sink, colorize(fmt), ap);
+// 	va_end(ap);
+// 	sink_out('\n', &log_sink);
+// 	xSemaphoreGive(log_mutex);
+// 	// exit(-1);
+// }

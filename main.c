@@ -39,6 +39,7 @@
 // Shared runtime symbols (owned by main.c).
 uint8_t mode; // read by USB descriptor callbacks
 SemaphoreHandle_t log_mutex;
+SemaphoreHandle_t stdio_tusb_cdc_mutex;
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
@@ -115,6 +116,8 @@ static void app_task(void *pvParameters)
 {
     (void)pvParameters;
 
+    msg("");
+
     static config_t config;
 
     int parse_rc = parse(&config, "config.json");
@@ -138,7 +141,7 @@ static void app_task(void *pvParameters)
     if (base_mode != HID) {
         warn("base mode=MSC: config parse failed");
     }
-    msg("mode resolved: %s (%s)\n",
+    msg("mode resolved: %s (%s)",
         mode == HID ? "HID" : "MSC",
         mode_resolution.reason);
     dbg3config(&config);
@@ -153,39 +156,36 @@ static void app_task(void *pvParameters)
                                CORE1, NULL);
     }
 
+    
     if (mode == HID) {
         QueueHandle_t keyscan_queue_handle = xQueueCreate(16, sizeof(struct device_event));
         static void *keyscan_task_params[2];
         keyscan_task_params[0] = &config;               // config_t*
         keyscan_task_params[1] = keyscan_queue_handle;  // QueueHandle_t
 
-        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 5, CORE1,
-                               NULL);
-        xTaskCreateAffinitySet(keyd_task, NULL, 8192, keyscan_queue_handle, IDLE_PRIORITY + 4, CORE1,
-                               NULL); // empirically: min free watermark was 3408 words
-        xTaskCreateAffinitySet(key_event_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2,
-                               CORE0, NULL);
+        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 5, CORE1, NULL);
+
+        xTaskCreateAffinitySet(key_event_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
 
         TaskHandle_t pointing_task_handle = NULL;
-        xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 1,
-                               CORE0, &pointing_task_handle);
+        xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 1, CORE0, &pointing_task_handle);
         pointing_motion_irq_init(pointing_task_handle);
+
+        // vTaskDelay(3000);
+        xTaskCreateAffinitySet(keyd_task, NULL, 8192, keyscan_queue_handle, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
     }
 
     vTaskDelete(NULL);
 }
 
-int main()
+int main() 
 {
     board_init();
-
-    // Keep main() thin: start the scheduler ASAP, run app init from a task.
     log_mutex = xSemaphoreCreateMutex();
-    configASSERT(log_mutex);
-    msg("\n")
+    stdio_tusb_cdc_mutex = xSemaphoreCreateMutex();
     xTaskCreateAffinitySet(app_task, NULL, 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
-
+    // Keep main() thin: start the scheduler ASAP, run app init from a task.
     while (1) { };
     return 0;
 }

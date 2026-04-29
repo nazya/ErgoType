@@ -602,14 +602,51 @@ exit:
  *   -1 in the case of an invalid macro expression
  *   > 0 for all other errors
  */
+int parse_macro_expression(const char *s, struct macro *macro)
+{
+        uint8_t code, mods;
+
+        #define ADD_ENTRY(t, d) do { \
+                if (macro->sz >= ARRAY_SIZE(macro->entries)) { \
+                        err("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries)); \
+                        return 1; \
+                } \
+                macro->entries[macro->sz].type = t; \
+                macro->entries[macro->sz].data = d; \
+                macro->sz++; \
+        } while(0)
+
+        size_t len = strlen(s);
+
+        char buf[1024];
+        char *ptr = buf;
+
+        if (len >= sizeof(buf)) {
+                err("macro size exceeded maximum size (%ld)\n", sizeof(buf));
+                return -1;
+        }
+
+        strcpy(buf, s);
+
+        if (!strncmp(ptr, "macro(", 6) && ptr[len-1] == ')') {
+                ptr[len-1] = 0;
+                ptr += 6;
+                str_escape(ptr);
+        } else if (parse_key_sequence(ptr, &code, &mods) && utf8_strlen(ptr) != 1) {
+                // err("Invalid macro");
+                return -1;
+        }
+
+        return macro_parse(ptr, macro) == 0 ? 0 : 1;
+}
 
 // int parse_macro_expression(const char *s, struct macro *macro)
 // {
 // 	uint8_t code, mods;
-// 	// err("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries));
+
 // 	#define ADD_ENTRY(t, d) do { \
 // 		if (macro->sz >= ARRAY_SIZE(macro->entries)) { \
-// 			printf("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries)); \
+// 			err("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries)); \
 // 			return 1; \
 // 		} \
 // 		macro->entries[macro->sz].type = t; \
@@ -619,69 +656,27 @@ exit:
 
 // 	size_t len = strlen(s);
 
-// 	// char buf[1024];
-// 	// char *ptr = buf;
+// 	char buf[MAX_EXP_LEN];
+// 	char *ptr = buf;
 
-// 	if (len >= 1024) {
-// 		printf("macro size exceeded maximum size (%ld)\n", 1024);
-// 		// err("macro size exceeded maximum size (%ld)\n", 1024);
+// 	if (len >= sizeof(buf)) {
+// 		err("macro size exceeded maximum size (%ld)", sizeof(buf));
 // 		return -1;
 // 	}
-// 	char *ptr = malloc(len + 1); // change to dynamic allocation
 
-// 	strcpy(ptr, s);
+// 	strcpy(buf, s);
 
 // 	if (!strncmp(ptr, "macro(", 6) && ptr[len-1] == ')') {
 // 		ptr[len-1] = 0;
 // 		ptr += 6;
 // 		str_escape(ptr);
 // 	} else if (parse_key_sequence(ptr, &code, &mods) && utf8_strlen(ptr) != 1) {
-// 		printf("Invalid macro");
-// 		// err("Invalid macro");
-// 		free(ptr);
+// 		err("Invalid macro %s and %s", s, ptr);
 // 		return -1;
 // 	}
 
 // 	return macro_parse(ptr, macro) == 0 ? 0 : 1;
 // }
-
-int parse_macro_expression(const char *s, struct macro *macro)
-{
-	uint8_t code, mods;
-
-	#define ADD_ENTRY(t, d) do { \
-		if (macro->sz >= ARRAY_SIZE(macro->entries)) { \
-			err("maximum macro size (%d) exceeded", ARRAY_SIZE(macro->entries)); \
-			return 1; \
-		} \
-		macro->entries[macro->sz].type = t; \
-		macro->entries[macro->sz].data = d; \
-		macro->sz++; \
-	} while(0)
-
-	size_t len = strlen(s);
-
-	char buf[MAX_EXP_LEN];
-	char *ptr = buf;
-
-	if (len >= sizeof(buf)) {
-		err("macro size exceeded maximum size (%ld)", sizeof(buf));
-		return -1;
-	}
-
-	strcpy(buf, s);
-
-	if (!strncmp(ptr, "macro(", 6) && ptr[len-1] == ')') {
-		ptr[len-1] = 0;
-		ptr += 6;
-		str_escape(ptr);
-	} else if (parse_key_sequence(ptr, &code, &mods) && utf8_strlen(ptr) != 1) {
-		err("Invalid macro %s and %s", s, ptr);
-		return -1;
-	}
-
-	return macro_parse(ptr, macro) == 0 ? 0 : 1;
-}
 
 static int parse_command(const char *s)
 // static int parse_command(const char *s, struct command *command)
