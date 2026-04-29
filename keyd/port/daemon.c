@@ -31,18 +31,16 @@ QueueHandle_t keyd_queue;
 
 static struct vkbd *vkbd;
 
-// static void clear_hid_state() {
-// 	size_t i;
-// 	key_event_t event;
+static void clear_vkbd(void)
+{
+	size_t i;
 
-// 	for (i = 0; i < 256; i++)
-// 		if (keystate[i]) {
-// 			keystate[i] = 0;
-// 			event.code = i;
-// 			event.state = 0;
-// 			xQueueSendToBack(key_event_queue, &event, portMAX_DELAY);
-// 		}
-// }
+	for (i = 0; i < 256; i++)
+		if (keystate[i]) {
+			vkbd_send_key(vkbd, i, 0);
+			keystate[i] = 0;
+		}
+}
 
 static void send_key(uint8_t code, uint8_t state)
 {
@@ -70,6 +68,12 @@ static void send_key(uint8_t code, uint8_t state)
 			break;
 	}
 }
+
+static void send_key_macro_wrapper(void *ctx, uint8_t code, uint8_t state)
+{
+        send_key(code, state);
+}
+
 
 static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t state)
 {
@@ -99,10 +103,10 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// if (!nr_listeners)
 	// 	return;
 
-	// if (layer->type == LT_LAYOUT)
-	// 	bufsz = snprintf(buf, sizeof(buf), "/%s\n", layer->name);
-	// else
-	// 	bufsz = snprintf(buf, sizeof(buf), "%c%s\n", state ? '+' : '-', layer->name);
+	if (layer->type == LT_LAYOUT)
+		bufsz = snprintf(buf, sizeof(buf), "/%s\n", layer->name);
+	else
+		bufsz = snprintf(buf, sizeof(buf), "%c%s\n", state ? '+' : '-', layer->name);
 
 	// for (i = 0; i < nr_listeners; i++) {
 	// 	ssize_t nw = write(listeners[i], buf, bufsz);
@@ -117,6 +121,20 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// 	nr_listeners = n;
 	// 	memcpy(listeners, keep, n * sizeof(int));
 	// }
+}
+
+static int process_keypress(struct keyboard *kbd, uint8_t code, int timestamp)
+{
+        struct key_event kev = {
+                .code = code,
+                .pressed = 1,
+                .timestamp = timestamp
+        };
+
+        kbd_process_events(kbd, &kev, 1);
+
+        kev.pressed = 0;
+        return kbd_process_events(kbd, &kev, 1);
 }
 
 static int event_handler(struct event *ev)
@@ -143,14 +161,9 @@ static int event_handler(struct event *ev)
 		break;
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
-		if (true) {
+		if (active_kbd) { // active_kbd = ev->dev->data; # now it is the only active kbd
 			// struct keyboard *kbd = ev->dev->data;
-			// active_kbd = ev->dev->data; # now it is the only active kbd
 			struct keyboard *kbd = active_kbd;
-			if (!kbd) {
-				dbg("no kbd set");
-				return 0;
-			}
 			switch (ev->devev->type) {
 			size_t i;
 			case DEV_KEY:
@@ -163,48 +176,46 @@ static int event_handler(struct event *ev)
 				timeout = kbd_process_events(kbd, &kev, 1);
 				break;
 			case DEV_MOUSE_MOVE:
-				// if (kbd->scroll.active) {
-				// 	if (kbd->scroll.sensitivity == 0)
-				// 		break;
-				// 	int xticks, yticks;
+				if (kbd->scroll.active) {
+					if (kbd->scroll.sensitivity == 0)
+						break;
+					int xticks, yticks;
 
-				// 	kbd->scroll.y += ev->devev->y;
-				// 	kbd->scroll.x += ev->devev->x;
+					kbd->scroll.y += ev->devev->y;
+					kbd->scroll.x += ev->devev->x;
 
-				// 	yticks = kbd->scroll.y / kbd->scroll.sensitivity;
-				// 	kbd->scroll.y %= kbd->scroll.sensitivity;
+					yticks = kbd->scroll.y / kbd->scroll.sensitivity;
+					kbd->scroll.y %= kbd->scroll.sensitivity;
 
-				// 	xticks = kbd->scroll.x / kbd->scroll.sensitivity;
-				// 	kbd->scroll.x %= kbd->scroll.sensitivity;
+					xticks = kbd->scroll.x / kbd->scroll.sensitivity;
+					kbd->scroll.x %= kbd->scroll.sensitivity;
 
-				// 	vkbd_mouse_scroll(vkbd, 0, -1*yticks);
-				// 	vkbd_mouse_scroll(vkbd, 0, xticks);
-				// } else {
-				// 	vkbd_mouse_move(vkbd, ev->devev->x, ev->devev->y);
-				// }
+					vkbd_mouse_scroll(vkbd, 0, -1*yticks);
+					vkbd_mouse_scroll(vkbd, 0, xticks);
+				} else {
+					vkbd_mouse_move(vkbd, ev->devev->x, ev->devev->y);
+				}
 				break;
 			case DEV_MOUSE_MOVE_ABS:
-				// vkbd_mouse_move_abs(vkbd, ev->devev->x, ev->devev->y);
-				break;
-			default:
+				vkbd_mouse_move_abs(vkbd, ev->devev->x, ev->devev->y);
 				break;
 			case DEV_MOUSE_SCROLL:
-				// /*
-				//  * Treat scroll events as mouse buttons so oneshot and the like get
-				//  * cleared.
-				//  */
-				// if (active_kbd) {
-				// 	kev.code = KEYD_EXTERNAL_MOUSE_BUTTON;
-				// 	kev.pressed = 1;
-				// 	kev.timestamp = ev->timestamp;
-
-				// 	kbd_process_events(ev->dev->data, &kev, 1);
-
-				// 	kev.pressed = 0;
-				// 	timeout = kbd_process_events(ev->dev->data, &kev, 1);
-				// }
-
-				// vkbd_mouse_scroll(vkbd, ev->devev->x, ev->devev->y);
+				if (active_kbd) {
+					if (ev->devev->x > 0)
+						for (i = 0;i < (size_t)ev->devev->x; i++)
+							timeout = process_keypress(active_kbd, KEYD_SCROLL_RIGHT, ev->timestamp);
+					if (ev->devev->x < 0)
+						for (i = 0;i < (size_t)-1*ev->devev->x; i++)
+							timeout = process_keypress(active_kbd, KEYD_SCROLL_LEFT, ev->timestamp);
+					if (ev->devev->y > 0)
+						for (i = 0;i < (size_t)ev->devev->y; i++)
+							timeout = process_keypress(active_kbd, KEYD_SCROLL_UP, ev->timestamp);
+					if (ev->devev->y < 0)
+						for (i = 0;i < (size_t)-1*ev->devev->y; i++)
+							timeout = process_keypress(active_kbd, KEYD_SCROLL_DOWN, ev->timestamp);
+				}
+				break;
+			default:
 				break;
 			}
 		// } else if (ev->dev->is_virtual && ev->devev->type == DEV_LED) {
@@ -246,6 +257,7 @@ static int event_handler(struct event *ev)
 	}
 	return timeout;
 }
+
 static int evloop(QueueHandle_t keyscan_event_queue, int (*event_handler) (struct event *ev))
 {
 	size_t i;
@@ -299,7 +311,7 @@ static void keyd_init() {
 					.on_layer_change = on_layer_change,
 				};
 
-	vkbd = vkbd_init("ErgoType");
+	vkbd = vkbd_init("");
 	active_kbd = new_keyboard(&output);
 	// if (active_kbd && active_kbd->config.layer_indicator) {
 	// 	gpio_led_set_pattern(0);

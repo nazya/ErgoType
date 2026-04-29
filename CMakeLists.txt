@@ -66,10 +66,10 @@ pico_generate_pio_header(${PROJECT_NAME}
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.pio
 )
 
-add_subdirectory(tusb)
-add_subdirectory(pico-usb-flash-drive)
-add_subdirectory(keyd/src)
-add_subdirectory(pointing/pmw3360)
+	add_subdirectory(tusb)
+	add_subdirectory(pico-usb-flash-drive)
+	add_subdirectory(keyd)
+	add_subdirectory(pointing/pmw3360)
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
@@ -102,6 +102,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 # headers like <string.h> are never shadowed by keyd/src/string.h.
 target_compile_options(${PROJECT_NAME} PRIVATE
         -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/src
+        -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/port
 )
 
 # In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_device

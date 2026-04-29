@@ -840,8 +840,8 @@ struct keyboard *new_keyboard(const struct output *output)
 	size_t i;
 	// struct keyboard *kbd;
 	// kbd = calloc(1, sizeof(struct keyboard));
-
 	struct keyboard *kbd = pvPortMalloc(sizeof(struct keyboard));
+
     if (kbd != NULL) {
         memset(kbd, 0, sizeof(struct keyboard));
     } else {
