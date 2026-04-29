@@ -15,7 +15,7 @@
 #include "log.h"
 #include "vkbd.h"
 
-static const TickType_t vkbd_queue_send_timeout_ticks = pdMS_TO_TICKS(3);
+#define QUEUE_SEND_TIMEOUT_TICKS 3
 
 static void enqueue_key_event(uint8_t code, uint8_t state)
 {
@@ -25,10 +25,7 @@ static void enqueue_key_event(uint8_t code, uint8_t state)
 	event.code = code;
 	event.state = state;
 
-	if (!keyd_queue)
-		return;
-
-	if (xQueueSendToBack(keyd_queue, &event, vkbd_queue_send_timeout_ticks) != pdPASS)
+	if (xQueueSendToBack(keyd_queue, &event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
 }
 
@@ -47,10 +44,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 	event.x = (int16_t)x;
 	event.y = (int16_t)y;
 
-	if (!keyd_queue)
-		return;
-
-	if (xQueueSendToBack(keyd_queue, &event, vkbd_queue_send_timeout_ticks) != pdPASS)
+	if (xQueueSendToBack(keyd_queue, &event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
 }
 
@@ -63,10 +57,7 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 	event.x = (int16_t)x;
 	event.y = (int16_t)y;
 
-	if (!keyd_queue)
-		return;
-
-	if (xQueueSendToBack(keyd_queue, &event, vkbd_queue_send_timeout_ticks) != pdPASS)
+	if (xQueueSendToBack(keyd_queue, &event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
 }
 

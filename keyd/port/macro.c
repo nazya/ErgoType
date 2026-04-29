@@ -17,6 +17,7 @@
 #include "string.h"
 #include "config.h"
 #include "keys.h"
+#include "unicode.h"
 #include "log.h"
 
 #define SLEEP_MS(x) vTaskDelay(pdMS_TO_TICKS(x))
@@ -59,7 +60,7 @@ int macro_parse(char *s, struct macro *macro)
 				else if (!parse_key_sequence(key, &code, &mods))
 					ADD_ENTRY(MACRO_HOLD, code);
 				else {
-					// err("%s is not a valid key", key);
+					err("%s is not a valid key", key);
 					return -1;
 				}
 			}
@@ -91,8 +92,8 @@ int macro_parse(char *s, struct macro *macro)
 						}
 					}
 				} 
-				// else if ((xcode = unicode_lookup_index(codepoint)) > 0)
-				// 	ADD_ENTRY(MACRO_UNICODE, xcode);
+				else if ((xcode = unicode_lookup_index(codepoint)) > 0)
+					ADD_ENTRY(MACRO_UNICODE, xcode);
 
 				tok += chrsz;
 			}
@@ -139,14 +140,14 @@ void macro_execute(void (*output)(uint8_t, uint8_t),
 			}
 			break;
 		case MACRO_UNICODE:
-			// idx = ent->data;
+			idx = ent->data;
 
-			// unicode_get_sequence(idx, codes);
+			unicode_get_sequence(idx, codes);
 
-			// for (j = 0; j < 4; j++) {
-			// 	output(codes[j], 1);
-			// 	output(codes[j], 0);
-			// }
+			for (j = 0; j < 4; j++) {
+				output(codes[j], 1);
+				output(codes[j], 0);
+			}
 
 			break;
 		case MACRO_KEYSEQUENCE:

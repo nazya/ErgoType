@@ -105,3 +105,4 @@ size_t str_escape(char *s)
 
 	return n;
 }
+

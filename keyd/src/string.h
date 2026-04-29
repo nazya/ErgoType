@@ -3,8 +3,8 @@
  *
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
-#ifndef KEYD_STRING_H
-#define KEYD_STRING_H
+#ifndef STRING_H
+#define STRING_H
 
 #include <stdint.h>
 #include <stdlib.h>
