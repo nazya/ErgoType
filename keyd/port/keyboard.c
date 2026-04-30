@@ -501,7 +501,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			case OP_LAYERM:
 			case OP_ONESHOTM:
 			case OP_TOGGLEM:
-				macro = &kbd->config.macros[d->args[1].idx];
+				macro = kbd->config.macros[d->args[1].idx];
 				execute_macro(kbd, dl, macro);
 				break;
 			default:
@@ -643,7 +643,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_CLEARM:
 			if(pressed) {
 				clear(kbd);
-				macro = &kbd->config.macros[d->args[0].idx];
+				macro = kbd->config.macros[d->args[0].idx];
 				execute_macro(kbd, dl, macro);
 			}
 			break;
@@ -671,7 +671,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 						* Macro release relies on event logic, so we can't just synthesize a
 						* descriptor release.
 						*/
-						struct macro *macro = &kbd->config.macros[action->args[0].idx];
+						struct macro *macro = kbd->config.macros[action->args[0].idx];
 						execute_macro(kbd, dl, macro);
 					} else {
 						process_descriptor(kbd, code, action, dl, 1, time);
@@ -707,12 +707,12 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_MACRO:
 			if (pressed) {
 				if (d->op == OP_MACRO2) {
-					macro = &kbd->config.macros[d->args[2].idx];
+					macro = kbd->config.macros[d->args[2].idx];
 
 					timeout = d->args[0].timeout;
 					kbd->macro_repeat_interval = d->args[1].timeout;
 				} else {
-					macro = &kbd->config.macros[d->args[0].idx];
+					macro = kbd->config.macros[d->args[0].idx];
 
 					timeout = kbd->config.macro_timeout;
 					kbd->macro_repeat_interval = kbd->config.macro_repeat_timeout;
@@ -770,7 +770,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_SWAP:
 		case OP_SWAPM:
 			idx = d->args[0].idx;
-			macro = d->op == OP_SWAPM ?  &kbd->config.macros[d->args[1].idx] : NULL;
+			macro = d->op == OP_SWAPM ?  kbd->config.macros[d->args[1].idx] : NULL;
 
 			if (pressed) {
 				size_t i;
@@ -845,10 +845,11 @@ struct keyboard *new_keyboard(const struct output *output)
     if (kbd != NULL) {
         memset(kbd, 0, sizeof(struct keyboard));
     } else {
+		err("pvPortMalloc failed for struct keyboard");
 		return NULL;
 	}
 
-	kbd->original_config = &kbd->config;
+	// kbd->original_config = &kbd->config;
 	// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
 
 	kbd->output = *output;
@@ -870,10 +871,10 @@ struct keyboard *new_keyboard(const struct output *output)
 			}
 		}
 
-			if (!found)
-				msg("\tWARNING: could not find default layout %s.\n",
-					kbd->config.default_layout);
-		}
+		if (!found)
+			warn("could not find default layout %s.",
+				kbd->config.default_layout);
+	}
 
 	kbd->chord.queue_sz = 0;
 	kbd->chord.state = CHORD_INACTIVE;
@@ -1251,7 +1252,8 @@ long kbd_process_events(struct keyboard *kbd, const struct key_event *events, si
 int kbd_eval(struct keyboard *kbd, const char *exp)
 {
 	if (!strcmp(exp, "reset")) {
-		memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
+		// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
+		// TODO: reinit from config (no RAM for kbd->original_config)
 		return 0;
 	} else {
 		return config_add_entry(&kbd->config, exp);
