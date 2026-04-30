@@ -622,7 +622,7 @@ int parse_macro_expression(const char *s, struct macro *macro)
         char *ptr = buf;
 
         if (len >= sizeof(buf)) {
-                err("macro size exceeded maximum size (%ld)\n", sizeof(buf));
+                err("macro size exceeded maximum size (%ld)", sizeof(buf));
                 return -1;
         }
 
@@ -638,6 +638,52 @@ int parse_macro_expression(const char *s, struct macro *macro)
         }
 
         return macro_parse(ptr, macro) == 0 ? 0 : 1;
+}
+
+static int macro_equals(const struct macro *a, const struct macro *b)
+{
+	if (a->sz != b->sz)
+		return 0;
+
+	for (size_t i = 0; i < a->sz; i++) {
+		if (a->entries[i].type != b->entries[i].type)
+			return 0;
+		if (a->entries[i].data != b->entries[i].data)
+			return 0;
+	}
+
+	return 1;
+}
+
+static int config_intern_macro(struct config *config, const struct macro *macro)
+{
+	for (size_t i = 0; i < config->nr_macros; i++) {
+		const struct macro *existing = config->macros[i];
+
+		if (existing && macro_equals(existing, macro))
+			return (int)i;
+	}
+
+	if (config->nr_macros >= ARRAY_SIZE(config->macros)) {
+		err("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
+		return -1;
+	}
+
+	struct macro *copy = pvPortMalloc(sizeof(*copy));
+	if (!copy) {
+		err("failed to allocate macro");
+		return -1;
+	}
+
+	memset(copy, 0, sizeof(*copy));
+	copy->sz = macro->sz;
+	for (size_t i = 0; i < macro->sz; i++) {
+		copy->entries[i].type = macro->entries[i].type;
+		copy->entries[i].data = macro->entries[i].data;
+	}
+
+	config->macros[config->nr_macros] = copy;
+	return (int)config->nr_macros++;
 }
 
 // int parse_macro_expression(const char *s, struct macro *macro)
@@ -771,15 +817,12 @@ static int parse_descriptor(char *s,
 		if (ret)
 			return -1;
 
-		if (config->nr_macros >= ARRAY_SIZE(config->macros)) {
-			err("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
+		int macro_idx = config_intern_macro(config, &macro);
+		if (macro_idx < 0)
 			return -1;
-		}
 
 		d->op = OP_MACRO;
-		d->args[0].idx = config->nr_macros;
-
-		config->macros[config->nr_macros++] = macro;
+		d->args[0].idx = macro_idx;
 
 		return 0;
 	} else if (!parse_fn(s, &fn, args, &nargs)) {
@@ -871,18 +914,18 @@ static int parse_descriptor(char *s,
 						arg->timeout = atoi(argstr);
 						break;
 					case ARG_MACRO:
-						if (config->nr_macros >= ARRAY_SIZE(config->macros)) {
-							err("max macros (%d), exceeded", ARRAY_SIZE(config->macros));
+						ret = parse_macro_expression(argstr, &macro);
+						if (ret) {
+							if (ret < 0)
+								err("%s is not a valid macro expression", argstr);
 							return -1;
 						}
 
-						if (parse_macro_expression(argstr, &config->macros[config->nr_macros])) {
+						int macro_idx = config_intern_macro(config, &macro);
+						if (macro_idx < 0)
 							return -1;
-						}
 
-						arg->idx = config->nr_macros;
-						config->nr_macros++;
-
+						arg->idx = macro_idx;
 						break;
 					default:
 						assert(0);
