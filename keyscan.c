@@ -58,6 +58,87 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 static uint8_t debouncing_time; 
 static bool debouncing = false;
 
+typedef struct {
+    uint8_t prev;
+    int16_t accum;
+} encoder_state_t;
+
+static bool is_encoder_channel(const config_t *config, uint8_t row, uint8_t col)
+{
+    for (uint8_t i = 0; i < config->nr_encoders; ++i) {
+        const encoder_t *enc = &config->encoders[i];
+        if ((row == enc->a_row && col == enc->a_col) || (row == enc->b_row && col == enc->b_col))
+            return true;
+    }
+    return false;
+}
+
+static inline bool matrix_pressed(const matrix_row_t *matrix, uint8_t row, uint8_t col)
+{
+    return (matrix[row] & ((matrix_row_t)1U << col)) != 0;
+}
+
+static void send_key_tap(QueueHandle_t queue, uint8_t code)
+{
+    if (code == 0 || code == KEYD_NOOP)
+        return;
+
+    struct device_event ev = {0};
+    ev.type = DEV_KEY;
+    ev.code = code;
+
+    ev.pressed = 1;
+    (void)xQueueSendToBack(queue, &ev, portMAX_DELAY);
+    ev.pressed = 0;
+    (void)xQueueSendToBack(queue, &ev, portMAX_DELAY);
+}
+
+static void process_encoders(const config_t *config,
+                             encoder_state_t *states,
+                             const matrix_row_t *raw_matrix,
+                             QueueHandle_t keyscan_event_queue)
+{
+    static const int8_t quad_table[16] = {
+        0, -1, 1, 0,
+        1, 0, 0, -1,
+        -1, 0, 0, 1,
+        0, 1, -1, 0,
+    };
+
+    for (uint8_t i = 0; i < config->nr_encoders; ++i) {
+        const encoder_t *enc = &config->encoders[i];
+        encoder_state_t *st = &states[i];
+
+        uint8_t curr = 0;
+        if (matrix_pressed(raw_matrix, enc->a_row, enc->a_col))
+            curr |= 0x1;
+        if (matrix_pressed(raw_matrix, enc->b_row, enc->b_col))
+            curr |= 0x2;
+
+        if (st->prev == 0xFF) {
+            st->prev = curr;
+            st->accum = 0;
+            continue;
+        }
+
+        uint8_t idx = (uint8_t)((st->prev << 2) | curr);
+        int16_t delta = quad_table[idx];
+        if (enc->invert)
+            delta = -delta;
+
+        st->prev = curr;
+        st->accum += delta;
+
+        while (st->accum >= (int16_t)enc->div) {
+            st->accum -= (int16_t)enc->div;
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->a_row][enc->a_col]);
+        }
+        while (st->accum <= -(int16_t)enc->div) {
+            st->accum += (int16_t)enc->div;
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->b_row][enc->b_col]);
+        }
+    }
+}
 
 // Separate variables for diode direction
 static const uint8_t row2col = 0;  // ROW2COL configuration
@@ -287,17 +368,23 @@ void keyscan_task(void* pvParameters) {
     static matrix_row_t raw_matrix[MAX_GPIOS] = {0};
     static matrix_row_t debounced_matrix[MAX_GPIOS] = {0};
     static matrix_row_t previous_debounced_matrix[MAX_GPIOS] = {0};
+    static encoder_state_t encoder_states[MAX_ENCODERS];
 
     // struct event ev;
     struct device_event devev;
     devev.type = DEV_KEY;
 
     matrix_init(&config->matrix);
+    for (uint8_t i = 0; i < MAX_ENCODERS; ++i) {
+        encoder_states[i].prev = 0xFF;
+        encoder_states[i].accum = 0;
+    }
 
     while (1) {
         TickType_t last_wake_time = xTaskGetTickCount();
         // Scan the matrix
         matrix_scan(&config->matrix, raw_matrix);
+        process_encoders(config, encoder_states, raw_matrix, keyscan_event_queue);
 
         // Debounce the matrix
         bool debounced_changed = debounce(raw_matrix, debounced_matrix, config->matrix.nr_rows);
@@ -315,6 +402,8 @@ void keyscan_task(void* pvParameters) {
                         for (uint8_t col = 0; col < config->matrix.nr_cols; col++) {
                             matrix_row_t col_mask = ((matrix_row_t)1 << col);
                             if (changed_keys & col_mask) {
+                                if (is_encoder_channel(config, row, col))
+                                    continue;
                                 devev.pressed = (debounced_matrix[row] & col_mask) != 0;
                                 devev.code = config->matrix.keymap[row][col];
                                 (void)xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
