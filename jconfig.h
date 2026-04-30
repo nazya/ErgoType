@@ -7,11 +7,13 @@
 #define CONFIG_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "log.h"
 
 #define IS_GPIO_PIN(pin) ((pin) >= 0 && (pin) <= 29)
 
 #define MAX_GPIOS 8 
+#define MAX_ENCODERS 2
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -45,12 +47,23 @@ typedef struct {
     uint8_t nr_rows;                      // Number of rows
 } matrix_t;
 
+typedef struct {
+    uint8_t a_row;
+    uint8_t a_col;
+    uint8_t b_row;
+    uint8_t b_col;
+    uint8_t div;
+    bool invert;
+} encoder_t;
+
 // Define the config_t struct using the X-Macro
 typedef struct {
     #define FIELD(name, type, default_value) type name;
     CONFIG_FIELDS
     #undef FIELD
     matrix_t matrix;
+    uint8_t nr_encoders;
+    encoder_t encoders[MAX_ENCODERS];
 } config_t;
 
 int parse(config_t *config, const char *filename);
