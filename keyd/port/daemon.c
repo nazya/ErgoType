@@ -268,39 +268,27 @@ static int evloop(QueueHandle_t keyscan_event_queue, int (*event_handler) (struc
 	TickType_t xTicksToWait = portMAX_DELAY; // Block indefinitely if not otherwise specified
 	dbg3("entering evloop");
 
-	// UBaseType_t keyd_stack_min_free_words = uxTaskGetStackHighWaterMark(NULL);
-	// dbg3("keyd_task stack initial free watermark: %u words (%u bytes)",
-	//      (unsigned)keyd_stack_min_free_words,
-	//      (unsigned)(keyd_stack_min_free_words * sizeof(StackType_t)));
-	    while (1) {
-	        if (xQueueReceive(keyscan_event_queue, &devev, xTicksToWait) == pdPASS) {
-				ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
-				ev.type = EV_DEV_EVENT;
-				ev.devev = &devev;
-            timeout = event_handler(&ev);
-			timeout = timeout < 0 ? 0 : timeout;
-            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-        } else {
-            // Timeout occurred
-            ev.type = EV_TIMEOUT;
-			ev.devev = NULL;
+	while (1) {
+		if (xQueueReceive(keyscan_event_queue, &devev, xTicksToWait) == pdPASS) {
 			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
-            timeout = event_handler(&ev);
-				timeout = timeout < 0 ? 0 : timeout;
-	            xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-	        }
-
-			// UBaseType_t keyd_stack_free_words = uxTaskGetStackHighWaterMark(NULL);
-			// if (keyd_stack_free_words < keyd_stack_min_free_words) {
-			// 	keyd_stack_min_free_words = keyd_stack_free_words;
-			// 	dbg3("keyd_task stack new min free watermark: %u words (%u bytes)",
-			// 	     (unsigned)keyd_stack_min_free_words,
-			// 	     (unsigned)(keyd_stack_min_free_words * sizeof(StackType_t)));
-			// }
-	    }
-
-	    return 0; // Never reached
+			ev.type = EV_DEV_EVENT;
+			ev.devev = &devev;
+		timeout = event_handler(&ev);
+		timeout = timeout < 0 ? 0 : timeout;
+		xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+	} else {
+		// Timeout occurred
+		ev.type = EV_TIMEOUT;
+		ev.devev = NULL;
+		ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
+		timeout = event_handler(&ev);
+			timeout = timeout < 0 ? 0 : timeout;
+			xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+		}
 	}
+
+	return 0; // Never reached
+}
 
 static void keyd_init() {
 	keyd_queue = xQueueCreate(256, sizeof(key_event_t));
@@ -316,8 +304,10 @@ static void keyd_init() {
 	// if (active_kbd && active_kbd->config.layer_indicator) {
 	// 	gpio_led_set_pattern(0);
 	// }
-	dbg3("kbd initialized");
-	dbg3("free heap size: %u bytes", xPortGetFreeHeapSize());
+	if (active_kbd) {
+		msg("kbd initialized");
+	}
+	dbg("free heap size: %u bytes", xPortGetFreeHeapSize());
 }
 
 void keyd_task(void *pvParameters) {
