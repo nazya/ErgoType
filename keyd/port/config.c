@@ -1223,9 +1223,8 @@ static int process_first_pass_line(char *line, size_t ln, struct ini_section *se
             } else {
                 dbg3("new section: '%s' at line %zd", section->name, ln);
             }
+            return 0;
         }
-
-        return 0;
     }
 
     if (!strcmp(section->name, "ids") ||
@@ -1304,9 +1303,8 @@ static int process_second_pass_line(char *line, size_t ln, char *section_name, s
             } else {
                 dbg3("new section: '%s' at line %zd", section_name, ln);
             }
+            return 0;
         }
-
-        return 0;
     }
 
     if (!strcmp(section_name, "ids") ||

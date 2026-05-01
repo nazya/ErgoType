@@ -20,10 +20,12 @@ add_library(keyd
   ${KEYD_SRC_DIR}/keys.c
   ${KEYD_SRC_DIR}/string.c
   ${KEYD_PORT_DIR}/keyboard.c
+  ${KEYD_PORT_DIR}/evloop.c
   ${KEYD_PORT_DIR}/daemon.c
+  ${KEYD_PORT_DIR}/task.c
   ${KEYD_SRC_DIR}/unicode.c
-  ${KEYD_PORT_DIR}/vkbd.c
-  ${KEYD_PORT_DIR}/vkbd_tusb_backend.c
+  ${KEYD_PORT_DIR}/vkbd/vkbd.c
+  ${KEYD_PORT_DIR}/vkbd/tusb_hid.c
 )
 
 target_link_libraries(keyd
@@ -36,6 +38,6 @@ target_link_libraries(keyd
 
 # Keep upstream include style without shadowing standard library headers like <string.h>.
 target_compile_options(keyd PRIVATE
-  -iquote${KEYD_SRC_DIR}
   -iquote${KEYD_PORT_DIR}
+  -iquote${KEYD_SRC_DIR}
 )
