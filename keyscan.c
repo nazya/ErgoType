@@ -51,7 +51,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "queue.h"
 
 #include "jconfig.h"
-#include "daemon.h"
+#include "device.h"
 #include "keys.h"
 
 // Debounce time in milliseconds
@@ -67,7 +67,7 @@ static bool is_encoder_channel(const config_t *config, uint8_t row, uint8_t col)
 {
     for (uint8_t i = 0; i < config->nr_encoders; ++i) {
         const encoder_t *enc = &config->encoders[i];
-        if ((row == enc->a_row && col == enc->a_col) || (row == enc->b_row && col == enc->b_col))
+        if ((row == enc->a && col == enc->c) || (row == enc->b && col == enc->c))
             return true;
     }
     return false;
@@ -75,22 +75,19 @@ static bool is_encoder_channel(const config_t *config, uint8_t row, uint8_t col)
 
 static inline bool matrix_pressed(const matrix_row_t *matrix, uint8_t row, uint8_t col)
 {
-    return (matrix[row] & ((matrix_row_t)1U << col)) != 0;
+    return (matrix[row] & ((matrix_row_t)1 << col)) != 0;
 }
 
 static void send_key_tap(QueueHandle_t queue, uint8_t code)
 {
-    if (code == 0 || code == KEYD_NOOP)
-        return;
-
     struct device_event ev = {0};
     ev.type = DEV_KEY;
     ev.code = code;
 
     ev.pressed = 1;
-    (void)xQueueSendToBack(queue, &ev, portMAX_DELAY);
+    xQueueSendToBack(queue, &ev, portMAX_DELAY);
     ev.pressed = 0;
-    (void)xQueueSendToBack(queue, &ev, portMAX_DELAY);
+    xQueueSendToBack(queue, &ev, portMAX_DELAY);
 }
 
 static void process_encoders(const config_t *config,
@@ -110,9 +107,9 @@ static void process_encoders(const config_t *config,
         encoder_state_t *st = &states[i];
 
         uint8_t curr = 0;
-        if (matrix_pressed(raw_matrix, enc->a_row, enc->a_col))
+        if (matrix_pressed(raw_matrix, enc->a, enc->c))
             curr |= 0x1;
-        if (matrix_pressed(raw_matrix, enc->b_row, enc->b_col))
+        if (matrix_pressed(raw_matrix, enc->b, enc->c))
             curr |= 0x2;
 
         if (st->prev == 0xFF) {
@@ -123,19 +120,17 @@ static void process_encoders(const config_t *config,
 
         uint8_t idx = (uint8_t)((st->prev << 2) | curr);
         int16_t delta = quad_table[idx];
-        if (enc->invert)
-            delta = -delta;
 
         st->prev = curr;
         st->accum += delta;
 
         while (st->accum >= (int16_t)enc->div) {
             st->accum -= (int16_t)enc->div;
-            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->a_row][enc->a_col]);
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->a][enc->c]);
         }
         while (st->accum <= -(int16_t)enc->div) {
             st->accum += (int16_t)enc->div;
-            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->b_row][enc->b_col]);
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->b][enc->c]);
         }
     }
 }
@@ -384,38 +379,51 @@ void keyscan_task(void* pvParameters) {
         TickType_t last_wake_time = xTaskGetTickCount();
         // Scan the matrix
         matrix_scan(&config->matrix, raw_matrix);
-        process_encoders(config, encoder_states, raw_matrix, keyscan_event_queue);
+        if (config->nr_encoders > 0) {
+            process_encoders(config, encoder_states, raw_matrix, keyscan_event_queue);
+        }
 
         // Debounce the matrix
         bool debounced_changed = debounce(raw_matrix, debounced_matrix, config->matrix.nr_rows);
 
         // Process key events only if debounced state changed
-        if (debounced_changed) {
-            for (uint8_t row = 0; row < config->matrix.nr_rows; row++) {
-                matrix_row_t changed_keys = debounced_matrix[row] ^ previous_debounced_matrix[row];
-                if (changed_keys) {
-                    if (has_ghost_in_row(&config->matrix, row, debounced_matrix[row], debounced_matrix)) {
-                        // Ghosting detected, ignore the keys in this row
-                        debounced_matrix[row] = 0;
-                    } else {
-                        // Handle key events here (key pressed or released)
-                        for (uint8_t col = 0; col < config->matrix.nr_cols; col++) {
-                            matrix_row_t col_mask = ((matrix_row_t)1 << col);
-                            if (changed_keys & col_mask) {
-                                if (is_encoder_channel(config, row, col))
-                                    continue;
-                                devev.pressed = (debounced_matrix[row] & col_mask) != 0;
-                                devev.code = config->matrix.keymap[row][col];
-                                (void)xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
-                                // if (xStatus != pdPASS) {
-                                //     err("Failed to send event to queue");
-                                // }
-                            }
-                        }
-                    }
-                }
+        if (!debounced_changed) {
+            vTaskDelayUntil(&last_wake_time, config->scan_period);
+            continue;
+        }
+
+        for (uint8_t row = 0; row < config->matrix.nr_rows; row++) {
+            matrix_row_t changed_keys = debounced_matrix[row] ^ previous_debounced_matrix[row];
+            if (!changed_keys) {
                 previous_debounced_matrix[row] = debounced_matrix[row];
+                continue;
             }
+            if (has_ghost_in_row(&config->matrix, row, debounced_matrix[row], debounced_matrix)) {
+                // Ghosting detected, ignore the keys in this row
+                debounced_matrix[row] = 0;
+                previous_debounced_matrix[row] = debounced_matrix[row];
+                continue;
+            }
+            // Handle key events here (key pressed or released)
+            for (uint8_t col = 0; col < config->matrix.nr_cols; col++) {
+                matrix_row_t col_mask = ((matrix_row_t)1 << col);
+                if (!(changed_keys & col_mask))
+                    continue;
+                if (is_encoder_channel(config, row, col))
+                    continue;
+                
+                bool pressed = (debounced_matrix[row] & col_mask) != 0;
+                uint8_t code = config->matrix.keymap[row][col];
+
+                devev.pressed = pressed;
+                devev.code = code;
+                xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
+                
+                // if (xStatus != pdPASS) {
+                //     err("Failed to send event to queue");
+                // }
+            }
+            previous_debounced_matrix[row] = debounced_matrix[row];
         }
         vTaskDelayUntil(&last_wake_time, config->scan_period);
     }

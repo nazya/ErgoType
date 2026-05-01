@@ -20,7 +20,8 @@
 #include "semphr.h"
 
 #include "flash.h"
-#include "daemon.h"
+#include "keyd.h"
+#include "vkbd/vkbd_event.h"
 #include "jconfig.h"
 #include "led/plain.h"
 #include "led/ws2812.h"
@@ -40,10 +41,14 @@
 uint8_t mode; // read by USB descriptor callbacks
 SemaphoreHandle_t log_mutex;
 SemaphoreHandle_t stdio_tusb_cdc_mutex;
+QueueHandle_t vkbd_event_queue;
+QueueHandle_t keyscan_event_queue;
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void keyscan_task(void* pvParameters); // keyscan.c
+void keyd_task(void *pvParameters); // keyd/port/task.c:
+void vkbd_hid_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
 uint8_t count_pressed_keys(matrix_t* matrix); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
 
@@ -158,21 +163,22 @@ static void app_task(void *pvParameters)
 
     
     if (mode == HID) {
-        QueueHandle_t keyscan_queue_handle = xQueueCreate(16, sizeof(struct device_event));
+        vkbd_event_queue = xQueueCreate(256, sizeof(key_event_t));
+
+        keyscan_event_queue = xQueueCreate(16, sizeof(struct device_event));
         static void *keyscan_task_params[2];
         keyscan_task_params[0] = &config;               // config_t*
-        keyscan_task_params[1] = keyscan_queue_handle;  // QueueHandle_t
+        keyscan_task_params[1] = keyscan_event_queue;   // QueueHandle_t
 
         xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 5, CORE1, NULL);
 
-        xTaskCreateAffinitySet(key_event_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+        xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
 
         TaskHandle_t pointing_task_handle = NULL;
         xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 1, CORE0, &pointing_task_handle);
         pointing_motion_irq_init(pointing_task_handle);
 
-        // vTaskDelay(3000);
-        xTaskCreateAffinitySet(keyd_task, NULL, 8192, keyscan_queue_handle, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
+        xTaskCreateAffinitySet(keyd_task, NULL, 8192, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
     }
 
     vTaskDelete(NULL);

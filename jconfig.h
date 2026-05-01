@@ -47,13 +47,16 @@ typedef struct {
     uint8_t nr_rows;                      // Number of rows
 } matrix_t;
 
+#define ENCODER_FIELDS \
+    FIELD(a, int8_t, -1) \
+    FIELD(b, int8_t, -1) \
+    FIELD(c, int8_t, -1) \
+    FIELD(div, int8_t, 2)
+
 typedef struct {
-    uint8_t a_row;
-    uint8_t a_col;
-    uint8_t b_row;
-    uint8_t b_col;
-    uint8_t div;
-    bool invert;
+    #define FIELD(name, type, default_value) type name;
+    ENCODER_FIELDS
+    #undef FIELD
 } encoder_t;
 
 // Define the config_t struct using the X-Macro

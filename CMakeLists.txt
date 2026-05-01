@@ -101,8 +101,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 # Expose keyd headers to this target via quote-only search path so system
 # headers like <string.h> are never shadowed by keyd/src/string.h.
 target_compile_options(${PROJECT_NAME} PRIVATE
-        -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/src
         -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/port
+        -iquote${CMAKE_CURRENT_LIST_DIR}/keyd/src
 )
 
 # In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_device

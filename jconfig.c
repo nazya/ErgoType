@@ -12,9 +12,6 @@
 #include "jconfig.h"
 #include "keys.h"
 
-#include "pico/stdio.h"
-#include "pico/stdlib.h"
-
 #define GPIO_PULL_UP(pin)       \
     do {                        \
         gpio_init(pin);         \
@@ -26,69 +23,6 @@
         gpio_init(pin);         \
         gpio_pull_down(pin);    \
     } while (0)
-
-static int find_gpio_index(const uint8_t *pins, uint8_t nr_pins, uint8_t gpio)
-{
-    for (uint8_t i = 0; i < nr_pins; ++i) {
-        if (pins[i] == gpio)
-            return (int)i;
-    }
-    return -1;
-}
-
-static bool json_get_u8(const char *json, size_t json_len, const char *key, uint8_t *out)
-{
-    JSONTypes_t type = JSONInvalid;
-    const char *val = NULL;
-    size_t val_len = 0;
-
-    JSONStatus_t result = JSON_SearchConst(json, json_len, key, strlen(key), &val, &val_len, &type);
-    if (result != JSONSuccess)
-        return false;
-
-    if (type != JSONNumber)
-        return false;
-
-    char save = val[val_len];
-    ((char *)val)[val_len] = '\0';
-    int n = atoi(val);
-    ((char *)val)[val_len] = save;
-
-    if (n < 0 || n > 255)
-        return false;
-
-    *out = (uint8_t)n;
-    return true;
-}
-
-static bool json_get_bool(const char *json, size_t json_len, const char *key, bool *out)
-{
-    JSONTypes_t type = JSONInvalid;
-    const char *val = NULL;
-    size_t val_len = 0;
-
-    JSONStatus_t result = JSON_SearchConst(json, json_len, key, strlen(key), &val, &val_len, &type);
-    if (result != JSONSuccess)
-        return false;
-
-    if (type == JSONTrue) {
-        *out = true;
-        return true;
-    }
-    if (type == JSONFalse) {
-        *out = false;
-        return true;
-    }
-    if (type != JSONNumber)
-        return false;
-
-    char save = val[val_len];
-    ((char *)val)[val_len] = '\0';
-    int n = atoi(val);
-    ((char *)val)[val_len] = save;
-    *out = (n != 0);
-    return true;
-}
 
 void dbg3config(const config_t *config)
 {
@@ -112,10 +46,9 @@ void dbg3config(const config_t *config)
     dbg3("config.nr_encoders=%u", config->nr_encoders);
     for (uint8_t i = 0; i < config->nr_encoders; ++i) {
         const encoder_t *enc = &config->encoders[i];
-        dbg3("config.encoders[%u].a=(%u,%u)", i, enc->a_row, enc->a_col);
-        dbg3("config.encoders[%u].b=(%u,%u)", i, enc->b_row, enc->b_col);
-        dbg3("config.encoders[%u].div=%u", i, enc->div);
-        dbg3("config.encoders[%u].invert=%u", i, (unsigned)enc->invert);
+        #define FIELD(name, type, default_value) dbg3("config.encoders[%u]." #name "=%u", i, (unsigned)enc->name);
+        ENCODER_FIELDS
+        #undef FIELD
     }
 }
 
@@ -331,6 +264,21 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
     return 0;  // Success
 }
 
+static int lookup_pin_index(config_t *config, uint8_t pin)
+{
+    for (uint8_t col = 0; col < config->matrix.nr_cols; ++col) {
+        if (config->matrix.gpio_cols[col] == pin) {
+            return col;
+        }
+    }
+    for (uint8_t row = 0; row < config->matrix.nr_rows; ++row) {
+        if (config->matrix.gpio_rows[row] == pin) {
+            return row;
+        }
+    }
+    return -1;
+}
+
 static int parse_encoders(const char *json, size_t json_len, config_t *config)
 {
     JSONStatus_t result;
@@ -353,53 +301,39 @@ static int parse_encoders(const char *json, size_t json_len, config_t *config)
             continue;
         }
 
-        uint8_t a_gpio = 0, b_gpio = 0, c_gpio = 0;
-        if (!json_get_u8(pair.value, pair.valueLength, "a", &a_gpio) ||
-            !json_get_u8(pair.value, pair.valueLength, "b", &b_gpio) ||
-            !json_get_u8(pair.value, pair.valueLength, "c", &c_gpio)) {
-            err("encoders[%u]: need numeric fields a,b,c", idx);
-            continue;
-        }
-
         encoder_t enc = {0};
-        enc.div = 4;
-        enc.invert = false;
 
-        (void)json_get_u8(pair.value, pair.valueLength, "div", &enc.div);
-        if (enc.div == 0)
-            enc.div = 1;
-        (void)json_get_bool(pair.value, pair.valueLength, "invert", &enc.invert);
+        // Defaults.
+        #define FIELD(name, type, default_value) enc.name = (type)(default_value);
+        ENCODER_FIELDS
+        #undef FIELD
 
-        int c_col = find_gpio_index(config->matrix.gpio_cols, config->matrix.nr_cols, c_gpio);
-        int c_row = find_gpio_index(config->matrix.gpio_rows, config->matrix.nr_rows, c_gpio);
-
-        if (c_col >= 0) {
-            int a_row = find_gpio_index(config->matrix.gpio_rows, config->matrix.nr_rows, a_gpio);
-            int b_row = find_gpio_index(config->matrix.gpio_rows, config->matrix.nr_rows, b_gpio);
-            if (a_row < 0 || b_row < 0) {
-                err("encoders[%u]: a,b must be in gpio_rows when c in gpio_cols", idx);
-                continue;
+        // Iterate over fields using the X-Macro (same style as CONFIG_FIELDS).
+        #define FIELD(name, type, default_value)                               \
+            {                                                                  \
+            const char *value = NULL;                                      \
+            size_t value_length = 0;                                       \
+            JSONTypes_t value_type = JSONInvalid;                          \
+            result = JSON_SearchConst(pair.value, pair.valueLength,        \
+                                        #name, strlen(#name),                \
+                                        &value, &value_length, &value_type); \
+                if (result == JSONSuccess) {                                   \
+                    char save = value[value_length];                           \
+                    ((char *)value)[value_length] = '\0';                      \
+                    if (strcmp(#name, "div") == 0) {                           \
+                        enc.div = (type)atoi(value);                           \
+                    } else {                                                   \
+                        enc.name = lookup_pin_index(config, (type)atoi(value));\
+                    }                                                          \
+                    ((char *)value)[value_length] = save;                      \
+                }                                                              \
             }
-            enc.a_row = (uint8_t)a_row;
-            enc.a_col = (uint8_t)c_col;
-            enc.b_row = (uint8_t)b_row;
-            enc.b_col = (uint8_t)c_col;
-        } else if (c_row >= 0) {
-            int a_col = find_gpio_index(config->matrix.gpio_cols, config->matrix.nr_cols, a_gpio);
-            int b_col = find_gpio_index(config->matrix.gpio_cols, config->matrix.nr_cols, b_gpio);
-            if (a_col < 0 || b_col < 0) {
-                err("encoders[%u]: a,b must be in gpio_cols when c in gpio_rows", idx);
-                continue;
-            }
-            enc.a_row = (uint8_t)c_row;
-            enc.a_col = (uint8_t)a_col;
-            enc.b_row = (uint8_t)c_row;
-            enc.b_col = (uint8_t)b_col;
-        } else {
-            err("encoders[%u]: c not found in gpio_rows/gpio_cols", idx);
+        ENCODER_FIELDS
+        #undef FIELD
+	
+        if (enc.a < 0 || enc.b < 0 || enc.c < 0 || enc.div <= 0) {
             continue;
         }
-
         config->encoders[idx++] = enc;
     }
 
