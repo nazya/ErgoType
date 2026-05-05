@@ -36,7 +36,7 @@ bool tud_msc_test_unit_ready_cb(uint8_t lun) {
 
     uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
     if (color != last_ws2812_color) {
-        ws2812_set(color, 0xFFFFFFFFu);
+        ws2812_set(color, 0xFFFFFFFFu, true);
         last_ws2812_color = color;
     }
 
@@ -70,17 +70,17 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
             // load disk storage
             ejected = false;
             // dbg("msc loaded");
-            gpio_led_set_pattern(LED_PATTERN_MEDIUM);
+            gpio_led_set_pattern(LED_PATTERN_MEDIUM, true);
         } else {
             // unload disk storage
             ejected = true;
             // dbg("msc ejected");
-            gpio_led_set_pattern(LED_PATTERN_FAST);
+            gpio_led_set_pattern(LED_PATTERN_FAST, true);
         }
     }
 
     uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
-    ws2812_set(color, 0xFFFFFFFFu);
+    ws2812_set(color, 0xFFFFFFFFu, true);
     
     return true;
 }

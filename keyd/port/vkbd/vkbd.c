@@ -78,24 +78,11 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 
 	key_event_t event;
 	memset(&event, 0, sizeof(event));
-	event.type = KEY_EVENT_KEY;
-	event.state = 1;
+	event.type = KEY_EVENT_MOUSE_SCROLL;
+	event.x = (int16_t)x; // horizontal (pan)
+	event.y = (int16_t)y; // vertical (wheel)
 
-	if (y < 0) {
-		event.code = KEYD_SCROLL_DOWN;
-		enqueue_event(&event);
-	} else if (y > 0) {
-		event.code = KEYD_SCROLL_UP;
-		enqueue_event(&event);
-	}
-
-	if (x < 0) {
-		event.code = KEYD_SCROLL_LEFT;
-		enqueue_event(&event);
-	} else if (x > 0) {
-		event.code = KEYD_SCROLL_RIGHT;
-		enqueue_event(&event);
-	}
+	enqueue_event(&event);
 }
 
 static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)

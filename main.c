@@ -170,13 +170,16 @@ static void app_task(void *pvParameters)
         keyscan_task_params[0] = &config;               // config_t*
         keyscan_task_params[1] = keyscan_event_queue;   // QueueHandle_t
 
-        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 5, CORE1, NULL);
+        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 3, CORE1, NULL);
 
         xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
 
-        TaskHandle_t pointing_task_handle = NULL;
-        xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 1, CORE0, &pointing_task_handle);
-        pointing_motion_irq_init(pointing_task_handle);
+        if (config.nr_pmw3360) {
+            TaskHandle_t pointing_task_handle = NULL;
+            xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 5, CORE0, &pointing_task_handle);
+            for (uint8_t i = 0; i < config.nr_pmw3360; ++i)
+                pointing_motion_irq_init(pointing_task_handle, config.pmw3360[i].irq, i);
+        }
 
         xTaskCreateAffinitySet(keyd_task, NULL, 8192, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
     }

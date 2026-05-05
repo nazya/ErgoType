@@ -9,6 +9,8 @@
 #include "task.h"
 #include "timers.h"
 
+#include "led/ws2812.h"
+
 extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 
 // Some host terminals/drivers drop the first bytes right after they open the CDC port
@@ -24,8 +26,8 @@ extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 // Helps slow producer a bit so USB task can drain, reducing drops.
 // All values in ticks/bytes (no ms conversion inside).
 #define THROTTLE_MIN_FREE_BUFSIZE 512u
-#define THROTTLE_WAIT_TICKS 1u
-#define THROTTLE_MAX_WAIT_TICKS 99u
+#define THROTTLE_WAIT_TICKS 3u
+#define THROTTLE_MAX_WAIT_TICKS 7u
 
 static uint8_t pending_buf[BUFSIZE];
 static uint32_t pending_wr;
@@ -49,27 +51,32 @@ static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 
 	if (!tud_inited())
 		return;
-	if (!tud_cdc_connected() && cdc_settled_once)
+	// If the host hasn't opened the CDC port (DTR=0), stdio_tusb_cdc_poll() will not drain
+	// pending_buf. Waiting here would just stall the system (e.g. block app init / keyscan).
+	// Keep buffering best-effort and drop when full; never throttle on "not connected".
+	if (!tud_cdc_connected())
 		return;
 
     TickType_t waited = 0;
 
-	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
-
+    
     while (1) {
         size_t free_bytes = BUFSIZE - pending_count;
 		if (stdio_tusb_cdc_mutex) {
-			xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+            xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
 			free_bytes = BUFSIZE - pending_count;
 			xSemaphoreGive(stdio_tusb_cdc_mutex);
 		}
 		if (free_bytes >= free_target)
 			break;
-
+        
         if (waited >= THROTTLE_MAX_WAIT_TICKS)
             break;
+        
 
         vTaskDelay(THROTTLE_WAIT_TICKS);
+        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+
         waited += THROTTLE_WAIT_TICKS;
     }
 }
@@ -110,9 +117,9 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
         length = BUFSIZE;
 
 
-    if ((BUFSIZE - pending_count) < THROTTLE_MIN_FREE_BUFSIZE) {
-        stdio_tusb_cdc_throttle_until_free(THROTTLE_MIN_FREE_BUFSIZE);
-    }
+    // if ((BUFSIZE - pending_count) < THROTTLE_MIN_FREE_BUFSIZE) {
+    //     stdio_tusb_cdc_throttle_until_free(THROTTLE_MIN_FREE_BUFSIZE);
+    // }
     if ((BUFSIZE - pending_count) < length) {
         stdio_tusb_cdc_throttle_until_free(length);
     }
@@ -120,6 +127,8 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
     // If chunk still doesn't fit, drop the freshest bytes (the incoming chunk) and emit a DROP marker.
     // To make room for the marker we may trim newest buffered bytes back to a newline boundary.
     if ((BUFSIZE - pending_count) < length) {
+        // Visual signal for CDC drops: single red blink (one-shot, no loop).
+        ws2812_set(WS2812_RED, 0x01u, false);
         if (tud_inited())
             usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
         return;
@@ -241,7 +250,7 @@ void stdio_tusb_cdc_poll(void)
 	}
 }
 
-void tud_cdc_tx_complete_cb(uint8_t)
-{
-	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
-}
+// void tud_cdc_tx_complete_cb(uint8_t)
+// {
+// 	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+// }

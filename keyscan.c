@@ -122,6 +122,10 @@ static void process_encoders(const config_t *config,
         int16_t delta = quad_table[idx];
 
         st->prev = curr;
+        if (delta > 0 && st->accum < 0)
+            st->accum = 0;
+        else if (delta < 0 && st->accum > 0)
+            st->accum = 0;
         st->accum += delta;
 
         while (st->accum >= (int16_t)enc->div) {

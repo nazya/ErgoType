@@ -14,6 +14,10 @@
 
 #define MAX_GPIOS 8 
 #define MAX_ENCODERS 2
+#define MAX_PMW3360 2
+
+#define PMW3360_ROLE_MOUSEMOVE 0u
+#define PMW3360_ROLE_SCROLL    1u
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -59,6 +63,23 @@ typedef struct {
     #undef FIELD
 } encoder_t;
 
+typedef struct {
+    uint8_t id;      // user-defined id (optional)
+    uint8_t role;    // 0=mousemove (x/y), 1=scroll (wheel/pan)
+    int8_t bus;      // 0=spi0, 1=spi1
+    int8_t cs;       // chip select pin (GPIO)
+    int8_t irq;      // motion pin (GPIO), active low
+    uint32_t baud;   // per-device SPI baud
+    uint8_t mode;    // SPI mode (0..3)
+    uint16_t cpi;    // sensor CPI
+} pmw3360_cfg_t;
+
+typedef struct {
+    int8_t sck;
+    int8_t mosi;
+    int8_t miso;
+} spi_cfg_t;
+
 // Define the config_t struct using the X-Macro
 typedef struct {
     #define FIELD(name, type, default_value) type name;
@@ -67,6 +88,13 @@ typedef struct {
     matrix_t matrix;
     uint8_t nr_encoders;
     encoder_t encoders[MAX_ENCODERS];
+
+    // SPI buses (pins only). Per-device baud/mode live in drivers.
+    spi_cfg_t spi[2];
+
+    // Drivers
+    uint8_t nr_pmw3360;
+    pmw3360_cfg_t pmw3360[MAX_PMW3360];
 } config_t;
 
 int parse(config_t *config, const char *filename);

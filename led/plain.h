@@ -1,6 +1,7 @@
 #ifndef LED_PLAIN_H
 #define LED_PLAIN_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // 32-step ring, advanced every STEP_MS in led/plain.c. Bit 0 is output first.
@@ -9,7 +10,7 @@
 // 2500ms isn't representable exactly as a clean 32-bit ring at STEP_MS=250.
 #define LED_PATTERN_SLOW   0x00FF00FFu // ~2000ms toggle (8 on, 8 off)
 
-void gpio_led_set_pattern(uint32_t p);
+void gpio_led_set_pattern(uint32_t p, bool loop);
 
 void gpio_led_task(void* pvParameters);
 

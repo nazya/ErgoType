@@ -64,6 +64,19 @@ The `config.json` file allows you to set the following parameters:
 
 Current firmware uses a hardcoded `col2row` scan direction. One can flip `gpio_row` and `gpio_cols` and transpose `keymap` if needed.
 
+### SPI / drivers
+Optional driver section (example for PMW3360 pointing sensor):
+```json
+{
+    "spi0": { "sck": 6, "mosi": 3, "miso": 4 },
+    "drivers": {
+        "pmw3360": [
+            { "id": 0, "role": "mousemove", "bus": "spi0", "cs": 5, "irq": 7, "baud": 500000, "mode": 3, "cpi": 800 }
+        ]
+    }
+}
+```
+
 ### keyd
 The `keyd.conf` is compatible with standard keyd configuration syntax, with the exception of **IPC**, **Unicode**, **File Inclusion**, **[ids]** section (parsed, but skipped) and **command**s (parsed, but skipped).
 

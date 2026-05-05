@@ -277,14 +277,6 @@ static int update_modifier_state(int code, int state)
 	return 0;
 }
 
-static void backend_send_key(uint8_t code, int state)
-{
-	if (update_modifier_state(code, state) < 0)
-		update_key_state(code, state);
-
-	send_hid_report();
-}
-
 static void backend_mouse_scroll(int x, int y)
 {
 	while (!tud_hid_ready())
@@ -292,6 +284,21 @@ static void backend_mouse_scroll(int x, int y)
 
 	/* TinyUSB: wheel=vertical, pan=horizontal. */
 	tud_hid_mouse_report(REPORT_ID_MOUSE, mouse_buttons, 0, 0, (int8_t)y, (int8_t)x);
+}
+
+static void backend_mouse_move(int16_t x, int16_t y)
+{
+	while (!tud_hid_ready())
+		vTaskDelay(HID_READY_WAIT_TICKS);
+
+	tud_hid_mouse_report(
+		REPORT_ID_MOUSE,
+		mouse_buttons,
+		clamp_i16_to_i8(x),
+		clamp_i16_to_i8(y),
+		0,
+		0
+	);
 }
 
 static void backend_mouse_button(uint8_t buttons, int state)
@@ -321,61 +328,25 @@ void vkbd_hid_task(void *pvParameters)
 		case KEY_EVENT_MOUSE_BUTTON:
 			backend_mouse_button(event.buttons, event.state);
 			continue;
-		case KEY_EVENT_MOUSE_MOVE:
-			while (!tud_hid_ready())
-				vTaskDelay(HID_READY_WAIT_TICKS);
-
-			tud_hid_mouse_report(
-				REPORT_ID_MOUSE,
-				mouse_buttons,
-				clamp_i16_to_i8(event.x),
-				clamp_i16_to_i8(event.y),
-				0,
-				0
-			);
+		case KEY_EVENT_MOUSE_SCROLL:
+			backend_mouse_scroll(clamp_i16_to_i8(event.x), clamp_i16_to_i8(event.y));
 			continue;
 		case KEY_EVENT_MOUSE_MOVE_ABS:
 			/*
 			 * TODO: absolute mouse mode backend.
 			 * For now treat as relative deltas.
 			 */
-			while (!tud_hid_ready())
-				vTaskDelay(HID_READY_WAIT_TICKS);
-
-			tud_hid_mouse_report(
-				REPORT_ID_MOUSE,
-				mouse_buttons,
-				clamp_i16_to_i8(event.x),
-				clamp_i16_to_i8(event.y),
-				0,
-				0
-			);
+			/* fallthrough */
+		case KEY_EVENT_MOUSE_MOVE:
+			backend_mouse_move(event.x, event.y);
 			continue;
 		case KEY_EVENT_KEY:
+			if (update_modifier_state(event.code, event.state) < 0)
+				update_key_state(event.code, event.state);
+			send_hid_report();
+			continue;
 		default:
-			break;
-		}
-
-		switch (event.code) {
-		case KEYD_SCROLL_DOWN:
-			if (event.state)
-				backend_mouse_scroll(0, -1);
-			break;
-		case KEYD_SCROLL_UP:
-			if (event.state)
-				backend_mouse_scroll(0, 1);
-			break;
-		case KEYD_SCROLL_RIGHT:
-			if (event.state)
-				backend_mouse_scroll(1, 0);
-			break;
-		case KEYD_SCROLL_LEFT:
-			if (event.state)
-				backend_mouse_scroll(-1, 0);
-			break;
-		default:
-			backend_send_key(event.code, event.state);
-			break;
+			continue;
 		}
 	}
 }
