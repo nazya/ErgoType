@@ -5,6 +5,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "FreeRTOS.h"
 #include "ff.h" // FatFS header
 #include "core_json.h"
@@ -49,6 +50,16 @@ void dbg3config(const config_t *config)
         #define FIELD(name, type, default_value) dbg3("config.encoders[%u]." #name "=%u", i, (unsigned)enc->name);
         ENCODER_FIELDS
         #undef FIELD
+    }
+
+    dbg3("config.spi0={sck=%d,mosi=%d,miso=%d}", (int)config->spi[0].sck, (int)config->spi[0].mosi, (int)config->spi[0].miso);
+    dbg3("config.spi1={sck=%d,mosi=%d,miso=%d}", (int)config->spi[1].sck, (int)config->spi[1].mosi, (int)config->spi[1].miso);
+
+    dbg3("config.nr_pmw3360=%u", config->nr_pmw3360);
+    for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
+        const pmw3360_cfg_t *d = &config->pmw3360[i];
+        dbg3("config.pmw3360[%u]={id=%u,role=%u,bus=%d,cs=%d,irq=%d,baud=%lu,mode=%u,cpi=%u}",
+             i, d->id, d->role, (int)d->bus, (int)d->cs, (int)d->irq, (unsigned long)d->baud, d->mode, d->cpi);
     }
 }
 
@@ -132,6 +143,16 @@ static void init_default_cfg(config_t *config) {
     #undef FIELD
     config->nr_encoders = 0;
     memset(config->encoders, 0, sizeof(config->encoders));
+
+    config->spi[0].sck = -1;
+    config->spi[0].mosi = -1;
+    config->spi[0].miso = -1;
+    config->spi[1].sck = -1;
+    config->spi[1].mosi = -1;
+    config->spi[1].miso = -1;
+
+    config->nr_pmw3360 = 0;
+    memset(config->pmw3360, 0, sizeof(config->pmw3360));
 }
 
 // Set a configuration value based on the field name
@@ -146,6 +167,196 @@ static int set_cfg_value(config_t *config, const char *field_name, int8_t value)
 
     err("Unknown field: %s", field_name);
     return -1;  // Field not found
+}
+
+static bool json_parse_long(const char *json, size_t json_len, const char *query, long *out)
+{
+    JSONStatus_t result;
+    const char *value = NULL;
+    size_t value_length = 0;
+    JSONTypes_t value_type = JSONInvalid;
+
+    result = JSON_SearchConst(json, json_len, query, strlen(query), &value, &value_length, &value_type);
+    if (result != JSONSuccess)
+        return false;
+    if (value_type != JSONNumber && value_type != JSONString)
+        return false;
+
+    char save = value[value_length];
+    ((char *)value)[value_length] = '\0';
+    char *end = NULL;
+    long v = strtol(value, &end, 0);
+    ((char *)value)[value_length] = save;
+
+    if (!end || end == value)
+        return false;
+
+    *out = v;
+    return true;
+}
+
+static bool json_parse_string(const char *json, size_t json_len, const char *query, const char **out, size_t *out_len)
+{
+    JSONStatus_t result;
+    const char *value = NULL;
+    size_t value_length = 0;
+    JSONTypes_t value_type = JSONInvalid;
+
+    result = JSON_SearchConst(json, json_len, query, strlen(query), &value, &value_length, &value_type);
+    if (result != JSONSuccess || value_type != JSONString)
+        return false;
+
+    *out = value;
+    *out_len = value_length;
+    return true;
+}
+
+static int8_t json_parse_gpio_pin(const char *json, size_t json_len, const char *query, int8_t default_value)
+{
+    long v = 0;
+    if (!json_parse_long(json, json_len, query, &v))
+        return default_value;
+    if (!IS_GPIO_PIN(v)) {
+        err("%s: invalid GPIO %ld", query, v);
+        return default_value;
+    }
+    return (int8_t)v;
+}
+
+static void parse_spi_buses(const char *json, size_t json_len, config_t *config)
+{
+    config->spi[0].sck = json_parse_gpio_pin(json, json_len, "spi0.sck", config->spi[0].sck);
+    config->spi[0].mosi = json_parse_gpio_pin(json, json_len, "spi0.mosi", config->spi[0].mosi);
+    config->spi[0].miso = json_parse_gpio_pin(json, json_len, "spi0.miso", config->spi[0].miso);
+
+    config->spi[1].sck = json_parse_gpio_pin(json, json_len, "spi1.sck", config->spi[1].sck);
+    config->spi[1].mosi = json_parse_gpio_pin(json, json_len, "spi1.mosi", config->spi[1].mosi);
+    config->spi[1].miso = json_parse_gpio_pin(json, json_len, "spi1.miso", config->spi[1].miso);
+}
+
+static bool spi_bus_pins_valid(const config_t *config, int8_t bus)
+{
+    switch (bus) {
+    case 0:
+        return IS_GPIO_PIN(config->spi[0].sck) && IS_GPIO_PIN(config->spi[0].mosi) && IS_GPIO_PIN(config->spi[0].miso);
+    case 1:
+        return IS_GPIO_PIN(config->spi[1].sck) && IS_GPIO_PIN(config->spi[1].mosi) && IS_GPIO_PIN(config->spi[1].miso);
+    default:
+        return false;
+    }
+}
+
+static int8_t parse_spi_bus_name(const char *s, size_t len, int8_t default_bus)
+{
+    if (len == 4 && memcmp(s, "spi0", 4) == 0)
+        return 0;
+    if (len == 4 && memcmp(s, "spi1", 4) == 0)
+        return 1;
+    return default_bus;
+}
+
+static uint8_t parse_pmw3360_role_name(const char *s, size_t len, uint8_t default_role)
+{
+    if (len == 8 && memcmp(s, "mousemove", 8) == 0)
+        return PMW3360_ROLE_MOUSEMOVE;
+    if (len == 5 && memcmp(s, "mouse", 5) == 0)
+        return PMW3360_ROLE_MOUSEMOVE;
+    if (len == 6 && memcmp(s, "scroll", 6) == 0)
+        return PMW3360_ROLE_SCROLL;
+    return default_role;
+}
+
+static int parse_pmw3360_drivers(const char *json, size_t json_len, config_t *config)
+{
+    JSONStatus_t result;
+    const char *start = NULL;
+    size_t length = 0;
+    JSONTypes_t type = JSONInvalid;
+
+    config->nr_pmw3360 = 0;
+
+    result = JSON_SearchConst(json, json_len, "drivers.pmw3360", strlen("drivers.pmw3360"), &start, &length, &type);
+    if (result != JSONSuccess) {
+        return 0;
+    }
+
+    size_t it_start = 0, it_next = 0;
+    JSONPair_t pair = {0};
+    uint8_t idx = 0;
+
+    while (idx < MAX_PMW3360) {
+        if (type == JSONArray) {
+            if (JSON_Iterate(start, length, &it_start, &it_next, &pair) != JSONSuccess)
+                break;
+            if (pair.jsonType != JSONObject) {
+                err("drivers.pmw3360[%u]: expected object", idx);
+                continue;
+            }
+        } else if (type == JSONObject) {
+            if (idx > 0)
+                break;
+            pair.value = start;
+            pair.valueLength = length;
+            pair.jsonType = JSONObject;
+        } else {
+            err("drivers.pmw3360: expected array/object");
+            config->nr_pmw3360 = 0;
+            return -1;
+        }
+
+        pmw3360_cfg_t dev = {0};
+        dev.id = idx;
+        dev.role = PMW3360_ROLE_MOUSEMOVE;
+        dev.bus = 0;
+        dev.cs = -1;
+        dev.irq = -1;
+        dev.baud = 500000;
+        dev.mode = 3;
+        dev.cpi = 800;
+
+        long v = 0;
+        if (json_parse_long(pair.value, pair.valueLength, "id", &v))
+            dev.id = (uint8_t)v;
+
+        const char *bus_s = NULL;
+        size_t bus_len = 0;
+        if (json_parse_string(pair.value, pair.valueLength, "bus", &bus_s, &bus_len))
+            dev.bus = parse_spi_bus_name(bus_s, bus_len, dev.bus);
+
+        const char *role_s = NULL;
+        size_t role_len = 0;
+        if (json_parse_string(pair.value, pair.valueLength, "role", &role_s, &role_len)) {
+            dev.role = parse_pmw3360_role_name(role_s, role_len, dev.role);
+        } else if (json_parse_long(pair.value, pair.valueLength, "role", &v) && (v == 0 || v == 1)) {
+            dev.role = (uint8_t)v;
+        }
+
+        dev.cs = json_parse_gpio_pin(pair.value, pair.valueLength, "cs", dev.cs);
+        dev.irq = json_parse_gpio_pin(pair.value, pair.valueLength, "irq", dev.irq);
+
+        if (json_parse_long(pair.value, pair.valueLength, "baud", &v) && v > 0)
+            dev.baud = (uint32_t)v;
+        if (json_parse_long(pair.value, pair.valueLength, "mode", &v) && v >= 0 && v <= 3)
+            dev.mode = (uint8_t)v;
+        if (json_parse_long(pair.value, pair.valueLength, "cpi", &v) && v > 0)
+            dev.cpi = (uint16_t)v;
+
+        if (!IS_GPIO_PIN(dev.cs) || !IS_GPIO_PIN(dev.irq)) {
+            err("drivers.pmw3360[%u]: need valid cs+irq pins", idx);
+            idx++;
+            continue;
+        }
+        if (!spi_bus_pins_valid(config, dev.bus)) {
+            err("drivers.pmw3360[%u]: %s pins missing/invalid", idx, dev.bus == 1 ? "spi1" : "spi0");
+            idx++;
+            continue;
+        }
+
+        config->pmw3360[config->nr_pmw3360++] = dev;
+        idx++;
+    }
+
+    return 0;
 }
 
 static int parse_int_array(const char *json, size_t json_len, const char *key, uint8_t *array, size_t max_size) {
@@ -462,6 +673,8 @@ int parse(config_t *config, const char *filename) {
 
     log_level = config->log_level;
 
+    parse_spi_buses(json, json_len, config);
+
     // Parse the integer array from the JSON
     int nr;
     nr = parse_int_array(json, json_len, "gpio_rows", config->matrix.gpio_rows, MAX_GPIOS);
@@ -489,6 +702,12 @@ int parse(config_t *config, const char *filename) {
 
     if (parse_encoders(json, json_len, config)) {
         err("Failed to parse encoders.");
+        vPortFree(json);
+        return -1;
+    }
+
+    if (parse_pmw3360_drivers(json, json_len, config)) {
+        err("Failed to parse drivers.pmw3360.");
         vPortFree(json);
         return -1;
     }

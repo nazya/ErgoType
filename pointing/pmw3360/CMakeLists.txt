@@ -26,12 +26,8 @@ target_include_directories(pmw3360
 
 target_link_libraries(pmw3360
   PRIVATE
-
-  # usbd
-  # fsd
-  # FreeRTOS-Kernel
   pico_stdlib
+
+  PUBLIC
   hardware_spi
-  # tinyusb_device
-  # tinyusb_board
 )

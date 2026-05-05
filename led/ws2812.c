@@ -24,11 +24,25 @@
 // 32-step ring, advanced every STEP_MS. Bit 0 is output first.
 static volatile uint32_t pattern = 0;
 static volatile uint32_t color = WS2812_OFF;
+static volatile bool pattern_loop = true;
+static TaskHandle_t ws2812_task_handle;
 
-void ws2812_set(uint32_t c, uint32_t p) {
-    // Keep this minimal: just publish new values for the task loop.
+static inline uint32_t rot_r32(uint32_t v)
+{
+    return (v >> 1) | (v << 31);
+}
+
+void ws2812_set(uint32_t c, uint32_t p, bool loop) {
     color = c;
     pattern = p;
+    pattern_loop = loop;
+
+    // Wake the WS2812 task so it applies the new pattern immediately (even if unchanged).
+    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
+        return;
+    TaskHandle_t h = ws2812_task_handle;
+    if (h)
+        xTaskNotifyGive(h);
 }
 
 static inline void put(PIO pio, uint sm, uint32_t grb) {
@@ -69,34 +83,25 @@ void ws2812_task(void* pvParameters) {
         ready = true;
     }
 
-    uint32_t last_pattern = pattern;
-    uint32_t ring = last_pattern;
-    uint32_t marker = 1u;
+    ws2812_task_handle = xTaskGetCurrentTaskHandle();
 
-    while (1) {
-        uint32_t p = pattern;
-        uint32_t c = color;
+    uint32_t cur_pattern = pattern;
+    uint32_t cur_color = color;
+    bool loop = pattern_loop;
 
-        // Restart the ring on pattern change so updates take effect cleanly.
-        if (p != last_pattern) {
-            last_pattern = p;
-            ring = p;
-            marker = 1u;
+    uint32_t ring = cur_pattern;
+
+    for (;;) {
+        if (ready)
+            put(pio, sm, (ring & 0x01u) ? cur_color : WS2812_OFF);
+
+        ring = loop ? rot_r32(ring) : (ring >> 1);
+
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STEP_MS))) {
+            cur_pattern = pattern;
+            cur_color = color;
+            loop = pattern_loop;
+            ring = cur_pattern;
         }
-
-        if (ready) {
-            put(pio, sm, (ring & 0x01u) ? c : WS2812_OFF);
-        }
-        ring = (ring >> 1) | (ring << 31);
-        marker = (marker >> 1) | (marker << 31);
-
-        // One-shot: for any pattern that's not all-off or all-on, stop after 32 steps.
-        if (marker == 1u && p != 0u && p != 0xFFFFFFFFu && pattern == p) {
-            pattern = 0;
-            last_pattern = 0;
-            ring = 0;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(STEP_MS));
     }
 }

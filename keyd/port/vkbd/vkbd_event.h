@@ -28,6 +28,8 @@ enum key_event_type {
 	KEY_EVENT_MOUSE_MOVE = 1,
 	KEY_EVENT_MOUSE_MOVE_ABS = 2,
 	KEY_EVENT_MOUSE_BUTTON = 3,
+	// Mouse wheel/pan (HID: wheel=vertical, pan=horizontal). Uses x=pan, y=wheel.
+	KEY_EVENT_MOUSE_SCROLL = 4,
 };
 
 #endif
