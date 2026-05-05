@@ -27,7 +27,7 @@ jobs:
     - name: Setup Pico SDK
       run: |
         mkdir -p ~/.pico-sdk
-        git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git --branch 2.0.0 ~/.pico-sdk
+        git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git --branch 2.1.1 ~/.pico-sdk
     
     - name: Modify ffconf.h to Set FF_USE_STRFUNC=1
       run: |
