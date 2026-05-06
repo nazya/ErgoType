@@ -15,9 +15,15 @@
 #define MAX_GPIOS 8 
 #define MAX_ENCODERS 2
 #define MAX_PMW3360 2
+#define MAX_PMW3389 2
+#define MAX_SPI 2
+#define MAX_UART 2
+#define MAX_I2C 2
 
-#define PMW3360_ROLE_MOUSEMOVE 0u
-#define PMW3360_ROLE_SCROLL    1u
+enum {
+    SENSOR_ROLE_MOUSEMOVE = 0, // x/y
+    SENSOR_ROLE_SCROLL = 1,    // wheel/pan
+};
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -31,8 +37,6 @@ typedef uint32_t matrix_row_t;
 
 // Include the config field definitions
 #define CONFIG_FIELDS \
-    FIELD(uart_rx_pin, int8_t, -1)  \
-    FIELD(uart_tx_pin, int8_t, -1)  \
     FIELD(log_level, int8_t, 0)  \
     FIELD(led_pin, int8_t, -1)  \
     FIELD(ws2812_pin, int8_t, -1)  \
@@ -51,6 +55,16 @@ typedef struct {
     uint8_t nr_rows;                      // Number of rows
 } matrix_t;
 
+#define UART_CFG_FIELDS \
+    FIELD(rx, int8_t, -1) \
+    FIELD(tx, int8_t, -1)
+
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    UART_CFG_FIELDS
+    #undef FIELD
+} uart_cfg_t;
+
 #define ENCODER_FIELDS \
     FIELD(a, int8_t, -1) \
     FIELD(b, int8_t, -1) \
@@ -63,22 +77,44 @@ typedef struct {
     #undef FIELD
 } encoder_t;
 
-typedef struct {
-    uint8_t id;      // user-defined id (optional)
-    uint8_t role;    // 0=mousemove (x/y), 1=scroll (wheel/pan)
-    int8_t bus;      // 0=spi0, 1=spi1
-    int8_t cs;       // chip select pin (GPIO)
-    int8_t irq;      // motion pin (GPIO), active low
-    uint32_t baud;   // per-device SPI baud
-    uint8_t mode;    // SPI mode (0..3)
-    uint16_t cpi;    // sensor CPI
-} pmw3360_cfg_t;
+#define PMW33XX_FIELDS(role_default) \
+    FIELD(role, uint8_t, (role_default)) /* 0=mousemove (x/y), 1=scroll (wheel/pan) */ \
+    FIELD(spi_idx, int8_t, -1) /* 0=spi0, 1=spi1 */ \
+    FIELD(cs, int8_t, -1) /* chip select pin (GPIO) */ \
+    FIELD(irq, int8_t, -1) /* motion pin (GPIO), active low */ \
+    FIELD(cpi, uint16_t, 800u) /* sensor CPI */
 
 typedef struct {
-    int8_t sck;
-    int8_t mosi;
-    int8_t miso;
+    #define FIELD(name, type, default_value) type name;
+    PMW33XX_FIELDS(SENSOR_ROLE_MOUSEMOVE)
+    #undef FIELD
+} pmw33xx_cfg_t;
+
+#define SPI_PIN_FIELDS \
+    FIELD(sck, int8_t, -1) \
+    FIELD(mosi, int8_t, -1) \
+    FIELD(miso, int8_t, -1)
+
+#define SPI_CFG_FIELDS \
+    SPI_PIN_FIELDS \
+    FIELD(baud, uint32_t, 500000u)
+
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    SPI_CFG_FIELDS
+    #undef FIELD
 } spi_cfg_t;
+
+// I2C buses (pins only).
+#define I2C_CFG_FIELDS \
+    FIELD(sda, int8_t, -1) \
+    FIELD(scl, int8_t, -1)
+
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    I2C_CFG_FIELDS
+    #undef FIELD
+} i2c_cfg_t;
 
 // Define the config_t struct using the X-Macro
 typedef struct {
@@ -89,12 +125,23 @@ typedef struct {
     uint8_t nr_encoders;
     encoder_t encoders[MAX_ENCODERS];
 
-    // SPI buses (pins only). Per-device baud/mode live in drivers.
-    spi_cfg_t spi[2];
+    // SPI buses (pins + baud).
+    uint8_t spi_mask;
+    spi_cfg_t spi[MAX_SPI];
+
+    // UART buses (pins only). Used for stdio/logging.
+    uint8_t uart_mask;
+    uart_cfg_t uart[MAX_UART];
+
+    // I2C buses (pins only).
+    uint8_t i2c_mask;
+    i2c_cfg_t i2c[MAX_I2C];
 
     // Drivers
     uint8_t nr_pmw3360;
-    pmw3360_cfg_t pmw3360[MAX_PMW3360];
+    pmw33xx_cfg_t pmw3360[MAX_PMW3360];
+    uint8_t nr_pmw3389;
+    pmw33xx_cfg_t pmw3389[MAX_PMW3389];
 } config_t;
 
 int parse(config_t *config, const char *filename);

@@ -20,16 +20,11 @@
 #define QUEUE_SEND_TIMEOUT_TICKS 3
 
 struct vkbd {
-	char name[16];
+	uint8_t unused;
 };
 
 static void enqueue_event(const key_event_t *event)
 {
-	if (!vkbd_event_queue) {
-		warn("vkbd: vkbd_event_queue is NULL (drop event)");
-		return;
-	}
-
 	if (xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
 }
@@ -38,12 +33,7 @@ struct vkbd *vkbd_init(const char *name)
 {
 	static struct vkbd vkbd;
 
-	if (name) {
-		strncpy(vkbd.name, name, sizeof(vkbd.name) - 1);
-		vkbd.name[sizeof(vkbd.name) - 1] = '\0';
-	} else {
-		vkbd.name[0] = '\0';
-	}
+	(void)name;
 
 	return &vkbd;
 }

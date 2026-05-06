@@ -45,8 +45,14 @@ ErgoType aims to extend the functionality of keyd beyond Linux by creating a har
 The `config.json` file allows you to set the following parameters:
 | Field              | Type       | Default | Description |
 |--------------------|------------|---------|-------------|
-| `uart_rx_pin`      | `int8`     | `-1`    | GPIO pin number for UART RX. Set to `-1` if not used. Supported pins: 1, 13, 17, 29 |
-| `uart_tx_pin`      | `int8`     | `-1`    | GPIO pin number for UART TX. Set to `-1` if not used. Supported pins: 0, 12, 16, 28 |
+| `uart0.rx`         | `int8`     | `-1`    | GPIO pin number for UART0 RX. Supported pins: 1, 13, 17, 29 |
+| `uart0.tx`         | `int8`     | `-1`    | GPIO pin number for UART0 TX. Supported pins: 0, 12, 16, 28 |
+| `uart1.rx`         | `int8`     | `-1`    | GPIO pin number for UART1 RX. Supported pins: 5, 9, 21, 25 |
+| `uart1.tx`         | `int8`     | `-1`    | GPIO pin number for UART1 TX. Supported pins: 4, 8, 20, 24 |
+| `i2c0.sda`         | `int8`     | `-1`    | GPIO pin number for I2C0 SDA. Supported pins: 0, 4, 8, 12, 16, 20, 24, 28 |
+| `i2c0.scl`         | `int8`     | `-1`    | GPIO pin number for I2C0 SCL. Supported pins: 1, 5, 9, 13, 17, 21, 25, 29 |
+| `i2c1.sda`         | `int8`     | `-1`    | GPIO pin number for I2C1 SDA. Supported pins: 2, 6, 10, 14, 18, 22, 26 |
+| `i2c1.scl`         | `int8`     | `-1`    | GPIO pin number for I2C1 SCL. Supported pins: 3, 7, 11, 15, 19, 23, 27 |
 | `log_level`        | `int8`     | `0`     | Specifies the verbosity level of logging output. |
 | `led_pin`          | `int8`     | `-1`    | GPIO pin number for the status LED. |
 | `ws2812_pin`       | `int8`     | `-1`    | GPIO pin number for a WS2812/NeoPixel data line. Set to `-1` to disable. |
@@ -68,14 +74,15 @@ Current firmware uses a hardcoded `col2row` scan direction. One can flip `gpio_r
 Optional driver section (example for PMW3360 pointing sensor):
 ```json
 {
-    "spi0": { "sck": 6, "mosi": 3, "miso": 4 },
+    "spi0": { "sck": 6, "mosi": 3, "miso": 4, "baud": 500000 },
     "drivers": {
         "pmw3360": [
-            { "id": 0, "role": "mousemove", "bus": "spi0", "cs": 5, "irq": 7, "baud": 500000, "mode": 3, "cpi": 800 }
+            { "role": "mousemove", "spi_idx": 0, "cs": 5, "irq": 7, "cpi": 800 }
         ]
     }
 }
 ```
+PMW3360/PMW3389 SPI clock mode is fixed to mode 3 (CPOL=1, CPHA=1).
 
 ### keyd
 The `keyd.conf` is compatible with standard keyd configuration syntax, with the exception of **IPC**, **Unicode**, **File Inclusion**, **[ids]** section (parsed, but skipped) and **command**s (parsed, but skipped).
@@ -87,8 +94,7 @@ Using the RP2040 ProMicro I configured the left-hand part of the keyboard. Check
 ````json
 {
     "log_level": 1,
-    "uart_rx_pin": 13,
-    "uart_tx_pin": 16,
+    "uart0": { "rx": 13, "tx": 16 },
     "led_pin": 17,
     "scan_period": 5,
     "debounce": 9,
@@ -143,7 +149,7 @@ g = layerm(space+rightcontrol, @)
 
 
 ## Debugging
-ErgoType inherits from `keyd` multiple levels of debug output (0 to 3, including an additional detailed logging level). To enable debug messages, set `uart_rx_pin` and `uart_tx_pin`.
+ErgoType inherits from `keyd` multiple levels of debug output (0 to 3, including an additional detailed logging level). To enable debug messages, set `uart0.rx` and `uart0.tx` (or `uart1.*`).
 
 Led blinking patterns indicate device status:
 - **not mounted**: 250 ms
