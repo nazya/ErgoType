@@ -25,6 +25,100 @@
         gpio_pull_down(pin);    \
     } while (0)
 
+
+#define IS_PIN_FIELD(name_lit) \
+    (sizeof(name_lit) > 4 && strcmp((name_lit) + sizeof(name_lit) - 5, "_pin") == 0)
+
+static uint32_t used_gpio_mask;
+
+static bool claim_gpio(int pin)
+{
+    if (!IS_GPIO_PIN(pin)) {
+        err("invalid GPIO %d", pin);
+        return false;
+    }
+
+    uint32_t bit = 1u << (uint32_t)pin;
+    if (used_gpio_mask & bit) {
+        err("duplicate GPIO %d", pin);
+        return false;
+    }
+
+    used_gpio_mask |= bit;
+    return true;
+}
+
+static bool spi_pin_valid(uint8_t spi_idx, const char *name, int pin)
+{
+    // RP2040: SPI signals are only available on specific GPIOs.
+    // Validate only bus pins (sck/mosi/miso). Device CS is handled as a plain GPIO.
+    if (spi_idx == 0) {
+        if (strcmp(name, "sck") == 0)
+            return pin == 2 || pin == 6 || pin == 18 || pin == 22;
+        if (strcmp(name, "mosi") == 0)
+            return pin == 3 || pin == 7 || pin == 19 || pin == 23;
+        if (strcmp(name, "miso") == 0)
+            return pin == 0 || pin == 4 || pin == 16 || pin == 20;
+        return false;
+    }
+
+    if (spi_idx == 1) {
+        if (strcmp(name, "sck") == 0)
+            return pin == 10 || pin == 14 || pin == 26;
+        if (strcmp(name, "mosi") == 0)
+            return pin == 11 || pin == 15 || pin == 27;
+        if (strcmp(name, "miso") == 0)
+            return pin == 8 || pin == 12 || pin == 24 || pin == 28;
+        return false;
+    }
+
+    return false;
+}
+
+static bool uart_pin_valid(uint8_t uart_idx, const char *name, int pin)
+{
+    // RP2040: UART signals are only available on specific GPIOs.
+    if (uart_idx == 0) {
+        if (strcmp(name, "tx") == 0)
+            return pin == 0 || pin == 12 || pin == 16 || pin == 28;
+        if (strcmp(name, "rx") == 0)
+            return pin == 1 || pin == 13 || pin == 17 || pin == 29;
+        return false;
+    }
+
+    if (uart_idx == 1) {
+        if (strcmp(name, "tx") == 0)
+            return pin == 4 || pin == 8 || pin == 20 || pin == 24;
+        if (strcmp(name, "rx") == 0)
+            return pin == 5 || pin == 9 || pin == 21 || pin == 25;
+        return false;
+    }
+
+    return false;
+}
+
+static bool i2c_pin_valid(uint8_t i2c_idx, const char *name, int pin)
+{
+    // RP2040: I2C signals are only available on specific GPIOs.
+    if (i2c_idx == 0) {
+        if (strcmp(name, "sda") == 0)
+            return pin == 0 || pin == 4 || pin == 8 || pin == 12 || pin == 16 || pin == 20 || pin == 24 || pin == 28;
+        if (strcmp(name, "scl") == 0)
+            return pin == 1 || pin == 5 || pin == 9 || pin == 13 || pin == 17 || pin == 21 || pin == 25 || pin == 29;
+        return false;
+    }
+
+    if (i2c_idx == 1) {
+        if (strcmp(name, "sda") == 0)
+            return pin == 2 || pin == 6 || pin == 10 || pin == 14 || pin == 18 || pin == 22 || pin == 26;
+        if (strcmp(name, "scl") == 0)
+            return pin == 3 || pin == 7 || pin == 11 || pin == 15 || pin == 19 || pin == 23 || pin == 27;
+        return false;
+    }
+
+    return false;
+}
+
 void dbg3config(const config_t *config)
 {
     #define FIELD(name, type, default_value) dbg3("config.%s=%d", #name, (int)config->name);
@@ -52,14 +146,34 @@ void dbg3config(const config_t *config)
         #undef FIELD
     }
 
-    dbg3("config.spi0={sck=%d,mosi=%d,miso=%d}", (int)config->spi[0].sck, (int)config->spi[0].mosi, (int)config->spi[0].miso);
-    dbg3("config.spi1={sck=%d,mosi=%d,miso=%d}", (int)config->spi[1].sck, (int)config->spi[1].mosi, (int)config->spi[1].miso);
+    dbg3("config.spi_mask=0x%02x", config->spi_mask);
+    dbg3("config.spi0={sck=%d,mosi=%d,miso=%d,baud=%lu}",
+         (int)config->spi[0].sck, (int)config->spi[0].mosi, (int)config->spi[0].miso, (unsigned long)config->spi[0].baud);
+    dbg3("config.spi1={sck=%d,mosi=%d,miso=%d,baud=%lu}",
+         (int)config->spi[1].sck, (int)config->spi[1].mosi, (int)config->spi[1].miso, (unsigned long)config->spi[1].baud);
+
+    dbg3("config.uart_mask=0x%02x", config->uart_mask);
+    dbg3("config.uart0={rx=%d,tx=%d}", (int)config->uart[0].rx, (int)config->uart[0].tx);
+    dbg3("config.uart1={rx=%d,tx=%d}", (int)config->uart[1].rx, (int)config->uart[1].tx);
+
+    dbg3("config.i2c_mask=0x%02x", config->i2c_mask);
+    dbg3("config.i2c0={sda=%d,scl=%d}", (int)config->i2c[0].sda, (int)config->i2c[0].scl);
+    dbg3("config.i2c1={sda=%d,scl=%d}", (int)config->i2c[1].sda, (int)config->i2c[1].scl);
 
     dbg3("config.nr_pmw3360=%u", config->nr_pmw3360);
     for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
-        const pmw3360_cfg_t *d = &config->pmw3360[i];
-        dbg3("config.pmw3360[%u]={id=%u,role=%u,bus=%d,cs=%d,irq=%d,baud=%lu,mode=%u,cpi=%u}",
-             i, d->id, d->role, (int)d->bus, (int)d->cs, (int)d->irq, (unsigned long)d->baud, d->mode, d->cpi);
+        const pmw33xx_cfg_t *d = &config->pmw3360[i];
+        dbg3("config.pmw3360[%u]={role=%u,spi_idx=%d,cs=%d,irq=%d,cpi=%u}",
+             i, d->role, (int)d->spi_idx, (int)d->cs, (int)d->irq,
+             d->cpi);
+    }
+
+    dbg3("config.nr_pmw3389=%u", config->nr_pmw3389);
+    for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
+        const pmw33xx_cfg_t *d = &config->pmw3389[i];
+        dbg3("config.pmw3389[%u]={role=%u,spi_idx=%d,cs=%d,irq=%d,cpi=%u}",
+             i, d->role, (int)d->spi_idx, (int)d->cs, (int)d->irq,
+             d->cpi);
     }
 }
 
@@ -137,239 +251,21 @@ static int load(char **buffer, const char *filename) {
 }
 
 
-static void init_default_cfg(config_t *config) {
-    #define FIELD(name, type, default_value) config->name = default_value;
-    CONFIG_FIELDS
-    #undef FIELD
-    config->nr_encoders = 0;
-    memset(config->encoders, 0, sizeof(config->encoders));
-
-    config->spi[0].sck = -1;
-    config->spi[0].mosi = -1;
-    config->spi[0].miso = -1;
-    config->spi[1].sck = -1;
-    config->spi[1].mosi = -1;
-    config->spi[1].miso = -1;
-
-    config->nr_pmw3360 = 0;
-    memset(config->pmw3360, 0, sizeof(config->pmw3360));
-}
-
-// Set a configuration value based on the field name
-static int set_cfg_value(config_t *config, const char *field_name, int8_t value) {
-    #define FIELD(name, type, default_value) \
-        if (strcmp(field_name, #name) == 0) { \
-            config->name = value; \
-            return 0; \
-        }
-    CONFIG_FIELDS
-    #undef FIELD
-
-    err("Unknown field: %s", field_name);
-    return -1;  // Field not found
-}
-
-static bool json_parse_long(const char *json, size_t json_len, const char *query, long *out)
+static uint8_t parse_pin_array(const char *json,
+                               size_t json_len,
+                               const char *key,
+                               uint8_t *array,
+                               size_t max_size)
 {
-    JSONStatus_t result;
-    const char *value = NULL;
-    size_t value_length = 0;
-    JSONTypes_t value_type = JSONInvalid;
-
-    result = JSON_SearchConst(json, json_len, query, strlen(query), &value, &value_length, &value_type);
-    if (result != JSONSuccess)
-        return false;
-    if (value_type != JSONNumber && value_type != JSONString)
-        return false;
-
-    char save = value[value_length];
-    ((char *)value)[value_length] = '\0';
-    char *end = NULL;
-    long v = strtol(value, &end, 0);
-    ((char *)value)[value_length] = save;
-
-    if (!end || end == value)
-        return false;
-
-    *out = v;
-    return true;
-}
-
-static bool json_parse_string(const char *json, size_t json_len, const char *query, const char **out, size_t *out_len)
-{
-    JSONStatus_t result;
-    const char *value = NULL;
-    size_t value_length = 0;
-    JSONTypes_t value_type = JSONInvalid;
-
-    result = JSON_SearchConst(json, json_len, query, strlen(query), &value, &value_length, &value_type);
-    if (result != JSONSuccess || value_type != JSONString)
-        return false;
-
-    *out = value;
-    *out_len = value_length;
-    return true;
-}
-
-static int8_t json_parse_gpio_pin(const char *json, size_t json_len, const char *query, int8_t default_value)
-{
-    long v = 0;
-    if (!json_parse_long(json, json_len, query, &v))
-        return default_value;
-    if (!IS_GPIO_PIN(v)) {
-        err("%s: invalid GPIO %ld", query, v);
-        return default_value;
-    }
-    return (int8_t)v;
-}
-
-static void parse_spi_buses(const char *json, size_t json_len, config_t *config)
-{
-    config->spi[0].sck = json_parse_gpio_pin(json, json_len, "spi0.sck", config->spi[0].sck);
-    config->spi[0].mosi = json_parse_gpio_pin(json, json_len, "spi0.mosi", config->spi[0].mosi);
-    config->spi[0].miso = json_parse_gpio_pin(json, json_len, "spi0.miso", config->spi[0].miso);
-
-    config->spi[1].sck = json_parse_gpio_pin(json, json_len, "spi1.sck", config->spi[1].sck);
-    config->spi[1].mosi = json_parse_gpio_pin(json, json_len, "spi1.mosi", config->spi[1].mosi);
-    config->spi[1].miso = json_parse_gpio_pin(json, json_len, "spi1.miso", config->spi[1].miso);
-}
-
-static bool spi_bus_pins_valid(const config_t *config, int8_t bus)
-{
-    switch (bus) {
-    case 0:
-        return IS_GPIO_PIN(config->spi[0].sck) && IS_GPIO_PIN(config->spi[0].mosi) && IS_GPIO_PIN(config->spi[0].miso);
-    case 1:
-        return IS_GPIO_PIN(config->spi[1].sck) && IS_GPIO_PIN(config->spi[1].mosi) && IS_GPIO_PIN(config->spi[1].miso);
-    default:
-        return false;
-    }
-}
-
-static int8_t parse_spi_bus_name(const char *s, size_t len, int8_t default_bus)
-{
-    if (len == 4 && memcmp(s, "spi0", 4) == 0)
-        return 0;
-    if (len == 4 && memcmp(s, "spi1", 4) == 0)
-        return 1;
-    return default_bus;
-}
-
-static uint8_t parse_pmw3360_role_name(const char *s, size_t len, uint8_t default_role)
-{
-    if (len == 8 && memcmp(s, "mousemove", 8) == 0)
-        return PMW3360_ROLE_MOUSEMOVE;
-    if (len == 5 && memcmp(s, "mouse", 5) == 0)
-        return PMW3360_ROLE_MOUSEMOVE;
-    if (len == 6 && memcmp(s, "scroll", 6) == 0)
-        return PMW3360_ROLE_SCROLL;
-    return default_role;
-}
-
-static int parse_pmw3360_drivers(const char *json, size_t json_len, config_t *config)
-{
-    JSONStatus_t result;
-    const char *start = NULL;
-    size_t length = 0;
-    JSONTypes_t type = JSONInvalid;
-
-    config->nr_pmw3360 = 0;
-
-    result = JSON_SearchConst(json, json_len, "drivers.pmw3360", strlen("drivers.pmw3360"), &start, &length, &type);
-    if (result != JSONSuccess) {
-        return 0;
-    }
-
-    size_t it_start = 0, it_next = 0;
-    JSONPair_t pair = {0};
-    uint8_t idx = 0;
-
-    while (idx < MAX_PMW3360) {
-        if (type == JSONArray) {
-            if (JSON_Iterate(start, length, &it_start, &it_next, &pair) != JSONSuccess)
-                break;
-            if (pair.jsonType != JSONObject) {
-                err("drivers.pmw3360[%u]: expected object", idx);
-                continue;
-            }
-        } else if (type == JSONObject) {
-            if (idx > 0)
-                break;
-            pair.value = start;
-            pair.valueLength = length;
-            pair.jsonType = JSONObject;
-        } else {
-            err("drivers.pmw3360: expected array/object");
-            config->nr_pmw3360 = 0;
-            return -1;
-        }
-
-        pmw3360_cfg_t dev = {0};
-        dev.id = idx;
-        dev.role = PMW3360_ROLE_MOUSEMOVE;
-        dev.bus = 0;
-        dev.cs = -1;
-        dev.irq = -1;
-        dev.baud = 500000;
-        dev.mode = 3;
-        dev.cpi = 800;
-
-        long v = 0;
-        if (json_parse_long(pair.value, pair.valueLength, "id", &v))
-            dev.id = (uint8_t)v;
-
-        const char *bus_s = NULL;
-        size_t bus_len = 0;
-        if (json_parse_string(pair.value, pair.valueLength, "bus", &bus_s, &bus_len))
-            dev.bus = parse_spi_bus_name(bus_s, bus_len, dev.bus);
-
-        const char *role_s = NULL;
-        size_t role_len = 0;
-        if (json_parse_string(pair.value, pair.valueLength, "role", &role_s, &role_len)) {
-            dev.role = parse_pmw3360_role_name(role_s, role_len, dev.role);
-        } else if (json_parse_long(pair.value, pair.valueLength, "role", &v) && (v == 0 || v == 1)) {
-            dev.role = (uint8_t)v;
-        }
-
-        dev.cs = json_parse_gpio_pin(pair.value, pair.valueLength, "cs", dev.cs);
-        dev.irq = json_parse_gpio_pin(pair.value, pair.valueLength, "irq", dev.irq);
-
-        if (json_parse_long(pair.value, pair.valueLength, "baud", &v) && v > 0)
-            dev.baud = (uint32_t)v;
-        if (json_parse_long(pair.value, pair.valueLength, "mode", &v) && v >= 0 && v <= 3)
-            dev.mode = (uint8_t)v;
-        if (json_parse_long(pair.value, pair.valueLength, "cpi", &v) && v > 0)
-            dev.cpi = (uint16_t)v;
-
-        if (!IS_GPIO_PIN(dev.cs) || !IS_GPIO_PIN(dev.irq)) {
-            err("drivers.pmw3360[%u]: need valid cs+irq pins", idx);
-            idx++;
-            continue;
-        }
-        if (!spi_bus_pins_valid(config, dev.bus)) {
-            err("drivers.pmw3360[%u]: %s pins missing/invalid", idx, dev.bus == 1 ? "spi1" : "spi0");
-            idx++;
-            continue;
-        }
-
-        config->pmw3360[config->nr_pmw3360++] = dev;
-        idx++;
-    }
-
-    return 0;
-}
-
-static int parse_int_array(const char *json, size_t json_len, const char *key, uint8_t *array, size_t max_size) {
     JSONStatus_t result;
     const char *array_start;
     size_t array_length;
-    size_t element_count = 0;
+    uint8_t element_count = 0;
 
     // Search for the JSON array with the given key
     result = JSON_SearchConst(json, json_len, key, strlen(key), &array_start, &array_length, NULL);
     if (result != JSONSuccess) {
-        err("Failed to find key: %s", key);
-        return -1;  // Indicate failure
+        return 0;
     }
 
     // Variables for iteration
@@ -390,7 +286,9 @@ static int parse_int_array(const char *json, size_t json_len, const char *key, u
             ((char *)pair.value)[pair.valueLength] = '\0';
 
             // Convert the value to an integer and store it in the array
-            array[element_count++] = (uint8_t)atoi(pair.value);
+            int pin = atoi(pair.value);
+            if (claim_gpio(pin))
+                array[element_count++] = (uint8_t)pin;
 
             // Restore the original character
             ((char *)pair.value)[pair.valueLength] = save;
@@ -399,22 +297,22 @@ static int parse_int_array(const char *json, size_t json_len, const char *key, u
         }
     }
 
-    return (int)element_count;  // Return the number of elements parsed
+    return element_count;
 }
 
 static uint8_t lookup_keycode(const char *name)
 {
-    size_t i;
-    for (i = 0; i < 256; i++) {
+    for (uint8_t i = 0;; ++i) {
         const struct keycode_table_ent *ent = &keycode_table[i];
         if (ent->name && !strcmp(ent->name, name)) {
             return i;
         }
+        if (i == 255)
+            return KEYD_NOOP;
     }
-    return KEYD_NOOP;
 }
 
-static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
+static void parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
     JSONStatus_t result;
     const char *array_start;
     size_t array_length;
@@ -422,8 +320,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
     // Search for the "keymap" array in the JSON
     result = JSON_SearchConst(json, json_len, "keymap", strlen("keymap"), &array_start, &array_length, NULL);
     if (result != JSONSuccess) {
-        err("Failed to find 'keymap' in JSON");
-        return -1;
+        return;
     }
 
     // Variables for iterating through the JSON array
@@ -435,6 +332,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
     while (row < matrix->nr_rows && JSON_Iterate(array_start, array_length, &start, &next, &pair) == JSONSuccess) {
         if (pair.jsonType != JSONArray) {
             err("Expected a JSON array for row %zu", row);
+            row++;
             continue;
         }
 
@@ -449,6 +347,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
 
             if (pair.jsonType == JSONString) {
                 // Convert key name to keycode using the lookup function
+                // coreJSON strips quotes for JSONString values.
                 char save = pair.value[pair.valueLength];
                 ((char *)pair.value)[pair.valueLength] = '\0';  // Null-terminate the string
                 keycode = lookup_keycode(pair.value);
@@ -461,7 +360,7 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
                 ((char *)pair.value)[pair.valueLength] = save;  // Restore original character
             } else {
                 err("Unexpected type for keymap element at [%zu][%zu].", row, col);
-                continue;
+                keycode = KEYD_NOOP;
             }
 
             // Store the keycode in the 2D keymap array
@@ -471,8 +370,6 @@ static int parse_keymap(const char *json, size_t json_len, matrix_t *matrix) {
 
         row++;
     }
-
-    return 0;  // Success
 }
 
 static int lookup_pin_index(config_t *config, uint8_t pin)
@@ -490,7 +387,7 @@ static int lookup_pin_index(config_t *config, uint8_t pin)
     return -1;
 }
 
-static int parse_encoders(const char *json, size_t json_len, config_t *config)
+static void parse_encoders(const char *json, size_t json_len, config_t *config)
 {
     JSONStatus_t result;
     const char *array_start = NULL;
@@ -499,20 +396,24 @@ static int parse_encoders(const char *json, size_t json_len, config_t *config)
     result = JSON_SearchConst(json, json_len, "encoders", strlen("encoders"), &array_start, &array_length, NULL);
     if (result != JSONSuccess) {
         config->nr_encoders = 0;
-        return 0;
+        return;
     }
 
     size_t start = 0, next = 0;
     JSONPair_t pair = {0};
-    uint8_t idx = 0;
+    config->nr_encoders = 0;
 
-    while (idx < MAX_ENCODERS && JSON_Iterate(array_start, array_length, &start, &next, &pair) == JSONSuccess) {
+    for (uint8_t idx = 0; idx < MAX_ENCODERS && config->nr_encoders < MAX_ENCODERS; idx++) {
+        if (JSON_Iterate(array_start, array_length, &start, &next, &pair) != JSONSuccess)
+            break;
+
         if (pair.jsonType != JSONObject) {
             err("encoders[%u]: expected object", idx);
             continue;
         }
 
         encoder_t enc = {0};
+        uint8_t found = 0;
 
         // Defaults.
         #define FIELD(name, type, default_value) enc.name = (type)(default_value);
@@ -520,36 +421,32 @@ static int parse_encoders(const char *json, size_t json_len, config_t *config)
         #undef FIELD
 
         // Iterate over fields using the X-Macro (same style as CONFIG_FIELDS).
-        #define FIELD(name, type, default_value)                               \
-            {                                                                  \
-            const char *value = NULL;                                      \
-            size_t value_length = 0;                                       \
-            JSONTypes_t value_type = JSONInvalid;                          \
-            result = JSON_SearchConst(pair.value, pair.valueLength,        \
-                                        #name, strlen(#name),                \
-                                        &value, &value_length, &value_type); \
-                if (result == JSONSuccess) {                                   \
-                    char save = value[value_length];                           \
-                    ((char *)value)[value_length] = '\0';                      \
-                    if (strcmp(#name, "div") == 0) {                           \
-                        enc.div = (type)atoi(value);                           \
-                    } else {                                                   \
-                        enc.name = lookup_pin_index(config, (type)atoi(value));\
-                    }                                                          \
-                    ((char *)value)[value_length] = save;                      \
-                }                                                              \
+        #define FIELD(name, type, default_value)                                   \
+            {                                                                      \
+                const char *value = NULL;                                          \
+                size_t value_length = 0;                                           \
+                JSONTypes_t value_type = JSONInvalid;                              \
+                result = JSON_SearchConst(pair.value, pair.valueLength,            \
+                                          #name, strlen(#name),                    \
+                                          &value, &value_length, &value_type);    \
+                if (result == JSONSuccess && value_type == JSONNumber) {          \
+                    char save = value[value_length];                               \
+                    ((char *)value)[value_length] = '\0';                          \
+                    if (strcmp(#name, "div") == 0)                                 \
+                        enc.div = (type)atoi(value);                               \
+                    else {                                                         \
+                        enc.name = lookup_pin_index(config, (type)atoi(value));    \
+                        found += (enc.name != -1);                                  \
+                    }                                                              \
+                    ((char *)value)[value_length] = save;                          \
+                }                                                                  \
             }
         ENCODER_FIELDS
         #undef FIELD
-	
-        if (enc.a < 0 || enc.b < 0 || enc.c < 0 || enc.div <= 0) {
-            continue;
-        }
-        config->encoders[idx++] = enc;
-    }
 
-    config->nr_encoders = idx;
-    return 0;
+        if (found == 3)
+            config->encoders[config->nr_encoders++] = enc;
+    }
 }
 
 static void pull_pins(const char *json_data) {
@@ -586,11 +483,9 @@ static void pull_pins(const char *json_data) {
             ((char *)pair.value)[pair.valueLength] = '\0';
             int pin = atoi(pair.value);
             ((char *)pair.value)[pair.valueLength] = save;
-            if (IS_GPIO_PIN(pin)) {
+            if (claim_gpio(pin)) {
                 GPIO_PULL_UP(pin);
                 // dbg3("GPIO %d: Pulled up", pin);
-            } else {
-                err("Not a valid pin in 'pull_up_pins'");
             }
         } else {
             err("Skipping non-integer value in 'pull_up_pins'");
@@ -620,11 +515,9 @@ static void pull_pins(const char *json_data) {
             ((char *)pair.value)[pair.valueLength] = '\0';
             int pin = atoi(pair.value);
             ((char *)pair.value)[pair.valueLength] = save;
-            if (IS_GPIO_PIN(pin)) {
+            if (claim_gpio(pin)) {
                 GPIO_PULL_DOWN(pin);
                 // dbg3("GPIO %d: Pulled down", pin);
-            } else {
-                err("Not a valid pin in 'pull_down_pins'");
             }
         } else {
             err("Skipping non-integer value in 'pull_down_pins'");
@@ -632,9 +525,261 @@ static void pull_pins(const char *json_data) {
     }
 }
 
+static void parse_spi_buses(const char *json, size_t json_len, config_t *config)
+{
+    JSONStatus_t result;
+    const char *value = NULL;
+    size_t value_length = 0;
+    JSONTypes_t value_type = JSONInvalid;
+
+    config->spi_mask = 0;
+
+    for (uint8_t spi_idx = 0; spi_idx < MAX_SPI; ++spi_idx) {
+        uint8_t found = 0;
+
+        // Defaults.
+        #define FIELD(name, type, default_value) config->spi[spi_idx].name = (type)(default_value);
+        SPI_CFG_FIELDS
+        #undef FIELD
+
+        #define FIELD(name, type, default_value)                                          \
+            {                                                                             \
+                char key[16];                                                            \
+                int n = snprintf(key, sizeof(key), "spi%u.%s", (unsigned)spi_idx, #name); \
+                result = JSON_SearchConst(json, json_len,                                 \
+                                          key, (size_t)n,                                \
+                                          &value, &value_length, &value_type);           \
+                if (result == JSONSuccess && value_type == JSONNumber) {                  \
+                    char save = value[value_length];                                      \
+                    ((char *)value)[value_length] = '\0';                                 \
+                    int num = atoi(value);                                                \
+                    ((char *)value)[value_length] = save;                                 \
+                    if (strcmp(#name, "baud") == 0) {                                     \
+                        config->spi[spi_idx].baud = (type)num;                            \
+                    } else {                                                              \
+                        int pin = num;                                                    \
+                        if (spi_pin_valid(spi_idx, #name, pin)) {                         \
+                            config->spi[spi_idx].name = (type)pin;                        \
+                            found += claim_gpio(config->spi[spi_idx].name);               \
+                        } else {                                                          \
+                            err("spi%u." #name ": invalid GPIO %d", (unsigned)spi_idx, pin); \
+                        }                                                                 \
+                    }                                                                     \
+                }                                                                         \
+            }
+        SPI_CFG_FIELDS
+        #undef FIELD
+
+        config->spi_mask |= (uint8_t)((found == 3) << spi_idx);
+    }
+}
+
+static void parse_uart_buses(const char *json, size_t json_len, config_t *config)
+{
+    JSONStatus_t result;
+    const char *value = NULL;
+    size_t value_length = 0;
+    JSONTypes_t value_type = JSONInvalid;
+
+    config->uart_mask = 0;
+
+    for (uint8_t uart_idx = 0; uart_idx < MAX_UART; ++uart_idx) {
+        uint8_t found = 0;
+
+        // Defaults.
+        #define FIELD(name, type, default_value) config->uart[uart_idx].name = (type)(default_value);
+        UART_CFG_FIELDS
+        #undef FIELD
+
+        #define FIELD(name, type, default_value)                                           \
+            {                                                                              \
+                char key[16];                                                              \
+                int n = snprintf(key, sizeof(key), "uart%u.%s", (unsigned)uart_idx, #name);\
+                result = JSON_SearchConst(json, json_len,                                  \
+                                          key, (size_t)n,                                 \
+                                          &value, &value_length, &value_type);            \
+                if (result == JSONSuccess && value_type == JSONNumber) {                   \
+                    char save = value[value_length];                                       \
+                    ((char *)value)[value_length] = '\0';                                  \
+                    int pin = atoi(value);                                                 \
+                    ((char *)value)[value_length] = save;                                  \
+                    if (uart_pin_valid(uart_idx, #name, pin)) {                             \
+                        config->uart[uart_idx].name = (type)pin;                            \
+                        found += claim_gpio(config->uart[uart_idx].name);                  \
+                    } else {                                                               \
+                        err("uart%u." #name ": invalid GPIO %d", (unsigned)uart_idx, pin); \
+                    }                                                                      \
+                }                                                                          \
+            }
+        UART_CFG_FIELDS
+        #undef FIELD
+
+        config->uart_mask |= (uint8_t)((found == 2) << uart_idx);
+    }
+}
+
+static void parse_i2c_buses(const char *json, size_t json_len, config_t *config)
+{
+    JSONStatus_t result;
+    const char *value = NULL;
+    size_t value_length = 0;
+    JSONTypes_t value_type = JSONInvalid;
+
+    config->i2c_mask = 0;
+
+    for (uint8_t i2c_idx = 0; i2c_idx < MAX_I2C; ++i2c_idx) {
+        uint8_t found = 0;
+
+        // Defaults.
+        #define FIELD(name, type, default_value) config->i2c[i2c_idx].name = (type)(default_value);
+        I2C_CFG_FIELDS
+        #undef FIELD
+
+        #define FIELD(name, type, default_value)                                           \
+            {                                                                              \
+                char key[16];                                                              \
+                int n = snprintf(key, sizeof(key), "i2c%u.%s", (unsigned)i2c_idx, #name);  \
+                result = JSON_SearchConst(json, json_len,                                  \
+                                          key, (size_t)n,                                 \
+                                          &value, &value_length, &value_type);            \
+                if (result == JSONSuccess && value_type == JSONNumber) {                   \
+                    char save = value[value_length];                                       \
+                    ((char *)value)[value_length] = '\0';                                  \
+                    int pin = atoi(value);                                                 \
+                    ((char *)value)[value_length] = save;                                  \
+                    if (i2c_pin_valid(i2c_idx, #name, pin)) {                               \
+                        config->i2c[i2c_idx].name = (type)pin;                              \
+                        found += claim_gpio(config->i2c[i2c_idx].name);                     \
+                    } else {                                                               \
+                        err("i2c%u." #name ": invalid GPIO %d", (unsigned)i2c_idx, pin);    \
+                    }                                                                      \
+                }                                                                          \
+            }
+        I2C_CFG_FIELDS
+        #undef FIELD
+
+        config->i2c_mask |= (uint8_t)((found == 2) << i2c_idx);
+    }
+}
+
+static uint8_t parse_sensor_role_name(const char *s, size_t len, uint8_t default_role)
+{
+    if (len == 9 && memcmp(s, "mousemove", 9) == 0)
+        return SENSOR_ROLE_MOUSEMOVE;
+    if (len == 5 && memcmp(s, "mouse", 5) == 0)
+        return SENSOR_ROLE_MOUSEMOVE;
+    if (len == 6 && memcmp(s, "scroll", 6) == 0)
+        return SENSOR_ROLE_SCROLL;
+    return default_role;
+}
+
+static void parse_pmw33xx_drivers(const char *json,
+                                 size_t json_len,
+                                 const char *query,
+                                 const char *name,
+                                 config_t *config,
+                                 pmw33xx_cfg_t *out,
+                                 uint8_t *out_count,
+                                 uint8_t max_out)
+{
+    JSONStatus_t result;
+    const char *start = NULL;
+    size_t length = 0;
+    JSONTypes_t type = JSONInvalid;
+
+    *out_count = 0;
+
+    result = JSON_SearchConst(json, json_len, query, strlen(query), &start, &length, &type);
+    if (result != JSONSuccess) {
+        return;
+    }
+    if (type != JSONArray) {
+        err("drivers.%s: expected array", name);
+        *out_count = 0;
+        return;
+    }
+
+    size_t it_start = 0, it_next = 0;
+    JSONPair_t pair = {0};
+    for (uint8_t idx = 0; idx < max_out; idx++) {
+        if (JSON_Iterate(start, length, &it_start, &it_next, &pair) != JSONSuccess)
+            break;
+        if (pair.jsonType != JSONObject) {
+            err("drivers.%s[%u]: expected object", name, idx);
+            continue;
+        }
+
+        pmw33xx_cfg_t dev = {0};
+        #define FIELD(name, type, default_value) dev.name = (type)(default_value);
+        PMW33XX_FIELDS(SENSOR_ROLE_MOUSEMOVE)
+        #undef FIELD
+
+        #define FIELD(name, type, default_value)                                              \
+            {                                                                                 \
+                const char *value = NULL;                                                     \
+                size_t value_length = 0;                                                      \
+                JSONTypes_t value_type = JSONInvalid;                                         \
+                result = JSON_SearchConst(pair.value, pair.valueLength,                        \
+                                          #name, strlen(#name),                                \
+                                          &value, &value_length, &value_type);                \
+                    if (result == JSONSuccess) {                                                  \
+                    if (strcmp(#name, "role") == 0 && value_type == JSONString) {                 \
+                        dev.role = parse_sensor_role_name(value, value_length, dev.role);         \
+                    } else if (strcmp(#name, "role") != 0 && value_type == JSONNumber) {      \
+                        char save = value[value_length];                                      \
+                        ((char *)value)[value_length] = '\0';                                 \
+                        dev.name = (type)atoi(value);                                         \
+                        ((char *)value)[value_length] = save;                                 \
+                    }                                                                         \
+                }                                                                             \
+            }
+        PMW33XX_FIELDS(SENSOR_ROLE_MOUSEMOVE)
+        #undef FIELD
+
+        if ((uint8_t)dev.spi_idx >= MAX_SPI) {
+            err("drivers.%s[%u].spi_idx: invalid %d", name, idx, (int)dev.spi_idx);
+            continue;
+        }
+
+        if (!(config->spi_mask & (uint8_t)(1u << (uint8_t)dev.spi_idx)))
+            continue;
+
+        if (!claim_gpio(dev.cs) || !claim_gpio(dev.irq))
+            continue;
+
+        out[(*out_count)++] = dev;
+    }
+}
+
+static void parse_pmw3360_drivers(const char *json, size_t json_len, config_t *config)
+{
+    parse_pmw33xx_drivers(json,
+                          json_len,
+                          "drivers.pmw3360",
+                          "pmw3360",
+                          config,
+                          config->pmw3360,
+                          &config->nr_pmw3360,
+                          MAX_PMW3360);
+}
+
+static void parse_pmw3389_drivers(const char *json, size_t json_len, config_t *config)
+{
+    parse_pmw33xx_drivers(json,
+                          json_len,
+                          "drivers.pmw3389",
+                          "pmw3389",
+                          config,
+                          config->pmw3389,
+                          &config->nr_pmw3389,
+                          MAX_PMW3389);
+}
+
 int parse(config_t *config, const char *filename) {
-    init_default_cfg(config);
-    // errstr[0] = '\0';
+    #define FIELD(name, type, default_value) config->name = default_value;
+    CONFIG_FIELDS
+    #undef FIELD
+
 
     char *json = NULL;
     int json_len = load(&json, filename);
@@ -652,62 +797,57 @@ int parse(config_t *config, const char *filename) {
         return -1;
     }
 
-    pull_pins(json);
     
-    // Iterate over fields using the X-Macro
-    #define FIELD(name, type, default_value)                       \
-        {                                                          \
-            char *value;                                           \
-            size_t value_length;                                   \
-            result = JSON_Search(json, json_len, #name,            \
-                strlen(#name), &value, &value_length);             \
-            if (result == JSONSuccess) {                           \
-                char save = value[value_length];                   \
-                value[value_length] = '\0';                        \
-                set_cfg_value(config, #name, (int8_t)atoi(value)); \
-                value[value_length] = save;                        \
-            }                                                      \
+        // Iterate over fields using the X-macro.
+    #define FIELD(name, type, default_value)                              \
+        {                                                                 \
+            const char *value = NULL;                                     \
+            size_t value_length = 0;                                      \
+            JSONTypes_t value_type = JSONInvalid;                         \
+            result = JSON_SearchConst(json, json_len,                     \
+                                        #name, strlen(#name),               \
+                                        &value, &value_length,              \
+                                        &value_type);                       \
+            if (result == JSONSuccess && value_type == JSONNumber) {      \
+                char save = value[value_length];                          \
+                ((char *)value)[value_length] = '\0';                     \
+                int v = atoi(value);                                      \
+                ((char *)value)[value_length] = save;                     \
+                if (IS_PIN_FIELD(#name))                                  \
+                    if (!claim_gpio(v))                                   \
+                        v = default_value;                                \
+                config->name = (type)v;                                   \
+            }                                                             \
         }
     CONFIG_FIELDS
     #undef FIELD
 
     log_level = config->log_level;
+    
+    parse_uart_buses(json, json_len, config);
+    parse_i2c_buses(json, json_len, config);
+
+
+    config->matrix.nr_rows = parse_pin_array(json, json_len, "gpio_rows", config->matrix.gpio_rows, MAX_GPIOS);
+    config->matrix.nr_cols = parse_pin_array(json, json_len, "gpio_cols", config->matrix.gpio_cols, MAX_GPIOS);
+    
+    parse_keymap(json, json_len, &config->matrix);
+
+    parse_encoders(json, json_len, config);
 
     parse_spi_buses(json, json_len, config);
+    parse_pmw3360_drivers(json, json_len, config);
+    parse_pmw3389_drivers(json, json_len, config);
 
-    // Parse the integer array from the JSON
-    int nr;
-    nr = parse_int_array(json, json_len, "gpio_rows", config->matrix.gpio_rows, MAX_GPIOS);
-    if (nr < 0) {
-        err("Failed to parse gpio_rows.");
-        vPortFree(json);
-        return -1;
-    }
-    config->matrix.nr_rows = nr;
+    pull_pins(json);
 
-    // Parse the integer array from the JSON
-    nr = parse_int_array(json, json_len, "gpio_cols", config->matrix.gpio_cols, MAX_GPIOS);
-    if (nr < 0) {
-        err("Failed to parse gpio_cols.");
-        vPortFree(json);
-        return -1;
-    }
-    config->matrix.nr_cols = nr;
 
-    if (parse_keymap(json, json_len, &config->matrix)) {
-        err("Failed to parse keymap.");
-        vPortFree(json);
-        return -1;
-    }
-
-    if (parse_encoders(json, json_len, config)) {
-        err("Failed to parse encoders.");
-        vPortFree(json);
-        return -1;
-    }
-
-    if (parse_pmw3360_drivers(json, json_len, config)) {
-        err("Failed to parse drivers.pmw3360.");
+    if (config->matrix.nr_rows == 0 &&
+        config->matrix.nr_cols == 0 &&
+        config->nr_encoders == 0 &&
+        config->nr_pmw3360 == 0 &&
+        config->nr_pmw3389 == 0) {
+        err("Config has no input devices.");
         vPortFree(json);
         return -1;
     }

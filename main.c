@@ -129,7 +129,7 @@ static void app_task(void *pvParameters)
     uint8_t base_mode = (parse_rc == 0) ? HID : MSC; // HID by default; if config parse failed -> start MSC
 
     // Optional: enable "plain" printf()/puts() over UART if config pins are valid.
-    uart_stdio_init(&config);
+    // uart_stdio_init(&config);
 
     mode_resolution_t mode_resolution = resolve_mode(&config, base_mode);
     mode = mode_resolution.mode;
@@ -153,32 +153,34 @@ static void app_task(void *pvParameters)
     
 
     if (IS_GPIO_PIN(config.led_pin)) {
-        xTaskCreateAffinitySet(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin, IDLE_PRIORITY,
-                               CORE1, NULL);
+        xTaskCreateAffinitySet(gpio_led_task, NULL, MIN_STACK_SIZE, &config.led_pin,    IDLE_PRIORITY, CORE1, NULL);
     }
     if (IS_GPIO_PIN(config.ws2812_pin)) {
-        xTaskCreateAffinitySet(ws2812_task, NULL, MIN_STACK_SIZE, &config.ws2812_pin, IDLE_PRIORITY,
-                               CORE1, NULL);
+        xTaskCreateAffinitySet(ws2812_task,   NULL, MIN_STACK_SIZE, &config.ws2812_pin, IDLE_PRIORITY, CORE1, NULL);
     }
 
     
     if (mode == HID) {
         vkbd_event_queue = xQueueCreate(256, sizeof(key_event_t));
+        configASSERT(vkbd_event_queue);
 
         keyscan_event_queue = xQueueCreate(16, sizeof(struct device_event));
+        configASSERT(keyscan_event_queue);
         static void *keyscan_task_params[2];
         keyscan_task_params[0] = &config;               // config_t*
         keyscan_task_params[1] = keyscan_event_queue;   // QueueHandle_t
 
-        xTaskCreateAffinitySet(keyscan_task, NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 3, CORE1, NULL);
+        xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 3, CORE1, NULL);
 
-        xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+        xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL,                IDLE_PRIORITY + 2, CORE0, NULL);
 
-        if (config.nr_pmw3360) {
+        if (config.nr_pmw3360 || config.nr_pmw3389) {
             TaskHandle_t pointing_task_handle = NULL;
-            xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 5, CORE0, &pointing_task_handle);
+            xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 5, CORE1, &pointing_task_handle);
             for (uint8_t i = 0; i < config.nr_pmw3360; ++i)
                 pointing_motion_irq_init(pointing_task_handle, config.pmw3360[i].irq, i);
+            for (uint8_t i = 0; i < config.nr_pmw3389; ++i)
+                pointing_motion_irq_init(pointing_task_handle, config.pmw3389[i].irq, (uint8_t)(MAX_PMW3360 + i));
         }
 
         xTaskCreateAffinitySet(keyd_task, NULL, 8192, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words

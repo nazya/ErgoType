@@ -70,6 +70,7 @@ pico_generate_pio_header(${PROJECT_NAME}
 	add_subdirectory(pico-usb-flash-drive)
 	add_subdirectory(keyd)
 	add_subdirectory(pointing/pmw3360)
+	add_subdirectory(pointing/pmw3389)
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
@@ -112,6 +113,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         fsd
         keyd
         pmw3360
+        pmw3389
 
         pico_async_context_freertos
         FreeRTOS-Kernel
