@@ -1,6 +1,16 @@
 # ErgoType
 ErgoType is a project I'm developing to integrate all the keyboard features I find most valuable. Currently, it includes a port of [`keyd`](https://github.com/rvaiya/keyd) to the Raspberry Pi Pico with added functionality.
 
+Documentation moved to `docs/` to keep this README short:
+- `docs/README.md` (index)
+- `docs/quickstart.md`
+- `docs/config-json.md`
+- `docs/keymap.md`
+- `docs/pointing.md`
+- `docs/keyd.md`
+- `docs/examples.md`
+- `docs/debugging.md`
+- `docs/logging.md`
 
 ## Goals
 ErgoType aims to extend the functionality of keyd beyond Linux by creating a hardware solution for a range of platforms and devices. It also aims to combine a keyboard with a pointing device, focusing on ergonomic design.
@@ -18,156 +28,6 @@ ErgoType aims to extend the functionality of keyd beyond Linux by creating a har
 
 - **overloadtm** (keyd related)  
   Identical to overloadt, but additionally executes a supplied macro on layer activation.
-
-
-## Flashing
-1. Download the `.uf2` file from GitHub Actions and flash your RP Pico.  
-   After flashing, you will see 'ErgoType' MSC device with an empty `config.json` file.
-
-2. The minimal configuration requires `"gpio_rows"`, `"gpio_cols"`, and `"keymap"`. Here’s an example:
-   ```json
-   {
-       "gpio_rows": [4, 5, 6],
-       "gpio_cols": [8, 9],
-       "keymap": [
-           ["noop", 0],
-           ["capslock", "a"],
-           [123, "leftshift"]
-       ]
-   }
-   ````
-    For `"keymap"` one can use either keycodes or keyd names (refer to `keycode_table` in `keyd/src/keys.c`).
-
-4. Optionally, create keyd.conf for additional configurations.
-
-
-## Configuration
-The `config.json` file allows you to set the following parameters:
-| Field              | Type       | Default | Description |
-|--------------------|------------|---------|-------------|
-| `uart0.rx`         | `int8`     | `-1`    | GPIO pin number for UART0 RX. Supported pins: 1, 13, 17, 29 |
-| `uart0.tx`         | `int8`     | `-1`    | GPIO pin number for UART0 TX. Supported pins: 0, 12, 16, 28 |
-| `uart1.rx`         | `int8`     | `-1`    | GPIO pin number for UART1 RX. Supported pins: 5, 9, 21, 25 |
-| `uart1.tx`         | `int8`     | `-1`    | GPIO pin number for UART1 TX. Supported pins: 4, 8, 20, 24 |
-| `i2c0.sda`         | `int8`     | `-1`    | GPIO pin number for I2C0 SDA. Supported pins: 0, 4, 8, 12, 16, 20, 24, 28 |
-| `i2c0.scl`         | `int8`     | `-1`    | GPIO pin number for I2C0 SCL. Supported pins: 1, 5, 9, 13, 17, 21, 25, 29 |
-| `i2c1.sda`         | `int8`     | `-1`    | GPIO pin number for I2C1 SDA. Supported pins: 2, 6, 10, 14, 18, 22, 26 |
-| `i2c1.scl`         | `int8`     | `-1`    | GPIO pin number for I2C1 SCL. Supported pins: 3, 7, 11, 15, 19, 23, 27 |
-| `log_level`        | `int8`     | `0`     | Specifies the verbosity level of logging output. |
-| `led_pin`          | `int8`     | `-1`    | GPIO pin number for the status LED. |
-| `ws2812_pin`       | `int8`     | `-1`    | GPIO pin number for a WS2812/NeoPixel data line. Set to `-1` to disable. |
-| `erase_pin`        | `int8`     | `-1`    | GPIO pin used to trigger settings erase (active low). |
-| `nr_pressed_erase` | `int8`     | `9`     | Number of simultaneously pressed keys on start up to trigger file system reinit. Only for the default `erase_pin` set.|
-| `msc_pin`          | `int8`     | `-1`    | GPIO pin to switch to MSC mode (active low). |
-| `nr_pressed_msc`   | `int8`     | `3`     | Number of simultaneously pressed keys on start up to switch to MSC mode. Only for the default `msc_pin` set.|
-| `scan_period`      | `int8`     | `5`     | Time in milliseconds between scans for key state changes. |
-| `debounce`         | `int8`     | `9`     | Time in milliseconds to stabilize key states, mitigating bouncing effects. |
-| `gpio_rows`        | `int[]`    | N/A     | Array of GPIO pins configured as rows in the key matrix. |
-| `gpio_cols`        | `int[]`    | N/A     | Array of GPIO pins configured as columns in the key matrix. |
-| `keymap`           | `string(int)[][]`| N/A | Two-dimensional array specifying the key codes or key names for each matrix position. |
-| `pull_up_pins`     | `int[]`    | N/A     | Array of GPIO pins configured with internal pull-up resistors. |
-| `pull_down_pins`   | `int[]`    | N/A     | Array of GPIO pins configured with internal pull-down resistors. |
-
-Current firmware uses a hardcoded `col2row` scan direction. One can flip `gpio_row` and `gpio_cols` and transpose `keymap` if needed.
-
-### SPI / drivers
-Optional driver section (example for PMW3360 pointing sensor):
-```json
-{
-    "spi0": { "sck": 6, "mosi": 3, "miso": 4, "baud": 500000 },
-    "drivers": {
-        "pmw3360": [
-            { "role": "mousemove", "spi_idx": 0, "cs": 5, "irq": 7, "cpi": 800 }
-        ]
-    }
-}
-```
-PMW3360/PMW3389 SPI clock mode is fixed to mode 3 (CPOL=1, CPHA=1).
-
-### keyd
-The `keyd.conf` is compatible with standard keyd configuration syntax, with the exception of **IPC**, **Unicode**, **File Inclusion**, **[ids]** section (parsed, but skipped) and **command**s (parsed, but skipped).
-
-Check [`keyd docs`](https://github.com/rvaiya/keyd/tree/master/docs/keyd.scdoc)
-
-## Hillside 46 Demo
-Using the RP2040 ProMicro I configured the left-hand part of the keyboard. Check the demo [video](https://www.youtube.com/watch?v=nl_YRXBFJNs)
-````json
-{
-    "log_level": 1,
-    "uart0": { "rx": 13, "tx": 16 },
-    "led_pin": 17,
-    "scan_period": 5,
-    "debounce": 9,
-    "pull_up_pins": [28, 29],
-    "pull_down_pins": [0],
-    "gpio_rows": [5, 6, 7, 9],
-    "gpio_cols": [27, 26, 22, 20, 23, 21],
-    "keymap": [
-        [         "`",       "q",      "w",           "e",        "r",         "t" ],
-        [  "capslock",       "a",      "s",           "d",        "f",         "g" ],
-        [ "leftshift",       "z",      "x",           "c",        "v",         "b" ],
-        [      "noop", "leftmeta", "leftalt", "leftcontrol",  "space", "backspace" ]
-    ]
-}
-````
-
-Then I created the following `keyd.conf` file
-
-````
-[global]
-oneshot_timeout = 300
-overload_tap_timeout = 300
-chord_timeout = 200
-overloadtm_timeout = 200
-
-[main]
-space = overload(space, space)
-capslock = overload(rightcontrol, escape)
-leftcontrol = layer(rightronctol)
-
-a = overloadtm(space+rightcontrol, 1, a)
-s = overloadtm(space+rightcontrol, 2, s)
-d = overloadtm(space+rightcontrol, 3, d)
-f = overloadtm(space+rightcontrol, 4, f)
-g = overloadtm(space+rightcontrol, @, g)
-
-[rightcontrol:C]
-space = overload(space, C-space)
-
-[space]
-s = macro(p rint S-9 S-0 left)
-rightcontrol = overload(rightalt, escape)
-
-
-[space+rightcontrol]
-a = layerm(space+rightcontrol, 1)
-s = layerm(space+rightcontrol, 2)
-d = layerm(space+rightcontrol, 3)
-f = layerm(space+rightcontrol, 4)
-g = layerm(space+rightcontrol, @)
-````
-
-
-## Debugging
-ErgoType inherits from `keyd` multiple levels of debug output (0 to 3, including an additional detailed logging level). To enable debug messages, set `uart0.rx` and `uart0.tx` (or `uart1.*`).
-
-Led blinking patterns indicate device status:
-- **not mounted**: 250 ms
-- **mounted**: 1000 ms
-- **suspended**: 2500 ms (not implemented)
-
-If `ws2812_pin` is set, a single WS2812/NeoPixel can be used as a status LED:
-- **HID mode** (startup only): **green** = `config.json` parsed OK, **red** = parse errors (then turns off).
-- **MSC mode**: **blue** = not mounted/idle, **red** = mounted/active, **green** = safe-ejected.
-
-WS2812 brightness is currently fixed in code via the hardcoded color constants in `led/ws2812.h` (`WS2812_RED/GREEN/BLUE`).
-
-## TODO
-- split keyboards and compatibility with qmk communication protocol 
-- pointing devices
-- pico w
-- suspend mode
-- arbitrary multiplex scan matrix (see [`PicoMK`](https://github.com/zli117/PicoMK))
 
 ## Bugs and Feedback
 If you encounter a bug, please feel free to file an issue.
