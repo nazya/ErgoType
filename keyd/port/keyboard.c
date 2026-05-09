@@ -856,6 +856,8 @@ struct keyboard *new_keyboard(const struct output *output)
 	kbd->layer_state[0].active = 1;
 	kbd->layer_state[0].activation_time = 0;
 
+	config_parse(&kbd->config);
+
 	if (kbd->config.default_layout[0]) {
 		int found = 0;
 		for (i = 0; i < kbd->config.nr_layers; i++) {
@@ -878,8 +880,6 @@ struct keyboard *new_keyboard(const struct output *output)
 
 	kbd->chord.queue_sz = 0;
 	kbd->chord.state = CHORD_INACTIVE;
-
-	config_parse(&kbd->config);
 
 	return kbd;
 }
