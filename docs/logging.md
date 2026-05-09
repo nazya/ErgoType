@@ -51,9 +51,24 @@ Windows:
 
 ## Buffering, drops, and “garbled” ANSI
 
-- The CDC backend buffers up to `BUFSIZE` bytes (`stdio_tusb_cdc.h`, currently 2048) while the port is closed or the host is slow.
-- If an incoming write doesn’t fit, the incoming chunk is dropped. If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
+- There are **two** relevant buffers (both use `BUFSIZE` from `stdio_tusb_cdc.h`, currently `2048`):
+  - `_msg()` (`log.c`) formats a log line into a per-call staging buffer and flushes it on `\n` (it writes `\r\n` to CDC).
+  - `stdio_tusb_cdc_write()` (`stdio_tusb_cdc.c`) appends bytes into a `BUFSIZE` ring buffer while the port is closed or the host is slow.
+
+- **Max write size:** `stdio_tusb_cdc_write()` clamps each call to at most `BUFSIZE` bytes. If some caller tries to write more than that in one call, the tail is dropped.
+
+- **Very long lines:** if a *single formatted line* exceeds the `_msg()` staging buffer (roughly `BUFSIZE-2` bytes before the newline), the logger forces a `\r\n` flush and starts a new line. The byte that overflowed is dropped. Practically: very long log lines will be split/truncated and are not reliable.
+
+- **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring. This is skipped when DTR=0, from an ISR, or before the FreeRTOS scheduler starts (so logging never blocks early boot / keyscan).
+
+- **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped. If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
+
+- **Flush gating (DTR):** the ring buffer is only drained when the host has opened the CDC port (`tud_cdc_connected()==true`, i.e. DTR=1). While DTR=0 we still buffer, but there is no backpressure — if the ring fills, new chunks are dropped.
+
+- **“Minicom open effect” and the settle delay:** on a DTR rising edge, flushing is delayed by `CDC_SETTLE_MS` (50ms) to avoid some host stacks dropping the first bytes. During this window we still buffer, so a big startup burst can still overflow the ring if the port wasn’t open early enough.
+
 - If you need full startup logs, open the CDC port *before* resetting/powering the board (otherwise the small buffer can overflow and early lines may be lost).
+
 - Some host terminal stacks drop the first bytes right after open; if this happens mid-escape-sequence you can see artifacts like `4m...` at the start of a line. Re-opening the port usually clears this.
 
 ## UART stdio (separate from logging)
