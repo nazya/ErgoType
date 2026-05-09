@@ -36,7 +36,7 @@ Implemented actions are defined in `keyd/port/config.c` and executed in `keyd/po
 - Overloads/timeouts: `overload()`, `overloadt()`, `overloadt2()`, `overloadi()`, `lettermod()`, `timeout()`
 - Macros: `macro(...)`, `macro2(...)` (same tokenization rules as upstream keyd)
 - Experimental: `scroll()`, `scrollt()` (toggle)
-- ErgoType extension: `overloadtm(layer, macro, action)` (**see “Known limitations”**)
+- ErgoType extension: `overloadtm(layer, macro, action)` (see below)
 
 Chords like `j+k = esc` are supported (up to 6 keys per chord).
 
@@ -54,7 +54,7 @@ Parsed options (all timeouts are interpreted as **milliseconds** in this port):
 - `disable_modifier_guard`
 - `layer_indicator` (**see “Known limitations”**)
 - `default_layout` (name of a `[<name>:layout]` layer to activate at startup)
-- `overloadtm_timeout` (**see “Known limitations”**)
+- `overloadtm_timeout` (hold timeout for `overloadtm(...)`)
 
 ## Output differences vs upstream keyd
 
@@ -83,9 +83,17 @@ Before `keyd.conf` is read, ErgoType seeds a small default config that defines:
 
 You can override any of these in `keyd.conf`.
 
+## ErgoType extension: `overloadtm(...)`
+
+`overloadtm(<layer>, <macro>, <action>)` behaves like `overloadt(<layer>, <action>, <timeout>)`,
+but the hold path activates the layer **and** runs a macro via `layerm(<layer>, <macro>)`.
+
+The hold timeout is controlled by `[global] overloadtm_timeout` (milliseconds).
+
+Note: unlike `overloadt(...)`, the timeout is currently **global** (one value for all `overloadtm(...)` bindings).
+
 ## Known limitations (current code)
 
-- `overloadtm_timeout` is parsed from `[global]`, but is not currently used by the `overloadtm(...)` implementation.
 - `layer_indicator` is parsed from `[global]`, but does not currently drive any LED behavior in this port.
 
 Upstream reference (syntax + semantics): https://github.com/rvaiya/keyd/tree/master/docs/keyd.scdoc
