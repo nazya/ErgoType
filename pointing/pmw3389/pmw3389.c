@@ -4,9 +4,17 @@
 
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
+#include "hardware/timer.h"
 #include "pico/stdlib.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "srom.h"
+
+// NOTE: We intentionally use `busy_wait_us_32()` (spin) instead of pico-sdk `sleep_us()`.
+// `sleep_us()` may use WFE-based sleep; with PMW33xx enabled this caused flaky USB enumeration
+// on some setups (device sometimes fails to enumerate unless reset several times).
 
 // Registers
 #define Product_ID  0x00
@@ -67,10 +75,24 @@
 #define PMW3389_PRODUCT_ID_EXPECTED 0x47u
 
 // Timing (PMW3389 datasheet)
-#define PMW3389_TSRAD_US 160u
+//
+// Datasheet (AC electrical specs):
+// - tSRAD: 160us (read address->data delay)
+// - tSRW/tSRR: 20us (read->next command)
+// - tSCLK-NCS (write): 35us (last SCLK->NCS deassert)
+// - tSWW/tSWR: 180us (write->write / write->read)
+// - TBR: 35us (burst mode motion read)
+//
+// Teensy reference (https://github.com/ydeswal/PMW3389_Teensy-4, "PMW3389 Dual Sensor"):
+// - uses 100us for tSRAD (comment says "datasheet 25", 100 stable)
+// - uses 20us for tSCLK-NCS (write)
+// - uses 100us after write (comment: "safe lower bound")
+//
+// We match the Teensy delays here.
+#define PMW3389_TSRAD_US 100u
 #define PMW3389_TSRW_US 20u
-#define PMW3389_TSCLK_NCS_WRITE_US 35u
-#define PMW3389_TSWW_TSWR_US 180u
+#define PMW3389_TSCLK_NCS_WRITE_US 20u
+#define PMW3389_TSWW_TSWR_US 100u
 
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
 
@@ -108,14 +130,14 @@ static uint8_t read_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr)
 
     uint8_t x = reg_addr & 0x7f; // read
     spi_write_blocking(spi, &x, 1);
-    sleep_us(PMW3389_TSRAD_US);
+    busy_wait_us_32(PMW3389_TSRAD_US);
 
     uint8_t data;
     spi_read_blocking(spi, 0, &data, 1);
 
-    sleep_us(1);
+    busy_wait_us_32(1);
     cs_deselect(cfg);
-    sleep_us(PMW3389_TSRW_US - 1u);
+    busy_wait_us_32(PMW3389_TSRW_US - 1u);
 
     return data;
 }
@@ -130,9 +152,9 @@ static void write_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr, uint8_t d
     spi_write_blocking(spi, &x, 1);
     spi_write_blocking(spi, &data, 1);
 
-    sleep_us(PMW3389_TSCLK_NCS_WRITE_US);
+    busy_wait_us_32(PMW3389_TSCLK_NCS_WRITE_US);
     cs_deselect(cfg);
-    sleep_us(PMW3389_TSWW_TSWR_US);
+    busy_wait_us_32(PMW3389_TSWW_TSWR_US);
 }
 
 static void upload_firmware(const pmw33xx_cfg_t *cfg)
@@ -144,7 +166,7 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg)
     write_register(cfg, SROM_Enable, 0x1d);
 
     // wait for more than one frame period
-    sleep_ms(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
 
     // write 0x18 to SROM_enable to start SROM download
     write_register(cfg, SROM_Enable, 0x18);
@@ -155,11 +177,11 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg)
     cs_select(cfg);
     uint8_t data = SROM_Load_Burst | 0x80;
     spi_write_blocking(spi, &data, 1);
-    sleep_us(15);
+    busy_wait_us_32(15);
 
     for (int i = 0; i < (int)pmw3389_firmware_length; i++) {
         spi_write_blocking(spi, &(pmw3389_firmware_data[i]), 1);
-        sleep_us(15);
+        busy_wait_us_32(15);
     }
 
     // Read the SROM_ID register to verify the ID before any other register reads or writes.
@@ -177,7 +199,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg)
     cs_select(cfg);
     cs_deselect(cfg);
     write_register(cfg, Power_Up_Reset, 0x5a);
-    sleep_ms(50);
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     read_register(cfg, Motion);
     read_register(cfg, Delta_X_L);
@@ -186,7 +208,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg)
     read_register(cfg, Delta_Y_H);
 
     upload_firmware(cfg);
-    sleep_ms(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
 void pmw3389_set_cpi(const pmw33xx_cfg_t *cfg)

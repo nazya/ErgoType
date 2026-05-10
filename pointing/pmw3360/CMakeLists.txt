@@ -20,6 +20,7 @@ add_library(pmw3360
 target_include_directories(pmw3360
   PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}
+  ${CMAKE_CURRENT_LIST_DIR}/../../rtos
 )
 
 # target_link_libraries(pico_stdlib hardware_spi tinyusb_device tinyusb_board)
@@ -27,6 +28,7 @@ target_include_directories(pmw3360
 target_link_libraries(pmw3360
   PRIVATE
   pico_stdlib
+  FreeRTOS-Kernel
 
   PUBLIC
   hardware_spi

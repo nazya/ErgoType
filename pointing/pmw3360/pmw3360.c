@@ -4,9 +4,17 @@
 
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
+#include "hardware/timer.h"
 #include "pico/stdlib.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "srom.h"
+
+// NOTE: We intentionally use `busy_wait_us_32()` (spin) instead of pico-sdk `sleep_us()`.
+// `sleep_us()` may use WFE-based sleep; with PMW33xx enabled this caused flaky USB enumeration
+// on some setups (device sometimes fails to enumerate unless reset several times).
 
 // Registers
 #define Product_ID  0x00
@@ -93,14 +101,14 @@ static uint8_t read_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr) {
     // send adress of the register, with MSBit = 0 to indicate it's a read
     uint8_t x = reg_addr & 0x7f;
     spi_write_blocking(spi, &x, 1);
-    sleep_us(100);              // tSRAD
+    busy_wait_us_32(100);              // tSRAD
     // read data
     uint8_t data;
     spi_read_blocking(spi, 0, &data, 1);
 
-    sleep_us(1);                // tSCLK-NCS for read operation is 120ns
+    busy_wait_us_32(1);                // tSCLK-NCS for read operation is 120ns
     cs_deselect(cfg);
-    sleep_us(19);               // tSRW/tSRR (=20us) minus tSCLK-NCS
+    busy_wait_us_32(19);               // tSRW/tSRR (=20us) minus tSCLK-NCS
 
     return data;
 }
@@ -116,9 +124,9 @@ static void write_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr, uint8_t d
     // send data
     spi_write_blocking(spi, &data, 1);
 
-    sleep_us(20);               // tSCLK-NCS for write operation
+    busy_wait_us_32(20);               // tSCLK-NCS for write operation
     cs_deselect(cfg);
-    sleep_us(100);              // tSWW/tSWR (=120us) minus tSCLK-NCS. Could be shortened, but is looks like a safe lower bound 
+    busy_wait_us_32(100);              // tSWW/tSWR (=120us) minus tSCLK-NCS. Could be shortened, but is looks like a safe lower bound 
 }
 
 static void upload_firmware(const pmw33xx_cfg_t *cfg) {
@@ -131,7 +139,7 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg) {
     write_register(cfg, SROM_Enable, 0x1d);
 
     // wait for more than one frame period
-    sleep_ms(10);               // assume that the frame rate is as low as 100fps... even if it should never be that low
+    vTaskDelay(pdMS_TO_TICKS(10)); // assume that the frame rate is as low as 100fps... even if it should never be that low
 
     // write 0x18 to SROM_enable to start SROM download
     write_register(cfg, SROM_Enable, 0x18);
@@ -142,12 +150,12 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg) {
     cs_select(cfg);
     uint8_t data = SROM_Load_Burst | 0x80; // write burst destination adress
     spi_write_blocking(spi, &data, 1);
-    sleep_us(15);
+    busy_wait_us_32(15);
 
     // send all bytes of the firmware
     for (int i = 0; i < firmware_length; i++) {
         spi_write_blocking(spi, &(firmware_data[i]), 1);
-        sleep_us(15);
+        busy_wait_us_32(15);
     }
 
     // Read the SROM_ID register to verify the ID before any other register reads or writes.
@@ -170,7 +178,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg) {
     cs_select(cfg);                // ensure that the serial port is reset
     cs_deselect(cfg);              // ensure that the serial port is reset
     write_register(cfg, Power_Up_Reset, 0x5a);       // force reset
-    sleep_ms(50);               // wait for it to reboot
+    vTaskDelay(pdMS_TO_TICKS(50)); // wait for it to reboot
     // read registers 0x02 to 0x06 (and discard the data)
     read_register(cfg, Motion);
     read_register(cfg, Delta_X_L);
@@ -179,7 +187,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg) {
     read_register(cfg, Delta_Y_H);
     // upload the firmware
     upload_firmware(cfg);
-    sleep_ms(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
 void pmw3360_set_cpi(const pmw33xx_cfg_t *cfg) {
