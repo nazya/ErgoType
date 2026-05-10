@@ -13,7 +13,7 @@
 - `_msg()` in `log.c` formats the line (including ANSI colors) and writes bytes into the CDC backend (`stdio_tusb_cdc_write()`).
 - The USB device task (`tusb_device_task.c`) runs `tud_task(); stdio_tusb_cdc_poll();`.
 - `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
-- `stdio_tusb_cdc_write()` currently requires the FreeRTOS scheduler to be running (and must not be called from an ISR), so very-early boot / ISR logs may be dropped.
+- `stdio_tusb_cdc_write()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
 ## Viewing logs
 
@@ -59,7 +59,7 @@ Windows:
 
 - **Very long lines:** if a *single formatted line* exceeds the `_msg()` staging buffer (roughly `BUFSIZE-2` bytes before the newline), the logger forces a `\r\n` flush and starts a new line. The byte that overflowed is dropped. Practically: very long log lines will be split/truncated and are not reliable.
 
-- **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring. This is skipped when DTR=0, from an ISR, or before the FreeRTOS scheduler starts (so logging never blocks early boot / keyscan).
+- **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring.
 
 - **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped. If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
 
@@ -76,4 +76,4 @@ Windows:
 The build enables **pico stdio UART** (`pico_enable_stdio_uart(... 1)`), but ErgoType logging does **not** use `printf()`.
 
 - `uart0.*` / `uart1.*` are parsed from `config.json` and can be used by `uart_stdio_init()` (`uart_stdio.c`) to move pico-stdio UART to those pins.
-- As of 2026-05-09, `main.c` keeps the `uart_stdio_init(&config)` call commented out. Enabling UART for `printf()` output requires a small firmware change.
+- `main.c` keeps the `uart_stdio_init(&config)` call commented out. Enabling UART for `printf()` output requires a small firmware change.

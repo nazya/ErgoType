@@ -14,7 +14,7 @@ Mode is resolved at boot by `main.c`.
 Config parse failures include:
 - file missing (`config.json` not found)
 - invalid JSON
-- “config has no input devices” (matrix rows/cols + encoders + pointing all absent)
+- “config has no input devices” (matrix has no rows and no cols, and encoders + pointing are absent)
 
 ## Forcing MSC mode
 
@@ -42,4 +42,3 @@ If base mode is HID, firmware can also re-initialize the on-flash FAT filesystem
 
 During `config.json` load, if `f_mount()` fails, firmware calls `flash_fat_initialize()` and retries the mount.
 This is a destructive recovery path (filesystem re-init).
-

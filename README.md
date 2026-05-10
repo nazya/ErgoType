@@ -1,16 +1,7 @@
 # ErgoType
 ErgoType is a project I'm developing to integrate all the keyboard features I find most valuable. Currently, it includes a port of [`keyd`](https://github.com/rvaiya/keyd) to the Raspberry Pi Pico with added functionality.
 
-Documentation moved to `docs/` to keep this README short:
-- `docs/README.md` (index)
-- `docs/quickstart.md`
-- `docs/config-json.md`
-- `docs/keymap.md`
-- `docs/pointing.md`
-- `docs/keyd.md`
-- `docs/examples.md`
-- `docs/debugging.md`
-- `docs/logging.md`
+Documentation index: [`docs/README.md`](docs/README.md).
 
 ## Goals
 ErgoType aims to extend the functionality of keyd beyond Linux by creating a hardware solution for a range of platforms and devices. It also aims to combine a keyboard with a pointing device, focusing on ergonomic design.
