@@ -27,7 +27,7 @@ extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 // All values in ticks/bytes (no ms conversion inside).
 #define THROTTLE_MIN_FREE_BUFSIZE 512u
 #define THROTTLE_WAIT_TICKS 3u
-#define THROTTLE_MAX_WAIT_TICKS 7u
+#define THROTTLE_MAX_WAIT_TICKS 70u
 
 static uint8_t pending_buf[BUFSIZE];
 static uint32_t pending_wr;
@@ -43,14 +43,6 @@ static void stdio_tusb_cdc_kick_cb(void *);
 
 static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 {
-    // No blocking/yielding from ISRs or when scheduler isn't running.
-    if (portCHECK_IF_IN_ISR())
-        return;
-    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
-        return;
-
-	if (!tud_inited())
-		return;
 	// If the host hasn't opened the CDC port (DTR=0), stdio_tusb_cdc_poll() will not drain
 	// pending_buf. Waiting here would just stall the system (e.g. block app init / keyscan).
 	// Keep buffering best-effort and drop when full; never throttle on "not connected".
@@ -59,34 +51,29 @@ static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 
     TickType_t waited = 0;
 
-    
     while (1) {
+        xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
         size_t free_bytes = BUFSIZE - pending_count;
-		if (stdio_tusb_cdc_mutex) {
-            xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
-			free_bytes = BUFSIZE - pending_count;
-			xSemaphoreGive(stdio_tusb_cdc_mutex);
-		}
-		if (free_bytes >= free_target)
-			break;
-        
+        xSemaphoreGive(stdio_tusb_cdc_mutex);
+
+        if (free_bytes >= free_target)
+            return;
+
         if (waited >= THROTTLE_MAX_WAIT_TICKS)
             break;
-        
 
-        vTaskDelay(THROTTLE_WAIT_TICKS);
         usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
-
+        vTaskDelay(THROTTLE_WAIT_TICKS);
         waited += THROTTLE_WAIT_TICKS;
     }
+
+    usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
 }
 
 static void stdio_tusb_cdc_settle_timer_cb(TimerHandle_t)
 {
     // Wake the TinyUSB device task so it can re-run stdio_tusb_cdc_poll()
     // after the settle delay, even if there are no new USB events.
-	if (!tud_inited())
-		return;
 	if (!tud_cdc_connected())
 		return;
 
@@ -107,19 +94,9 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
 {
     const uint8_t *src = (const uint8_t *)buf;
 
-    const bool lock_safe = (stdio_tusb_cdc_mutex != NULL) &&
-                            !portCHECK_IF_IN_ISR() &&
-                            (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
-    if (!lock_safe)
-        return;
-
     if (length > BUFSIZE)
         length = BUFSIZE;
 
-
-    // if ((BUFSIZE - pending_count) < THROTTLE_MIN_FREE_BUFSIZE) {
-    //     stdio_tusb_cdc_throttle_until_free(THROTTLE_MIN_FREE_BUFSIZE);
-    // }
     if ((BUFSIZE - pending_count) < length) {
         stdio_tusb_cdc_throttle_until_free(length);
     }
@@ -129,18 +106,13 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
     if ((BUFSIZE - pending_count) < length) {
         // Visual signal for CDC drops: single red blink (one-shot, no loop).
         ws2812_set(WS2812_RED, 0x01u, false);
-        if (tud_inited())
+        if (tud_cdc_connected())
             usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
         return;
     }
 
     xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
     for (size_t i = 0; i < length; ++i) {
-        // if ((BUFSIZE - pending_count) < THROTTLE_MIN_FREE_BUFSIZE) {
-        //     xSemaphoreGive(stdio_tusb_cdc_mutex);
-        //     stdio_tusb_cdc_throttle_until_free(THROTTLE_MIN_FREE_BUFSIZE);
-        //     xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
-        // }
         pending_buf[pending_wr] = src[i];
         pending_wr = (pending_wr + 1u) % BUFSIZE;
         if (pending_count < BUFSIZE)
@@ -150,17 +122,13 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
 
     // Wake the TinyUSB device task (blocked in `tud_task()`) so it can run stdio_tusb_cdc_poll().
     // Do this through TinyUSB's own event queue (USBD_EVENT_FUNC_CALL) to avoid RTOS cross-signals here.
-    if (tud_inited()) {
+    if (tud_cdc_connected()) {
         usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
     }
 }
 
 void stdio_tusb_cdc_poll(void)
 {
-    const bool lock_safe = (stdio_tusb_cdc_mutex != NULL) &&
-                          !portCHECK_IF_IN_ISR() &&
-                          (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
-
     // Only send when host has opened the port (DTR=1).
     // Until then we keep buffering (no truncation, no overwritable TinyUSB FIFO).
     if (!tud_cdc_connected()) {
@@ -200,18 +168,17 @@ void stdio_tusb_cdc_poll(void)
     // Move data from pending ring to TinyUSB CDC FIFO.
     // Keep chunks small to avoid long critical sections and to coexist with other USB classes.
     uint32_t wrote_bytes = 0;
+    bool still_pending = false;
     while (1) {
         uint32_t n = tud_cdc_write_available();
         if (!n)
             break;
 
-        if (lock_safe)
-            xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+        xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
 
         if (!pending_count) {
-            if (lock_safe)
-                xSemaphoreGive(stdio_tusb_cdc_mutex);
-            break;
+            xSemaphoreGive(stdio_tusb_cdc_mutex);
+            return;
         }
 
         uint8_t tmp[POLL_TMP_BUFSIZE];
@@ -232,9 +199,9 @@ void stdio_tusb_cdc_poll(void)
 
         pending_rd = (pending_rd + written) % BUFSIZE;
         pending_count -= written;
+        still_pending = pending_count != 0;
 
-        if (lock_safe)
-            xSemaphoreGive(stdio_tusb_cdc_mutex);
+        xSemaphoreGive(stdio_tusb_cdc_mutex);
 
         tud_cdc_write_flush();
 
@@ -245,12 +212,9 @@ void stdio_tusb_cdc_poll(void)
 
 	// If we made progress and still have buffered bytes, queue a follow-up poll.
 	// This helps drain quickly when TinyUSB keeps some write space available without waiting for TX complete.
-	if (wrote_bytes && tud_inited()) {
+	//
+	// Avoid kicking when there is nothing pending: `usbd_defer_func()` enqueues an event and can overflow the
+	// TinyUSB task queue under load.
+	if (wrote_bytes && still_pending)
 		usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
-	}
 }
-
-// void tud_cdc_tx_complete_cb(uint8_t)
-// {
-// 	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
-// }
