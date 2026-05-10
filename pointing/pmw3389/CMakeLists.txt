@@ -18,13 +18,14 @@ add_library(pmw3389
 target_include_directories(pmw3389
   PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}
+  ${CMAKE_CURRENT_LIST_DIR}/../../rtos
 )
 
 target_link_libraries(pmw3389
   PRIVATE
   pico_stdlib
+  FreeRTOS-Kernel
 
   PUBLIC
   hardware_spi
 )
-
