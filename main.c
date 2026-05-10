@@ -196,7 +196,7 @@ int main()
     stdio_tusb_cdc_mutex = xSemaphoreCreateMutex();
     xTaskCreateAffinitySet(app_task, NULL, 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
-    // Keep main() thin: start the scheduler ASAP, run app init from a task.
+    // main(): no logging here. Start scheduler ASAP, do init/logging from tasks.
     while (1) { };
     return 0;
 }
