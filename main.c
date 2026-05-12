@@ -25,6 +25,7 @@
 #include "jconfig.h"
 #include "led/plain.h"
 #include "led/ws2812.h"
+#include "display/ssd1306.h"
 #include "pointing/pointer.h"
 #include "log.h"
 
@@ -157,6 +158,10 @@ static void app_task(void *pvParameters)
     }
     if (IS_GPIO_PIN(config.ws2812_pin)) {
         xTaskCreateAffinitySet(ws2812_task,   NULL, MIN_STACK_SIZE, &config.ws2812_pin, IDLE_PRIORITY, CORE1, NULL);
+    }
+
+    if (config.ssd1306.i2c_idx >= 0) {
+        xTaskCreateAffinitySet(ssd1306_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY, CORE1, NULL);
     }
 
     

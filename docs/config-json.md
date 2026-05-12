@@ -102,6 +102,27 @@ Optional I2C pin config (validated against RP2040 pin muxing):
 | `i2c1.sda` | `int8` | `-1`    | 2, 6, 10, 14, 18, 22, 26 |
 | `i2c1.scl` | `int8` | `-1`    | 3, 7, 11, 15, 19, 23, 27 |
 
+## SSD1306 OLED display (I2C)
+
+Optional SSD1306 OLED display over I2C. It uses a bus configured via `i2c0.*` / `i2c1.*`.
+
+| Field             | Type     | Default | Description |
+|-------------------|----------|---------|-------------|
+| `ssd1306.i2c_idx` | `int8`   | `-1`    | I2C bus index (`0` = `i2c0`, `1` = `i2c1`). Omit the whole `ssd1306` section to disable. |
+| `ssd1306.addr`    | `uint8`  | `60`    | 7-bit I2C address (`60` = `0x3c`). |
+| `ssd1306.width`   | `uint16` | `128`   | Display width in pixels. |
+| `ssd1306.height`  | `uint16` | `64`    | Display height in pixels (`32` or `64`). |
+
+Example:
+```json
+{
+    "i2c0": { "sda": 4, "scl": 5 },
+    "ssd1306": { "i2c_idx": 0, "addr": 60, "width": 128, "height": 64 }
+}
+```
+
+When enabled, the firmware uses the display as a simple status screen and shows CDC drop statistics (see `docs/logging.md`).
+
 ## SPI buses
 
 Optional SPI bus config (bus pins are validated against RP2040 pin muxing; device CS is just a plain GPIO):
