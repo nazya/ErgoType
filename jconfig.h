@@ -116,6 +116,19 @@ typedef struct {
     #undef FIELD
 } i2c_cfg_t;
 
+// SSD1306 OLED display (I2C).
+#define SSD1306_CFG_FIELDS \
+    FIELD(i2c_idx, int8_t, -1)  /* 0=i2c0, 1=i2c1; unset => disabled */ \
+    FIELD(addr, uint8_t, 60u)   /* 7-bit I2C address; 60=0x3c */ \
+    FIELD(width, uint16_t, 128u) \
+    FIELD(height, uint16_t, 64u)
+
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    SSD1306_CFG_FIELDS
+    #undef FIELD
+} ssd1306_cfg_t;
+
 // Define the config_t struct using the X-Macro
 typedef struct {
     #define FIELD(name, type, default_value) type name;
@@ -136,6 +149,9 @@ typedef struct {
     // I2C buses (pins only).
     uint8_t i2c_mask;
     i2c_cfg_t i2c[MAX_I2C];
+
+    // Optional SSD1306 display (I2C).
+    ssd1306_cfg_t ssd1306;
 
     // Drivers
     uint8_t nr_pmw3360;

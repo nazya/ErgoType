@@ -160,6 +160,12 @@ void dbg3config(const config_t *config)
     dbg3("config.i2c0={sda=%d,scl=%d}", (int)config->i2c[0].sda, (int)config->i2c[0].scl);
     dbg3("config.i2c1={sda=%d,scl=%d}", (int)config->i2c[1].sda, (int)config->i2c[1].scl);
 
+    dbg3("config.ssd1306={i2c_idx=%d,addr=%u,width=%u,height=%u}",
+         (int)config->ssd1306.i2c_idx,
+         (unsigned)config->ssd1306.addr,
+         (unsigned)config->ssd1306.width,
+         (unsigned)config->ssd1306.height);
+
     dbg3("config.nr_pmw3360=%u", config->nr_pmw3360);
     for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
         const pmw33xx_cfg_t *d = &config->pmw3360[i];
@@ -662,6 +668,60 @@ static void parse_i2c_buses(const char *json, size_t json_len, config_t *config)
     }
 }
 
+static void parse_ssd1306(const char *json, size_t json_len, config_t *config)
+{
+    JSONStatus_t result;
+    const char *start = NULL;
+    size_t length = 0;
+    JSONTypes_t type = JSONInvalid;
+
+    // Defaults.
+    #define FIELD(name, type, default_value) config->ssd1306.name = (type)(default_value);
+    SSD1306_CFG_FIELDS
+    #undef FIELD
+
+    result = JSON_SearchConst(json, json_len,
+                              "ssd1306", strlen("ssd1306"),
+                              &start, &length, &type);
+    if (result != JSONSuccess)
+        return;
+    if (type != JSONObject) {
+        err("ssd1306: expected object");
+        config->ssd1306.i2c_idx = -1;
+        return;
+    }
+
+    #define FIELD(name, type, default_value)                                           \
+        {                                                                              \
+            const char *value = NULL;                                                  \
+            size_t value_length = 0;                                                   \
+            JSONTypes_t value_type = JSONInvalid;                                      \
+            result = JSON_SearchConst(start, length,                                   \
+                                      #name, strlen(#name),                            \
+                                      &value, &value_length, &value_type);             \
+            if (result == JSONSuccess && value_type == JSONNumber) {                   \
+                char save = value[value_length];                                       \
+                ((char *)value)[value_length] = '\0';                                  \
+                config->ssd1306.name = (type)atoi(value);                              \
+                ((char *)value)[value_length] = save;                                  \
+            }                                                                          \
+        }
+    SSD1306_CFG_FIELDS
+    #undef FIELD
+
+    if ((uint8_t)config->ssd1306.i2c_idx >= MAX_I2C) {
+        err("ssd1306.i2c_idx: invalid %d", (int)config->ssd1306.i2c_idx);
+        config->ssd1306.i2c_idx = -1;
+        return;
+    }
+
+    if (!(config->i2c_mask & (uint8_t)(1u << (uint8_t)config->ssd1306.i2c_idx))) {
+        err("ssd1306: i2c%u is not configured", (unsigned)config->ssd1306.i2c_idx);
+        config->ssd1306.i2c_idx = -1;
+        return;
+    }
+}
+
 static uint8_t parse_sensor_role_name(const char *s, size_t len, uint8_t default_role)
 {
     if (len == 9 && memcmp(s, "mousemove", 9) == 0)
@@ -826,6 +886,7 @@ int parse(config_t *config, const char *filename) {
     
     parse_uart_buses(json, json_len, config);
     parse_i2c_buses(json, json_len, config);
+    parse_ssd1306(json, json_len, config);
 
 
     config->matrix.nr_rows = parse_pin_array(json, json_len, "gpio_rows", config->matrix.gpio_rows, MAX_GPIOS);

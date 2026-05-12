@@ -61,7 +61,9 @@ Windows:
 
 - **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring.
 
-- **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped. If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
+- **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped.
+  - If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
+  - If `ssd1306` is configured, the SSD1306 screen is updated to show drop statistics (`W=` writes, `B=` bytes).
 
 - **Flush gating (DTR):** the ring buffer is only drained when the host has opened the CDC port (`tud_cdc_connected()==true`, i.e. DTR=1). While DTR=0 we still buffer, but there is no backpressure — if the ring fills, new chunks are dropped.
 

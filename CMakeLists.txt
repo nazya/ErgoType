@@ -85,6 +85,7 @@ target_sources(${PROJECT_NAME} PUBLIC
 	        ${CMAKE_CURRENT_LIST_DIR}/log.c
 	        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
 	        ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
+	        ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
 		        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
 		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
 		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
@@ -129,6 +130,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 
         hardware_sync
         hardware_flash
+        hardware_i2c
         hardware_pio
         hardware_clocks
 
