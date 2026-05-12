@@ -22,7 +22,7 @@ See also: [`docs/logging.md`](logging.md).
 
 The GPIO “plain LED” is driven as a 32-step pattern advanced every 250 ms.
 
-- USB **unmounted**: fast blink (`LED_PATTERN_FAST`, ~250 ms toggle)
+- USB **unmounted**: fast blink (`LED_PATTERN_FAST`, ~200 ms toggle)
 - USB **mounted**: off (`pattern=0`)
 - USB **suspended**: “heartbeat” (one 250 ms on-pulse every ~8 s)
 - HID **CapsLock**: if the host sends the keyboard LED output report, the plain LED mirrors CapsLock (solid on/off).
@@ -34,4 +34,4 @@ If `ws2812_pin` is set, a single WS2812/NeoPixel can be used as a status LED.
 - **MSC mode**: **blue** = unmounted/idle, **red** = mounted/active, **green** = safe-ejected.
 - **CDC log drops**: a brief **red** blink is emitted when the CDC log buffer overflows.
 
-WS2812 brightness is currently fixed in code via the hardcoded color constants in `led/ws2812.h` (`WS2812_RED/GREEN/BLUE`).
+WS2812 brightness is currently fixed in code via the hardcoded color constants in `ui/ui.h` (`WS2812_RED/GREEN/BLUE`).

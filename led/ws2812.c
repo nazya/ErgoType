@@ -1,15 +1,11 @@
 #include "hardware/pio.h"
 #include "hardware/clocks.h"
 
-#include "FreeRTOS.h"
-#include "task.h"
-
 #include "ws2812.pio.h"
 
 #include "led/ws2812.h"
 
-#define FREQ 800000
-#define STEP_MS 250
+#define FREQ 800000u
 
 #ifndef WS2812_USE_WHITE_CHANNEL
 #define WS2812_USE_WHITE_CHANNEL 0
@@ -21,29 +17,9 @@
 #define IS_RGBW false
 #endif
 
-// 32-step ring, advanced every STEP_MS. Bit 0 is output first.
-static volatile uint32_t pattern = 0;
-static volatile uint32_t color = WS2812_OFF;
-static volatile bool pattern_loop = true;
-static TaskHandle_t ws2812_task_handle;
-
-static inline uint32_t rot_r32(uint32_t v)
-{
-    return (v >> 1) | (v << 31);
-}
-
-void ws2812_set(uint32_t c, uint32_t p, bool loop) {
-    color = c;
-    pattern = p;
-    pattern_loop = loop;
-
-    // Wake the WS2812 task so it applies the new pattern immediately (even if unchanged).
-    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
-        return;
-    TaskHandle_t h = ws2812_task_handle;
-    if (h)
-        xTaskNotifyGive(h);
-}
+static bool ws_ready;
+static PIO ws_pio;
+static uint ws_sm;
 
 static inline void put(PIO pio, uint sm, uint32_t grb) {
     if (IS_RGBW) {
@@ -69,39 +45,25 @@ static inline void init_sm(PIO pio, uint sm, uint off, uint pin, float freq, boo
     pio_sm_set_enabled(pio, sm, true);
 }
 
-void ws2812_task(void* pvParameters) {
-    const int8_t pin = *(const int8_t*)pvParameters;
+bool ws2812_hw_init(int8_t pin)
+{
+    ws_pio = pio0;
+    ws_sm = 0;
+    ws_ready = false;
+
     const uint pin_value = (uint)(uint8_t)pin;
-
-    const PIO pio = pio0;
-    const uint sm = 0;
-    bool ready = false;
-
-    if (pio_can_add_program(pio, &ws2812_program)) {
-        uint off = pio_add_program(pio, &ws2812_program);
-        init_sm(pio, sm, off, pin_value, FREQ, IS_RGBW);
-        ready = true;
+    if (pio_can_add_program(ws_pio, &ws2812_program)) {
+        uint off = pio_add_program(ws_pio, &ws2812_program);
+        init_sm(ws_pio, ws_sm, off, pin_value, (float)FREQ, IS_RGBW);
+        ws_ready = true;
     }
 
-    ws2812_task_handle = xTaskGetCurrentTaskHandle();
+    return ws_ready;
+}
 
-    uint32_t cur_pattern = pattern;
-    uint32_t cur_color = color;
-    bool loop = pattern_loop;
-
-    uint32_t ring = cur_pattern;
-
-    for (;;) {
-        if (ready)
-            put(pio, sm, (ring & 0x01u) ? cur_color : WS2812_OFF);
-
-        ring = loop ? rot_r32(ring) : (ring >> 1);
-
-        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STEP_MS))) {
-            cur_pattern = pattern;
-            cur_color = color;
-            loop = pattern_loop;
-            ring = cur_pattern;
-        }
-    }
+void ws2812_hw_put(uint32_t color)
+{
+    if (!ws_ready)
+        return;
+    put(ws_pio, ws_sm, color);
 }

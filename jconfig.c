@@ -157,8 +157,8 @@ void dbg3config(const config_t *config)
     dbg3("config.uart1={rx=%d,tx=%d}", (int)config->uart[1].rx, (int)config->uart[1].tx);
 
     dbg3("config.i2c_mask=0x%02x", config->i2c_mask);
-    dbg3("config.i2c0={sda=%d,scl=%d}", (int)config->i2c[0].sda, (int)config->i2c[0].scl);
-    dbg3("config.i2c1={sda=%d,scl=%d}", (int)config->i2c[1].sda, (int)config->i2c[1].scl);
+    dbg3("config.i2c0={sda=%d,scl=%d,baud=%lu}", (int)config->i2c[0].sda, (int)config->i2c[0].scl, (unsigned long)config->i2c[0].baud);
+    dbg3("config.i2c1={sda=%d,scl=%d,baud=%lu}", (int)config->i2c[1].sda, (int)config->i2c[1].scl, (unsigned long)config->i2c[1].baud);
 
     dbg3("config.ssd1306={i2c_idx=%d,addr=%u,width=%u,height=%u}",
          (int)config->ssd1306.i2c_idx,
@@ -558,17 +558,16 @@ static void parse_spi_buses(const char *json, size_t json_len, config_t *config)
                 if (result == JSONSuccess && value_type == JSONNumber) {                  \
                     char save = value[value_length];                                      \
                     ((char *)value)[value_length] = '\0';                                 \
-                    int num = atoi(value);                                                \
+                    int v = atoi(value);                                                  \
                     ((char *)value)[value_length] = save;                                 \
                     if (strcmp(#name, "baud") == 0) {                                     \
-                        config->spi[spi_idx].baud = (type)num;                            \
+                        config->spi[spi_idx].baud = (type)v;                              \
                     } else {                                                              \
-                        int pin = num;                                                    \
-                        if (spi_pin_valid(spi_idx, #name, pin)) {                         \
-                            config->spi[spi_idx].name = (type)pin;                        \
+                        if (spi_pin_valid(spi_idx, #name, v)) {                           \
+                            config->spi[spi_idx].name = (type)v;                          \
                             found += claim_gpio(config->spi[spi_idx].name);               \
                         } else {                                                          \
-                            err("spi%u." #name ": invalid GPIO %d", (unsigned)spi_idx, pin); \
+                            err("spi%u." #name ": invalid GPIO %d", (unsigned)spi_idx, v); \
                         }                                                                 \
                     }                                                                     \
                 }                                                                         \
@@ -651,13 +650,17 @@ static void parse_i2c_buses(const char *json, size_t json_len, config_t *config)
                 if (result == JSONSuccess && value_type == JSONNumber) {                   \
                     char save = value[value_length];                                       \
                     ((char *)value)[value_length] = '\0';                                  \
-                    int pin = atoi(value);                                                 \
+                    int v = atoi(value);                                                   \
                     ((char *)value)[value_length] = save;                                  \
-                    if (i2c_pin_valid(i2c_idx, #name, pin)) {                               \
-                        config->i2c[i2c_idx].name = (type)pin;                              \
-                        found += claim_gpio(config->i2c[i2c_idx].name);                     \
+                    if (strcmp(#name, "baud") == 0) {                                      \
+                        config->i2c[i2c_idx].baud = (type)v;                                \
                     } else {                                                               \
-                        err("i2c%u." #name ": invalid GPIO %d", (unsigned)i2c_idx, pin);    \
+                        if (i2c_pin_valid(i2c_idx, #name, v)) {                            \
+                            config->i2c[i2c_idx].name = (type)v;                           \
+                            found += claim_gpio(config->i2c[i2c_idx].name);                \
+                        } else {                                                           \
+                            err("i2c%u." #name ": invalid GPIO %d", (unsigned)i2c_idx, v); \
+                        }                                                                  \
                     }                                                                      \
                 }                                                                          \
             }

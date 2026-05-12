@@ -9,8 +9,7 @@
 #include "task.h"
 #include "timers.h"
 
-#include "led/ws2812.h"
-#include "display/ssd1306.h"
+#include "ui/ui.h"
 
 extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 
@@ -104,9 +103,7 @@ void stdio_tusb_cdc_write(const void *buf, size_t length)
 
     // If chunk still doesn't fit, drop the freshest bytes (the incoming chunk) and signal a drop.
     if ((BUFSIZE - pending_count) < length) {
-        // Visual signal for CDC drops: single red blink (one-shot, no loop).
-        ws2812_set(WS2812_RED, 0x01u, false);
-        ssd1306_notify_cdc_drop(length);
+        ui_notify_cdc_drop(length);
         if (tud_cdc_connected())
             usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
         return;
