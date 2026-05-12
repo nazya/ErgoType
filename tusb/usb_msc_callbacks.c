@@ -2,8 +2,7 @@
 // #include <bsp/board.h>
 #include <tusb.h>
 #include "flash.h"
-#include "led/plain.h"
-#include "led/ws2812.h"
+#include "ui/ui.h"
 #include "log.h"
 
 #define  DISK_BLOCK_NUM  128
@@ -12,13 +11,11 @@
 
 // whether host does safe-eject
 static bool ejected = false;
-static uint32_t last_ws2812_color = 0xFFFFFFFFu;
 // Invoked when received SCSI_CMD_INQUIRY
 // Application fill vendor id, product id and revision with string up to 8, 16, 4 characters respectively
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4])
 {
     (void) lun;
-    // dbg("msc inquiry");
 
     const char vid[] = "TinyUSB";
     const char pid[] = "Mass Storage";
@@ -33,12 +30,6 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 // return true allowing host to read/write this LUN e.g SD card inserted
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
     (void) lun;
-
-    uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
-    if (color != last_ws2812_color) {
-        ws2812_set(color, 0xFFFFFFFFu, true);
-        last_ws2812_color = color;
-    }
 
     // RAM disk is ready until ejected
     if (ejected) {
@@ -55,7 +46,6 @@ void tud_msc_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_siz
     (void) lun;
     *block_count = DISK_BLOCK_NUM;
     *block_size  = DISK_BLOCK_SIZE;
-    // dbg("msc capacity: blocks=%u block_size=%u", *block_count, *block_size);
 }
 
 // Invoked when received Start Stop Unit command
@@ -69,18 +59,11 @@ bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, boo
         if (start) {
             // load disk storage
             ejected = false;
-            // dbg("msc loaded");
-            gpio_led_set_pattern(LED_PATTERN_MEDIUM, true);
         } else {
             // unload disk storage
             ejected = true;
-            // dbg("msc ejected");
-            gpio_led_set_pattern(LED_PATTERN_FAST, true);
         }
     }
-
-    uint32_t color = ejected ? WS2812_GREEN : WS2812_RED;
-    ws2812_set(color, 0xFFFFFFFFu, true);
     
     return true;
 }
@@ -92,7 +75,6 @@ int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buff
     (void) offset;
     // out of ramdisk
     if (lba >= DISK_BLOCK_NUM) {
-        // warn("read10 out of ramdisk: lba=%u", lba);
         return -1;
     }
     flash_fat_read(lba, buffer);

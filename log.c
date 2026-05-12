@@ -6,6 +6,7 @@
 #include "log.h"
 
 #include "stdio_tusb_cdc.h"
+#include "ui/ui.h"
 
 #include "pico/printf.h"
 
@@ -110,17 +111,33 @@ static void sink_out(char character, void *arg)
 	sink->buf[sink->len++] = character;
 }
 
-void _msg(int level, const char *fmt, ...)
+static void vmsg(int level, const char *fmt, va_list ap)
 {
-	if (level > log_level)
-		return;
-
-	va_list ap;
-	va_start(ap, fmt);
 	xSemaphoreTake(log_mutex, portMAX_DELAY);
 	log_sink_t sink = {0};
 	vfctprintf(sink_out, &sink, colorize(fmt), ap);
 	xSemaphoreGive(log_mutex);
+}
+
+void _msg(int level, log_kind_t kind, const char *fmt, ...)
+{
+	if (level > log_level)
+		return;
+
+	switch (kind) {
+	case LOG_KIND_WARN:
+		ui_notify_warn();
+		break;
+	case LOG_KIND_ERR:
+		ui_notify_err();
+		break;
+	case LOG_KIND_MSG:
+		break;
+	}
+
+	va_list ap;
+	va_start(ap, fmt);
+	vmsg(level, fmt, ap);
 	va_end(ap);
 }
 

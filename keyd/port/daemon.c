@@ -17,8 +17,6 @@
 
 #include "FreeRTOS.h"
 
-#include "led/plain.h"
-
 #include "keyboard.h"
 #include "vkbd.h"
 #include "log.h"
