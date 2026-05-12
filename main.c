@@ -151,8 +151,8 @@ static void app_task(void *pvParameters)
     dbg3config(&config);
     
 
-    if (IS_GPIO_PIN(config.led_pin) ||
-        IS_GPIO_PIN(config.ws2812_pin) ||
+    if (config.nr_leds != 0 ||
+        config.ws2812_pin != -1 ||
         config.ssd1306.i2c_idx != -1) {
         TaskHandle_t ui_task_handle = NULL;
         xTaskCreateAffinitySet(ui_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY, CORE1, &ui_task_handle);

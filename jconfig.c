@@ -125,6 +125,11 @@ void dbg3config(const config_t *config)
     CONFIG_FIELDS
     #undef FIELD
 
+    dbg3("config.nr_leds=%u", config->nr_leds);
+
+    for (uint8_t i = 0; i < config->nr_leds; ++i)
+        dbg3("config.led_pins[%u]=%d", (unsigned)i, (int)config->led_pins[i]);
+
     dbg3("config.matrix.nr_rows=%u", config->matrix.nr_rows);
     dbg3("config.matrix.nr_cols=%u", config->matrix.nr_cols);
 
@@ -182,7 +187,6 @@ void dbg3config(const config_t *config)
              d->cpi);
     }
 }
-
 
 // Function to load cfguration from JSON file
 static int load(char **buffer, const char *filename) {
@@ -292,9 +296,9 @@ static uint8_t parse_pin_array(const char *json,
             ((char *)pair.value)[pair.valueLength] = '\0';
 
             // Convert the value to an integer and store it in the array
-            int pin = atoi(pair.value);
-            if (claim_gpio(pin))
-                array[element_count++] = (uint8_t)pin;
+            int v = atoi(pair.value);
+            if (claim_gpio(v))
+                array[element_count++] = (uint8_t)v;
 
             // Restore the original character
             ((char *)pair.value)[pair.valueLength] = save;
@@ -304,6 +308,15 @@ static uint8_t parse_pin_array(const char *json,
     }
 
     return element_count;
+}
+
+static void parse_led_pins(const char *json, size_t json_len, config_t *config)
+{
+    config->nr_leds = parse_pin_array(json,
+                                      json_len,
+                                      "led_pins",
+                                      (uint8_t *)config->led_pins,
+                                      MAX_LED);
 }
 
 static uint8_t lookup_keycode(const char *name)
@@ -838,11 +851,11 @@ static void parse_pmw3389_drivers(const char *json, size_t json_len, config_t *c
                           MAX_PMW3389);
 }
 
-int parse(config_t *config, const char *filename) {
+int parse(config_t *config, const char *filename)
+{
     #define FIELD(name, type, default_value) config->name = default_value;
     CONFIG_FIELDS
     #undef FIELD
-
 
     char *json = NULL;
     int json_len = load(&json, filename);
@@ -860,8 +873,7 @@ int parse(config_t *config, const char *filename) {
         return -1;
     }
 
-    
-        // Iterate over fields using the X-macro.
+    // Iterate over fields using the X-macro.
     #define FIELD(name, type, default_value)                              \
         {                                                                 \
             const char *value = NULL;                                     \
@@ -886,7 +898,8 @@ int parse(config_t *config, const char *filename) {
     #undef FIELD
 
     log_level = config->log_level;
-    
+
+    parse_led_pins(json, json_len, config);
     parse_uart_buses(json, json_len, config);
     parse_i2c_buses(json, json_len, config);
     parse_ssd1306(json, json_len, config);

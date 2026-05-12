@@ -35,5 +35,5 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
         return;
 
     uint8_t leds = buffer[0];
-    ui_led_set_pattern((leds & 0x02u) ? 0xFFFFFFFFu : 0u, true);
+    ui_led_set_pattern(0, (leds & 0x02u) ? 0xFFFFFFFFu : 0u, true);
 }

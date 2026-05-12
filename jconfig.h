@@ -16,6 +16,7 @@
 #define MAX_ENCODERS 2
 #define MAX_PMW3360 2
 #define MAX_PMW3389 2
+#define MAX_LED 2
 #define MAX_SPI 2
 #define MAX_UART 2
 #define MAX_I2C 2
@@ -38,7 +39,6 @@ typedef uint32_t matrix_row_t;
 // Include the config field definitions
 #define CONFIG_FIELDS \
     FIELD(log_level, int8_t, 0)  \
-    FIELD(led_pin, int8_t, -1)  \
     FIELD(ws2812_pin, int8_t, -1)  \
     FIELD(erase_pin, int8_t, -1)  \
     FIELD(nr_pressed_erase, int8_t, 9)  \
@@ -141,6 +141,8 @@ typedef struct {
     #define FIELD(name, type, default_value) type name;
     CONFIG_FIELDS
     #undef FIELD
+    uint8_t nr_leds;
+    int8_t led_pins[MAX_LED];
     matrix_t matrix;
     uint8_t nr_encoders;
     encoder_t encoders[MAX_ENCODERS];

@@ -22,7 +22,6 @@ This doc refers to nested fields using JSON “paths” (for example `uart0.rx` 
 | Field              | Type    | Default | Description |
 |--------------------|---------|---------|-------------|
 | `log_level`        | `int8`  | `0`     | Logging verbosity: `0` = only `msg`/`warn`/`err`, `1..3` enables `dbg..dbg3`. |
-| `led_pin`          | `int8`  | `-1`    | Optional GPIO “plain” status LED (active-high). |
 | `ws2812_pin`       | `int8`  | `-1`    | Optional WS2812/NeoPixel data pin. |
 | `erase_pin`        | `int8`  | `-1`    | Optional GPIO pin to force filesystem re-init at boot (active-low). |
 | `nr_pressed_erase` | `int8`  | `9`     | If `erase_pin` is unset/invalid, re-init filesystem when `nr_pressed >= nr_pressed_erase` at boot. Set to `0` to disable. |
@@ -30,6 +29,19 @@ This doc refers to nested fields using JSON “paths” (for example `uart0.rx` 
 | `nr_pressed_msc`   | `int8`  | `3`     | If `msc_pin` is unset/invalid, enter MSC mode when `nr_pressed >= nr_pressed_msc` at boot. Set to `0` to disable. |
 | `scan_period`      | `int8`  | `5`     | Key scan period in FreeRTOS ticks (tick rate is 1000 Hz, so 1 tick = 1 ms). |
 | `debounce`         | `int8`  | `9`     | Debounce time in milliseconds. Set to `0` to disable debouncing. |
+
+## Status LEDs (`led_pins`)
+
+`led_pins` is an optional array of GPIO pins for one or two “plain” status LEDs (active-high).
+Both pins, if provided, show the same blink pattern.
+
+```json
+{ "led_pins": [17] }
+```
+
+```json
+{ "led_pins": [17, 18] }
+```
 
 ## Matrix + `keymap`
 
