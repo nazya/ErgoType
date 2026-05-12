@@ -25,7 +25,7 @@ extern TaskHandle_t ui_handle;
 
 void ui_task(void *pvParameters);
 
-void ui_led_set_pattern(uint32_t pattern, bool loop);
+void ui_led_set_pattern(uint8_t led_idx, uint32_t pattern, bool loop);
 void ui_ws2812_set(uint32_t color, uint32_t pattern, bool loop);
 
 void ui_notify_cdc_drop(size_t bytes);

@@ -235,7 +235,7 @@ void ssd1306_clear(ssd1306_t *d)
     memset(d->fb, 0, sizeof(d->fb));
 }
 
-void ssd1306_putc(ssd1306_t *d, uint8_t col, uint8_t row, char c)
+void ssd1306_putc(ssd1306_t *d, uint8_t row, uint8_t col, char c)
 {
     if (row >= d->rows || col >= d->cols)
         return;
@@ -247,33 +247,33 @@ void ssd1306_putc(ssd1306_t *d, uint8_t col, uint8_t row, char c)
     d->fb[off] = 0x00;
 }
 
-void ssd1306_puts(ssd1306_t *d, uint8_t col, uint8_t row, const char *s)
+void ssd1306_puts(ssd1306_t *d, uint8_t row, uint8_t col, const char *s)
 {
     while (*s && col < d->cols) {
-        ssd1306_putc(d, col, row, *s++);
+        ssd1306_putc(d, row, col, *s++);
         col++;
     }
 }
 
-void ssd1306_box(ssd1306_t *d, uint8_t col, uint8_t row, uint8_t w, uint8_t h)
+void ssd1306_box(ssd1306_t *d, uint8_t row, uint8_t col, uint8_t w, uint8_t h)
 {
     if (w < 2 || h < 2)
         return;
 
-    ssd1306_putc(d, col, row, '+');
+    ssd1306_putc(d, row, col, '+');
     for (uint8_t x = 1; x < (uint8_t)(w - 1); ++x)
-        ssd1306_putc(d, (uint8_t)(col + x), row, '-');
-    ssd1306_putc(d, (uint8_t)(col + w - 1), row, '+');
+        ssd1306_putc(d, row, (uint8_t)(col + x), '-');
+    ssd1306_putc(d, row, (uint8_t)(col + w - 1), '+');
 
     for (uint8_t y = 1; y < (uint8_t)(h - 1); ++y) {
-        ssd1306_putc(d, col, (uint8_t)(row + y), '|');
-        ssd1306_putc(d, (uint8_t)(col + w - 1), (uint8_t)(row + y), '|');
+        ssd1306_putc(d, (uint8_t)(row + y), col, '|');
+        ssd1306_putc(d, (uint8_t)(row + y), (uint8_t)(col + w - 1), '|');
     }
 
-    ssd1306_putc(d, col, (uint8_t)(row + h - 1), '+');
+    ssd1306_putc(d, (uint8_t)(row + h - 1), col, '+');
     for (uint8_t x = 1; x < (uint8_t)(w - 1); ++x)
-        ssd1306_putc(d, (uint8_t)(col + x), (uint8_t)(row + h - 1), '-');
-    ssd1306_putc(d, (uint8_t)(col + w - 1), (uint8_t)(row + h - 1), '+');
+        ssd1306_putc(d, (uint8_t)(row + h - 1), (uint8_t)(col + x), '-');
+    ssd1306_putc(d, (uint8_t)(row + h - 1), (uint8_t)(col + w - 1), '+');
 }
 
 void ssd1306_flush(ssd1306_t *d)

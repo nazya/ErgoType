@@ -7,7 +7,7 @@ Using the RP2040 ProMicro, left-hand part configured as. Demo video: https://www
 {
     "log_level": 1,
     "uart0": { "rx": 13, "tx": 16 },
-    "led_pin": 17,
+    "led_pins": [17],
     "scan_period": 5,
     "debounce": 9,
     "pull_up_pins": [28, 29],

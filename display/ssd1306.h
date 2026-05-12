@@ -34,9 +34,9 @@ void ssd1306_init(ssd1306_t *d,
                   int scl);
 
 void ssd1306_clear(ssd1306_t *d);
-void ssd1306_putc(ssd1306_t *d, uint8_t col, uint8_t row, char c);
-void ssd1306_puts(ssd1306_t *d, uint8_t col, uint8_t row, const char *s);
-void ssd1306_box(ssd1306_t *d, uint8_t col, uint8_t row, uint8_t w, uint8_t h);
+void ssd1306_putc(ssd1306_t *d, uint8_t row, uint8_t col, char c);
+void ssd1306_puts(ssd1306_t *d, uint8_t row, uint8_t col, const char *s);
+void ssd1306_box(ssd1306_t *d, uint8_t row, uint8_t col, uint8_t w, uint8_t h);
 void ssd1306_flush(ssd1306_t *d);
 
 #endif
