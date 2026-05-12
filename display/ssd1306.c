@@ -290,3 +290,19 @@ void ssd1306_flush(ssd1306_t *d)
     const size_t n = (size_t)d->width * (size_t)d->pages;
     ssd1306_write_data(d, d->fb, n);
 }
+
+void ssd1306_flush_cols(ssd1306_t *d, uint8_t x0, uint8_t x1)
+{
+    const uint8_t page_end = (uint8_t)(d->pages - 1u);
+    const uint8_t addr_cmds[] = {
+        SSD1306_CMD_SET_COLUMN_ADDR, x0, x1,
+        SSD1306_CMD_SET_PAGE_ADDR, 0u, page_end,
+    };
+    ssd1306_write_cmds(d, addr_cmds, sizeof(addr_cmds));
+
+    const uint8_t span = (uint8_t)(x1 - x0 + 1u);
+    for (uint8_t page = 0; page < d->pages; ++page) {
+        const size_t off = (size_t)page * (size_t)d->width + (size_t)x0;
+        ssd1306_write_data(d, &d->fb[off], span);
+    }
+}
