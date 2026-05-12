@@ -101,11 +101,39 @@ typedef enum {
 typedef struct {
     ssd1306_t disp;
     ui_screen_t screen;
+    uint8_t spinner_y;
 } ui_state_t;
 
 static const char *ui_mode_str(void)
 {
     return mode == MSC ? "MSC" : "HID";
+}
+
+static void ui_spinner_draw(ui_state_t *ui)
+{
+    ssd1306_t *d = &ui->disp;
+    // Use the last 2 pixel columns (normally unused by the 6px text grid) as an activity spinner.
+    const uint8_t x0 = (uint8_t)(d->width - 2u);
+    const uint8_t x1 = (uint8_t)(d->width - 1u);
+
+    for (uint8_t page = 0; page < d->pages; ++page) {
+        const size_t off = (size_t)page * (size_t)d->width + (size_t)x0;
+        d->fb[off] = 0u;
+        d->fb[off + 1] = 0u;
+    }
+
+    for (uint8_t t = 0; t < 3u; ++t) {
+        uint8_t y = (uint8_t)(ui->spinner_y + t);
+        if (y >= d->height)
+            y = (uint8_t)(y - (uint8_t)d->height);
+        const uint8_t page = (uint8_t)(y >> 3);
+        const uint8_t bit = (uint8_t)(1u << (y & 7u));
+        const size_t off = (size_t)page * (size_t)d->width + (size_t)x0;
+        d->fb[off] |= bit;
+        d->fb[off + 1] |= bit;
+    }
+
+    ssd1306_flush_cols(d, x0, x1);
 }
 
 static void ui_render_boot(ui_state_t *ui)
@@ -185,6 +213,7 @@ void ui_task(void *pvParameters)
                          ui_warn_count,
                          ui_cdc_drop_writes,
                          ui_cdc_drop_bytes);
+        ui_spinner_draw(&ui);
     }
 
     uint32_t led_ring[MAX_LED] = {0};
@@ -222,12 +251,14 @@ void ui_task(void *pvParameters)
         }
 
         if (config->ssd1306.i2c_idx != -1 && ui.screen == UI_SCREEN_STATUS) {
-            if (events & (UI_EVT_WARN | UI_EVT_ERR | UI_EVT_CDC_DROP))
+            if (events & (UI_EVT_WARN | UI_EVT_ERR | UI_EVT_CDC_DROP)) {
                 ui_render_status(&ui,
                                  ui_err_count,
                                  ui_warn_count,
                                  ui_cdc_drop_writes,
                                  ui_cdc_drop_bytes);
+                ui_spinner_draw(&ui);
+            }
         }
 
         if (!(events & UI_EVT_TICK))
@@ -241,6 +272,13 @@ void ui_task(void *pvParameters)
         if (config->ws2812_pin != -1) {
             ws2812_hw_put((ws_ring & 0x01u) ? ws_color : WS2812_OFF);
             ws_ring = ws_loop ? rot_r32(ws_ring) : (ws_ring >> 1);
+        }
+
+        if (config->ssd1306.i2c_idx != -1 && ui.screen == UI_SCREEN_STATUS) {
+            ui_spinner_draw(&ui);
+            ui.spinner_y++;
+            if (ui.spinner_y >= ui.disp.height)
+                ui.spinner_y = 0;
         }
 
     }
