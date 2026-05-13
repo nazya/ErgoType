@@ -4,40 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "hardware/i2c.h"
+#include "jconfig.h"
 
-#define SSD1306_MAX_WIDTH 128u
-#define SSD1306_MAX_HEIGHT 64u
-#define SSD1306_FB_SIZE (SSD1306_MAX_WIDTH * (SSD1306_MAX_HEIGHT / 8u))
-
-typedef struct {
-    i2c_inst_t *i2c;
-    uint8_t addr;
-    uint16_t width;
-    uint16_t height;
-    uint8_t pages;
-    uint8_t cols;
-    uint8_t rows;
-    uint8_t fb[SSD1306_FB_SIZE];
-} ssd1306_t;
-
-void ssd1306_init(ssd1306_t *d,
-                  i2c_inst_t *i2c,
-                  uint8_t addr,
-                  uint16_t width,
-                  uint16_t height,
-                  uint32_t baud,
-                  uint8_t contrast,
-                  uint8_t precharge,
-                  uint8_t vcomh,
-                  int sda,
-                  int scl);
-
-void ssd1306_clear(ssd1306_t *d);
-void ssd1306_putc(ssd1306_t *d, uint8_t row, uint8_t col, char c);
-void ssd1306_puts(ssd1306_t *d, uint8_t row, uint8_t col, const char *s);
-void ssd1306_box(ssd1306_t *d, uint8_t row, uint8_t col, uint8_t w, uint8_t h);
-void ssd1306_flush(ssd1306_t *d);
-void ssd1306_flush_cols(ssd1306_t *d, uint8_t x0, uint8_t x1);
+void ssd1306_init(const ssd1306_cfg_t *cfg);
+void ssd1306_clear(const ssd1306_cfg_t *cfg);
+void ssd1306_clear_page(const ssd1306_cfg_t *cfg, uint8_t row);
+void ssd1306_write_page_span(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t x, const uint8_t *data, uint8_t n);
+void ssd1306_putn4x8(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, const char *s, size_t n);
+void ssd1306_putn6x8(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, const char *s, size_t n);
+void ssd1306_box(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, uint8_t w, uint8_t h);
 
 #endif
