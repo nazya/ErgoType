@@ -31,5 +31,7 @@ void ui_ws2812_set(uint32_t color, uint32_t pattern, bool loop);
 void ui_notify_cdc_drop(size_t bytes);
 void ui_notify_warn(void);
 void ui_notify_err(void);
+void ui_notify_cdc_connected(void);
+void ui_notify_cdc_disconnected(void);
 
 #endif

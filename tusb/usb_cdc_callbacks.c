@@ -1,5 +1,7 @@
 #include "tusb.h"
 
+#include "ui/ui.h"
+
 // Invoked when there is data available on CDC interface
 void tud_cdc_rx_cb(uint8_t itf)
 {
@@ -14,5 +16,8 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void) itf;
     (void) rts;
-    (void) dtr;
+    if (dtr)
+        ui_notify_cdc_connected();
+    else
+        ui_notify_cdc_disconnected();
 }

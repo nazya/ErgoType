@@ -26,6 +26,8 @@ extern uint8_t mode; // owned by main.c
 #define UI_TITLE_WIDTH_PX (UI_TITLE_LEN * 6u)
 #define UI_STATUS_MODE_LEN 3u
 #define UI_STATUS_MODE_COL (UI_TITLE_LEN + 1u)
+#define UI_STATUS_CDC_LEN 3u
+#define UI_STATUS_CDC_COL (UI_STATUS_MODE_COL + UI_STATUS_MODE_LEN + 1u)
 
 enum {
     UI_EVT_LED0            = 1u << 0,
@@ -49,6 +51,7 @@ static volatile uint32_t ui_warn_count;
 static volatile uint32_t ui_err_count;
 static volatile uint32_t ui_cdc_drop_writes;
 static volatile uint32_t ui_cdc_drop_bytes;
+static volatile bool ui_cdc_connected;
 
 static const char ui_title[] = "ErgoType";
 
@@ -94,6 +97,16 @@ void ui_notify_cdc_drop(size_t bytes)
     ui_cdc_drop_bytes += (uint32_t)bytes;
 }
 
+void ui_notify_cdc_connected(void)
+{
+    ui_cdc_connected = true;
+}
+
+void ui_notify_cdc_disconnected(void)
+{
+    ui_cdc_connected = false;
+}
+
 typedef enum {
     UI_SCREEN_BOOT = 0,
     UI_SCREEN_STATUS = 1,
@@ -102,6 +115,7 @@ typedef enum {
 typedef struct {
     const ssd1306_cfg_t *disp;
     ui_screen_t screen;
+    bool cdc_connected;
     uint32_t err_count;
     uint32_t warn_count;
     uint32_t cdc_drop_writes;
@@ -151,14 +165,19 @@ static void ui_draw_status_counts(ui_state_t *ui)
 
 static void ui_update_status_screen(ui_state_t *ui)
 {
-    if (ui->err_count == ui_err_count &&
-        ui->warn_count == ui_warn_count &&
-        ui->cdc_drop_writes == ui_cdc_drop_writes &&
-        ui->cdc_drop_bytes == ui_cdc_drop_bytes)
-        return;
+    if (ui->cdc_connected != ui_cdc_connected) {
+        ui->cdc_connected = ui_cdc_connected;
+        const char *s = ui->cdc_connected ? "CDC" : "   ";
+        ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, s, UI_STATUS_CDC_LEN);
+    }
 
-    ui_read_stats(ui);
-    ui_draw_status_counts(ui);
+    if (ui->err_count != ui_err_count ||
+        ui->warn_count != ui_warn_count ||
+        ui->cdc_drop_writes != ui_cdc_drop_writes ||
+        ui->cdc_drop_bytes != ui_cdc_drop_bytes) {
+        ui_read_stats(ui);
+        ui_draw_status_counts(ui);
+    }
 }
 
 static void ui_render_status_screen(ui_state_t *ui)
@@ -168,6 +187,8 @@ static void ui_render_status_screen(ui_state_t *ui)
     ssd1306_clear(ui->disp);
     ssd1306_putn6x8(ui->disp, 0, 0, ui_title, UI_TITLE_LEN);
     ssd1306_putn6x8(ui->disp, 0, UI_STATUS_MODE_COL, mode == MSC ? "MSC" : "HID", UI_STATUS_MODE_LEN);
+    ui->cdc_connected = ui_cdc_connected;
+    ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, ui->cdc_connected ? "CDC" : "   ", UI_STATUS_CDC_LEN);
     ssd1306_putn6x8(ui->disp, 2, 0, "CDC drops:", sizeof("CDC drops:") - 1u);
 
     for (size_t i = 0; i < UI_TITLE_LEN; ++i)
