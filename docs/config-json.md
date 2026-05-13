@@ -122,8 +122,8 @@ Optional SSD1306 OLED display over I2C. It uses a bus configured via `i2c0.*` / 
 |-------------------|----------|---------|-------------|
 | `ssd1306.i2c_idx` | `int8`   | `-1`    | I2C bus index (`0` = `i2c0`, `1` = `i2c1`). Omit the whole `ssd1306` section to disable. |
 | `ssd1306.addr`    | `uint8`  | `60`    | 7-bit I2C address (`60` = `0x3c`). |
-| `ssd1306.width`   | `uint16` | `128`   | Display width in pixels. |
-| `ssd1306.height`  | `uint16` | `64`    | Display height in pixels (`32` or `64`). |
+| `ssd1306.width`   | `uint8` | `128`   | Display width in pixels. |
+| `ssd1306.height`  | `uint8` | `64`    | Display height in pixels (`32` or `64`). |
 
 Example:
 ```json

@@ -124,8 +124,8 @@ typedef struct {
 #define SSD1306_CFG_FIELDS \
     FIELD(i2c_idx, int8_t, -1)  /* 0=i2c0, 1=i2c1; unset => disabled */ \
     FIELD(addr, uint8_t, 60u)   /* 7-bit I2C address; 60=0x3c */ \
-    FIELD(width, uint16_t, 128u) \
-    FIELD(height, uint16_t, 64u) \
+    FIELD(width, uint8_t, 128u) \
+    FIELD(height, uint8_t, 64u) \
     FIELD(contrast, uint8_t, 0x3Fu) /* default: low (minimally readable) */ \
     FIELD(precharge, uint8_t, 0x22u) /* 0xD9: phase 1/2 periods */ \
     FIELD(vcomh, uint8_t, 0x20u) /* 0xDB: VCOMH deselect level */

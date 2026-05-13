@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "hardware/gpio.h"
 #include "hardware/i2c.h"
 
 #include "FreeRTOS.h"
@@ -15,20 +16,24 @@
 
 #include "led/led.h"
 #include "led/ws2812.h"
+#include "display/px6x8_font.h"
 #include "display/ssd1306.h"
 
 extern uint8_t mode; // owned by main.c
 
 #define UI_STEP_MS 100u
+#define UI_TITLE_LEN (sizeof(ui_title) - 1u)
+#define UI_TITLE_WIDTH_PX (UI_TITLE_LEN * 6u)
+#define UI_STATUS_MODE_LEN 3u
+#define UI_STATUS_MODE_COL (UI_TITLE_LEN + 1u)
 
 enum {
-    UI_EVT_LED0     = 1u << 0,
-    UI_EVT_LED1     = 1u << 1,
-    UI_EVT_WS2812   = 1u << 2,
-    UI_EVT_WARN     = 1u << 3,
-    UI_EVT_ERR      = 1u << 4,
-    UI_EVT_CDC_DROP = 1u << 5,
-    UI_EVT_TICK     = 1u << 6,
+    UI_EVT_LED0            = 1u << 0,
+    UI_EVT_LED1            = 1u << 1,
+    UI_EVT_WS2812          = 1u << 2,
+    UI_EVT_SCREEN          = 1u << 3,
+    UI_EVT_STATUS          = 1u << 4,
+    UI_EVT_TICK            = 1u << 5,
 };
 
 TaskHandle_t ui_handle;
@@ -44,6 +49,8 @@ static volatile uint32_t ui_warn_count;
 static volatile uint32_t ui_err_count;
 static volatile uint32_t ui_cdc_drop_writes;
 static volatile uint32_t ui_cdc_drop_bytes;
+
+static const char ui_title[] = "ErgoType";
 
 static inline uint32_t rot_r32(uint32_t v)
 {
@@ -74,23 +81,17 @@ void ui_ws2812_set(uint32_t color, uint32_t pattern, bool loop)
 void ui_notify_warn(void)
 {
     ui_warn_count++;
-    xTaskNotify(ui_handle, UI_EVT_WARN, eSetBits);
 }
 
 void ui_notify_err(void)
 {
     ui_err_count++;
-    xTaskNotify(ui_handle, UI_EVT_ERR, eSetBits);
 }
 
 void ui_notify_cdc_drop(size_t bytes)
 {
     ui_cdc_drop_writes++;
     ui_cdc_drop_bytes += (uint32_t)bytes;
-    ui_ws2812_color = WS2812_RED;
-    ui_ws2812_pattern = 0x01u;
-    ui_ws2812_loop = false;
-    xTaskNotify(ui_handle, UI_EVT_WS2812 | UI_EVT_CDC_DROP, eSetBits);
 }
 
 typedef enum {
@@ -99,82 +100,94 @@ typedef enum {
 } ui_screen_t;
 
 typedef struct {
-    ssd1306_t disp;
+    const ssd1306_cfg_t *disp;
     ui_screen_t screen;
-    uint8_t spinner_y;
+    uint32_t err_count;
+    uint32_t warn_count;
+    uint32_t cdc_drop_writes;
+    uint32_t cdc_drop_bytes;
+    uint8_t title_span[UI_TITLE_WIDTH_PX];
 } ui_state_t;
-
-static const char *ui_mode_str(void)
-{
-    return mode == MSC ? "MSC" : "HID";
-}
-
-static void ui_spinner_draw(ui_state_t *ui)
-{
-    ssd1306_t *d = &ui->disp;
-    // Use the last 2 pixel columns (normally unused by the 6px text grid) as an activity spinner.
-    const uint8_t x0 = (uint8_t)(d->width - 2u);
-    const uint8_t x1 = (uint8_t)(d->width - 1u);
-
-    for (uint8_t page = 0; page < d->pages; ++page) {
-        const size_t off = (size_t)page * (size_t)d->width + (size_t)x0;
-        d->fb[off] = 0u;
-        d->fb[off + 1] = 0u;
-    }
-
-    for (uint8_t t = 0; t < 3u; ++t) {
-        uint8_t y = (uint8_t)(ui->spinner_y + t);
-        if (y >= d->height)
-            y = (uint8_t)(y - (uint8_t)d->height);
-        const uint8_t page = (uint8_t)(y >> 3);
-        const uint8_t bit = (uint8_t)(1u << (y & 7u));
-        const size_t off = (size_t)page * (size_t)d->width + (size_t)x0;
-        d->fb[off] |= bit;
-        d->fb[off + 1] |= bit;
-    }
-
-    ssd1306_flush_cols(d, x0, x1);
-}
 
 static void ui_render_boot(ui_state_t *ui)
 {
     const char *line0 = "ErgoType";
     const char *line1 = "firmware";
-    uint8_t col0 = (uint8_t)((ui->disp.cols - (uint8_t)strlen(line0)) / 2u);
-    uint8_t col1 = (uint8_t)((ui->disp.cols - (uint8_t)strlen(line1)) / 2u);
+    const uint8_t cols4x8 = ui->disp->width / 4u;
+    const uint8_t cols6x8 = ui->disp->width / 6u;
+    uint8_t col0 = (cols6x8 - strlen(line0)) / 2u;
+    uint8_t col1 = (cols4x8 - strlen(line1)) / 2u;
 
-    ssd1306_clear(&ui->disp);
-    ssd1306_puts(&ui->disp, 2, col0, line0);
-    ssd1306_puts(&ui->disp, 4, col1, line1);
-    ssd1306_flush(&ui->disp);
+    ssd1306_clear(ui->disp);
+    ssd1306_putn6x8(ui->disp, 2, col0, line0, strlen(line0));
+    ssd1306_putn4x8(ui->disp, 4, col1, line1, strlen(line1));
 }
 
-static void ui_render_status(ui_state_t *ui,
-                             uint32_t err_count,
-                             uint32_t warn_count,
-                             uint32_t drop_writes,
-                             uint32_t drop_bytes)
+static void ui_read_stats(ui_state_t *ui)
 {
-    char line0[22];
-    char line1[22];
-    char line2[22];
-    char line3[22];
-    char line4[22];
+    ui->err_count = ui_err_count;
+    ui->warn_count = ui_warn_count;
+    ui->cdc_drop_writes = ui_cdc_drop_writes;
+    ui->cdc_drop_bytes = ui_cdc_drop_bytes;
+}
 
-    (void)snprintf(line0, sizeof(line0), "ErgoType %s", ui_mode_str());
-    (void)snprintf(line1, sizeof(line1), "err=%lu warn=%lu",
-                   (unsigned long)err_count, (unsigned long)warn_count);
-    (void)snprintf(line2, sizeof(line2), "CDC drops:");
-    (void)snprintf(line3, sizeof(line3), "lines=%lu", (unsigned long)drop_writes);
-    (void)snprintf(line4, sizeof(line4), "bytes=%lu", (unsigned long)drop_bytes);
+static void ui_draw_status_counts(ui_state_t *ui)
+{
+    char line[22];
 
-    ssd1306_clear(&ui->disp);
-    ssd1306_puts(&ui->disp, 0, 0, line0);
-    ssd1306_puts(&ui->disp, 1, 0, line1);
-    ssd1306_puts(&ui->disp, 2, 0, line2);
-    ssd1306_puts(&ui->disp, 3, 0, line3);
-    ssd1306_puts(&ui->disp, 4, 0, line4);
-    ssd1306_flush(&ui->disp);
+    ssd1306_clear_page(ui->disp, 1);
+    (void)snprintf(line, sizeof(line), "err=%lu warn=%lu",
+                   (unsigned long)ui->err_count, (unsigned long)ui->warn_count);
+    ssd1306_putn4x8(ui->disp, 1, 0, line, strlen(line));
+
+    ssd1306_clear_page(ui->disp, 3);
+    (void)snprintf(line, sizeof(line), "lines=%lu", (unsigned long)ui->cdc_drop_writes);
+    ssd1306_putn4x8(ui->disp, 3, 0, line, strlen(line));
+
+    ssd1306_clear_page(ui->disp, 4);
+    (void)snprintf(line, sizeof(line), "bytes=%lu", (unsigned long)ui->cdc_drop_bytes);
+    ssd1306_putn4x8(ui->disp, 4, 0, line, strlen(line));
+}
+
+static void ui_update_status_screen(ui_state_t *ui)
+{
+    if (ui->err_count == ui_err_count &&
+        ui->warn_count == ui_warn_count &&
+        ui->cdc_drop_writes == ui_cdc_drop_writes &&
+        ui->cdc_drop_bytes == ui_cdc_drop_bytes)
+        return;
+
+    ui_read_stats(ui);
+    ui_draw_status_counts(ui);
+}
+
+static void ui_render_status_screen(ui_state_t *ui)
+{
+    ui_read_stats(ui);
+
+    ssd1306_clear(ui->disp);
+    ssd1306_putn6x8(ui->disp, 0, 0, ui_title, UI_TITLE_LEN);
+    ssd1306_putn6x8(ui->disp, 0, UI_STATUS_MODE_COL, mode == MSC ? "MSC" : "HID", UI_STATUS_MODE_LEN);
+    ssd1306_putn6x8(ui->disp, 2, 0, "CDC drops:", sizeof("CDC drops:") - 1u);
+
+    for (size_t i = 0; i < UI_TITLE_LEN; ++i)
+        memcpy(&ui->title_span[i * 6u], px6x8_glyphs[(uint8_t)ui_title[i]], 6u);
+
+    ui_draw_status_counts(ui);
+}
+
+static void ui_spin_status_title(ui_state_t *ui)
+{
+    const uint8_t first = ui->title_span[0];
+    memmove(ui->title_span, ui->title_span + 1u, UI_TITLE_WIDTH_PX - 1u);
+    ui->title_span[UI_TITLE_WIDTH_PX - 1u] = first;
+    ssd1306_write_page_span(ui->disp, 0, 0, ui->title_span, UI_TITLE_WIDTH_PX);
+}
+
+static void ui_tick_status_screen(ui_state_t *ui)
+{
+    ui_update_status_screen(ui);
+    ui_spin_status_title(ui);
 }
 
 void ui_task(void *pvParameters)
@@ -191,29 +204,25 @@ void ui_task(void *pvParameters)
 
     if (config->ssd1306.i2c_idx != -1) {
         static i2c_inst_t *const i2c_by_idx[MAX_I2C] = { i2c0, i2c1 };
-        const uint8_t bus = (uint8_t)config->ssd1306.i2c_idx;
-        i2c_inst_t *i2c = i2c_by_idx[bus];
-        ssd1306_init(&ui.disp,
-                     i2c,
-                     (uint8_t)config->ssd1306.addr,
-                     config->ssd1306.width,
-                     config->ssd1306.height,
-                     config->i2c[bus].baud,
-                     config->ssd1306.contrast,
-                     config->ssd1306.precharge,
-                     config->ssd1306.vcomh,
-                     config->i2c[bus].sda,
-                     config->i2c[bus].scl);
+        for (uint8_t bus = 0; bus < MAX_I2C; ++bus) {
+            if (!(config->i2c_mask & (uint8_t)(1u << bus)))
+                continue;
+            i2c_inst_t *i2c = i2c_by_idx[bus];
+            const i2c_cfg_t *bus_cfg = &config->i2c[bus];
+            gpio_set_function((uint)bus_cfg->sda, GPIO_FUNC_I2C);
+            gpio_set_function((uint)bus_cfg->scl, GPIO_FUNC_I2C);
+            gpio_pull_up((uint)bus_cfg->sda);
+            gpio_pull_up((uint)bus_cfg->scl);
+            (void)i2c_init(i2c, bus_cfg->baud);
+        }
+
+        ui.disp = &config->ssd1306;
+        ssd1306_init(ui.disp);
         ui.screen = UI_SCREEN_BOOT;
         ui_render_boot(&ui);
         vTaskDelay(pdMS_TO_TICKS(300u));
         ui.screen = UI_SCREEN_STATUS;
-        ui_render_status(&ui,
-                         ui_err_count,
-                         ui_warn_count,
-                         ui_cdc_drop_writes,
-                         ui_cdc_drop_bytes);
-        ui_spinner_draw(&ui);
+        ui_render_status_screen(&ui);
     }
 
     uint32_t led_ring[MAX_LED] = {0};
@@ -249,15 +258,13 @@ void ui_task(void *pvParameters)
             ws_loop = ui_ws2812_loop;
             ws_color = ui_ws2812_color;
         }
-
-        if (config->ssd1306.i2c_idx != -1 && ui.screen == UI_SCREEN_STATUS) {
-            if (events & (UI_EVT_WARN | UI_EVT_ERR | UI_EVT_CDC_DROP)) {
-                ui_render_status(&ui,
-                                 ui_err_count,
-                                 ui_warn_count,
-                                 ui_cdc_drop_writes,
-                                 ui_cdc_drop_bytes);
-                ui_spinner_draw(&ui);
+        if (config->ssd1306.i2c_idx != -1) {
+            if (events & UI_EVT_SCREEN) {
+                switch (ui.screen) {
+                case UI_SCREEN_STATUS:
+                    ui_render_status_screen(&ui);
+                    break;
+                }
             }
         }
 
@@ -274,12 +281,7 @@ void ui_task(void *pvParameters)
             ws_ring = ws_loop ? rot_r32(ws_ring) : (ws_ring >> 1);
         }
 
-        if (config->ssd1306.i2c_idx != -1 && ui.screen == UI_SCREEN_STATUS) {
-            ui_spinner_draw(&ui);
-            ui.spinner_y++;
-            if (ui.spinner_y >= ui.disp.height)
-                ui.spinner_y = 0;
-        }
-
+        if (config->ssd1306.i2c_idx != -1 && ui.screen == UI_SCREEN_STATUS)
+            ui_tick_status_screen(&ui);
     }
 }
