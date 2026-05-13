@@ -14,9 +14,7 @@
 extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 
 // Some host terminals/drivers drop the first bytes right after they open the CDC port
-// (DTR goes high). If the drop happens mid ANSI escape sequence, the remainder shows
-// up as visible "artifacts" like `4mErgoType/...` (tail of "\033[34m").
-//
+// (DTR goes high).
 // Delay the first transmit a little after a connect edge so the host has time to settle.
 #define CDC_SETTLE_MS 50u
 
@@ -26,8 +24,9 @@ extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 // Helps slow producer a bit so USB task can drain, reducing drops.
 // All values in ticks/bytes (no ms conversion inside).
 #define THROTTLE_MIN_FREE_BUFSIZE 512u
-#define THROTTLE_WAIT_TICKS 3u
-#define THROTTLE_MAX_WAIT_TICKS 70u
+#define THROTTLE_FIRST_WAIT_TICKS (pdMS_TO_TICKS(1024u))
+#define THROTTLE_MAX_WAIT_TICKS 16u
+#define THROTTLE_WAIT_TICKS 2u
 
 static uint8_t pending_buf[BUFSIZE];
 static uint32_t pending_wr;
@@ -43,12 +42,18 @@ static void stdio_tusb_cdc_kick_cb(void *);
 
 static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 {
-	// If the host hasn't opened the CDC port (DTR=0), stdio_tusb_cdc_poll() will not drain
-	// pending_buf. Waiting here would just stall the system (e.g. block app init / keyscan).
-	// Keep buffering best-effort and drop when full; never throttle on "not connected".
-	if (!tud_cdc_connected())
-		return;
+    static bool first_throttle = true;
+    TickType_t max_wait_ticks = THROTTLE_MAX_WAIT_TICKS;
 
+    if (first_throttle) {
+        first_throttle = false;
+        max_wait_ticks = THROTTLE_FIRST_WAIT_TICKS;
+    } else if (!tud_cdc_connected()) {
+        return;
+    }
+
+    // After the first throttle, avoid waiting when the host hasn't opened CDC (DTR=0).
+    // stdio_tusb_cdc_poll() will not drain pending_buf until then.
     TickType_t waited = 0;
 
     while (1) {
@@ -59,7 +64,7 @@ static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
         if (free_bytes >= free_target)
             return;
 
-        if (waited >= THROTTLE_MAX_WAIT_TICKS)
+        if (waited >= max_wait_ticks)
             break;
 
         usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
