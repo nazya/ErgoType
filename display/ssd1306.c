@@ -145,18 +145,22 @@ void ssd1306_putn4x8(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, const c
         ssd1306_write_data(cfg, px4x8_glyphs[(uint8_t)s[i]], 4u);
 }
 
-void ssd1306_putn6x8(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, const char *s, size_t n)
+void ssd1306_putn6x8_x(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t x, const char *s, size_t n)
 {
-    const uint8_t x0 = col * 6u;
-    const uint8_t x1 = x0 + n * 6u - 1u;
+    const uint8_t x1 = x + n * 6u - 1u;
     const uint8_t addr_cmds[] = {
-        SSD1306_CMD_SET_COLUMN_ADDR, x0, x1,
+        SSD1306_CMD_SET_COLUMN_ADDR, x, x1,
         SSD1306_CMD_SET_PAGE_ADDR, row, row,
     };
     ssd1306_write_cmds(cfg, addr_cmds, sizeof(addr_cmds));
 
     for (size_t i = 0; i < n; ++i)
         ssd1306_write_data(cfg, px6x8_glyphs[(uint8_t)s[i]], 6u);
+}
+
+void ssd1306_putn6x8(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, const char *s, size_t n)
+{
+    ssd1306_putn6x8_x(cfg, row, col * 6u, s, n);
 }
 
 void ssd1306_box(const ssd1306_cfg_t *cfg, uint8_t row, uint8_t col, uint8_t w, uint8_t h)

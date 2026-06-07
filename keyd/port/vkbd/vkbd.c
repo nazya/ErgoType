@@ -7,6 +7,7 @@
  */
 
 #include <string.h>
+#include <stdio.h>
 
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -16,6 +17,7 @@
 #include "keyd.h"
 #include "vkbd_event.h"
 #include "vkbd.h"
+#include "ui/ui.h"
 
 #define QUEUE_SEND_TIMEOUT_TICKS 3
 
@@ -135,7 +137,11 @@ static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)
 
 void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 {
+	char line[UI_KEYLOG_LINE_LEN + 1u];
+
 	dbg("output %s %s", KEY_NAME(code), state == 1 ? "down" : "up");
+	(void)snprintf(line, sizeof(line), "%s %s", KEY_NAME(code), state == 1 ? "down" : "up");
+	ui_notify_keyd(line);
 
 	write_key_event(vkbd, code, state);
 }
