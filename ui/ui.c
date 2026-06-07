@@ -21,13 +21,64 @@
 
 extern uint8_t mode; // owned by main.c
 
+/*
+ * Status row 0 layout (6x8 text unless noted otherwise):
+ *
+ * chars:  [0..3] title window ("Ergo" view)
+ *         [5..7] mode
+ *         [9..11] CDC
+ *
+ * pixels: [0..23]   title window (4 * 6)
+ *         [30..47]  mode (3 * 6)
+ *         [54..71]  CDC (3 * 6)
+ *         [72..73]  CDC warn '!'
+ *         [74..127] free tail after CDC warn
+ *
+ * title window:
+ *   start x = 0
+ *   width   = UI_TITLE_WIN_PX
+ *   chars   = UI_TITLE_WIN_COLS
+ *
+ * mode:
+ *   start col = UI_STATUS_MODE_COL
+ *   len chars = UI_STATUS_MODE_LEN
+ *   start x   = UI_STATUS_MODE_COL * 6
+ *   end x     = UI_STATUS_MODE_COL * 6 + UI_STATUS_MODE_LEN * 6 - 1
+ *
+ * CDC:
+ *   start col = UI_STATUS_CDC_COL
+ *   len chars = UI_STATUS_CDC_LEN
+ *   start x   = UI_STATUS_CDC_COL * 6
+ *   end x     = UI_STATUS_CDC_COL * 6 + UI_STATUS_CDC_LEN * 6 - 1
+ *
+ * CDC warn '!':
+ *   start x = UI_STATUS_CDC_WARN_X
+ *   width   = UI_STATUS_CDC_WARN_PX
+ *
+ * free tail after CDC warn:
+ *   start x   = UI_STATUS_AFTER_CDC_WARN_X
+ *   width px  = UI_STATUS_AFTER_CDC_WARN_PX
+ *   len 6x8   = UI_STATUS_AFTER_CDC_WARN_LEN6X8
+ */
 #define UI_STEP_MS 100u
 #define UI_TITLE_LEN (sizeof(ui_title) - 1u)
 #define UI_TITLE_WIDTH_PX (UI_TITLE_LEN * 6u)
+#define UI_TITLE_WIN_COLS 4u
+#define UI_TITLE_WIN_PX (UI_TITLE_WIN_COLS * 6u)
 #define UI_STATUS_MODE_LEN 3u
-#define UI_STATUS_MODE_COL (UI_TITLE_LEN + 1u)
+#define UI_STATUS_MODE_COL (UI_TITLE_WIN_COLS + 1u)
 #define UI_STATUS_CDC_LEN 3u
 #define UI_STATUS_CDC_COL (UI_STATUS_MODE_COL + UI_STATUS_MODE_LEN + 1u)
+#define UI_STATUS_CDC_WARN_PX 2u
+#define UI_STATUS_CDC_WARN_X ((UI_STATUS_CDC_COL + UI_STATUS_CDC_LEN) * 6u)
+#define UI_STATUS_AFTER_CDC_WARN_X (UI_STATUS_CDC_WARN_X + UI_STATUS_CDC_WARN_PX)
+#define UI_STATUS_AFTER_CDC_WARN_PX (128u - UI_STATUS_AFTER_CDC_WARN_X)
+#define UI_STATUS_AFTER_CDC_WARN_LEN6X8 (UI_STATUS_AFTER_CDC_WARN_PX / 6u)
+#define UI_KEYLOG_ROW0_WITH_STATUS 2u
+#define UI_KEYLOG_ROWS_WITH_STATUS 6u
+#define UI_KEYLOG_ROW0_NO_STATUS 1u
+#define UI_KEYLOG_ROWS_NO_STATUS 7u
+#define UI_KEYLOG_MAX_ROWS UI_KEYLOG_ROWS_NO_STATUS
 
 enum {
     UI_EVT_LED0            = 1u << 0,
@@ -36,6 +87,7 @@ enum {
     UI_EVT_SCREEN          = 1u << 3,
     UI_EVT_STATUS          = 1u << 4,
     UI_EVT_TICK            = 1u << 5,
+    UI_EVT_KEYLOG          = 1u << 6,
 };
 
 TaskHandle_t ui_handle;
@@ -52,6 +104,9 @@ static volatile uint32_t ui_err_count;
 static volatile uint32_t ui_cdc_drop_writes;
 static volatile uint32_t ui_cdc_drop_bytes;
 static volatile bool ui_cdc_connected;
+static char ui_keylog[UI_KEYLOG_MAX_ROWS][UI_KEYLOG_LINE_LEN + 1u];
+static volatile uint8_t ui_keylog_head;
+static volatile uint8_t ui_keylog_count;
 
 static const char ui_title[] = "ErgoType";
 
@@ -107,6 +162,22 @@ void ui_notify_cdc_disconnected(void)
     ui_cdc_connected = false;
 }
 
+void ui_notify_keyd(const char *s)
+{
+    char line[UI_KEYLOG_LINE_LEN + 1u] = {0};
+
+    (void)snprintf(line, sizeof(line), "%s", s);
+
+    memcpy(ui_keylog[ui_keylog_head], line, sizeof(line));
+    ui_keylog_head++;
+    if (ui_keylog_head == UI_KEYLOG_MAX_ROWS)
+        ui_keylog_head = 0;
+    if (ui_keylog_count != UI_KEYLOG_MAX_ROWS)
+        ui_keylog_count++;
+
+    xTaskNotify(ui_handle, UI_EVT_KEYLOG, eSetBits);
+}
+
 typedef enum {
     UI_SCREEN_BOOT = 0,
     UI_SCREEN_STATUS = 1,
@@ -150,25 +221,54 @@ static void ui_draw_status_counts(ui_state_t *ui)
     char line[22];
 
     ssd1306_clear_page(ui->disp, 1);
-    (void)snprintf(line, sizeof(line), "err=%lu warn=%lu",
-                   (unsigned long)ui->err_count, (unsigned long)ui->warn_count);
-    ssd1306_putn4x8(ui->disp, 1, 0, line, strlen(line));
+    if (ui->err_count || ui->warn_count || ui_keylog_count == 0) {
+        (void)snprintf(line, sizeof(line), "err=%lu warn=%lu",
+                       (unsigned long)ui->err_count, (unsigned long)ui->warn_count);
+        ssd1306_putn4x8(ui->disp, 1, 0, line, strlen(line));
+    }
+}
 
-    ssd1306_clear_page(ui->disp, 3);
-    (void)snprintf(line, sizeof(line), "lines=%lu", (unsigned long)ui->cdc_drop_writes);
-    ssd1306_putn4x8(ui->disp, 3, 0, line, strlen(line));
+static void ui_draw_keylog(ui_state_t *ui)
+{
+    char lines[UI_KEYLOG_MAX_ROWS][UI_KEYLOG_LINE_LEN + 1u] = {0};
+    const uint8_t row0 = (ui->err_count || ui->warn_count || ui_keylog_count == 0) ? UI_KEYLOG_ROW0_WITH_STATUS
+                                                                                     : UI_KEYLOG_ROW0_NO_STATUS;
+    const uint8_t rows = (ui->err_count || ui->warn_count || ui_keylog_count == 0) ? UI_KEYLOG_ROWS_WITH_STATUS
+                                                                                     : UI_KEYLOG_ROWS_NO_STATUS;
+    uint8_t head = 0;
+    uint8_t count = 0;
 
-    ssd1306_clear_page(ui->disp, 4);
-    (void)snprintf(line, sizeof(line), "bytes=%lu", (unsigned long)ui->cdc_drop_bytes);
-    ssd1306_putn4x8(ui->disp, 4, 0, line, strlen(line));
+    head = ui_keylog_head;
+    count = ui_keylog_count;
+    if (count > rows) {
+        count = rows;
+        ui_keylog_count = rows;
+    }
+    for (uint8_t i = 0; i < count; ++i) {
+        uint8_t idx = (uint8_t)(head + UI_KEYLOG_MAX_ROWS - count + i);
+        if (idx >= UI_KEYLOG_MAX_ROWS)
+            idx -= UI_KEYLOG_MAX_ROWS;
+        memcpy(lines[i], ui_keylog[idx], sizeof(lines[i]));
+    }
+
+    for (uint8_t i = 0; i < rows; ++i) {
+        ssd1306_clear_page(ui->disp, row0 + i);
+        ssd1306_putn4x8(ui->disp, row0 + i, 0, lines[i], strlen(lines[i]));
+    }
 }
 
 static void ui_update_status_screen(ui_state_t *ui)
 {
+    const uint8_t warn_span[UI_STATUS_CDC_WARN_PX] = {0x5Fu, 0x00u};
+    const uint8_t clear_span[UI_STATUS_CDC_WARN_PX] = {0x00u, 0x00u};
+
     if (ui->cdc_connected != ui_cdc_connected) {
         ui->cdc_connected = ui_cdc_connected;
         const char *s = ui->cdc_connected ? "CDC" : "   ";
         ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, s, UI_STATUS_CDC_LEN);
+        ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
+                                (ui->cdc_connected && ui_cdc_drop_writes) ? warn_span : clear_span,
+                                UI_STATUS_CDC_WARN_PX);
     }
 
     if (ui->err_count != ui_err_count ||
@@ -177,6 +277,10 @@ static void ui_update_status_screen(ui_state_t *ui)
         ui->cdc_drop_bytes != ui_cdc_drop_bytes) {
         ui_read_stats(ui);
         ui_draw_status_counts(ui);
+        ui_draw_keylog(ui);
+        ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
+                                (ui->cdc_connected && ui->cdc_drop_writes) ? warn_span : clear_span,
+                                UI_STATUS_CDC_WARN_PX);
     }
 }
 
@@ -185,16 +289,22 @@ static void ui_render_status_screen(ui_state_t *ui)
     ui_read_stats(ui);
 
     ssd1306_clear(ui->disp);
-    ssd1306_putn6x8(ui->disp, 0, 0, ui_title, UI_TITLE_LEN);
     ssd1306_putn6x8(ui->disp, 0, UI_STATUS_MODE_COL, mode == MSC ? "MSC" : "HID", UI_STATUS_MODE_LEN);
     ui->cdc_connected = ui_cdc_connected;
     ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, ui->cdc_connected ? "CDC" : "   ", UI_STATUS_CDC_LEN);
-    ssd1306_putn6x8(ui->disp, 2, 0, "CDC drops:", sizeof("CDC drops:") - 1u);
+    const uint8_t warn_span[UI_STATUS_CDC_WARN_PX] = {0x5Fu, 0x00u};
+    const uint8_t clear_span[UI_STATUS_CDC_WARN_PX] = {0x00u, 0x00u};
+    ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
+                            (ui->cdc_connected && ui->cdc_drop_writes) ? warn_span : clear_span,
+                            UI_STATUS_CDC_WARN_PX);
 
     for (size_t i = 0; i < UI_TITLE_LEN; ++i)
         memcpy(&ui->title_span[i * 6u], px6x8_glyphs[(uint8_t)ui_title[i]], 6u);
+    for (uint8_t x = 0; x < UI_TITLE_WIN_PX; x += 4u)
+        ssd1306_write_page_span(ui->disp, 0, x, &ui->title_span[x], 4u);
 
     ui_draw_status_counts(ui);
+    ui_draw_keylog(ui);
 }
 
 static void ui_spin_status_title(ui_state_t *ui)
@@ -202,7 +312,8 @@ static void ui_spin_status_title(ui_state_t *ui)
     const uint8_t first = ui->title_span[0];
     memmove(ui->title_span, ui->title_span + 1u, UI_TITLE_WIDTH_PX - 1u);
     ui->title_span[UI_TITLE_WIDTH_PX - 1u] = first;
-    ssd1306_write_page_span(ui->disp, 0, 0, ui->title_span, UI_TITLE_WIDTH_PX);
+    for (uint8_t x = 0; x < UI_TITLE_WIN_PX; x += 4u)
+        ssd1306_write_page_span(ui->disp, 0, x, &ui->title_span[x], 4u);
 }
 
 static void ui_tick_status_screen(ui_state_t *ui)
@@ -287,6 +398,8 @@ void ui_task(void *pvParameters)
                     break;
                 }
             }
+            if ((events & UI_EVT_KEYLOG) && ui.screen == UI_SCREEN_STATUS)
+                ui_draw_keylog(&ui);
         }
 
         if (!(events & UI_EVT_TICK))
