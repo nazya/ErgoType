@@ -499,6 +499,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		if (d) {
 			switch (d->op) {
 			case OP_LAYERM:
+			case OP_LAYOUTM:
 			case OP_ONESHOTM:
 			case OP_TOGGLEM:
 				macro = kbd->config.macros[d->args[1].idx];
@@ -613,6 +614,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			}
 			break;
 		case OP_LAYOUT:
+		case OP_LAYOUTM:
 			if (pressed)
 				setlayout(kbd, d->args[0].idx);
 
