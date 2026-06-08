@@ -77,6 +77,7 @@ const static struct {
 
 	{ "macro2", 	NULL,	OP_MACRO2,	{ ARG_TIMEOUT, ARG_TIMEOUT, ARG_MACRO } },
 	{ "setlayout", 	NULL,	OP_LAYOUT,	{ ARG_LAYOUT } },
+	{ "setlayoutm", NULL,	OP_LAYOUTM,	{ ARG_LAYOUT, ARG_MACRO } },
 
 	/* Experimental */
 	{ "scrollt", 	NULL,	OP_SCROLL_TOGGLE,		{ARG_SENSITIVITY} },
