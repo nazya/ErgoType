@@ -99,10 +99,14 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// if (!nr_listeners)
 	// 	return;
 
-	if (layer->type == LT_LAYOUT)
+	if (layer->type == LT_LAYOUT) {
 		bufsz = snprintf(buf, sizeof(buf), "/%s\n", layer->name);
-	else
+		on_layout_change(layer->name);
+	} else {
 		bufsz = snprintf(buf, sizeof(buf), "%c%s\n", state ? '+' : '-', layer->name);
+		if (layer == &kbd->config.layers[0])
+			on_layout_change(layer->name);
+	}
 
 	// for (i = 0; i < nr_listeners; i++) {
 	// 	ssize_t nw = write(listeners[i], buf, bufsz);
@@ -117,6 +121,15 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// 	nr_listeners = n;
 	// 	memcpy(listeners, keep, n * sizeof(int));
 	// }
+}
+
+static const char *active_layout_name(const struct keyboard *kbd)
+{
+	for (size_t i = 0; i < kbd->config.nr_layers; i++)
+		if (kbd->config.layers[i].type == LT_LAYOUT && kbd->layer_state[i].active)
+			return kbd->config.layers[i].name;
+
+	return kbd->config.layers[0].name;
 }
 
 static int process_keypress(struct keyboard *kbd, uint8_t code, int timestamp)
@@ -273,8 +286,10 @@ static void reload(void)
 	// 	gpio_led_set_pattern(0);
 	// }
 
-	if (active_kbd)
+	if (active_kbd) {
+		on_layout_change(active_layout_name(active_kbd));
 		msg("kbd initialized");
+	}
 
 	dbg("free heap size: %u bytes", xPortGetFreeHeapSize());
 }
