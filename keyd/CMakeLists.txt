@@ -22,6 +22,7 @@ add_library(keyd
   ${KEYD_PORT_DIR}/keyboard.c
   ${KEYD_PORT_DIR}/evloop.c
   ${KEYD_PORT_DIR}/daemon.c
+  ${KEYD_PORT_DIR}/hooks.c
   ${KEYD_PORT_DIR}/task.c
   ${KEYD_SRC_DIR}/unicode.c
   ${KEYD_PORT_DIR}/vkbd/vkbd.c
