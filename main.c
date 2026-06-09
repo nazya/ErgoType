@@ -53,6 +53,11 @@ bool uart_stdio_init(const config_t *config); // uart_stdio.c
 
 static void app_task(void *pvParameters);
 
+void on_layout_change(const char *name)
+{
+    ui_notify_layout(name);
+}
+
 int8_t init_and_read_pin(int pin) {
     if (!IS_GPIO_PIN(pin))
         return -1;
