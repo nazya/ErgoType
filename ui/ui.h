@@ -21,7 +21,7 @@
 #define LED_PATTERN_SLOW   0xFFFF0000u // 1600ms toggle (16 on, 16 off)
 
 // 128px / 4px = 32 chars max for one full-width 4x8 UI line.
-#define UI_KEYLOG_LINE_LEN 32u
+#define UI_OUTPUT_EVENT_LINE_LEN 32u
 
 // Owned by ui/ui.c, assigned by main.c right after xTaskCreate*().
 extern TaskHandle_t ui_handle;
@@ -36,6 +36,7 @@ void ui_notify_warn(void);
 void ui_notify_err(void);
 void ui_notify_cdc_connected(void);
 void ui_notify_cdc_disconnected(void);
-void ui_notify_keyd(const char *s);
+void ui_notify_output_event(const char *s);
+void ui_notify_layout(const char *name);
 
 #endif

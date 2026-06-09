@@ -26,13 +26,14 @@ extern uint8_t mode; // owned by main.c
  *
  * chars:  [0..3] title window ("Ergo" view)
  *         [5..7] mode
- *         [9..11] CDC
+ *         [9..17] layout window
+ *         [18..20] CDC
  *
  * pixels: [0..23]   title window (4 * 6)
  *         [30..47]  mode (3 * 6)
- *         [54..71]  CDC (3 * 6)
- *         [72..73]  CDC warn '!'
- *         [74..127] free tail after CDC warn
+ *         [54..107] layout window
+ *         [108..125] CDC (3 * 6)
+ *         [126..127] CDC warn '!'
  *
  * title window:
  *   start x = 0
@@ -45,6 +46,10 @@ extern uint8_t mode; // owned by main.c
  *   start x   = UI_STATUS_MODE_COL * 6
  *   end x     = UI_STATUS_MODE_COL * 6 + UI_STATUS_MODE_LEN * 6 - 1
  *
+ * layout:
+ *   start x  = UI_STATUS_LAYOUT_X
+ *   width px = UI_STATUS_LAYOUT_PX
+ *
  * CDC:
  *   start col = UI_STATUS_CDC_COL
  *   len chars = UI_STATUS_CDC_LEN
@@ -54,11 +59,6 @@ extern uint8_t mode; // owned by main.c
  * CDC warn '!':
  *   start x = UI_STATUS_CDC_WARN_X
  *   width   = UI_STATUS_CDC_WARN_PX
- *
- * free tail after CDC warn:
- *   start x   = UI_STATUS_AFTER_CDC_WARN_X
- *   width px  = UI_STATUS_AFTER_CDC_WARN_PX
- *   len 6x8   = UI_STATUS_AFTER_CDC_WARN_LEN6X8
  */
 #define UI_STEP_MS 100u
 #define UI_TITLE_LEN (sizeof(ui_title) - 1u)
@@ -68,17 +68,22 @@ extern uint8_t mode; // owned by main.c
 #define UI_STATUS_MODE_LEN 3u
 #define UI_STATUS_MODE_COL (UI_TITLE_WIN_COLS + 1u)
 #define UI_STATUS_CDC_LEN 3u
-#define UI_STATUS_CDC_COL (UI_STATUS_MODE_COL + UI_STATUS_MODE_LEN + 1u)
 #define UI_STATUS_CDC_WARN_PX 2u
-#define UI_STATUS_CDC_WARN_X ((UI_STATUS_CDC_COL + UI_STATUS_CDC_LEN) * 6u)
+#define UI_STATUS_CDC_WARN_X (128u - UI_STATUS_CDC_WARN_PX)
+#define UI_STATUS_CDC_COL ((UI_STATUS_CDC_WARN_X / 6u) - UI_STATUS_CDC_LEN)
 #define UI_STATUS_AFTER_CDC_WARN_X (UI_STATUS_CDC_WARN_X + UI_STATUS_CDC_WARN_PX)
 #define UI_STATUS_AFTER_CDC_WARN_PX (128u - UI_STATUS_AFTER_CDC_WARN_X)
 #define UI_STATUS_AFTER_CDC_WARN_LEN6X8 (UI_STATUS_AFTER_CDC_WARN_PX / 6u)
-#define UI_KEYLOG_ROW0_WITH_STATUS 2u
-#define UI_KEYLOG_ROWS_WITH_STATUS 6u
-#define UI_KEYLOG_ROW0_NO_STATUS 1u
-#define UI_KEYLOG_ROWS_NO_STATUS 7u
-#define UI_KEYLOG_MAX_ROWS UI_KEYLOG_ROWS_NO_STATUS
+#define UI_STATUS_LAYOUT_X ((UI_STATUS_MODE_COL + UI_STATUS_MODE_LEN + 1u) * 6u)
+#define UI_STATUS_LAYOUT_PX ((UI_STATUS_CDC_COL * 6u) - UI_STATUS_LAYOUT_X)
+#define UI_LAYOUT_NAME_LEN 32u
+#define UI_LAYOUT_SPAN_PX (UI_LAYOUT_NAME_LEN * 6u)
+#define UI_LAYOUT_WIN_PX UI_STATUS_LAYOUT_PX
+#define UI_OUTPUT_EVENTS_ROW0_WITH_STATUS 2u
+#define UI_OUTPUT_EVENTS_ROWS_WITH_STATUS 6u
+#define UI_OUTPUT_EVENTS_ROW0_NO_STATUS 1u
+#define UI_OUTPUT_EVENTS_ROWS_NO_STATUS 7u
+#define UI_OUTPUT_EVENTS_MAX_ROWS UI_OUTPUT_EVENTS_ROWS_NO_STATUS
 
 enum {
     UI_EVT_LED0            = 1u << 0,
@@ -87,7 +92,8 @@ enum {
     UI_EVT_SCREEN          = 1u << 3,
     UI_EVT_STATUS          = 1u << 4,
     UI_EVT_TICK            = 1u << 5,
-    UI_EVT_KEYLOG          = 1u << 6,
+    UI_EVT_OUTPUT_EVENTS   = 1u << 6,
+    UI_EVT_LAYOUT          = 1u << 7,
 };
 
 TaskHandle_t ui_handle;
@@ -104,9 +110,10 @@ static volatile uint32_t ui_err_count;
 static volatile uint32_t ui_cdc_drop_writes;
 static volatile uint32_t ui_cdc_drop_bytes;
 static volatile bool ui_cdc_connected;
-static char ui_keylog[UI_KEYLOG_MAX_ROWS][UI_KEYLOG_LINE_LEN + 1u];
-static volatile uint8_t ui_keylog_head;
-static volatile uint8_t ui_keylog_count;
+static char ui_layout_name[UI_LAYOUT_NAME_LEN + 1u];
+static char ui_output_events[UI_OUTPUT_EVENTS_MAX_ROWS][UI_OUTPUT_EVENT_LINE_LEN + 1u];
+static volatile uint8_t ui_output_events_head;
+static volatile uint8_t ui_output_events_count;
 
 static const char ui_title[] = "ErgoType";
 
@@ -162,20 +169,33 @@ void ui_notify_cdc_disconnected(void)
     ui_cdc_connected = false;
 }
 
-void ui_notify_keyd(const char *s)
+void ui_notify_output_event(const char *s)
 {
-    char line[UI_KEYLOG_LINE_LEN + 1u] = {0};
+    if (!ui_handle)
+        return;
+
+    char line[UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
 
     (void)snprintf(line, sizeof(line), "%s", s);
 
-    memcpy(ui_keylog[ui_keylog_head], line, sizeof(line));
-    ui_keylog_head++;
-    if (ui_keylog_head == UI_KEYLOG_MAX_ROWS)
-        ui_keylog_head = 0;
-    if (ui_keylog_count != UI_KEYLOG_MAX_ROWS)
-        ui_keylog_count++;
+    memcpy(ui_output_events[ui_output_events_head], line, sizeof(line));
+    ui_output_events_head++;
+    if (ui_output_events_head == UI_OUTPUT_EVENTS_MAX_ROWS)
+        ui_output_events_head = 0;
+    if (ui_output_events_count != UI_OUTPUT_EVENTS_MAX_ROWS)
+        ui_output_events_count++;
 
-    xTaskNotify(ui_handle, UI_EVT_KEYLOG, eSetBits);
+    xTaskNotify(ui_handle, UI_EVT_OUTPUT_EVENTS, eSetBits);
+}
+
+void ui_notify_layout(const char *name)
+{
+    if (!ui_handle)
+        return;
+
+    (void)snprintf(ui_layout_name, sizeof(ui_layout_name), "%s", name);
+
+    xTaskNotify(ui_handle, UI_EVT_LAYOUT, eSetBits);
 }
 
 typedef enum {
@@ -192,6 +212,11 @@ typedef struct {
     uint32_t cdc_drop_writes;
     uint32_t cdc_drop_bytes;
     uint8_t title_span[UI_TITLE_WIDTH_PX];
+    uint8_t layout_span[UI_LAYOUT_SPAN_PX];
+    uint8_t layout_span_len;
+    uint8_t layout_offset;
+    int8_t layout_dir;
+    bool layout_scroll;
 } ui_state_t;
 
 static void ui_render_boot(ui_state_t *ui)
@@ -216,39 +241,64 @@ static void ui_read_stats(ui_state_t *ui)
     ui->cdc_drop_bytes = ui_cdc_drop_bytes;
 }
 
-static void ui_draw_status_counts(ui_state_t *ui)
+static void ui_draw_diagnostics(ui_state_t *ui)
 {
     char line[22];
 
     ssd1306_clear_page(ui->disp, 1);
-    if (ui->err_count || ui->warn_count || ui_keylog_count == 0) {
+    if (ui->err_count || ui->warn_count || ui_output_events_count == 0) {
         (void)snprintf(line, sizeof(line), "err=%lu warn=%lu",
                        (unsigned long)ui->err_count, (unsigned long)ui->warn_count);
         ssd1306_putn4x8(ui->disp, 1, 0, line, strlen(line));
     }
 }
 
-static void ui_draw_keylog(ui_state_t *ui)
+static void ui_prepare_layout_span(ui_state_t *ui)
 {
-    char lines[UI_KEYLOG_MAX_ROWS][UI_KEYLOG_LINE_LEN + 1u] = {0};
-    const uint8_t row0 = (ui->err_count || ui->warn_count || ui_keylog_count == 0) ? UI_KEYLOG_ROW0_WITH_STATUS
-                                                                                     : UI_KEYLOG_ROW0_NO_STATUS;
-    const uint8_t rows = (ui->err_count || ui->warn_count || ui_keylog_count == 0) ? UI_KEYLOG_ROWS_WITH_STATUS
-                                                                                     : UI_KEYLOG_ROWS_NO_STATUS;
+    size_t len = strlen(ui_layout_name);
+
+    memset(ui->layout_span, 0, sizeof(ui->layout_span));
+    for (size_t i = 0; i < len; ++i)
+        memcpy(&ui->layout_span[i * 6u], px6x8_glyphs[(uint8_t)ui_layout_name[i]], 6u);
+
+    ui->layout_span_len = (uint8_t)(len * 6u);
+    ui->layout_scroll = len * 6u > UI_LAYOUT_WIN_PX;
+    ui->layout_offset = 0;
+    ui->layout_dir = 1;
+}
+
+static void ui_draw_layout(ui_state_t *ui)
+{
+    uint8_t span[UI_LAYOUT_WIN_PX] = {0};
+    uint8_t n = ui->layout_span_len;
+
+    if (n > UI_LAYOUT_WIN_PX)
+        n = UI_LAYOUT_WIN_PX;
+    memcpy(span, ui->layout_span + ui->layout_offset, n);
+    ssd1306_write_page_span(ui->disp, 0, UI_STATUS_LAYOUT_X, span, UI_LAYOUT_WIN_PX);
+}
+
+static void ui_draw_output_events(ui_state_t *ui)
+{
+    char lines[UI_OUTPUT_EVENTS_MAX_ROWS][UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
+    const uint8_t row0 = (ui->err_count || ui->warn_count || ui_output_events_count == 0) ? UI_OUTPUT_EVENTS_ROW0_WITH_STATUS
+                                                                                          : UI_OUTPUT_EVENTS_ROW0_NO_STATUS;
+    const uint8_t rows = (ui->err_count || ui->warn_count || ui_output_events_count == 0) ? UI_OUTPUT_EVENTS_ROWS_WITH_STATUS
+                                                                                          : UI_OUTPUT_EVENTS_ROWS_NO_STATUS;
     uint8_t head = 0;
     uint8_t count = 0;
 
-    head = ui_keylog_head;
-    count = ui_keylog_count;
+    head = ui_output_events_head;
+    count = ui_output_events_count;
     if (count > rows) {
         count = rows;
-        ui_keylog_count = rows;
+        ui_output_events_count = rows;
     }
     for (uint8_t i = 0; i < count; ++i) {
-        uint8_t idx = (uint8_t)(head + UI_KEYLOG_MAX_ROWS - count + i);
-        if (idx >= UI_KEYLOG_MAX_ROWS)
-            idx -= UI_KEYLOG_MAX_ROWS;
-        memcpy(lines[i], ui_keylog[idx], sizeof(lines[i]));
+        uint8_t idx = (uint8_t)(head + UI_OUTPUT_EVENTS_MAX_ROWS - count + i);
+        if (idx >= UI_OUTPUT_EVENTS_MAX_ROWS)
+            idx -= UI_OUTPUT_EVENTS_MAX_ROWS;
+        memcpy(lines[i], ui_output_events[idx], sizeof(lines[i]));
     }
 
     for (uint8_t i = 0; i < rows; ++i) {
@@ -257,7 +307,7 @@ static void ui_draw_keylog(ui_state_t *ui)
     }
 }
 
-static void ui_update_status_screen(ui_state_t *ui)
+static void ui_update_status_indicators(ui_state_t *ui)
 {
     const uint8_t warn_span[UI_STATUS_CDC_WARN_PX] = {0x5Fu, 0x00u};
     const uint8_t clear_span[UI_STATUS_CDC_WARN_PX] = {0x00u, 0x00u};
@@ -276,8 +326,8 @@ static void ui_update_status_screen(ui_state_t *ui)
         ui->cdc_drop_writes != ui_cdc_drop_writes ||
         ui->cdc_drop_bytes != ui_cdc_drop_bytes) {
         ui_read_stats(ui);
-        ui_draw_status_counts(ui);
-        ui_draw_keylog(ui);
+        ui_draw_diagnostics(ui);
+        ui_draw_output_events(ui);
         ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
                                 (ui->cdc_connected && ui->cdc_drop_writes) ? warn_span : clear_span,
                                 UI_STATUS_CDC_WARN_PX);
@@ -303,8 +353,10 @@ static void ui_render_status_screen(ui_state_t *ui)
     for (uint8_t x = 0; x < UI_TITLE_WIN_PX; x += 4u)
         ssd1306_write_page_span(ui->disp, 0, x, &ui->title_span[x], 4u);
 
-    ui_draw_status_counts(ui);
-    ui_draw_keylog(ui);
+    ui_prepare_layout_span(ui);
+    ui_draw_layout(ui);
+    ui_draw_diagnostics(ui);
+    ui_draw_output_events(ui);
 }
 
 static void ui_spin_status_title(ui_state_t *ui)
@@ -316,10 +368,27 @@ static void ui_spin_status_title(ui_state_t *ui)
         ssd1306_write_page_span(ui->disp, 0, x, &ui->title_span[x], 4u);
 }
 
+static void ui_bounce_status_layout(ui_state_t *ui)
+{
+    if (!ui->layout_scroll)
+        return;
+
+    uint8_t max_offset = ui->layout_span_len - UI_LAYOUT_WIN_PX;
+
+    if (ui->layout_offset == 0)
+        ui->layout_dir = 1;
+    else if (ui->layout_offset == max_offset)
+        ui->layout_dir = -1;
+
+    ui->layout_offset = (uint8_t)(ui->layout_offset + ui->layout_dir);
+    ui_draw_layout(ui);
+}
+
 static void ui_tick_status_screen(ui_state_t *ui)
 {
-    ui_update_status_screen(ui);
+    ui_update_status_indicators(ui);
     ui_spin_status_title(ui);
+    ui_bounce_status_layout(ui);
 }
 
 void ui_task(void *pvParameters)
@@ -398,8 +467,12 @@ void ui_task(void *pvParameters)
                     break;
                 }
             }
-            if ((events & UI_EVT_KEYLOG) && ui.screen == UI_SCREEN_STATUS)
-                ui_draw_keylog(&ui);
+            if ((events & UI_EVT_OUTPUT_EVENTS) && ui.screen == UI_SCREEN_STATUS)
+                ui_draw_output_events(&ui);
+            if ((events & UI_EVT_LAYOUT) && ui.screen == UI_SCREEN_STATUS) {
+                ui_prepare_layout_span(&ui);
+                ui_draw_layout(&ui);
+            }
         }
 
         if (!(events & UI_EVT_TICK))

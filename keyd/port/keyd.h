@@ -24,5 +24,6 @@ struct event {
 
 int run_daemon(void);
 int evloop(int (*event_handler)(struct event *ev));
+void on_layout_change(const char *name);
 
 #endif
