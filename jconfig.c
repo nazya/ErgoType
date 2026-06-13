@@ -126,7 +126,7 @@ void dbg3config(const config_t *config)
     #define FIELD(name, type, default_value) dbg3("config.%s=%d", #name, (int)config->name);
     CONFIG_FIELDS
     #undef FIELD
-    dbg3("config.os=%s", config->os ? config->os : "NULL");
+    dbg3("config.overlay_conf=%s", config->overlay_conf ? config->overlay_conf : "NULL");
 
     dbg3("config.nr_leds=%u", config->nr_leds);
 
@@ -887,9 +887,9 @@ int parse(config_t *config, const char *filename)
                                         &value_type);                       \
             if (result != JSONSuccess) {                                  \
             } else if (value_type == JSONString) {                        \
-                static char s[MAX_OS_NAME_LEN];                           \
+                static char s[MAX_FILE_NAME];                             \
                 snprintf(s, sizeof(s), "%.*s", (int)value_length, value); \
-                config->os = s;                                           \
+                config->overlay_conf = s;                                 \
             } else if (value_type == JSONNumber) {                        \
                 char save = value[value_length];                          \
                 ((char *)value)[value_length] = '\0';                     \
@@ -905,7 +905,7 @@ int parse(config_t *config, const char *filename)
     #undef FIELD
 
     log_level = config->log_level;
-    keyd_overlay_conf = config->os;
+    keyd_overlay_conf = config->overlay_conf;
 
     parse_led_pins(json, json_len, config);
     parse_uart_buses(json, json_len, config);
