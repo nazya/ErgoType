@@ -1521,17 +1521,7 @@ int config_parse(struct config *config)
 {
 	memset(config, 0, sizeof *config);
 	config_init(config); // invalid macro here
-
-	if (config_parse_file(config, "default.conf") < 0)
-		return -1;
-
-	if (keyd_overlay_conf) {
-		char overlay_conf[16];
-		snprintf(overlay_conf, sizeof(overlay_conf), "%s.conf", keyd_overlay_conf);
-		return config_parse_file(config, overlay_conf);
-	}
-
-	return 0;
+	return config_parse_file(config, "default.conf");
 }
 
 
