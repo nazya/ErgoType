@@ -6,11 +6,11 @@ Motivation:
 - Put OS-specific differences into small overlay files.
 - Common differences are layout shortcuts, Command/Control ergonomics, and non-English symbol bindings.
 
-`config.json` can set `os` to select a small keyd overlay. The value is a bare name; keyd appends `.conf`.
+`config.json` can set `overlay_conf` to select a small keyd overlay.
 
 ```json
 {
-  "os": "macos"
+  "overlay_conf": "macos.conf"
 }
 ```
 
@@ -19,7 +19,7 @@ With this config, files on the Pico FAT volume are loaded in this order:
 1. `default.conf`
 2. `macos.conf`
 
-If `os` is not set, only `default.conf` is loaded. If `os` is set, the overlay file must exist.
+If `overlay_conf` is not set, only `default.conf` is loaded.
 
 Overlay rules:
 
