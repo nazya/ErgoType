@@ -336,23 +336,29 @@ bool debounce(matrix_row_t* raw_matrix, matrix_row_t* debounced_matrix, uint8_t 
     return changed;
 }
 
-uint8_t count_pressed_keys(matrix_t* matrix) {
+uint8_t count_pressed_keys(config_t *config, uint8_t *single_code) {
     matrix_row_t raw_matrix[MAX_GPIOS] = {0};
     uint8_t pressed_count = 0;
+    uint8_t code = 0;
 
     // Scan the matrix once
-    matrix_init(matrix);
-    matrix_scan(matrix, raw_matrix);
+    matrix_init(&config->matrix);
+    matrix_scan(&config->matrix, raw_matrix);
 
     // Count the pressed keys
-    for (uint8_t row = 0; row < matrix->nr_rows; row++) {
-        for (uint8_t col = 0; col < matrix->nr_cols; col++) {
+    for (uint8_t row = 0; row < config->matrix.nr_rows; row++) {
+        for (uint8_t col = 0; col < config->matrix.nr_cols; col++) {
             if (raw_matrix[row] & ((matrix_row_t)1 << col)) {
-                pressed_count++;
+                if (!is_encoder_channel(config, row, col)) {
+                    pressed_count++;
+                    if (pressed_count == 1)
+                        code = config->matrix.keymap[row][col];
+                }
             }
         }
     }
 
+    *single_code = pressed_count == 1 ? code : 0;
     return pressed_count;
 }
 
