@@ -13,6 +13,8 @@
 #include "jconfig.h"
 #include "keys.h"
 
+extern const char *keyd_overlay_conf;
+
 #define GPIO_PULL_UP(pin)       \
     do {                        \
         gpio_init(pin);         \
@@ -124,6 +126,7 @@ void dbg3config(const config_t *config)
     #define FIELD(name, type, default_value) dbg3("config.%s=%d", #name, (int)config->name);
     CONFIG_FIELDS
     #undef FIELD
+    dbg3("config.os=%s", config->os ? config->os : "NULL");
 
     dbg3("config.nr_leds=%u", config->nr_leds);
 
@@ -798,15 +801,14 @@ static void parse_pmw33xx_drivers(const char *json,
                 result = JSON_SearchConst(pair.value, pair.valueLength,                        \
                                           #name, strlen(#name),                                \
                                           &value, &value_length, &value_type);                \
-                    if (result == JSONSuccess) {                                                  \
-                    if (strcmp(#name, "role") == 0 && value_type == JSONString) {                 \
-                        dev.role = parse_sensor_role_name(value, value_length, dev.role);         \
-                    } else if (strcmp(#name, "role") != 0 && value_type == JSONNumber) {      \
-                        char save = value[value_length];                                      \
-                        ((char *)value)[value_length] = '\0';                                 \
-                        dev.name = (type)atoi(value);                                         \
-                        ((char *)value)[value_length] = save;                                 \
-                    }                                                                         \
+                if (result != JSONSuccess) {                                                  \
+                } else if (strcmp(#name, "role") == 0 && value_type == JSONString) {         \
+                    dev.role = parse_sensor_role_name(value, value_length, dev.role);         \
+                } else if (strcmp(#name, "role") != 0 && value_type == JSONNumber) {         \
+                    char save = value[value_length];                                          \
+                    ((char *)value)[value_length] = '\0';                                     \
+                    dev.name = (type)atoi(value);                                             \
+                    ((char *)value)[value_length] = save;                                     \
                 }                                                                             \
             }
         PMW33XX_FIELDS(SENSOR_ROLE_MOUSEMOVE)
@@ -883,7 +885,12 @@ int parse(config_t *config, const char *filename)
                                         #name, strlen(#name),               \
                                         &value, &value_length,              \
                                         &value_type);                       \
-            if (result == JSONSuccess && value_type == JSONNumber) {      \
+            if (result != JSONSuccess) {                                  \
+            } else if (value_type == JSONString) {                        \
+                static char s[MAX_OS_NAME_LEN];                           \
+                snprintf(s, sizeof(s), "%.*s", (int)value_length, value); \
+                config->os = s;                                           \
+            } else if (value_type == JSONNumber) {                        \
                 char save = value[value_length];                          \
                 ((char *)value)[value_length] = '\0';                     \
                 int v = atoi(value);                                      \
@@ -898,6 +905,7 @@ int parse(config_t *config, const char *filename)
     #undef FIELD
 
     log_level = config->log_level;
+    keyd_overlay_conf = config->os;
 
     parse_led_pins(json, json_len, config);
     parse_uart_buses(json, json_len, config);

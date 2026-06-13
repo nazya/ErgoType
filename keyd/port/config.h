@@ -125,7 +125,7 @@ struct config {
 	struct layer layers[MAX_LAYERS];
 
 	/* Auxiliary descriptors used by layer bindings. */
-	struct descriptor descriptors[256];
+	struct descriptor descriptors[512];
 	struct macro *macros[MAX_MACROS];
 	// struct command commands[64];
 	
@@ -159,6 +159,7 @@ uint8_t lookup_keycode(const char *name);
 int config_parse(struct config *config);
 int config_add_entry(struct config *config, const char *exp);
 int config_get_layer_index(const struct config *config, const char *name);
+extern const char *keyd_overlay_conf;
 
 // int config_check_match(struct config *config, const char *id, uint8_t flags);
 
