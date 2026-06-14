@@ -54,8 +54,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "device.h"
 #include "keys.h"
 
-extern QueueHandle_t input_event_queue;
-
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
 static bool debouncing = false;
@@ -94,7 +92,8 @@ static void send_key_tap(QueueHandle_t queue, uint8_t code)
 
 static void process_encoders(const config_t *config,
                              encoder_state_t *states,
-                             const matrix_row_t *raw_matrix)
+                             const matrix_row_t *raw_matrix,
+                             QueueHandle_t keyscan_event_queue)
 {
     static const int8_t quad_table[16] = {
         0, -1, 1, 0,
@@ -131,11 +130,11 @@ static void process_encoders(const config_t *config,
 
         while (st->accum >= (int16_t)enc->div) {
             st->accum -= (int16_t)enc->div;
-            send_key_tap(input_event_queue, config->matrix.keymap[enc->a][enc->c]);
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->a][enc->c]);
         }
         while (st->accum <= -(int16_t)enc->div) {
             st->accum += (int16_t)enc->div;
-            send_key_tap(input_event_queue, config->matrix.keymap[enc->b][enc->c]);
+            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->b][enc->c]);
         }
     }
 }
@@ -366,6 +365,7 @@ uint8_t count_pressed_keys(config_t *config, uint8_t *single_code) {
 // Main matrix scanning task
 void keyscan_task(void* pvParameters) {
     config_t *config = (config_t *)pvParameters;
+    QueueHandle_t keyscan_event_queue;
     debouncing_time = config->debounce;
     debouncing = (debouncing_time > 0);
     // matrix_t* matrix = (matrix_t*)pvParameters;
@@ -378,6 +378,23 @@ void keyscan_task(void* pvParameters) {
     struct device_event devev;
     devev.type = DEV_KEY;
 
+    struct device onboard_keyboard = {
+        .capabilities = CAP_KEY | CAP_KEYBOARD,
+        .id = "cafe:1001",
+        .name = "keyboard",
+    };
+    onboard_keyboard.events = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+    configASSERT(onboard_keyboard.events);
+    device_add(&onboard_keyboard);
+    keyscan_event_queue = onboard_keyboard.events;
+
+    if (0) {
+        struct device_event ev = {0};
+        ev.type = DEV_REMOVED;
+        xQueueSendToBack(keyscan_event_queue, &ev, portMAX_DELAY);
+        vTaskDelete(NULL);
+    }
+
     matrix_init(&config->matrix);
     for (uint8_t i = 0; i < MAX_ENCODERS; ++i) {
         encoder_states[i].prev = 0xFF;
@@ -389,7 +406,7 @@ void keyscan_task(void* pvParameters) {
         // Scan the matrix
         matrix_scan(&config->matrix, raw_matrix);
         if (config->nr_encoders > 0) {
-            process_encoders(config, encoder_states, raw_matrix);
+            process_encoders(config, encoder_states, raw_matrix, keyscan_event_queue);
         }
 
         // Debounce the matrix
@@ -426,7 +443,7 @@ void keyscan_task(void* pvParameters) {
 
                 devev.pressed = pressed;
                 devev.code = code;
-                xQueueSendToBack(input_event_queue, &devev, portMAX_DELAY);
+                xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
                 
                 // if (xStatus != pdPASS) {
                 //     err("Failed to send event to queue");
