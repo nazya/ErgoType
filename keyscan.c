@@ -364,9 +364,8 @@ uint8_t count_pressed_keys(config_t *config, uint8_t *single_code) {
 
 // Main matrix scanning task
 void keyscan_task(void* pvParameters) {
-    void **task_params = (void **)pvParameters;
-    config_t *config = (config_t *)task_params[0];
-    QueueHandle_t keyscan_event_queue = (QueueHandle_t)task_params[1];
+    config_t *config = (config_t *)pvParameters;
+    QueueHandle_t keyscan_event_queue;
     debouncing_time = config->debounce;
     debouncing = (debouncing_time > 0);
     // matrix_t* matrix = (matrix_t*)pvParameters;
@@ -378,6 +377,23 @@ void keyscan_task(void* pvParameters) {
     // struct event ev;
     struct device_event devev;
     devev.type = DEV_KEY;
+
+    struct device onboard_keyboard = {
+        .capabilities = CAP_KEY | CAP_KEYBOARD,
+        .id = "cafe:1001",
+        .name = "keyboard",
+    };
+    onboard_keyboard.events = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+    configASSERT(onboard_keyboard.events);
+    device_add(&onboard_keyboard);
+    keyscan_event_queue = onboard_keyboard.events;
+
+    if (0) {
+        struct device_event ev = {0};
+        ev.type = DEV_REMOVED;
+        xQueueSendToBack(keyscan_event_queue, &ev, portMAX_DELAY);
+        vTaskDelete(NULL);
+    }
 
     matrix_init(&config->matrix);
     for (uint8_t i = 0; i < MAX_ENCODERS; ++i) {

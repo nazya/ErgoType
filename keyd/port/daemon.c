@@ -188,12 +188,11 @@ static int event_handler(struct event *ev)
 	static int timeout = 0;
 	struct key_event kev = {0};
 
-	// FreeRTOS evloop owns timeout waiting and emits EV_TIMEOUT after xQueueReceive times out.
-	// timeout -= ev->timestamp - last_time;
-	// last_time = ev->timestamp;
+	timeout -= ev->timestamp - last_time;
+	last_time = ev->timestamp;
 
-	// timeout = timeout < 0 ? 0 : timeout;
-	
+	timeout = timeout < 0 ? 0 : timeout;
+
 	switch (ev->type) {
 	case EV_TIMEOUT:
 		if (!active_kbd)
@@ -280,13 +279,12 @@ static int event_handler(struct event *ev)
 		}
 
 		break;
-	// case EV_DEV_ADD:
-	// 	manage_device(ev->dev);
-	// 	break;
-	// case EV_DEV_REMOVE:
-	// 	msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
-
-	// 	break;
+	case EV_DEV_ADD:
+		ev->dev->data = active_kbd;
+		break;
+	case EV_DEV_REMOVE:
+		msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
+		break;
 	// case EV_FD_ACTIVITY:
 	// 	if (ev->fd == ipcfd) {
 	// 		int con = accept(ipcfd, NULL, 0);

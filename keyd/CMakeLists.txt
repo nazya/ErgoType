@@ -20,6 +20,7 @@ add_library(keyd
   ${KEYD_SRC_DIR}/keys.c
   ${KEYD_SRC_DIR}/string.c
   ${KEYD_PORT_DIR}/keyboard.c
+  ${KEYD_PORT_DIR}/device.c
   ${KEYD_PORT_DIR}/evloop.c
   ${KEYD_PORT_DIR}/daemon.c
   ${KEYD_PORT_DIR}/hooks.c
