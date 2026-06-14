@@ -43,7 +43,7 @@ SemaphoreHandle_t log_mutex;
 SemaphoreHandle_t stdio_tusb_cdc_mutex;
 SemaphoreHandle_t fatfs_mutex;
 QueueHandle_t vkbd_event_queue;
-QueueHandle_t input_event_queue;
+QueueHandle_t devmon_queue;
 
 static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
 
@@ -206,8 +206,9 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
 
-        input_event_queue = xQueueCreate(64, sizeof(struct device_event));
-        configASSERT(input_event_queue);
+        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct device));
+        configASSERT(devmon_queue);
+        devmon_init();
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
