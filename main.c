@@ -48,8 +48,9 @@ void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
-uint8_t count_pressed_keys(matrix_t* matrix); // keyscan.c
+uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
+extern const char *keyd_overlay_conf;
 
 static void app_task(void *pvParameters);
 
@@ -74,12 +75,31 @@ typedef struct {
     const char *reason;
 } mode_resolution_t;
 
-static mode_resolution_t resolve_mode(config_t *config, uint8_t base_mode) {
+static void override_keyd_overlay_conf(uint8_t code)
+{
+    switch (code) {
+    case KEYD_A:
+        keyd_overlay_conf = "android.conf";
+        break;
+    case KEYD_W:
+        keyd_overlay_conf = "windows.conf";
+        break;
+    case KEYD_M:
+        keyd_overlay_conf = "macos.conf";
+        break;
+    case KEYD_D:
+        keyd_overlay_conf = NULL;
+        break;
+    default:
+        return;
+    }
+}
+
+static mode_resolution_t resolve_mode(config_t *config, uint8_t base_mode, uint8_t nr_pressed) {
     mode_resolution_t resolution = {
         .mode = base_mode,
         .reason = base_mode == HID ? "base HID" : "config parse failed",
     };
-    uint8_t nr_pressed = count_pressed_keys(&config->matrix);
 
     if (resolution.mode == HID) {
 
@@ -135,7 +155,10 @@ static void app_task(void *pvParameters)
     // Optional: enable "plain" printf()/puts() over UART if config pins are valid.
     // uart_stdio_init(&config);
 
-    mode_resolution_t mode_resolution = resolve_mode(&config, base_mode);
+    uint8_t startup_key = 0;
+    uint8_t nr_pressed = count_pressed_keys(&config, &startup_key);
+    override_keyd_overlay_conf(startup_key);
+    mode_resolution_t mode_resolution = resolve_mode(&config, base_mode, nr_pressed);
     mode = mode_resolution.mode;
 
     if (mode == HID) {
@@ -145,6 +168,7 @@ static void app_task(void *pvParameters)
         xTaskCreateAffinitySet(tusb_device_task, NULL, TUD_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     }
+    dbg("startup keys: count=%u key=%u", nr_pressed, startup_key);
 
     // Print mode/config diagnostics (buffered until CDC is actually opened by the host).
     if (base_mode != HID) {

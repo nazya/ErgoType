@@ -108,7 +108,7 @@ static void clear_mod(struct keyboard *kbd, uint8_t code)
 			 code == KEYD_LEFTALT ||
 			 code == KEYD_RIGHTALT)) &&
 		       !kbd->inhibit_modifier_guard &&
-		       !kbd->config.disable_modifier_guard);
+		       !kbd->config->disable_modifier_guard);
 
 	if (guard && !kbd->keystate[KEYD_LEFTCTRL]) {
 		send_key(kbd, KEYD_LEFTCTRL, 1);
@@ -142,10 +142,10 @@ static void update_mods(struct keyboard *kbd, int excluded_layer_idx, uint8_t mo
 	size_t i;
 	struct layer *excluded_layer = excluded_layer_idx == -1 ?
 					NULL :
-					&kbd->config.layers[excluded_layer_idx];
+					&kbd->config->layers[excluded_layer_idx];
 
-	for (i = 0; i < kbd->config.nr_layers; i++) {
-		struct layer *layer = &kbd->config.layers[i];
+	for (i = 0; i < kbd->config->nr_layers; i++) {
+		struct layer *layer = &kbd->config->layers[i];
 		int excluded = 0;
 
 		if (!kbd->layer_state[i].active)
@@ -180,7 +180,7 @@ static void execute_macro(struct keyboard *kbd, int dl, const struct macro *macr
 		send_key(kbd, code, 0);
 	} else {
 		update_mods(kbd, dl, 0);
-		macro_execute(kbd->output.send_key, macro, kbd->config.macro_sequence_timeout);
+		macro_execute(kbd->output.send_key, macro, kbd->config->macro_sequence_timeout);
 	}
 }
 
@@ -204,8 +204,8 @@ static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
         return;
     }
 
-    for (i = 0; i < kbd->config.nr_layers; i++) {
-        struct layer *layer = &kbd->config.layers[i];
+    for (i = 0; i < kbd->config->nr_layers; i++) {
+        struct layer *layer = &kbd->config->layers[i];
 
         if (kbd->layer_state[i].active) {
             long activation_time = kbd->layer_state[i].activation_time;
@@ -220,8 +220,8 @@ static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
 
 	max = 0;
 	/* Scan for any composite matches (which take precedence). */
-	for (i = 0; i < kbd->config.nr_layers; i++) {
-		struct layer *layer = &kbd->config.layers[i];
+	for (i = 0; i < kbd->config->nr_layers; i++) {
+		struct layer *layer = &kbd->config->layers[i];
 
 		if (layer->type == LT_COMPOSITE) {
 			size_t j;
@@ -230,7 +230,7 @@ static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
 
 			for (j = 0; j < layer->nr_constituents; j++) {
 				if (kbd->layer_state[layer->constituents[j]].active)
-					mods |= kbd->config.layers[layer->constituents[j]].mods;
+					mods |= kbd->config->layers[layer->constituents[j]].mods;
 				else
 					match = 0;
 			}
@@ -254,12 +254,12 @@ static void lookup_descriptor(struct keyboard *kbd, uint8_t code,
 
 static void deactivate_layer(struct keyboard *kbd, int idx)
 {
-	dbg("Deactivating layer %s", kbd->config.layers[idx].name);
+	dbg("Deactivating layer %s", kbd->config->layers[idx].name);
 
 	assert(kbd->layer_state[idx].active > 0);
 	kbd->layer_state[idx].active--;
 
-	kbd->output.on_layer_change(kbd, &kbd->config.layers[idx], 0);
+	kbd->output.on_layer_change(kbd, &kbd->config->layers[idx], 0);
 }
 
 /*
@@ -269,7 +269,7 @@ static void deactivate_layer(struct keyboard *kbd, int idx)
 
 static void activate_layer(struct keyboard *kbd, uint8_t code, int idx)
 {
-	dbg("Activating layer %s", kbd->config.layers[idx].name);
+	dbg("Activating layer %s", kbd->config->layers[idx].name);
 	struct cache_entry *ce;
 
 	kbd->layer_state[idx].activation_time = get_time();
@@ -278,7 +278,7 @@ static void activate_layer(struct keyboard *kbd, uint8_t code, int idx)
 	if ((ce = cache_get(kbd, code)))
 		ce->layer = idx;
 
-	kbd->output.on_layer_change(kbd, &kbd->config.layers[idx], 1);
+	kbd->output.on_layer_change(kbd, &kbd->config->layers[idx], 1);
 }
 
 /* Returns:
@@ -343,9 +343,9 @@ static int check_chord_match(struct keyboard *kbd, const struct chord **chord, i
 	int partial_match = 0;
 	long maxts = -1;
 
-	for (idx = 0; idx < kbd->config.nr_layers; idx++) {
+	for (idx = 0; idx < kbd->config->nr_layers; idx++) {
 		size_t i;
-		struct layer *layer = &kbd->config.layers[idx];
+		struct layer *layer = &kbd->config->layers[idx];
 
 		if (!kbd->layer_state[idx].active)
 			continue;
@@ -411,7 +411,7 @@ static void clear_oneshot(struct keyboard *kbd)
 {
 	size_t i = 0;
 
-	for (i = 0; i < kbd->config.nr_layers; i++)
+	for (i = 0; i < kbd->config->nr_layers; i++)
 		while (kbd->layer_state[i].oneshot_depth) {
 			deactivate_layer(kbd, i);
 			kbd->layer_state[i].oneshot_depth--;
@@ -425,8 +425,8 @@ static void clear(struct keyboard *kbd)
 {
 	size_t i;
 	clear_oneshot(kbd);
-	for (i = 1; i < kbd->config.nr_layers; i++) {
-		struct layer *layer = &kbd->config.layers[i];
+	for (i = 1; i < kbd->config->nr_layers; i++) {
+		struct layer *layer = &kbd->config->layers[i];
 
 		if (layer->type != LT_LAYOUT) {
 			if (kbd->layer_state[i].toggled) {
@@ -446,8 +446,8 @@ static void setlayout(struct keyboard *kbd, uint8_t idx)
 	clear(kbd);
 	/* Only only layout may be active at a time */
 	size_t i;
-	for (i = 0; i < kbd->config.nr_layers; i++) {
-		struct layer *layer = &kbd->config.layers[i];
+	for (i = 0; i < kbd->config->nr_layers; i++) {
+		struct layer *layer = &kbd->config->layers[i];
 
 		if (layer->type == LT_LAYOUT)
 			kbd->layer_state[i].active = 0;
@@ -459,7 +459,7 @@ static void setlayout(struct keyboard *kbd, uint8_t idx)
 		kbd->layer_state[idx].active = 1;
 	}
 
-	kbd->output.on_layer_change(kbd, &kbd->config.layers[idx], 1);
+	kbd->output.on_layer_change(kbd, &kbd->config->layers[idx], 1);
 }
 
 
@@ -502,7 +502,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			case OP_LAYOUTM:
 			case OP_ONESHOTM:
 			case OP_TOGGLEM:
-				macro = kbd->config.macros[d->args[1].idx];
+				macro = kbd->config->macros[d->args[1].idx];
 				execute_macro(kbd, dl, macro);
 				break;
 			default:
@@ -562,9 +562,9 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 				long timeout = d->args[2].timeout;
 
 				if (((time - kbd->last_simple_key_time) >= timeout))
-					action = &kbd->config.descriptors[d->args[1].idx];
+						action = &kbd->config->descriptors[d->args[1].idx];
 				else
-					action = &kbd->config.descriptors[d->args[0].idx];
+						action = &kbd->config->descriptors[d->args[0].idx];
 
 				process_descriptor(kbd, code, action, dl, 1, time);
 				for (i = 0; i < CACHE_SIZE; i++) {
@@ -579,7 +579,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_OVERLOAD_TIMEOUT:
 			if (pressed) {
 				uint8_t layer = d->args[0].idx;
-				struct descriptor *action = &kbd->config.descriptors[d->args[1].idx];
+				struct descriptor *action = &kbd->config->descriptors[d->args[1].idx];
 
 				kbd->pending_key.code = code;
 				kbd->pending_key.behaviour =
@@ -601,7 +601,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			if (pressed) {
 				uint8_t layer = d->args[0].idx;
 				int macro_idx = d->args[1].idx;
-				struct descriptor *action = &kbd->config.descriptors[d->args[2].idx];
+				struct descriptor *action = &kbd->config->descriptors[d->args[2].idx];
 				kbd->pending_key.code = code;
 				kbd->pending_key.behaviour = PK_UNINTERRUPTIBLE;
 				kbd->pending_key.dl = dl;
@@ -609,7 +609,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 				kbd->pending_key.action2.op = OP_LAYERM;
 				kbd->pending_key.action2.args[0].idx = layer;
 				kbd->pending_key.action2.args[1].idx = macro_idx;
-				kbd->pending_key.expire = time + kbd->config.overloadtm_timeout;
+				kbd->pending_key.expire = time + kbd->config->overloadtm_timeout;
 				schedule_timeout(kbd, kbd->pending_key.expire);
 			}
 			break;
@@ -641,7 +641,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_CLEARM:
 			if(pressed) {
 				clear(kbd);
-				macro = kbd->config.macros[d->args[0].idx];
+				macro = kbd->config->macros[d->args[0].idx];
 				execute_macro(kbd, dl, macro);
 			}
 			break;
@@ -651,7 +651,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			break;
 		case OP_OVERLOAD:
 			idx = d->args[0].idx;
-			action = &kbd->config.descriptors[d->args[1].idx];
+			action = &kbd->config->descriptors[d->args[1].idx];
 
 			if (pressed) {
 				kbd->overload_start_time = time;
@@ -662,14 +662,14 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 				update_mods(kbd, -1, 0);
 
 				if (kbd->last_pressed_code == code &&
-					(!kbd->config.overload_tap_timeout ||
-					((time - kbd->overload_start_time) < kbd->config.overload_tap_timeout))) {
+					(!kbd->config->overload_tap_timeout ||
+					((time - kbd->overload_start_time) < kbd->config->overload_tap_timeout))) {
 					if (action->op == OP_MACRO) {
 						/*
 						* Macro release relies on event logic, so we can't just synthesize a
 						* descriptor release.
 						*/
-						struct macro *macro = kbd->config.macros[action->args[0].idx];
+						struct macro *macro = kbd->config->macros[action->args[0].idx];
 						execute_macro(kbd, dl, macro);
 					} else {
 						process_descriptor(kbd, code, action, dl, 1, time);
@@ -690,8 +690,8 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			} else {
 				if (kbd->oneshot_latch) {
 					kbd->layer_state[idx].oneshot_depth++;
-					if (kbd->config.oneshot_timeout) {
-						kbd->oneshot_timeout = time + kbd->config.oneshot_timeout;
+					if (kbd->config->oneshot_timeout) {
+						kbd->oneshot_timeout = time + kbd->config->oneshot_timeout;
 						schedule_timeout(kbd, kbd->oneshot_timeout);
 					}
 				} else {
@@ -705,15 +705,15 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_MACRO:
 			if (pressed) {
 				if (d->op == OP_MACRO2) {
-					macro = kbd->config.macros[d->args[2].idx];
+					macro = kbd->config->macros[d->args[2].idx];
 
 					timeout = d->args[0].timeout;
 					kbd->macro_repeat_interval = d->args[1].timeout;
 				} else {
-					macro = kbd->config.macros[d->args[0].idx];
+					macro = kbd->config->macros[d->args[0].idx];
 
-					timeout = kbd->config.macro_timeout;
-					kbd->macro_repeat_interval = kbd->config.macro_repeat_timeout;
+					timeout = kbd->config->macro_timeout;
+					kbd->macro_repeat_interval = kbd->config->macro_repeat_timeout;
 				}
 
 				clear_oneshot(kbd);
@@ -746,8 +746,8 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			break;
 		case OP_TIMEOUT:
 			if (pressed) {
-				kbd->pending_key.action1 = kbd->config.descriptors[d->args[0].idx];
-				kbd->pending_key.action2 = kbd->config.descriptors[d->args[2].idx];
+				kbd->pending_key.action1 = kbd->config->descriptors[d->args[0].idx];
+				kbd->pending_key.action2 = kbd->config->descriptors[d->args[2].idx];
 
 				kbd->pending_key.code = code;
 				kbd->pending_key.dl = dl;
@@ -760,7 +760,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 			break;
 		case OP_COMMAND:
 			if (pressed) {
-				// execute_command(kbd->config.commands[d->args[0].idx].cmd);
+				// execute_command(kbd->config->commands[d->args[0].idx].cmd);
 				clear_oneshot(kbd);
 				update_mods(kbd, -1, 0);
 			}
@@ -768,7 +768,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		case OP_SWAP:
 		case OP_SWAPM:
 			idx = d->args[0].idx;
-			macro = d->op == OP_SWAPM ?  kbd->config.macros[d->args[1].idx] : NULL;
+			macro = d->op == OP_SWAPM ?  kbd->config->macros[d->args[1].idx] : NULL;
 
 			if (pressed) {
 				size_t i;
@@ -792,7 +792,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 					for (i = 0; i < CACHE_SIZE; i++) {
 						uint8_t code = kbd->cache[i].code;
 						int layer = kbd->cache[i].layer;
-						int type = kbd->config.layers[layer].type;
+						int type = kbd->config->layers[layer].type;
 
 						if (code && layer == dl && type == LT_NORMAL && layer != 0) {
 							ce = &kbd->cache[i];
@@ -833,7 +833,7 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 	return timeout;
 }
 
-struct keyboard *new_keyboard(const struct output *output)
+struct keyboard *new_keyboard(struct config *config, const struct output *output)
 {
 	size_t i;
 	// struct keyboard *kbd;
@@ -850,20 +850,19 @@ struct keyboard *new_keyboard(const struct output *output)
 	// kbd->original_config = &kbd->config;
 	// memcpy(&kbd->config, kbd->original_config, sizeof(struct config));
 
+	kbd->config = config;
 	kbd->output = *output;
 	kbd->layer_state[0].active = 1;
 	kbd->layer_state[0].activation_time = 0;
 
-	config_parse(&kbd->config);
-
-	if (kbd->config.default_layout[0]) {
+	if (kbd->config->default_layout[0]) {
 		int found = 0;
-		for (i = 0; i < kbd->config.nr_layers; i++) {
-			struct layer *layer = &kbd->config.layers[i];
+		for (i = 0; i < kbd->config->nr_layers; i++) {
+			struct layer *layer = &kbd->config->layers[i];
 
 			if (layer->type == LT_LAYOUT &&
 			    !strcmp(layer->name,
-				    kbd->config.default_layout)) {
+				    kbd->config->default_layout)) {
 				kbd->layer_state[i].active = 1;
 				kbd->layer_state[i].activation_time = 1;
 				found = 1;
@@ -873,7 +872,7 @@ struct keyboard *new_keyboard(const struct output *output)
 
 		if (!found)
 			warn("could not find default layout %s.",
-				kbd->config.default_layout);
+				kbd->config->default_layout);
 	}
 
 	kbd->chord.queue_sz = 0;
@@ -929,8 +928,8 @@ static int handle_chord(struct keyboard *kbd,
 			uint8_t code, int pressed, long time)
 {
 	size_t i;
-	const long interkey_timeout = kbd->config.chord_interkey_timeout;
-	const long hold_timeout = kbd->config.chord_hold_timeout;
+	const long interkey_timeout = kbd->config->chord_interkey_timeout;
+	const long hold_timeout = kbd->config->chord_hold_timeout;
 
 	if (code && !pressed) {
 		for (i = 0; i < ARRAY_SIZE(kbd->active_chords); i++) {
@@ -1254,6 +1253,6 @@ int kbd_eval(struct keyboard *kbd, const char *exp)
 		// TODO: reinit from config (no RAM for kbd->original_config)
 		return 0;
 	} else {
-		return config_add_entry(&kbd->config, exp);
+		return config_add_entry(kbd->config, exp);
 	}
 }
