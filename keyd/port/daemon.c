@@ -27,6 +27,43 @@ static struct keyboard *active_kbd;
 static struct vkbd *vkbd;
 static uint8_t keystate[256];
 
+static void free_config(struct config *config)
+{
+	size_t i;
+
+	for (i = 0; i < config->nr_layers; i++) {
+		struct layer *layer = &config->layers[i];
+
+		for (size_t j = 0; j < ARRAY_SIZE(layer->keymap); j++)
+			vPortFree(layer->keymap[j]);
+
+		vPortFree(layer->chords);
+	}
+
+	for (i = 0; i < config->nr_macros; i++)
+		vPortFree(config->macros[i]);
+
+	for (i = 0; i < ARRAY_SIZE(config->aliases); i++)
+		vPortFree(config->aliases[i]);
+
+	vPortFree(config);
+}
+
+static void free_configs(void)
+{
+	if (active_kbd) {
+		free_config(active_kbd->config);
+		vPortFree(active_kbd);
+		active_kbd = NULL;
+	}
+}
+
+static void cleanup(void)
+{
+	free_configs();
+	free_vkbd(vkbd);
+}
+
 static void clear_vkbd(void)
 {
 	size_t i;
@@ -80,20 +117,19 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	// int keep[ARRAY_SIZE(listeners)];
 	size_t n = 0;
 
-		if (kbd->config.layer_indicator) {
-			int active_layers = 0;
+	if (kbd->config->layer_indicator) {
+		int active_layers = 0;
 
-			for (i = 1; i < kbd->config.nr_layers; i++)
-				if (kbd->config.layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
-					active_layers = 1;
-					break;
-				}
-			// gpio_led_set_pattern(active_layers ? 0xFFFFFFFFu : 0);
+		for (i = 1; i < kbd->config->nr_layers; i++)
+			if (kbd->config->layers[i].type != LT_LAYOUT && kbd->layer_state[i].active) {
+				active_layers = 1;
+				break;
+			}
 
-			// for (i = 0; i < device_table_sz; i++)
-			// 	if (device_table[i].data == kbd){
-			// 		device_set_led(&device_table[i], 1, active_layers);
-			// 	}
+		// for (i = 0; i < device_table_sz; i++)
+		// 	if (device_table[i].data == kbd){
+		// 		device_set_led(&device_table[i], 1, active_layers);
+		// 	}
 	}
 
 	// if (!nr_listeners)
@@ -104,7 +140,7 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 		on_layout_change(layer->name);
 	} else {
 		bufsz = snprintf(buf, sizeof(buf), "%c%s\n", state ? '+' : '-', layer->name);
-		if (layer == &kbd->config.layers[0])
+		if (layer == &kbd->config->layers[0])
 			on_layout_change(layer->name);
 	}
 
@@ -125,11 +161,11 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 
 static const char *active_layout_name(const struct keyboard *kbd)
 {
-	for (size_t i = 0; i < kbd->config.nr_layers; i++)
-		if (kbd->config.layers[i].type == LT_LAYOUT && kbd->layer_state[i].active)
-			return kbd->config.layers[i].name;
+	for (size_t i = 0; i < kbd->config->nr_layers; i++)
+		if (kbd->config->layers[i].type == LT_LAYOUT && kbd->layer_state[i].active)
+			return kbd->config->layers[i].name;
 
-	return kbd->config.layers[0].name;
+	return kbd->config->layers[0].name;
 }
 
 static int process_keypress(struct keyboard *kbd, uint8_t code, int timestamp)
@@ -152,6 +188,7 @@ static int event_handler(struct event *ev)
 	static int timeout = 0;
 	struct key_event kev = {0};
 
+	// FreeRTOS evloop owns timeout waiting and emits EV_TIMEOUT after xQueueReceive times out.
 	// timeout -= ev->timestamp - last_time;
 	// last_time = ev->timestamp;
 
@@ -267,36 +304,59 @@ static int event_handler(struct event *ev)
 	return timeout;
 }
 
-static void reload(void)
+static void load_configs(void)
 {
+	struct config *config = pvPortMalloc(sizeof *config);
+
+	if (!config) {
+		dbg("size of struct conf: %u bytes", sizeof(struct config));
+		err("pvPortMalloc failed for struct config");
+		return;
+	}
+
+	if (config_parse(config) < 0) {
+		warn("failed to parse keyd config");
+		free_config(config);
+		return;
+	}
+
 	struct output output = {
 		.send_key = send_key,
 		.on_layer_change = on_layer_change,
 	};
 
-	if (!vkbd)
-		vkbd = vkbd_init("");
-
-	clear_vkbd();
-
-	if (!active_kbd)
-		active_kbd = new_keyboard(&output);
-
-	// if (active_kbd && active_kbd->config.layer_indicator) {
-	// 	gpio_led_set_pattern(0);
-	// }
-
-	if (active_kbd) {
-		on_layout_change(active_layout_name(active_kbd));
-		msg("kbd initialized");
+	if (keyd_overlay_conf) {
+		config_parse_file(config, keyd_overlay_conf);
 	}
 
-	dbg("free heap size: %u bytes", xPortGetFreeHeapSize());
+	active_kbd = new_keyboard(config, &output);
+	if (!active_kbd) {
+		free_config(config);
+		return;
+	}
+
+	on_layout_change(active_layout_name(active_kbd));
+	dbg("kbd initialized");
+}
+
+static void reload(void)
+{
+	// size_t i;
+
+	free_configs();
+	load_configs();
+
+	dbg2("free heap size: %u bytes", xPortGetFreeHeapSize());
+
+	// for (i = 0; i < device_table_sz; i++)
+	//	manage_device(&device_table[i]);
+
+	clear_vkbd();
 }
 
 int run_daemon(void)
 {
-	dbg3("size of struct conf: %u bytes", sizeof(struct config));
+	vkbd = vkbd_init("");
 
 	reload();
 
