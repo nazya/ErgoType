@@ -22,6 +22,8 @@
 #include "string.h"
 #include "log.h"
 
+const char *keyd_overlay_conf;
+
 struct ini_entry {
 	char *key;
 	char *val;
@@ -1349,7 +1351,7 @@ static int process_second_pass_line(char *line, size_t ln, char *section_name, s
 }
 
 
-int config_parse_file(struct config *config)
+int config_parse_file(struct config *config, const char *filename)
 {
     FATFS filesystem;
     FRESULT res;
@@ -1367,10 +1369,10 @@ int config_parse_file(struct config *config)
     }
 
     // First pass: Create all layers based on section headers
-    res = f_open(&fh, "keyd.conf", FA_READ);
+    res = f_open(&fh, filename, FA_READ);
     if (res != FR_OK) {
         f_unmount("/");
-        err("failed to open keyd.conf");
+        err("failed to open %s", filename);
         return -1;
     }
 
@@ -1402,10 +1404,10 @@ int config_parse_file(struct config *config)
 
     // Second pass: Populate each layer
     ln = 0;
-    res = f_open(&fh, "keyd.conf", FA_READ);
+    res = f_open(&fh, filename, FA_READ);
     if (res != FR_OK) {
         f_unmount("/");
-        err("failed to open keyd.conf");
+        err("failed to open %s", filename);
         return -1;
     }
 
@@ -1519,7 +1521,7 @@ int config_parse(struct config *config)
 {
 	memset(config, 0, sizeof *config);
 	config_init(config); // invalid macro here
-	return config_parse_file(config);
+	return config_parse_file(config, "default.conf");
 }
 
 

@@ -20,6 +20,7 @@
 #define MAX_SPI 2
 #define MAX_UART 2
 #define MAX_I2C 2
+#define MAX_FILE_NAME 16
 
 enum {
     SENSOR_ROLE_MOUSEMOVE = 0, // x/y
@@ -45,7 +46,8 @@ typedef uint32_t matrix_row_t;
     FIELD(msc_pin, int8_t, -1)  \
     FIELD(nr_pressed_msc, int8_t, 3)  \
     FIELD(scan_period, int8_t, 5)  \
-    FIELD(debounce, int8_t, 9)
+    FIELD(debounce, int8_t, 9) \
+    FIELD(overlay_conf, char *, 0)
 
 typedef struct {
     uint8_t gpio_cols[MAX_GPIOS];         // GPIO pins for columns
