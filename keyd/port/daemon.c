@@ -309,25 +309,25 @@ static void load_configs(void)
 	struct config *config = pvPortMalloc(sizeof *config);
 
 	if (!config) {
-		dbg("size of struct conf: %u bytes", sizeof(struct config));
-		err("pvPortMalloc failed for struct config");
+		dbg2("size of struct conf: %u bytes", sizeof(struct config));
+		err("kbd was not initialize: pvPortMalloc failed for struct config");
 		return;
 	}
 
-	if (config_parse(config) < 0) {
-		warn("failed to parse keyd config");
-		free_config(config);
-		return;
+	config_init(config);
+
+	if (config_parse_file(config, "default.conf") < 0)
+		dbg("failed to parse keyd config default.conf");
+
+	if (keyd_overlay_conf) {
+		if (config_parse_file(config, keyd_overlay_conf) < 0)
+			dbg("failed to parse keyd overlay %s", keyd_overlay_conf);
 	}
 
 	struct output output = {
 		.send_key = send_key,
 		.on_layer_change = on_layer_change,
 	};
-
-	if (keyd_overlay_conf) {
-		config_parse_file(config, keyd_overlay_conf);
-	}
 
 	active_kbd = new_keyboard(config, &output);
 	if (!active_kbd) {

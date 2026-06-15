@@ -156,7 +156,7 @@ struct config {
 };
 
 uint8_t lookup_keycode(const char *name);
-int config_parse(struct config *config);
+void config_init(struct config *config);
 int config_parse_file(struct config *config, const char *filename);
 int config_add_entry(struct config *config, const char *exp);
 int config_get_layer_index(const struct config *config, const char *name);
