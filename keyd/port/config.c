@@ -1431,7 +1431,9 @@ int config_parse_file(struct config *config, const char *filename)
     return 0;
 }
 
-int config_init(struct config *config) {
+void config_init(struct config *config) {
+	memset(config, 0, sizeof *config);
+
 	config->chord_interkey_timeout = 50;
 	config->chord_hold_timeout = 0;
 	config->oneshot_timeout = 0;
@@ -1469,7 +1471,7 @@ int config_init(struct config *config) {
 		NULL  // Sentinel to mark the end of the array
 	};
     // First Pass: Create all layers based on section headers
-    dbg3("starting a first pass");
+    dbg3("starting config init first pass");
 
     struct ini_section section;
     memset(&section, 0, sizeof(section));
@@ -1480,8 +1482,11 @@ int config_init(struct config *config) {
         char line_buffer[MAX_LINE_LEN + 1];
         strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
         line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
-        if (process_first_pass_line(line_buffer, ln, &section, config, 1) < 0)
-            return -1;
+        if (process_first_pass_line(line_buffer, ln, &section, config, 1) < 0) {
+            err("kbd was not initialize due errors in config_lines at section '%s' line %zu: '%s'",
+                section.name[0] ? section.name : "<global>", ln, line_buffer);
+            return;
+        }
     }
 
     // Process the last section if any
@@ -1490,14 +1495,15 @@ int config_init(struct config *config) {
 
         if (process_section(&section, config) < 0) {
             free_section_entries(&section);
-            return -1;
+            err("kbd was not initialize due errors in config_lines at section '%s' line %zu", section.name, section.lnum);
+            return;
         }
         free_section_entries(&section);
         memset(&section, 0, sizeof(section));
     }
 
     // Second Pass: Populate each layer
-    dbg3("starting a second pass");
+    dbg3("starting config init second pass");
 
     ln = 0;
     char section_name[MAX_SECTION_NAME_LEN + 1];
@@ -1508,22 +1514,16 @@ int config_init(struct config *config) {
         char line_buffer[MAX_LINE_LEN + 1];
         strncpy(line_buffer, config_lines[i], MAX_LINE_LEN);
         line_buffer[MAX_LINE_LEN] = '\0';  // Ensure null termination
-        if (process_second_pass_line(line_buffer, ln, section_name, config, 1) < 0)
-            return -1;
+        if (process_second_pass_line(line_buffer, ln, section_name, config, 1) < 0) {
+            err("kbd was not initialize due errors in config_lines at section '%s' line %zu: '%s'",
+                section_name[0] ? section_name : "<global>", ln, line_buffer);
+            return;
+        }
     }
 
-    dbg3("configuration parsing completed successfully");
+    dbg3("configuration init completed successfully");
 
-    return 0;
 }
-
-int config_parse(struct config *config)
-{
-	memset(config, 0, sizeof *config);
-	config_init(config); // invalid macro here
-	return config_parse_file(config, "default.conf");
-}
-
 
 // int config_check_match(struct config *config, const char *id, uint8_t flags)
 // {
