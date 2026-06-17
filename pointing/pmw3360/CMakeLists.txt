@@ -10,8 +10,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Os")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Os")
 
-include_directories("${CMAKE_CURRENT_LIST_DIR}/../../")
-
 add_library(pmw3360
   ${CMAKE_CURRENT_LIST_DIR}/srom.c
   ${CMAKE_CURRENT_LIST_DIR}/pmw3360.c
@@ -20,6 +18,7 @@ add_library(pmw3360
 target_include_directories(pmw3360
   PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}
+  ${CMAKE_CURRENT_LIST_DIR}/../..
   ${CMAKE_CURRENT_LIST_DIR}/../../rtos
 )
 

@@ -20,14 +20,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 set(PICO_BOARD pico CACHE STRING "Board type")
-set(FAMILY rp2040)
+
+# set(PICO_BOARD waveshare_rp2040_pizero CACHE STRING "Board type" FORCE)
+
+# set(PICO_BOARD pico2 CACHE STRING "Board type" FORCE)
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
 # set(FREERTOS_HEAP 2)
-SET(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel)
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel)
 include(${CMAKE_CURRENT_SOURCE_DIR}/rtos/FreeRTOS_Kernel_import.cmake)
 
 
@@ -36,19 +40,15 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/coreJSON/jsonFilePaths.cmake)
 set(PROJECT_NAME ErgoType)
 project(${PROJECT_NAME} C CXX ASM)
 
-
-execute_process(
-  COMMAND sed -i "s/^#define FF_USE_STRFUNC.*/#define FF_USE_STRFUNC  1/"
-          ${CMAKE_SOURCE_DIR}/.pico-sdk/lib/tinyusb/lib/fatfs/source/ffconf.h
-)
-
-execute_process(
-  COMMAND grep FF_USE_STRFUNC ${CMAKE_SOURCE_DIR}/.pico-sdk/lib/tinyusb/lib/fatfs/source/ffconf.h
-  RESULT_VARIABLE grep_result
-  OUTPUT_VARIABLE grep_output
-)
-
-message(STATUS "FF_USE_STRFUNC line: ${grep_output}")
+set(FATFS_FFCONF ${PICO_SDK_PATH}/lib/tinyusb/lib/fatfs/source/ffconf.h)
+file(READ ${FATFS_FFCONF} FATFS_FFCONF_CONTENT)
+if(NOT FATFS_FFCONF_CONTENT MATCHES "#define[ \t]+FF_USE_STRFUNC[ \t]+1")
+    string(REGEX REPLACE "#define[ \t]+FF_USE_STRFUNC[ \t]+[0-9]+"
+           "#define FF_USE_STRFUNC 1"
+           FATFS_FFCONF_CONTENT
+           "${FATFS_FFCONF_CONTENT}")
+    file(WRITE ${FATFS_FFCONF} "${FATFS_FFCONF_CONTENT}")
+endif()
 
 
 # Ensure Pico SDK's TinyUSB is built with the FreeRTOS OSAL (CFG_TUSB_OS).
@@ -59,18 +59,17 @@ set(TINYUSB_OPT_OS OPT_OS_FREERTOS)
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-cmake_minimum_required(VERSION 3.13)
 add_executable(${PROJECT_NAME})
 
 pico_generate_pio_header(${PROJECT_NAME}
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.pio
 )
 
-	add_subdirectory(tusb)
-	add_subdirectory(pico-usb-flash-drive)
-	add_subdirectory(keyd)
-	add_subdirectory(pointing/pmw3360)
-	add_subdirectory(pointing/pmw3389)
+add_subdirectory(tusb)
+add_subdirectory(pico-usb-flash-drive)
+add_subdirectory(keyd)
+add_subdirectory(pointing/pmw3360)
+add_subdirectory(pointing/pmw3389)
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
@@ -81,25 +80,25 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
-	        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
-	        ${CMAKE_CURRENT_LIST_DIR}/log.c
-	        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
-	        ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
-	        ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
-	        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
-		        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
-	        )
+        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
+        ${CMAKE_CURRENT_LIST_DIR}/log.c
+        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
+        ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
+        ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
+        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
+        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+)
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}
         ${CMAKE_CURRENT_LIST_DIR}/rtos
         ${JSON_INCLUDE_PUBLIC_DIRS}
-) 
+)
 
 # Expose keyd headers to this target via quote-only search path so system
 # headers like <string.h> are never shadowed by keyd/src/string.h.
@@ -110,9 +109,9 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 
 # In addition to pico_stdlib required for common PicoSDK functionality, add dependency on tinyusb_device
 # for TinyUSB device support and tinyusb_board for the additional board support library used by the example
-target_link_libraries(${PROJECT_NAME} PUBLIC 
-        usbd
-        fsd
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        tusb_glue
+        flash_fatfs
         keyd
         pmw3360
         pmw3389
@@ -136,7 +135,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         hardware_clocks
 
         # pico_cyw43_arch_none
-   )
+)
 
 
 
