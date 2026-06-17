@@ -20,7 +20,7 @@
 #include "keyd.h"
 #include "log.h"
 
-extern QueueHandle_t keyscan_event_queue;
+extern QueueHandle_t input_event_queue;
 
 int evloop(int (*event_handler)(struct event *ev))
 {
@@ -34,7 +34,7 @@ int evloop(int (*event_handler)(struct event *ev))
 	dbg3("entering evloop");
 
 	while (1) {
-		if (xQueueReceive(keyscan_event_queue, &devev, xTicksToWait) ==
+		if (xQueueReceive(input_event_queue, &devev, xTicksToWait) ==
 		    pdPASS) {
 			ev.timestamp = xTaskGetTickCount() * portTICK_PERIOD_MS;
 			ev.type = EV_DEV_EVENT;
@@ -47,7 +47,6 @@ int evloop(int (*event_handler)(struct event *ev))
 		}
 
 		timeout = event_handler(&ev);
-		timeout = timeout < 0 ? 0 : timeout;
 		xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
 	}
 
