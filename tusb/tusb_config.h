@@ -21,6 +21,14 @@
 #define BOARD_TUD_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
 #endif
 
+#ifndef BOARD_TUH_RHPORT
+#define BOARD_TUH_RHPORT      1
+#endif
+
+#ifndef BOARD_TUH_MAX_SPEED
+#define BOARD_TUH_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
+#endif
+
 //--------------------------------------------------------------------
 // COMMON CONFIGURATION
 //--------------------------------------------------------------------
@@ -31,6 +39,9 @@
 #endif
 
 #define CFG_TUSB_RHPORT0_MODE     (OPT_MODE_DEVICE | BOARD_TUD_MAX_SPEED)
+#define CFG_TUSB_RHPORT1_MODE     (OPT_MODE_HOST | BOARD_TUH_MAX_SPEED)
+
+#define CFG_TUH_RPI_PIO_USB       1
 
 // This examples use FreeRTOS
 #ifndef CFG_TUSB_OS
@@ -48,6 +59,7 @@
 
 // Enable Device stack
 #define CFG_TUD_ENABLED           1
+#define CFG_TUH_ENABLED           1
 
 // TinyUSB device task event queue depth (used when CFG_TUSB_OS != OPT_OS_NONE).
 // Default in TinyUSB is 16. With FreeRTOS OSAL on RP2040 (SMP) + multiple classes
@@ -111,6 +123,22 @@
 // partial/discarded output when the stdio backend hits its stdout timeout.
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512
+
+#define CFG_TUH_ENUMERATION_BUFSIZE 256
+
+#ifndef CFG_TUH_MEM_SECTION
+#define CFG_TUH_MEM_SECTION
+#endif
+
+#ifndef CFG_TUH_MEM_ALIGN
+#define CFG_TUH_MEM_ALIGN        __attribute__ ((aligned(4)))
+#endif
+
+#define CFG_TUH_HUB              1
+#define CFG_TUH_DEVICE_MAX       4
+#define CFG_TUH_HID              (3 * CFG_TUH_DEVICE_MAX)
+#define CFG_TUH_HID_EPIN_BUFSIZE 64
+#define CFG_TUH_HID_EPOUT_BUFSIZE 64
 
 
 #ifdef __cplusplus

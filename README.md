@@ -3,6 +3,8 @@ ErgoType is a project I'm developing to integrate all the keyboard features I fi
 
 Documentation index: [`docs/README.md`](docs/README.md).
 
+This branch also supports a hardware HID remapper mode on Waveshare RP2040-PiZero: an external USB keyboard/mouse connects to the board's PIO-USB host port, events go through keyd, and the board appears to the computer as a USB HID device. See [`docs/hid-remapper.md`](docs/hid-remapper.md).
+
 ## Goals
 ErgoType aims to extend the functionality of keyd beyond Linux by creating a hardware solution for a range of platforms and devices. It also aims to combine a keyboard with a pointing device, focusing on ergonomic design.
 

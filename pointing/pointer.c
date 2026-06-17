@@ -103,10 +103,10 @@ void pointing_device_task(void *pvParameters)
             .name = "pmw3360",
         };
         snprintf(pmw3360_devices[i].id, sizeof(pmw3360_devices[i].id), "pmw3360:%u", i);
-        pmw3360_devices[i].events = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
-        configASSERT(pmw3360_devices[i].events);
+        pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+        configASSERT(pmw3360_devices[i].ev_queue);
         device_add(&pmw3360_devices[i]);
-        pmw3360_queues[i] = pmw3360_devices[i].events;
+        pmw3360_queues[i] = pmw3360_devices[i].ev_queue;
 
         pmw3360_init(&config->pmw3360[i]);
         pmw3360_set_cpi(&config->pmw3360[i]);
@@ -118,10 +118,10 @@ void pointing_device_task(void *pvParameters)
             .name = "pmw3389",
         };
         snprintf(pmw3389_devices[i].id, sizeof(pmw3389_devices[i].id), "pmw3389:%u", i);
-        pmw3389_devices[i].events = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
-        configASSERT(pmw3389_devices[i].events);
+        pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+        configASSERT(pmw3389_devices[i].ev_queue);
         device_add(&pmw3389_devices[i]);
-        pmw3389_queues[i] = pmw3389_devices[i].events;
+        pmw3389_queues[i] = pmw3389_devices[i].ev_queue;
 
         pmw3389_init(&config->pmw3389[i]);
         pmw3389_set_cpi(&config->pmw3389[i]);

@@ -31,7 +31,6 @@ target_compile_definitions(usbd PUBLIC
         CFG_TUSB_OS=${TINYUSB_OPT_OS}
         FREE_RTOS_KERNEL_SMP=1
         PICO_32BIT=1
-        PICO_BOARD="pico"
         PICO_BUILD=1
         PICO_CONFIG_RTOS_ADAPTER_HEADER=${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/include/freertos_sdk_config.h
         PICO_NO_HARDWARE=0

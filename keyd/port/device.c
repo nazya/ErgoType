@@ -19,7 +19,7 @@ void device_add(const struct device *dev)
 	BaseType_t add_rc;
 	BaseType_t send_rc;
 
-	add_rc = xQueueAddToSet(dev->events, device_events);
+	add_rc = xQueueAddToSet(dev->ev_queue, device_events);
 	configASSERT(add_rc == pdPASS);
 	send_rc = xQueueSendToBack(devmon_queue, dev, portMAX_DELAY);
 	configASSERT(send_rc == pdPASS);
@@ -27,16 +27,16 @@ void device_add(const struct device *dev)
 
 void device_delete(struct device *dev)
 {
-	xQueueRemoveFromSet(dev->events, device_events);
-	vQueueDelete(dev->events);
-	dev->events = NULL;
+	xQueueRemoveFromSet(dev->ev_queue, device_events);
+	vQueueDelete(dev->ev_queue);
+	dev->ev_queue = NULL;
 }
 
 struct device_event *device_read_event(struct device *dev)
 {
 	static struct device_event devev;
 
-	if (xQueueReceive(dev->events, &devev, 0) != pdPASS)
+	if (xQueueReceive(dev->ev_queue, &devev, 0) != pdPASS)
 		return NULL;
 
 	return &devev;

@@ -61,7 +61,7 @@ int evloop(int (*event_handler)(struct event *ev))
 			struct device_event *devev;
 			struct device *dev = &device_table[i];
 
-			if (dev->events != ready)
+			if (dev->ev_queue != ready)
 				continue;
 
 			devev = device_read_event(dev);
@@ -91,7 +91,7 @@ int evloop(int (*event_handler)(struct event *ev))
 			size_t n = 0;
 
 			for (i = 0; i < device_table_sz; i++)
-				if (device_table[i].events)
+				if (device_table[i].ev_queue)
 					device_table[n++] = device_table[i];
 
 			device_table_sz = n;

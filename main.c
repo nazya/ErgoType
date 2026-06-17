@@ -3,7 +3,7 @@
  *
  * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
  */
-#include "bsp/board.h"
+#include "hardware/clocks.h"
 #include "pico/stdlib.h"
 #include "pico/stdio.h"
 // #include "pico/cyw43_arch.h"
@@ -45,6 +45,7 @@ QueueHandle_t devmon_queue;
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
+void tusb_host_task(void* pvParameters);
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
@@ -198,6 +199,8 @@ static void app_task(void *pvParameters)
         configASSERT(devmon_queue);
         devmon_init();
 
+        xTaskCreateAffinitySet(tusb_host_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY, CORE1, NULL);
+
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
         xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL,                IDLE_PRIORITY + 2, CORE0, NULL);
@@ -219,7 +222,7 @@ static void app_task(void *pvParameters)
 
 int main() 
 {
-    board_init();
+    set_sys_clock_khz(120000, true);
     log_mutex = xSemaphoreCreateMutex();
     stdio_tusb_cdc_mutex = xSemaphoreCreateMutex();
     xTaskCreateAffinitySet(app_task, NULL, 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);

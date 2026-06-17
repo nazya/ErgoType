@@ -20,7 +20,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(PICO_BOARD pico CACHE STRING "Board type")
+set(PICO_BOARD waveshare_rp2040_pizero CACHE STRING "Board type")
 set(FAMILY rp2040)
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
@@ -54,6 +54,7 @@ message(STATUS "FF_USE_STRFUNC line: ${grep_output}")
 # Ensure Pico SDK's TinyUSB is built with the FreeRTOS OSAL (CFG_TUSB_OS).
 # This must be set before pico_sdk_init() (where tinyusb_device/tinyusb_board targets are created).
 set(TINYUSB_OPT_OS OPT_OS_FREERTOS)
+set(PICO_PIO_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/Pico-PIO-USB)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
@@ -74,12 +75,18 @@ pico_generate_pio_header(${PROJECT_NAME}
 
 target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
-        # ${CMAKE_CURRENT_LIST_DIR}/test.c
-        ${CMAKE_CURRENT_LIST_DIR}/main.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
-        ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
-        ${CMAKE_CURRENT_LIST_DIR}/led/led.c
-        ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
+	        # ${CMAKE_CURRENT_LIST_DIR}/test.c
+	        ${CMAKE_CURRENT_LIST_DIR}/main.c
+	        ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_callbacks.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/forward.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_keyd.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_parser.c
+	        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_report.c
+	        ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
+	        ${CMAKE_CURRENT_LIST_DIR}/led/led.c
+	        ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
 	        ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
 	        ${CMAKE_CURRENT_LIST_DIR}/log.c
@@ -87,12 +94,12 @@ target_sources(${PROJECT_NAME} PUBLIC
 	        ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
 	        ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
 	        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
-		        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
-		        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
-	        )
+			        ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
+			        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
+			        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
+			        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
+			        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+		        )
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -127,6 +134,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         pico_unique_id
         tinyusb_additions
         tinyusb_device
+        tinyusb_host
+        tinyusb_pico_pio_usb
         tinyusb_board
 
         hardware_sync
@@ -148,6 +157,7 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         PICO_STDIO_STACK_BUFFER_SIZE=256 # use a small printf on stack buffer
         PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000000 # avoid discarding long CDC bursts under load
+        PICO_DEFAULT_PIO_USB_DP_PIN=6
 )
 
 # add url via pico_set_program_url

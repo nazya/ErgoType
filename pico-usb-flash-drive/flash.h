@@ -10,10 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define FLASH_FAT_BLOCK_SIZE   4096
-#define FLASH_FAT_OFFSET       0x1F0000
 #define FAT_BLOCK_NUM          128  // 64KB
 #define FAT_BLOCK_SIZE         512
+#define FLASH_FAT_BLOCK_SIZE   4096
+#define FLASH_FAT_OFFSET       (PICO_FLASH_SIZE_BYTES - FAT_BLOCK_NUM * FAT_BLOCK_SIZE)
 
 
 void flash_fat_initialize(void);

@@ -20,9 +20,10 @@
 #define CAP_MOUSE_ABS	0x2
 #define CAP_KEYBOARD	0x4
 #define CAP_KEY		0x8
+/* New HID page support needs a CAP_* only if it cannot map to existing key/mouse events. */
 
 struct device {
-	QueueHandle_t events;
+	QueueHandle_t ev_queue;
 	uint8_t capabilities;
 	char id[16];
 	char name[32];
