@@ -5,7 +5,6 @@
  */
 #include "bsp/board.h"
 #include "pico/stdlib.h"
-#include "pico/stdio.h"
 // #include "pico/cyw43_arch.h"
 
 #include "tusb.h"
@@ -41,7 +40,7 @@ uint8_t mode; // read by USB descriptor callbacks
 SemaphoreHandle_t log_mutex;
 SemaphoreHandle_t stdio_tusb_cdc_mutex;
 QueueHandle_t vkbd_event_queue;
-QueueHandle_t keyscan_event_queue;
+QueueHandle_t input_event_queue;
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
@@ -194,13 +193,10 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(key_event_t));
         configASSERT(vkbd_event_queue);
 
-        keyscan_event_queue = xQueueCreate(16, sizeof(struct device_event));
-        configASSERT(keyscan_event_queue);
-        static void *keyscan_task_params[2];
-        keyscan_task_params[0] = &config;               // config_t*
-        keyscan_task_params[1] = keyscan_event_queue;   // QueueHandle_t
+        input_event_queue = xQueueCreate(64, sizeof(struct device_event));
+        configASSERT(input_event_queue);
 
-        xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 3, CORE1, NULL);
+        xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
         xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL,                IDLE_PRIORITY + 2, CORE0, NULL);
 

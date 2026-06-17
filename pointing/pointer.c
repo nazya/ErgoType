@@ -6,14 +6,17 @@
 #include "hardware/spi.h"
 
 #include "FreeRTOS.h"
+#include "queue.h"
 #include "task.h"
 
+#include "device.h"
 #include "jconfig.h"
 #include "log.h"
 #include "pmw3360.h"
 #include "pmw3389.h"
 #include "pointer.h"
-#include "vkbd.h"
+
+extern QueueHandle_t input_event_queue;
 
 static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
@@ -101,6 +104,7 @@ void pointing_device_task(void *pvParameters)
         int mouse_dy_sum = 0;
         int scroll_dx_sum = 0;
         int scroll_dy_sum = 0;
+        struct device_event devev = {0};
         for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
             if (bits && !(bits & (1u << i)))
                 continue;
@@ -131,9 +135,17 @@ void pointing_device_task(void *pvParameters)
             }
         }
 
-        if (mouse_dx_sum || mouse_dy_sum)
-            vkbd_mouse_move(NULL, mouse_dx_sum, mouse_dy_sum);
-        if (scroll_dx_sum || scroll_dy_sum)
-            vkbd_mouse_scroll(NULL, scroll_dx_sum, scroll_dy_sum);
+        if (mouse_dx_sum || mouse_dy_sum) {
+            devev.type = DEV_MOUSE_MOVE;
+            devev.x = mouse_dx_sum;
+            devev.y = mouse_dy_sum;
+            xQueueSendToBack(input_event_queue, &devev, portMAX_DELAY);
+        }
+        if (scroll_dx_sum || scroll_dy_sum) {
+            devev.type = DEV_MOUSE_SCROLL;
+            devev.x = scroll_dx_sum;
+            devev.y = scroll_dy_sum;
+            xQueueSendToBack(input_event_queue, &devev, portMAX_DELAY);
+        }
     }
 }
