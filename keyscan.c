@@ -54,6 +54,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "device.h"
 #include "keys.h"
 
+extern QueueHandle_t input_event_queue;
+
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
 static bool debouncing = false;
@@ -92,8 +94,7 @@ static void send_key_tap(QueueHandle_t queue, uint8_t code)
 
 static void process_encoders(const config_t *config,
                              encoder_state_t *states,
-                             const matrix_row_t *raw_matrix,
-                             QueueHandle_t keyscan_event_queue)
+                             const matrix_row_t *raw_matrix)
 {
     static const int8_t quad_table[16] = {
         0, -1, 1, 0,
@@ -130,11 +131,11 @@ static void process_encoders(const config_t *config,
 
         while (st->accum >= (int16_t)enc->div) {
             st->accum -= (int16_t)enc->div;
-            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->a][enc->c]);
+            send_key_tap(input_event_queue, config->matrix.keymap[enc->a][enc->c]);
         }
         while (st->accum <= -(int16_t)enc->div) {
             st->accum += (int16_t)enc->div;
-            send_key_tap(keyscan_event_queue, config->matrix.keymap[enc->b][enc->c]);
+            send_key_tap(input_event_queue, config->matrix.keymap[enc->b][enc->c]);
         }
     }
 }
@@ -364,9 +365,7 @@ uint8_t count_pressed_keys(config_t *config, uint8_t *single_code) {
 
 // Main matrix scanning task
 void keyscan_task(void* pvParameters) {
-    void **task_params = (void **)pvParameters;
-    config_t *config = (config_t *)task_params[0];
-    QueueHandle_t keyscan_event_queue = (QueueHandle_t)task_params[1];
+    config_t *config = (config_t *)pvParameters;
     debouncing_time = config->debounce;
     debouncing = (debouncing_time > 0);
     // matrix_t* matrix = (matrix_t*)pvParameters;
@@ -390,7 +389,7 @@ void keyscan_task(void* pvParameters) {
         // Scan the matrix
         matrix_scan(&config->matrix, raw_matrix);
         if (config->nr_encoders > 0) {
-            process_encoders(config, encoder_states, raw_matrix, keyscan_event_queue);
+            process_encoders(config, encoder_states, raw_matrix);
         }
 
         // Debounce the matrix
@@ -427,7 +426,7 @@ void keyscan_task(void* pvParameters) {
 
                 devev.pressed = pressed;
                 devev.code = code;
-                xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
+                xQueueSendToBack(input_event_queue, &devev, portMAX_DELAY);
                 
                 // if (xStatus != pdPASS) {
                 //     err("Failed to send event to queue");
