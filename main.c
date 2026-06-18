@@ -190,7 +190,7 @@ static void app_task(void *pvParameters)
 
     
     if (mode == HID) {
-        vkbd_event_queue = xQueueCreate(256, sizeof(key_event_t));
+        vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
 
         input_event_queue = xQueueCreate(64, sizeof(struct device_event));

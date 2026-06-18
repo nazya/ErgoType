@@ -21,9 +21,9 @@ typedef struct {
 	uint8_t buttons;
 	int16_t x;
 	int16_t y;
-} key_event_t;
+} vkbd_event_t;
 
-enum key_event_type {
+enum vkbd_event_type {
 	KEY_EVENT_KEY = 0,
 	KEY_EVENT_MOUSE_MOVE = 1,
 	KEY_EVENT_MOUSE_MOVE_ABS = 2,
