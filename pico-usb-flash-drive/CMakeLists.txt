@@ -1,10 +1,9 @@
 cmake_minimum_required(VERSION 3.13)
 
-set(PROJECT_NAME fsd)
+set(PROJECT_NAME flash_fatfs)
 project(${PROJECT_NAME} C CXX ASM)
 
 # set(PICO_BOARD pico_w)
-set(FAMILY rp2040)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 

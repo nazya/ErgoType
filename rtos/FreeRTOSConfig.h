@@ -73,7 +73,10 @@
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   (configSUPPORT_DYNAMIC_ALLOCATION*236*1024) // keep room for .bss (e.g. CDC pending buffer)
+#ifndef ERGOTYPE_FREERTOS_HEAP_KB
+#define ERGOTYPE_FREERTOS_HEAP_KB               236
+#endif
+#define configTOTAL_HEAP_SIZE                   (configSUPPORT_DYNAMIC_ALLOCATION*ERGOTYPE_FREERTOS_HEAP_KB*1024) // keep room for .bss (e.g. CDC pending buffer)
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Hook function related definitions. */

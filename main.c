@@ -45,9 +45,12 @@ QueueHandle_t keyscan_event_queue;
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
+void tusb_host_task(void *pvParameters);
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
+bool vkbd_bt_hid_init(void);
+void vkbd_bt_hid_task(void *pvParameters);
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
 extern const char *keyd_overlay_conf;
@@ -162,7 +165,7 @@ static void app_task(void *pvParameters)
     mode = mode_resolution.mode;
 
     if (mode == HID) {
-        xTaskCreateAffinitySet(tusb_device_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
+        xTaskCreateAffinitySet(tusb_host_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     } else {
         xTaskCreateAffinitySet(tusb_device_task, NULL, TUD_STACK_SIZE, NULL, TUSB_PRIORITY,
@@ -194,6 +197,9 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(key_event_t));
         configASSERT(vkbd_event_queue);
 
+        configASSERT(vkbd_bt_hid_init());
+        msg("output backend: bluetooth");
+
         keyscan_event_queue = xQueueCreate(16, sizeof(struct device_event));
         configASSERT(keyscan_event_queue);
         static void *keyscan_task_params[2];
@@ -202,7 +208,7 @@ static void app_task(void *pvParameters)
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, keyscan_task_params, IDLE_PRIORITY + 3, CORE1, NULL);
 
-        xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL,                IDLE_PRIORITY + 2, CORE0, NULL);
+        xTaskCreateAffinitySet(vkbd_bt_hid_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
 
         if (config.nr_pmw3360 || config.nr_pmw3389) {
             TaskHandle_t pointing_task_handle = NULL;

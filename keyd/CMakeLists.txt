@@ -11,9 +11,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Os")
 set(KEYD_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/src")
 set(KEYD_PORT_DIR "${CMAKE_CURRENT_LIST_DIR}/port")
 
-include_directories("${CMAKE_CURRENT_LIST_DIR}/../")
-include_directories("${CMAKE_CURRENT_LIST_DIR}/../rtos")
-
 add_library(keyd
   ${KEYD_PORT_DIR}/config.c
   ${KEYD_PORT_DIR}/macro.c
@@ -29,10 +26,15 @@ add_library(keyd
   ${KEYD_PORT_DIR}/vkbd/tusb_hid.c
 )
 
+target_include_directories(keyd PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/..
+  ${CMAKE_CURRENT_LIST_DIR}/../rtos
+)
+
 target_link_libraries(keyd
   PRIVATE
-  usbd
-  fsd
+  tusb_glue
+  flash_fatfs
   pico_stdlib
   FreeRTOS-Kernel
 )
