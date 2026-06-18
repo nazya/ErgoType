@@ -25,7 +25,7 @@ struct vkbd {
 	uint8_t unused;
 };
 
-static void enqueue_event(const key_event_t *event)
+static void enqueue_event(const vkbd_event_t *event)
 {
 	if (xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
@@ -43,7 +43,7 @@ struct vkbd *vkbd_init(const char *name)
 void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 {
 	(void)vkbd;
-	key_event_t event;
+	vkbd_event_t event;
 	memset(&event, 0, sizeof(event));
 	event.type = KEY_EVENT_MOUSE_MOVE;
 	event.x = (int16_t)x;
@@ -55,7 +55,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 {
 	(void)vkbd;
-	key_event_t event;
+	vkbd_event_t event;
 	memset(&event, 0, sizeof(event));
 	event.type = KEY_EVENT_MOUSE_MOVE_ABS;
 	event.x = (int16_t)x;
@@ -68,7 +68,7 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 {
 	(void)vkbd;
 
-	key_event_t event;
+	vkbd_event_t event;
 	memset(&event, 0, sizeof(event));
 	event.type = KEY_EVENT_MOUSE_SCROLL;
 	event.x = (int16_t)x; // horizontal (pan)
@@ -107,7 +107,7 @@ static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)
 		break;
 	}
 
-	key_event_t event;
+	vkbd_event_t event;
 	memset(&event, 0, sizeof(event));
 
 	if (is_btn) {

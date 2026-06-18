@@ -318,7 +318,7 @@ void vkbd_hid_task(void *pvParameters)
 {
 	(void)pvParameters;
 
-	key_event_t event;
+	vkbd_event_t event;
 
 	while (1) {
 		if (xQueueReceive(vkbd_event_queue, &event, portMAX_DELAY) != pdPASS)
