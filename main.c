@@ -37,16 +37,20 @@
 
 // Shared runtime symbols (owned by main.c).
 uint8_t mode; // read by USB descriptor callbacks
+uint8_t hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
 SemaphoreHandle_t log_mutex;
 SemaphoreHandle_t stdio_tusb_cdc_mutex;
 QueueHandle_t vkbd_event_queue;
 QueueHandle_t input_event_queue;
 
+static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
+
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
-void vkbd_hid_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
+void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
+void vkbd_hid_nkro_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
 extern const char *keyd_overlay_conf;
@@ -74,7 +78,7 @@ typedef struct {
     const char *reason;
 } mode_resolution_t;
 
-static void override_keyd_overlay_conf(uint8_t code)
+static void select_profile(uint8_t code)
 {
     switch (code) {
     case KEYD_A:
@@ -86,6 +90,9 @@ static void override_keyd_overlay_conf(uint8_t code)
     case KEYD_M:
         keyd_overlay_conf = "macos.conf";
         break;
+    case KEYD_L:
+        hid_output_profile = HID_OUTPUT_PROFILE_BOOT_KB_MOUSE;
+        /* fallthrough */
     case KEYD_D:
         keyd_overlay_conf = NULL;
         break;
@@ -150,13 +157,14 @@ static void app_task(void *pvParameters)
 
     int parse_rc = parse(&config, "config.json");
     uint8_t base_mode = (parse_rc == 0) ? HID : MSC; // HID by default; if config parse failed -> start MSC
+    hid_output_profile = default_hid_output_profile;
 
     // Optional: enable "plain" printf()/puts() over UART if config pins are valid.
     // uart_stdio_init(&config);
 
     uint8_t startup_key = 0;
     uint8_t nr_pressed = count_pressed_keys(&config, &startup_key);
-    override_keyd_overlay_conf(startup_key);
+    select_profile(startup_key);
     mode_resolution_t mode_resolution = resolve_mode(&config, base_mode, nr_pressed);
     mode = mode_resolution.mode;
 
@@ -198,7 +206,13 @@ static void app_task(void *pvParameters)
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
-        xTaskCreateAffinitySet(vkbd_hid_task, NULL, MIN_STACK_SIZE, NULL,                IDLE_PRIORITY + 2, CORE0, NULL);
+        if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
+            dbg("hid output profile: nkro");
+            xTaskCreateAffinitySet(vkbd_hid_nkro_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+        } else {
+            dbg("hid output profile: boot");
+            xTaskCreateAffinitySet(vkbd_hid_boot_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+        }
 
         if (config.nr_pmw3360 || config.nr_pmw3389) {
             TaskHandle_t pointing_task_handle = NULL;
