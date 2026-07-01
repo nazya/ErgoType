@@ -13,6 +13,7 @@ enum mode {
 enum report_id {
     REPORT_ID_KEYBOARD = 1,
     REPORT_ID_CONSUMER = 2,
+    REPORT_ID_WEBHID_CONFIG = 100,
 };
 
 enum hid_output_profile {
@@ -23,10 +24,14 @@ enum hid_output_profile {
 enum hid_instance {
     HID_KEYBOARD_INSTANCE = 0,
     HID_MOUSE_INSTANCE,
+    HID_WEBHID_INSTANCE,
 };
 
 #define HID_NKRO_KEY_BYTES 32
+#define WEBHID_REPORT_SIZE 63
+#define WEBHID_PROTOCOL_VERSION 1
 
+extern uint8_t mode;
 extern uint8_t hid_output_profile;
 
 // Descriptor constants

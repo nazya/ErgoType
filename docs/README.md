@@ -10,3 +10,4 @@
 - [Logging / console IO](logging.md)
 - [Boot modes (MSC vs HID)](modes.md)
 - [Runtime architecture](runtime.md)
+- [WebHID editor](webhid/README.md)

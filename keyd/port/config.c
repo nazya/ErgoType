@@ -15,6 +15,7 @@
 #include <ctype.h>
 
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "ff.h"
 
 #include "config.h"
@@ -23,6 +24,7 @@
 #include "log.h"
 
 const char *keyd_overlay_conf;
+extern SemaphoreHandle_t fatfs_mutex;
 
 struct ini_entry {
 	char *key;
@@ -1361,10 +1363,13 @@ int config_parse_file(struct config *config, const char *filename)
     struct ini_section section;
     memset(&section, 0, sizeof(section));
 
+    xSemaphoreTake(fatfs_mutex, portMAX_DELAY);
+
     // Mount the filesystem
     res = f_mount(&filesystem, "/", 1);
     if (res != FR_OK) {
         err("f_mount fail rc=%d", res);
+        xSemaphoreGive(fatfs_mutex);
         return -1;
     }
 
@@ -1373,6 +1378,7 @@ int config_parse_file(struct config *config, const char *filename)
     if (res != FR_OK) {
         f_unmount("/");
         err("failed to open %s", filename);
+        xSemaphoreGive(fatfs_mutex);
         return -1;
     }
 
@@ -1383,6 +1389,7 @@ int config_parse_file(struct config *config, const char *filename)
         if (process_first_pass_line(line, ln, &section, config, 0) < 0) {
             f_close(&fh);
             f_unmount("/");
+            xSemaphoreGive(fatfs_mutex);
             return -1;
         }
     }
@@ -1395,6 +1402,7 @@ int config_parse_file(struct config *config, const char *filename)
 			free_section_entries(&section);
 			f_close(&fh);
 			f_unmount("/");
+            xSemaphoreGive(fatfs_mutex);
 			return -1;
 		}
         free_section_entries(&section);
@@ -1408,6 +1416,7 @@ int config_parse_file(struct config *config, const char *filename)
     if (res != FR_OK) {
         f_unmount("/");
         err("failed to open %s", filename);
+        xSemaphoreGive(fatfs_mutex);
         return -1;
     }
 
@@ -1420,12 +1429,14 @@ int config_parse_file(struct config *config, const char *filename)
         if (process_second_pass_line(line, ln, section_name, config, 0) < 0) {
             f_close(&fh);
             f_unmount("/");
+            xSemaphoreGive(fatfs_mutex);
             return -1;
         }
     }
 
     f_close(&fh);
     f_unmount("/");
+    xSemaphoreGive(fatfs_mutex);
     dbg3("configuration parsing completed successfully");
 
     return 0;
