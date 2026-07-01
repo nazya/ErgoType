@@ -21,6 +21,16 @@ With this config, files on the Pico FAT volume are loaded in this order:
 
 If `overlay_conf` is not set, only `default.conf` is loaded.
 
+Startup override:
+
+- `a`: select `android.conf`
+- `w`: select `windows.conf`
+- `m`: select `macos.conf`
+- `d`: clear overlay and load only `default.conf`
+- `l`: select Boot/legacy HID profile and clear overlay
+
+The startup override is checked only when exactly one non-encoder key is held at boot.
+
 Overlay rules:
 
 - The overlay is parsed on top of `default.conf`.

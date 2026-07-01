@@ -29,6 +29,7 @@ This doc refers to nested fields using JSON “paths” (for example `uart0.rx` 
 | `nr_pressed_msc`   | `int8`  | `3`     | If `msc_pin` is unset/invalid, enter MSC mode when `nr_pressed >= nr_pressed_msc` at boot. Set to `0` to disable. |
 | `scan_period`      | `int8`  | `5`     | Key scan period in FreeRTOS ticks (tick rate is 1000 Hz, so 1 tick = 1 ms). |
 | `debounce`         | `int8`  | `9`     | Debounce time in milliseconds. Set to `0` to disable debouncing. |
+| `overlay_conf`     | `string` / `null` | `null` | Optional keyd overlay file loaded after `default.conf`, for example `"macos.conf"`. |
 
 ## Status LEDs (`led_pins`)
 

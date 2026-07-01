@@ -78,7 +78,7 @@ key <FK13> { [ ISO_First_Group ] };
 key <FK14> { [ ISO_Last_Group ] };
 ```
 
-Then in `keyd.conf`:
+Then in `default.conf`:
 
 ```ini
 [main]

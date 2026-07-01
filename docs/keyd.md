@@ -1,20 +1,21 @@
-# keyd.conf support
+# keyd config support
 
-ErgoType embeds a port of [`keyd`](https://github.com/rvaiya/keyd) and reads a single `keyd.conf` from the device’s on-flash FAT filesystem.
+ErgoType embeds a port of [`keyd`](https://github.com/rvaiya/keyd) and reads `default.conf` from the device’s on-flash FAT filesystem. An optional overlay file can be loaded on top.
 
 This page documents what is **actually implemented** in `keyd/*` in this repo.
 
 ## File location + load timing
 
-- File name: `keyd.conf`
+- Base file name: `default.conf`
+- Optional overlay: selected by `config.json` field `overlay_conf` or by startup key override
 - Location: root of the MSC drive (same volume that contains `config.json`)
 - Loaded: once, when the `keyd` task starts in **HID** mode (no hot reload)
 
 Practical workflow:
-1. Boot into **MSC** mode, edit `keyd.conf` on the drive.
+1. Edit `default.conf` and optional overlay files through **MSC** mode or the WebHID editor.
 2. Reboot / power-cycle back into **HID** mode to apply.
 
-See also: [`docs/modes.md`](modes.md).
+See also: [`docs/modes.md`](modes.md) and [`docs/keyd-overlays.md`](keyd-overlays.md).
 
 ## Supported config surface
 
@@ -62,7 +63,7 @@ ErgoType does not run a Linux daemon and does not emit `uinput` events. Instead,
 
 Practical implications:
 - You don’t get `keyd monitor`, `keyd reload`, `keyd listen`, app-specific mapper, or any other IPC-driven features.
-- Output is a standard 6KRO keyboard HID report (6 non-modifier keys + modifiers).
+- Output uses the selected HID profile. The default NKRO profile sends a keyboard bitmap plus Consumer Control report; the Boot/legacy profile sends boot keyboard + boot mouse reports.
 
 See also: [`docs/layouts.md`](layouts.md) for the recommended ErgoType multilingual layout model, host synchronization, `setlayoutm(...)`, XKB/Hyprland examples, and shortcut-layer guidance.
 
@@ -158,7 +159,7 @@ key <FK13> { [ ISO_First_Group ] };
 key <FK14> { [ ISO_Last_Group ] };
 ```
 
-Then in `keyd.conf`:
+Then in `default.conf`:
 
 ```ini
 [main]
@@ -289,12 +290,12 @@ These are parsed or recognized but not functional in this port:
 
 ## Built-in defaults
 
-Before `keyd.conf` is read, ErgoType seeds a small default config that defines:
+Before `default.conf` is read, ErgoType seeds a small default config that defines:
 - A default `[aliases]` section that aliases left/right modifiers to `shift`, `control`, `meta`, `alt`, `altgr`
 - A default `[main]` that maps `shift`, `control`, `meta`, `alt`, `altgr` to corresponding `layer(...)` actions
 - Empty modifier layers: `[control:C]`, `[shift:S]`, `[meta:M]`, `[alt:A]`, `[altgr:G]`
 
-You can override any of these in `keyd.conf`.
+You can override any of these in `default.conf` or an overlay.
 
 ## ErgoType extension: `overloadtm(...)`
 
