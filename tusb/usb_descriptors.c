@@ -8,8 +8,6 @@
 #include <stdint.h>
 #include <string.h>
 
-extern uint8_t mode;
-
 #define USB_DEVICE_DESCRIPTOR(product_id) { \
     .bLength            = sizeof(tusb_desc_device_t), \
     .bDescriptorType    = TUSB_DESC_DEVICE, \
@@ -95,6 +93,18 @@ static uint8_t const desc_hid_report_nkro[] =
     HID_COLLECTION_END,
 };
 
+static uint8_t const desc_hid_report_webhid[] =
+{
+    HID_USAGE_PAGE_N(0xFF00, 2),
+    HID_USAGE(0x20),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+    HID_REPORT_ID(REPORT_ID_WEBHID_CONFIG)
+    HID_REPORT_SIZE(8),
+    HID_REPORT_COUNT(WEBHID_REPORT_SIZE),
+    HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_COLLECTION_END,
+};
+
 //--------------------------------------------------------------------+
 // String Descriptors
 //--------------------------------------------------------------------+
@@ -108,6 +118,7 @@ enum
     STRID_CDC_IF,
     STRID_MSC_IF,
     STRID_HID_IF,
+    STRID_WEBHID_IF,
 };
 
 static char const* const string_desc_arr[] =
@@ -119,6 +130,7 @@ static char const* const string_desc_arr[] =
     "TinyUSB CDC",
     "TinyUSB MSC",
     "TinyUSB HID",
+    "ErgoType WebHID",
 };
 
 static uint16_t _desc_str[32 + 1];
@@ -142,6 +154,7 @@ enum
     ITF_NKRO_CDC_DATA,
     ITF_NKRO_KEYBOARD,
     ITF_NKRO_MOUSE,
+    ITF_NKRO_WEBHID,
     ITF_NKRO_TOTAL,
 };
 
@@ -158,10 +171,11 @@ enum
 #define EP_CDC_IN        0x82
 #define EP_HID_IN        0x83
 #define EP_HID_MOUSE_IN  0x84
+#define EP_HID_WEBHID_IN 0x85
 #define EP_MSC_OUT       0x03
 #define EP_MSC_IN        0x83
 
-#define CONFIG_TOTAL_LEN_HID_CDC_NKRO (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
+#define CONFIG_TOTAL_LEN_HID_CDC_NKRO (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
 #define CONFIG_TOTAL_LEN_HID_CDC_BOOT_KB_MOUSE (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
 #define CONFIG_TOTAL_LEN_CDC_MSC (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MSC_DESC_LEN)
 
@@ -179,6 +193,7 @@ static uint8_t const desc_configuration_hid_cdc_nkro[] =
     TUD_CDC_DESCRIPTOR(ITF_NKRO_CDC, STRID_CDC_IF, EP_CDC_NOTIF, USB_CDC_NOTIF_EP_SIZE, EP_CDC_OUT, EP_CDC_IN, USB_CDC_BULK_MPS_FS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_KEYBOARD, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_nkro), EP_HID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_MOUSE, sizeof(desc_hid_report_mouse), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
+    TUD_HID_DESCRIPTOR(ITF_NKRO_WEBHID, STRID_WEBHID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_webhid), EP_HID_WEBHID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
 };
 
 static uint8_t const desc_configuration_cdc_msc[] =
@@ -245,6 +260,12 @@ uint8_t const* tud_descriptor_configuration_cb(uint8_t index)
 
 uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance)
 {
+    if (mode != HID)
+        return NULL;
+
+    if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE && instance == HID_WEBHID_INSTANCE)
+        return desc_hid_report_webhid;
+
     if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE)
         return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_nkro : desc_hid_report_mouse;
 

@@ -1,0 +1,3972 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ErgoType WebHID</title>
+<style>
+:root {
+  color-scheme: light;
+
+  --space: 8px;
+  --space-xs: calc(var(--space) / 4);
+  --space-sm: calc(var(--space) / 2);
+  --space-lg: calc(var(--space) * 1);
+  --space-xl: calc(var(--space) * 1);
+  --border: 1px;
+  --radius: 8px;
+  --radius-pill: 999px;
+  --viewport-height: 100vh;
+  --control-height: calc(var(--space) * 4 + var(--border) * 2);
+  --small-control-height: calc(var(--space) * 3 + var(--space-sm));
+  --field-padding: var(--space);
+
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-size: 13px;
+  --font-size-xs: calc(var(--font-size) - 3px);
+  --font-size-sm: calc(var(--font-size) - 1px);
+  --font-size-file-subtitle: calc(var(--font-size) + 2px);
+  --font-size-brand: 20px;
+  --font-size-title: calc(var(--font-size-brand) + 2px);
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --line-height: 1.45;
+  --line-height-tight: 1;
+
+  --modal-width: 420px;
+  --dialog-top: 32px;
+  --toast-top: 50vh;
+  --toast-duration-ms: 1500;
+  --log-height: 190px;
+  --key-min-size: 34px;
+  --side-width: 280px;
+
+  --light-Canvas: #f7f7f7;
+  --light-CanvasText: #2b2f3b;
+  --light-AccentColor: #3498db;
+  --light-AccentColorText: #ffffff;
+  --light-ButtonFace: #ffffff;
+  --light-ButtonText: #2b2f3b;
+  --light-ButtonBorder: rgba(0, 0, 0, 0.15);
+  --light-Field: #ffffff;
+  --light-FieldText: #2e313d;
+  --light-GrayText: rgba(43, 47, 59, 0.55);
+  --light-Highlight: #3498db;
+  --light-HighlightText: #ffffff;
+  --light-SelectedItem: #3498db;
+  --light-SelectedItemText: #ffffff;
+  --light-LinkText: #217dbb;
+  --light-VisitedText: #23252e;
+  --light-ActiveText: #217dbb;
+  --light-MarkMix: 18%;
+
+  --Canvas: var(--light-Canvas);
+  --CanvasText: var(--light-CanvasText);
+  --AccentColor: var(--light-AccentColor);
+  --AccentColorText: var(--light-AccentColorText);
+  --ButtonFace: var(--light-ButtonFace);
+  --ButtonText: var(--light-ButtonText);
+  --ButtonBorder: var(--light-ButtonBorder);
+  --Field: var(--light-Field);
+  --FieldText: var(--light-FieldText);
+  --GrayText: var(--light-GrayText);
+  --Highlight: var(--light-Highlight);
+  --HighlightText: var(--light-HighlightText);
+  --SelectedItem: var(--light-SelectedItem);
+  --SelectedItemText: var(--light-SelectedItemText);
+  --LinkText: var(--light-LinkText);
+  --VisitedText: var(--light-VisitedText);
+  --ActiveText: var(--light-ActiveText);
+  --MarkMix: var(--light-MarkMix);
+  --Warning: #F27835;
+  --Error: #FC4138;
+  --Success: #2eb398;
+  --Destructive: #db5b5b;
+  --DropTarget: #F08437;
+  --WarningMark: color-mix(in srgb, var(--Warning) var(--MarkMix), var(--Canvas));
+  --ErrorMark: color-mix(in srgb, var(--Error) var(--MarkMix), var(--Canvas));
+  --SuccessMark: color-mix(in srgb, var(--Success) var(--MarkMix), var(--Canvas));
+  --DestructiveMark: color-mix(in srgb, var(--Destructive) var(--MarkMix), var(--Canvas));
+  --Mark: color-mix(in srgb, var(--AccentColor) var(--MarkMix), var(--Canvas));
+  --MarkText: var(--CanvasText);
+
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--AccentColor) var(--MarkMix), transparent);
+  --focus-inset-shadow: inset 0 0 0 2px var(--AccentColor);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  --SyntaxSection: #0369a1;
+  --SyntaxKey: #92400e;
+  --SyntaxOperator: #667085;
+  --SyntaxFunction: #6d28d9;
+  --SyntaxString: #047857;
+}
+
+* { box-sizing: border-box; }
+html {
+  height: 100%;
+}
+body {
+  background: var(--Canvas);
+  color: var(--CanvasText);
+  font-family: var(--font-sans);
+  margin: 0;
+}
+button, input, select, textarea {
+  font: inherit;
+}
+button {
+  align-items: center;
+  background: var(--ButtonFace);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  color: var(--ButtonText);
+  cursor: pointer;
+  display: inline-flex;
+  gap: var(--space);
+  min-height: var(--control-height);
+  padding: var(--space) var(--space);
+}
+button:hover:not(:disabled) { border-color: var(--GrayText); }
+button:disabled { cursor: not-allowed; opacity: .5; }
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--AccentColor);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+button.primary {
+  background: var(--AccentColor);
+  border-color: var(--AccentColor);
+  color: var(--AccentColorText);
+}
+button.danger {
+  background: var(--Destructive);
+  border-color: var(--Destructive);
+  color: var(--AccentColorText);
+}
+button.danger:hover:not(:disabled) {
+  border-color: var(--Destructive);
+}
+button.icon {
+  font-weight: var(--weight-bold);
+  justify-content: center;
+  padding: 0;
+  width: var(--control-height);
+}
+input, select, textarea {
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  color: var(--FieldText);
+  padding: var(--field-padding);
+}
+textarea {
+  line-height: var(--line-height);
+  resize: vertical;
+}
+.app {
+  display: grid;
+  grid-template-columns: var(--side-width) minmax(0, 1fr);
+  height: var(--viewport-height);
+}
+.sidebar {
+  background: var(--Canvas);
+  color: var(--CanvasText);
+  display: flex;
+  flex-direction: column;
+  height: var(--viewport-height);
+  overflow-y: auto;
+  padding: var(--space-xl);
+}
+.brand {
+  font-size: var(--font-size-brand);
+  font-weight: var(--weight-bold);
+  margin-bottom: var(--space-xl);
+}
+.side-section {
+  border-top: var(--border) solid var(--ButtonBorder);
+  margin-top: var(--space-lg);
+  padding: var(--space-lg) 0 0;
+}
+.side-bottom {
+  margin-top: auto;
+}
+.last-action-row {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height);
+}
+.last-action-row strong {
+  font-weight: var(--weight-semibold);
+}
+.side-title {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  margin-bottom: var(--space);
+  text-transform: uppercase;
+}
+.device-card {
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  padding: var(--space-lg);
+}
+.device-name {
+  font-weight: var(--weight-bold);
+  margin-bottom: var(--space);
+}
+.device-row {
+  align-items: center;
+  color: var(--GrayText);
+  display: flex;
+  font-size: var(--font-size);
+  gap: var(--space);
+  justify-content: space-between;
+  line-height: var(--line-height);
+}
+.side-actions {
+  display: grid;
+  gap: var(--space);
+  margin-top: var(--space-lg);
+}
+.side-actions button {
+  justify-content: center;
+  width: 100%;
+}
+.files {
+  display: grid;
+  gap: var(--space);
+}
+.file-actions {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: var(--space);
+}
+.file-actions button {
+  justify-content: center;
+}
+.file-subtitle {
+  align-items: baseline;
+  color: var(--GrayText);
+  display: flex;
+  font-size: var(--font-size-file-subtitle);
+  font-weight: var(--weight-bold);
+  gap: var(--space);
+  justify-content: space-between;
+  margin: var(--space) 0 var(--space);
+}
+.file-subtitle small {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+.file-row {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.side-hint {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height);
+  margin-top: var(--space);
+}
+.file-btn {
+  background: var(--Field);
+  border-color: var(--ButtonBorder);
+  color: var(--ButtonText);
+  justify-content: space-between;
+  width: 100%;
+}
+.file-btn.active {
+  background: var(--SelectedItem);
+  border-color: var(--SelectedItem);
+  color: var(--SelectedItemText);
+}
+.file-delete {
+  background: var(--Destructive);
+  border-color: var(--Destructive);
+  color: var(--AccentColorText);
+  justify-content: center;
+  padding-left: var(--space);
+  padding-right: var(--space);
+}
+.file-delete:hover:not(:disabled) {
+  border-color: var(--Destructive);
+}
+.status-pill {
+  align-items: center;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  gap: var(--space);
+  padding: var(--space-sm) var(--space);
+}
+.status-ok { background: var(--SuccessMark); color: var(--Success); }
+.status-warn { background: var(--WarningMark); color: var(--Warning); }
+.status-error { background: var(--ErrorMark); color: var(--Error); }
+.main {
+  height: var(--viewport-height);
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space);
+}
+.topbar {
+  align-items: center;
+  display: flex;
+  gap: var(--space-lg);
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+}
+.keyboard-preview {
+  overflow: hidden;
+}
+.top-workspace {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: minmax(0, 1fr) var(--side-width);
+  min-height: 0;
+}
+.editor-actions {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+.editor-actions .panel-body {
+  height: 100%;
+  min-height: 0;
+  padding: var(--space);
+}
+.action-view {
+  display: grid;
+  gap: var(--space);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.editor-file {
+  align-items: center;
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+.editor-file-name {
+  font-weight: var(--weight-bold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-file-size {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+}
+.editor-action-buttons {
+  align-content: start;
+  display: grid;
+  gap: var(--space);
+}
+.editor-action-buttons button {
+  justify-content: center;
+  width: 100%;
+}
+.keyboard-board {
+  height: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+.keyboard-key {
+  fill: var(--Field);
+  stroke: var(--ButtonBorder);
+  stroke-width: .035;
+}
+.keyboard-key.cursor-match {
+  fill: var(--WarningMark);
+  stroke: var(--Warning);
+  stroke-width: .07;
+}
+.keyboard-svg {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+.keyboard-label {
+  fill: var(--CanvasText);
+  font: .2px var(--font-sans);
+  font-weight: var(--weight-bold);
+  pointer-events: none;
+  text-anchor: middle;
+}
+.keyboard-sub-label {
+  fill: var(--GrayText);
+  font: .14px var(--font-sans);
+  pointer-events: none;
+  text-anchor: middle;
+}
+.keyboard-empty {
+  color: var(--GrayText);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+}
+.title {
+  font-size: var(--font-size-title);
+  font-weight: var(--weight-bold);
+}
+.subtitle {
+  color: var(--GrayText);
+  font-size: var(--font-size);
+  margin-top: var(--space-sm);
+}
+.tabs {
+  background: var(--ButtonFace);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  display: inline-flex;
+  padding: var(--space-sm);
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  min-height: var(--small-control-height);
+}
+.tab.active {
+  background: var(--Field);
+  box-shadow: var(--shadow-sm);
+}
+.tab:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.tab-pane.active {
+  display: block;
+}
+#pane-text.tab-pane.active {
+  display: grid;
+  gap: var(--space);
+  grid-template-rows: minmax(0, 50fr) minmax(0, 50fr);
+  height: 100%;
+}
+.panel {
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+.panel-header {
+  align-items: center;
+  border-bottom: var(--border) solid var(--ButtonBorder);
+  display: flex;
+  gap: var(--space);
+  justify-content: space-between;
+  padding: var(--space) var(--space);
+}
+.panel-title {
+  font-weight: var(--weight-bold);
+}
+.panel-body {
+  padding: var(--space);
+}
+.keyboard-preview .panel-body {
+  height: 100%;
+  padding: var(--space-sm);
+}
+.status-panel {
+  display: none;
+  margin-top: var(--space-lg);
+}
+.toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+}
+.toolbar-spaced {
+  margin-bottom: var(--space-lg);
+}
+.editor {
+  display: grid;
+  gap: var(--space-lg);
+  width: 100%;
+}
+.source-panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+.source-panel .panel-body {
+  min-height: 0;
+}
+.source-panel .editor {
+  height: 100%;
+  min-height: 0;
+}
+.editor-frame {
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.source-log-frame {
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.line-numbers {
+  background: var(--Field);
+  border-right: var(--border) solid var(--ButtonBorder);
+  color: var(--GrayText);
+  font: var(--font-size)/var(--line-height) var(--font-mono);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--space);
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+.editor-code {
+  background: var(--Field);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+#editor,
+#editor-highlight {
+  border: 0;
+  border-radius: 0;
+  font: var(--font-size)/var(--line-height) var(--font-mono);
+  margin: 0;
+  outline: none;
+  padding: var(--field-padding);
+  position: absolute;
+  tab-size: 4;
+  white-space: pre;
+  word-break: normal;
+}
+#editor {
+  background: transparent;
+  caret-color: var(--CanvasText);
+  color: transparent;
+  height: 100%;
+  inset: 0;
+  overflow: auto;
+  resize: none;
+  width: 100%;
+  z-index: 2;
+}
+#editor::selection {
+  background: var(--Highlight);
+  color: var(--HighlightText);
+}
+#editor-highlight {
+  background: transparent;
+  color: var(--CanvasText);
+  left: 0;
+  min-height: 100%;
+  min-width: 100%;
+  overflow: visible;
+  padding: 0;
+  pointer-events: none;
+  top: 0;
+  z-index: 1;
+}
+.editor-highlight-line {
+  position: absolute;
+  right: 0;
+  white-space: pre;
+}
+.hl-section { color: var(--SyntaxSection); font-weight: var(--weight-bold); }
+.hl-key { color: var(--SyntaxKey); }
+.hl-eq { color: var(--SyntaxOperator); }
+.hl-fn { color: var(--SyntaxFunction); }
+.hl-comment { color: var(--SyntaxOperator); font-style: italic; }
+.hl-string { color: var(--SyntaxString); }
+.hl-json-key { color: var(--SyntaxSection); }
+.hl-json-string { color: var(--SyntaxString); }
+.hl-json-number { color: var(--SyntaxKey); }
+.hl-json-literal { color: var(--SyntaxFunction); }
+.kv {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+.kv div:nth-child(odd) {
+  color: var(--GrayText);
+  font-size: var(--font-size);
+}
+.message {
+  border-radius: var(--radius);
+  line-height: var(--line-height);
+  margin-top: var(--space-lg);
+  padding: var(--space) var(--space-lg);
+}
+.status-toast {
+  box-shadow: var(--shadow);
+  left: 50%;
+  margin: 0;
+  max-width: min(520px, calc(100vw - var(--space) * 4));
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  top: var(--toast-top);
+  transform: translate(-50%, calc(-50% - var(--space)));
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 12;
+}
+.status-toast.active {
+  opacity: 1;
+  transform: translate(-50%, -50%);
+}
+.message.info { background: var(--Mark); color: var(--AccentColor); }
+.message.error { background: var(--ErrorMark); color: var(--Error); }
+.message.ok { background: var(--SuccessMark); color: var(--Success); }
+.checks {
+  display: grid;
+  gap: var(--space);
+  margin-top: var(--space);
+}
+.check-row {
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius);
+  display: flex;
+  font-size: var(--font-size);
+  gap: var(--space);
+  justify-content: flex-start;
+  line-height: var(--line-height);
+  padding: var(--field-padding);
+  text-align: left;
+  user-select: text;
+  width: 100%;
+}
+.check-row[data-line] { cursor: pointer; }
+.check-row.error { background: var(--ErrorMark); color: var(--Error); }
+.check-row.warn { background: var(--WarningMark); color: var(--Warning); }
+.check-row.info { background: var(--Mark); color: var(--AccentColor); }
+.check-row.ok { background: var(--SuccessMark); color: var(--Success); }
+.tail-header {
+  align-items: center;
+  display: flex;
+  gap: var(--space);
+  justify-content: space-between;
+  margin: var(--space-lg) 0 var(--space);
+}
+.tail-label {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+}
+.tail-header button {
+  font-size: var(--font-size-sm);
+  min-height: var(--small-control-height);
+  padding: var(--space-sm) var(--space);
+}
+.tail {
+  background: var(--CanvasText);
+  border-radius: var(--radius);
+  color: var(--Canvas);
+  font: var(--font-size-sm)/var(--line-height) var(--font-mono);
+  margin: 0;
+  max-height: var(--log-height);
+  overflow: auto;
+  padding: var(--space);
+  white-space: pre-wrap;
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+.visual-layout {
+  display: grid;
+  gap: var(--space-lg);
+  grid-template-columns: var(--side-width) minmax(0, 1fr);
+}
+.layer-list {
+  display: grid;
+  gap: var(--space);
+}
+.layer-row {
+  align-items: center;
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: var(--space);
+}
+.layer-row.active {
+  background: var(--SelectedItem);
+  border-color: var(--SelectedItem);
+  color: var(--SelectedItemText);
+}
+.layer-name {
+  font-weight: var(--weight-bold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-desc {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+}
+.layer-row.active .layer-desc {
+  color: var(--SelectedItemText);
+}
+.mapping-table {
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.visual-workbench {
+  display: grid;
+  gap: var(--space-lg);
+  grid-template-columns: minmax(0, 1fr) 270px;
+  margin-bottom: var(--space-lg);
+}
+.key-grid {
+  display: grid;
+  gap: var(--space);
+}
+.key-grid.config-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.key-row {
+  display: grid;
+  gap: var(--space);
+}
+.keycap {
+  align-items: center;
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  color: var(--CanvasText);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  justify-content: center;
+  min-height: 48px;
+  overflow: hidden;
+  padding: var(--space-sm);
+}
+.keycap.active {
+  background: var(--Mark);
+  border-color: var(--AccentColor);
+}
+.keycap.default {
+  background: var(--Field);
+  border-style: dashed;
+}
+.keycap.selected {
+  box-shadow: var(--focus-inset-shadow);
+}
+.keycap strong {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+}
+.keycap span {
+  color: var(--GrayText);
+  font-size: var(--font-size-xs);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector {
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--space);
+  padding: var(--space);
+}
+.inspector-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  text-transform: uppercase;
+}
+.inspector input,
+.inspector select,
+.inspector button {
+  width: 100%;
+}
+.empty-state {
+  background: var(--Field);
+  border: var(--border) dashed var(--ButtonBorder);
+  border-radius: var(--radius);
+  color: var(--GrayText);
+  line-height: var(--line-height);
+  padding: var(--space-lg);
+  text-align: center;
+}
+.key-filter {
+  margin-bottom: var(--space);
+  width: 100%;
+}
+.mapping-head,
+.mapping-row {
+  display: grid;
+  gap: 0;
+  grid-template-columns: 72px 150px 1fr 118px;
+}
+.mapping-head {
+  background: var(--ButtonFace);
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  text-transform: uppercase;
+}
+.mapping-head div,
+.mapping-row > div {
+  border-bottom: var(--border) solid var(--ButtonBorder);
+  padding: var(--space);
+}
+.mapping-row:last-child > div { border-bottom: 0; }
+.mapping-row.selected > div {
+  background: var(--SelectedItem);
+  color: var(--SelectedItemText);
+}
+.mapping-row.duplicate > div {
+  background: var(--Mark);
+}
+.mapping-row input,
+.mapping-row select {
+  width: 100%;
+}
+.mapping-line {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+}
+.mapping-actions {
+  display: flex;
+  gap: var(--space);
+}
+.mapping-empty {
+  color: var(--GrayText);
+  font-size: var(--font-size);
+  padding: var(--space-lg);
+}
+.key-grid .mapping-empty {
+  grid-column: 1 / -1;
+}
+.form-row {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  margin-bottom: var(--space-lg);
+}
+.descriptor-help {
+  align-items: center;
+  color: var(--GrayText);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-sm);
+  gap: var(--space);
+  line-height: var(--line-height);
+  margin: calc(-1 * var(--space-sm)) 0 var(--space-lg);
+}
+.descriptor-help code {
+  background: var(--ButtonFace);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  color: var(--CanvasText);
+  font-family: var(--font-mono);
+  padding: var(--space-xs) var(--radius);
+}
+.descriptor-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space);
+  margin: calc(-1 * var(--space-sm)) 0 var(--space-lg);
+}
+.descriptor-btn {
+  font-size: var(--font-size-sm);
+  min-height: var(--small-control-height);
+  padding: var(--space-sm) var(--space);
+}
+.descriptor-btn.active {
+  background: var(--SelectedItem);
+  border-color: var(--SelectedItem);
+  color: var(--SelectedItemText);
+  font-weight: var(--weight-bold);
+}
+#full-log {
+  background: var(--CanvasText);
+  color: var(--Canvas);
+  font: var(--font-size-sm)/var(--line-height) var(--font-mono);
+  height: 100%;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-lg);
+  white-space: pre-wrap;
+}
+.busy-blocker {
+  inset: 0;
+  position: fixed;
+  z-index: 10;
+}
+.busy-dialog {
+  background: var(--Field);
+  border: var(--border) solid var(--ButtonBorder);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  left: 50%;
+  max-width: var(--modal-width);
+  padding: var(--space-lg);
+  position: fixed;
+  top: var(--dialog-top);
+  transform: translateX(-50%);
+  z-index: 11;
+}
+.progress {
+  background: var(--ButtonFace);
+  border-radius: var(--radius-pill);
+  height: var(--space);
+  margin-top: var(--space-lg);
+  overflow: hidden;
+}
+.progress-bar {
+  background: var(--AccentColor);
+  height: 100%;
+  transition: width .12s ease;
+  width: 0;
+}
+.progress-label {
+  color: var(--GrayText);
+  font-size: var(--font-size-sm);
+  margin-top: var(--space);
+}
+.hidden { display: none; }
+@media (max-width: 980px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .visual-layout, .visual-workbench { grid-template-columns: 1fr; }
+  .mapping-head,
+  .mapping-row { grid-template-columns: minmax(84px, 1fr) minmax(120px, 2fr) 112px; }
+  .mapping-head div:first-child,
+  .mapping-row .mapping-line { display: none; }
+  .mapping-actions { gap: var(--space-sm); }
+}
+@media (max-width: 720px) {
+  .main { padding: var(--space); }
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .tabs { width: 100%; }
+  .tab {
+    flex: 1;
+    justify-content: center;
+  }
+  .panel-header {
+    align-items: stretch;
+    flex-direction: column;
+    padding: var(--space) var(--space);
+  }
+  .panel-body { padding: var(--space); }
+  .toolbar {
+    justify-content: flex-start;
+  }
+  .toolbar button,
+  .toolbar select,
+  .toolbar input {
+    flex: 1 1 140px;
+  }
+  .form-row { grid-template-columns: 1fr; }
+  .editor-frame { grid-template-columns: 44px minmax(0, 1fr); }
+  .line-numbers {
+    padding-left: var(--space-sm);
+    padding-right: var(--space);
+  }
+}
+</style>
+
+<div id="busy-blocker" class="busy-blocker hidden"></div>
+<div id="busy-dialog" class="busy-dialog hidden" role="status" aria-live="assertive" aria-labelledby="busy-title" aria-describedby="busy-text busy-progress-label">
+  <strong id="busy-title">Operation in progress</strong>
+  <div id="busy-text" class="subtitle">Do not unplug, reload, close this tab, or start another operation.</div>
+  <div class="progress"><div id="busy-progress" class="progress-bar" role="progressbar" aria-label="Transfer progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
+  <div id="busy-progress-label" class="progress-label" aria-live="polite">Preparing...</div>
+</div>
+<div id="status-message" class="message info status-toast" role="status" aria-live="polite">Ready.</div>
+
+<div id="app" class="app" aria-busy="false">
+  <aside class="sidebar">
+    <div class="brand">ErgoType WebHID</div>
+    <div class="device-card">
+      <div id="device" class="device-name">No device</div>
+      <div class="device-row">
+        <span id="device-meta">Connect a paired ErgoType WebHID interface.</span>
+        <span id="status-pill" class="status-pill status-warn">disconnected</span>
+      </div>
+    </div>
+    <div class="side-actions">
+      <button id="connect" class="primary">Connect</button>
+      <button id="refresh" disabled>Refresh status</button>
+      <button id="toggle-log">Log</button>
+    </div>
+
+    <div class="side-section">
+      <div class="file-subtitle">Predefined files</div>
+      <div id="known-file-list" class="files"></div>
+      <div class="file-subtitle">
+        <span>Device files</span>
+        <small><span id="storage-free">-</span>/<span id="storage-total">-</span></small>
+      </div>
+      <div class="file-actions">
+        <button id="refresh-files" disabled>Refresh</button>
+        <button id="new-file">New File</button>
+      </div>
+      <div id="file-list" class="files"></div>
+      <div class="side-hint">Refresh reads the root of the device FAT volume.</div>
+    </div>
+
+    <div class="side-section side-bottom">
+      <div class="last-action-row">Last action: <strong id="last-action">-</strong></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section id="pane-text" class="tab-pane active">
+      <div class="top-workspace">
+        <div class="panel keyboard-preview">
+          <div class="panel-body">
+            <div id="keyboard-subtitle" class="hidden">Load config.json to map physical keys.</div>
+            <div id="keyboard-board" class="keyboard-board"></div>
+          </div>
+        </div>
+
+        <div class="panel editor-actions">
+          <div class="panel-body">
+            <div id="file-action-view" class="action-view">
+              <div class="editor-file">
+                <div>
+                  <div id="action-current-file" class="editor-file-name">default.conf</div>
+                  <div id="doc-size" class="editor-file-size">0 bytes</div>
+                </div>
+                <span id="dirty-pill" class="status-pill status-ok">clean</span>
+              </div>
+              <div class="editor-action-buttons">
+                <button id="load" disabled>Load</button>
+                <button id="save" class="primary" disabled>Save</button>
+                <button id="download-backup" disabled>Download</button>
+                <button id="open-local">Open</button>
+                <button id="revert-changes" disabled>Revert</button>
+                <button id="format-file" disabled>Format</button>
+                <input id="local-file" class="hidden" type="file" accept=".conf,.json,.bak,text/plain,application/json" aria-label="Open local file">
+              </div>
+            </div>
+            <div id="log-action-view" class="action-view hidden">
+              <div class="editor-file">
+                <div>
+                  <div class="editor-file-name">Log</div>
+                  <div id="log-entry-count" class="editor-file-size">0 entries</div>
+                </div>
+              </div>
+              <div class="editor-action-buttons">
+                <button id="toggle-debug-log">Debug</button>
+                <button id="copy-log">Copy</button>
+                <button id="download-log">Download</button>
+                <button id="clear-log">Clear</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel source-panel">
+        <div class="panel-body editor">
+          <div id="editor-frame" class="editor-frame">
+            <pre id="line-numbers" class="line-numbers">1</pre>
+            <div class="editor-code">
+              <div id="editor-highlight" aria-hidden="true"></div>
+              <textarea id="editor" spellcheck="false" wrap="off" aria-label="Source editor"></textarea>
+            </div>
+          </div>
+          <div id="source-log-frame" class="source-log-frame hidden">
+            <pre id="full-log"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pane-visual" class="tab-pane" hidden>
+      <div class="visual-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Layers</div>
+            <button id="add-layer" class="icon" disabled title="Add layer" aria-label="Add layer">+</button>
+          </div>
+          <div class="panel-body">
+            <input id="layer-filter" class="key-filter" placeholder="filter layers" aria-label="Filter layers" disabled>
+            <div id="layer-list" class="layer-list"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div id="visual-title" class="panel-title">No .conf layer selected</div>
+              <div id="visual-subtitle" class="subtitle">Select, open, or create a .conf file.</div>
+            </div>
+            <div class="toolbar">
+              <button id="move-layer-up" disabled>Move up</button>
+              <button id="move-layer-down" disabled>Move down</button>
+              <button id="duplicate-layer" disabled>Duplicate</button>
+              <button id="remove-layer" class="danger" disabled>Remove layer</button>
+              <button id="apply-visual" class="primary" disabled>Apply to text</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="form-row">
+              <input id="layer-name" list="layer-options" placeholder="layer name" aria-label="Layer name" disabled>
+              <input id="layer-descriptor" list="descriptor-options" placeholder="descriptor, e.g. S" aria-label="Layer descriptor" disabled>
+              <datalist id="layer-options"></datalist>
+              <datalist id="descriptor-options">
+              </datalist>
+              <button id="rename-layer" disabled>Update</button>
+            </div>
+            <div class="descriptor-help">
+              Descriptors:
+              <code>base</code>
+              <code>layout</code>
+              <code>S</code>
+              <code>C</code>
+              <code>A</code>
+              <code>M</code>
+              and joined combos like <code>S-C-A-M</code>.
+            </div>
+            <div id="descriptor-palette" class="descriptor-palette" aria-label="Descriptor picker"></div>
+            <div class="toolbar toolbar-spaced">
+              <select id="action-preset" aria-label="Action preset" disabled>
+                <option value="">Insert action...</option>
+                <option value="noop">noop</option>
+                <option value="layer()">layer(...)</option>
+                <option value="oneshotm(typing, )">oneshotm(...)</option>
+                <option value="overload(, )">overload(...)</option>
+                <option value="overloadt(, , 200)">overloadt(...)</option>
+                <option value="timeout(, 300, )">timeout(...)</option>
+                <option value="macro()">macro(...)</option>
+                <option value="setlayout(en)">setlayout(en)</option>
+                <option value="setlayout(ru)">setlayout(ru)</option>
+              </select>
+              <button id="add-mapping" disabled>Add mapping</button>
+              <input id="mapping-filter" placeholder="filter mappings" aria-label="Filter mappings" disabled>
+            </div>
+            <div id="visual-workbench" class="visual-workbench">
+              <div>
+                <input id="key-filter" class="key-filter" placeholder="filter keys" aria-label="Filter keys" disabled>
+                <div id="key-grid" class="key-grid"></div>
+              </div>
+              <div class="inspector">
+                <div class="inspector-title">Selected key</div>
+                <input id="selected-key" list="key-options" placeholder="key" aria-label="Selected key" disabled>
+                <input id="selected-action" list="action-options" placeholder="action" aria-label="Selected action" disabled>
+                <datalist id="key-options"></datalist>
+                <datalist id="action-options"></datalist>
+                <button id="set-selected-action" disabled>Set action</button>
+              </div>
+            </div>
+            <div id="visual-empty" class="empty-state hidden"></div>
+            <div id="mapping-table" class="mapping-table">
+              <div class="mapping-head"><div>Line</div><div id="mapping-key-head">Key</div><div id="mapping-action-head">Action</div><div></div></div>
+              <div id="mapping-list"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="panel status-panel">
+      <div class="panel-header">
+        <div class="panel-title">Status</div>
+        <span id="op-pill" class="status-pill status-ok">idle</span>
+      </div>
+      <div class="panel-body">
+        <div id="check-summary" class="message ok" role="status" aria-live="polite">Checks not run yet.</div>
+        <div id="checks" class="checks"></div>
+        <div class="tail-header">
+          <div id="tail-label" class="tail-label">Recent log: empty</div>
+          <button id="open-full-log">Full log</button>
+        </div>
+        <pre id="tail-log" class="tail"></pre>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const REPORT_ID_WEBHID_CONFIG = 100;
+const WEBHID_REPORT_SIZE = 63;
+const WEBHID_PROTOCOL_VERSION = 1;
+const WEBHID_CMD_GET_STATUS = 1;
+const WEBHID_CMD_FILE_OPEN_READ = 2;
+const WEBHID_CMD_FILE_READ_CHUNK = 3;
+const WEBHID_CMD_FILE_WRITE_BEGIN = 4;
+const WEBHID_CMD_FILE_WRITE_CHUNK = 5;
+const WEBHID_CMD_FILE_WRITE_COMMIT = 6;
+const WEBHID_CMD_FILE_WRITE_ABORT = 7;
+const WEBHID_CMD_FILE_LIST_OPEN = 8;
+const WEBHID_CMD_FILE_LIST_READ_CHUNK = 9;
+const WEBHID_CMD_FILE_DELETE = 10;
+const WEBHID_CMD_FILE_READ_END = 11;
+const WEBHID_STATUS_OK = 0;
+const WEBHID_STATUS_BUSY = 4;
+const WEBHID_FILE_READ_DATA_OFFSET = 13;
+const WEBHID_FILE_LIST_DATA_OFFSET = 13;
+const WEBHID_FILE_WRITE_DATA_OFFSET = 7;
+const WEBHID_FILE_WRITE_DATA_SIZE = WEBHID_REPORT_SIZE - WEBHID_FILE_WRITE_DATA_OFFSET;
+const WEBHID_BUSY_RETRY_MS = 100;
+const WEBHID_BUSY_RETRIES = 30;
+const WEBHID_NO_BUSY_RETRY = 0;
+const LOG_TAIL_LIMIT = 100;
+const rootStyle = getComputedStyle(document.documentElement);
+const cssVar = name => rootStyle.getPropertyValue(name).trim();
+const KLE_KEY_COLOR = cssVar("--Field");
+const KLE_TEXT_COLOR = cssVar("--GrayText");
+const KEY_GRID_MIN_SIZE = cssVar("--key-min-size");
+const TOAST_DURATION_MS = Number(cssVar("--toast-duration-ms"));
+const FALLBACK_KEY_ROW_SIZE = 14;
+
+const statusNames = {
+  1: "unknown command",
+  2: "bad request",
+  3: "filesystem error",
+  [WEBHID_STATUS_BUSY]: "busy",
+};
+const commandNames = {
+  [WEBHID_CMD_GET_STATUS]: "get status",
+  [WEBHID_CMD_FILE_OPEN_READ]: "open read",
+  [WEBHID_CMD_FILE_READ_CHUNK]: "read chunk",
+  [WEBHID_CMD_FILE_WRITE_BEGIN]: "write begin",
+  [WEBHID_CMD_FILE_WRITE_CHUNK]: "write chunk",
+  [WEBHID_CMD_FILE_WRITE_COMMIT]: "write commit",
+  [WEBHID_CMD_FILE_WRITE_ABORT]: "write abort",
+  [WEBHID_CMD_FILE_LIST_OPEN]: "list open",
+  [WEBHID_CMD_FILE_LIST_READ_CHUNK]: "list read chunk",
+  [WEBHID_CMD_FILE_DELETE]: "delete",
+  [WEBHID_CMD_FILE_READ_END]: "read end",
+};
+const fsResultNames = {
+  0: "ok",
+  1: "disk error",
+  2: "internal error",
+  3: "not ready",
+  4: "no file",
+  5: "no path",
+  6: "invalid name",
+  7: "denied",
+  8: "already exists",
+  9: "invalid object",
+  10: "write protected",
+  11: "invalid drive",
+  12: "not enabled",
+  13: "no filesystem",
+  14: "mkfs aborted",
+  15: "timeout",
+  16: "locked",
+  17: "not enough core",
+  18: "too many open files",
+  19: "invalid parameter",
+};
+const knownFiles = [
+  { name: "default.conf", type: "conf" },
+  { name: "android.conf", type: "conf" },
+  { name: "windows.conf", type: "conf" },
+  { name: "macos.conf", type: "conf" },
+  { name: "config.json", type: "json" },
+];
+const defaultFile = knownFiles.find(file => file.name === "config.json");
+const defaultConfigJson = `{
+  "log_level": 3,
+  "ws2812_pin": 23,
+  "msc_pin": 24,
+  "led_pin": 25,
+  "scan_period": 2,
+  "debounce": 9,
+  "gpio_rows": [22, 21, 20, 19, 13, 18, 17, 16],
+  "gpio_cols": [14, 10, 12, 15, 11,  8, 28,  9],
+  "encoders": [
+    {"a": 17, "b": 18, "c": 12, "div": 2},
+    {"a": 18, "b": 17, "c":  8, "div": 2}
+  ],
+  "overlay_conf": "macos.conf",
+  "keymap": [
+    [         "3",        "4",           "5",       "swd4",         "swd5",          "6",         "7",          "8" ],
+    [         "1",        "2",           "z",          "<",            ">",          "j",         "9",          "0" ],
+    [         "x",        "b",           "r",          "t",            "n",          "e",         "p",          "q" ],
+    [         "/",        "v",           "c",          "f",            "y",          "h",         "k",          "-" ],
+    [         "a",        "s",           "d",          "[",            "]",          "l",         "i",          "o" ],
+    [         "g",        "w", "scrollright",      "space", "rightcontrol",   "scrollup",         "u",          "m" ],
+    [         ",",        "\`",  "scrollleft",  "leftshift",   "rightshift", "scrolldown",         "'",          "." ],
+    [ "leftwrist", "leftmeta",       "enc1c", "leftthumb3",  "rightthumb3",      "enc2c", "rightmeta", "rightwrist" ]
+  ]
+}
+`;
+const keyboardLayouts = {
+  ergotype_monosplit_kicad: {
+    name: "ErgoType monosplit KiCad placement",
+    kle: [{"name":"ErgoType KiCad layout","author":"ErgoType","notes":"Generated from KiCad component placement. Coordinates are rotated 180 degrees from KiCad placement into KLE screen coordinates. Switches are rendered as 1u CHICKLET keys; rotary encoders are omitted."},[{"r":-26,"rx":12.2774,"ry":0.7517,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW8"],[{"r":-26,"rx":11.2561,"ry":0.7534,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW7"],[{"r":-26,"rx":10.5455,"ry":1.392,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW6"],[{"r":-26,"rx":8.8233,"ry":4.1476,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW5"],[{"r":26,"rx":6.9138,"ry":4.1476,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW4"],[{"r":26,"rx":5.1916,"ry":1.392,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW3"],[{"r":26,"rx":4.481,"ry":0.7534,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW2"],[{"r":26,"rx":3.4597,"ry":0.7517,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW1"],[{"r":-26,"rx":14.5823,"ry":1.2862,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW16"],[{"r":-26,"rx":13.3746,"ry":0.9058,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW15"],[{"r":-26,"rx":10.9482,"ry":2.2177,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW14"],[{"r":-26,"rx":10.1755,"ry":2.7289,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW13"],[{"r":26,"rx":5.5616,"ry":2.7289,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW12"],[{"r":26,"rx":4.7889,"ry":2.2177,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW11"],[{"r":26,"rx":2.3625,"ry":0.9058,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW10"],[{"r":26,"rx":1.1549,"ry":1.2862,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW9"],[{"r":-26,"rx":13.7773,"ry":1.7314,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW24"],[{"r":-26,"rx":11.6589,"ry":1.5791,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW23"],[{"r":-26,"rx":12.0616,"ry":2.4047,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW22"],[{"r":-26,"rx":11.3509,"ry":3.0433,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW21"],[{"r":26,"rx":4.3862,"ry":3.0433,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW20"],[{"r":26,"rx":3.6756,"ry":2.4047,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW19"],[{"r":26,"rx":4.0783,"ry":1.5791,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW18"],[{"r":26,"rx":1.9598,"ry":1.7314,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW17"],[{"r":-26,"rx":14.985,"ry":2.1119,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW32"],[{"r":-26,"rx":12.6801,"ry":1.5774,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW31"],[{"r":-26,"rx":11.7537,"ry":3.869,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW30"],[{"r":-26,"rx":10.5784,"ry":3.5544,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW29"],[{"r":26,"rx":5.1589,"ry":3.5545,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW28"],[{"r":26,"rx":3.9835,"ry":3.869,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW27"],[{"r":26,"rx":3.057,"ry":1.5774,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW26"],[{"r":26,"rx":0.7522,"ry":2.1119,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW25"],[{"r":-26,"rx":14.18,"ry":2.5571,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW40"],[{"r":-26,"rx":13.0828,"ry":2.4031,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW39"],[{"r":-26,"rx":12.4643,"ry":3.2304,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW38"],[{"r":-26,"rx":9.649,"ry":3.7449,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW37"],[{"r":26,"rx":6.0882,"ry":3.7449,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW36"],[{"r":26,"rx":3.2729,"ry":3.2304,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW35"],[{"r":26,"rx":2.6543,"ry":2.4031,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW34"],[{"r":26,"rx":1.5571,"ry":2.5571,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW33"],[{"r":-26,"rx":14.5827,"ry":3.3827,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW46"],[{"r":-26,"rx":13.4855,"ry":3.2287,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW45"],[{"r":30,"rx":10.866,"ry":4.6948,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW44"],[{"r":-30,"rx":4.8712,"ry":4.6948,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW43"],[{"r":26,"rx":2.2516,"ry":3.2287,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW42"],[{"r":26,"rx":1.1544,"ry":3.3827,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW41"],[{"r":-26,"rx":13.8882,"ry":4.0544,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW52"],[{"r":-26,"rx":14.9854,"ry":4.2084,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW51"],[{"r":15,"rx":10.4513,"ry":5.708,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW50"],[{"r":-15,"rx":5.2859,"ry":5.708,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW49"],[{"r":26,"rx":0.7517,"ry":4.2084,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW48"],[{"r":26,"rx":1.8489,"ry":4.0544,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW47"],[{"r":-26,"rx":12.867,"ry":4.056,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW57"],[{"r":0,"rx":10.3095,"ry":6.7998,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW56"],[{"r":0,"rx":5.4276,"ry":6.7998,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW55"],[{"r":26,"rx":2.8702,"ry":4.056,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2},"SW54"],[{"r":0,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"rx":6.6717,"ry":5.3562},"swd59"],[{"r":0,"x":-0.5,"y":-0.5,"w":1,"h":1,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"rx":9.0654,"ry":5.3562},"swd60"],[{"r":0,"x":-1.0,"w":1.5,"h":0.5,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"y":-0.5,"rx":9.1389,"ry":6.5373},"enc2a"],[{"r":0,"x":-1.0,"w":1.5,"h":0.5,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"y":0.0,"rx":9.1389,"ry":6.5373},"enc2b"],[{"r":0,"x":-0.5,"w":1.5,"h":0.5,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"y":-0.5,"rx":6.5982,"ry":6.5373},"enc1a"],[{"r":0,"x":-0.5,"w":1.5,"h":0.5,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"y":0.0,"rx":6.5982,"ry":6.5373},"enc1b"],[{"r":0,"x":-5.25,"y":-1.5,"w":2,"h":2,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"rx":5.4276,"ry":6.7998},"leftwrist"],[{"r":0,"x":3.25,"y":-1.5,"w":2,"h":2,"c":KLE_KEY_COLOR,"t":KLE_TEXT_COLOR,"p":"CHICKLET","a":7,"f":2,"rx":10.3095,"ry":6.7998},"rightwrist"],[],[]],
+  },
+};
+const activeKeyboardLayoutId = "ergotype_monosplit_kicad";
+const validKeydNames = new Set(["esc","escape","1","!","2","@","3","#","4","$","5","%","6","^","7","&","8","*","9","(","0",")","-","minus","_","=","equal","+","backspace","tab","q","Q","w","W","e","E","r","R","t","T","y","Y","u","U","i","I","o","O","p","P","[","leftbrace","{","]","rightbrace","}","enter","leftcontrol","iso-level3-shift","a","A","s","S","d","D","f","F","g","G","h","H","j","J","k","K","l","L",";","semicolon",":","'","apostrophe","\"","`","grave","~","leftshift","\\","backslash","|","z","Z","x","X","c","C","v","V","b","B","n","N","m","M",",","comma","<",".","dot",">","/","slash","?","rightshift","kpasterisk","leftalt","space","capslock","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","numlock","scrolllock","kp7","kp8","kp9","kpminus","kp4","kp5","kp6","kpplus","kp1","kp2","kp3","kp0","kpdot","zenkakuhankaku","102nd","f11","f12","ro","katakana","hiragana","henkan","katakanahiragana","muhenkan","kpjpcomma","kpenter","rightcontrol","kpslash","sysrq","rightalt","linefeed","home","up","pageup","left","right","end","down","pagedown","insert","delete","macro","mute","volumedown","volumeup","power","kpequal","kpplusminus","pause","scale","kpcomma","hangeul","hanja","yen","leftmeta","rightmeta","compose","stop","again","props","undo","front","copy","open","paste","find","cut","help","menu","calc","setup","sleep","wakeup","file","sendfile","deletefile","xfer","scrolldown","scrollup","www","msdos","coffee","display","cyclewindows","mail","favorites","bookmarks","computer","back","forward","closecd","ejectcd","ejectclosecd","nextsong","playpause","previoussong","stopcd","record","rewind","phone","iso","config","homepage","refresh","exit","move","edit","kpleftparen","kprightparen","new","redo","f13","f14","f15","f16","f17","f18","f19","f20","f21","prog1","f22","prog2","f23","prog3","f24","prog4","playcd","pausecd","scrollright","scrollleft","dashboard","suspend","close","play","fastforward","bassboost","print","hp","camera","sound","question","email","chat","search","connect","finance","sport","shop","voicecommand","cancel","brightnessdown","brightnessup","media","switchvideomode","kbdillumtoggle","kbdillumdown","kbdillumup","send","reply","forwardmail","save","documents","battery","bluetooth","wlan","uwb","unknown","next","prev","cycle","auto","off","wwan","rfkill","micmute","leftmouse","rightmouse","middlemouse","mouse1","mouse2","mouseback","mouseforward","fn","zoom","noop"]);
+const keycodeNames = [
+  "", "esc", "1", "2", "3", "4", "5", "6",
+  "7", "8", "9", "0", "-", "=", "backspace", "tab",
+  "q", "w", "e", "r", "t", "y", "u", "i",
+  "o", "p", "[", "]", "enter", "leftcontrol", "a", "s",
+  "d", "f", "g", "h", "j", "k", "l", ";",
+  "'", "`", "leftshift", "\\", "z", "x", "c", "v",
+  "b", "n", "m", ",", ".", "/", "rightshift", "kpasterisk",
+  "leftalt", "space", "capslock", "f1", "f2", "f3", "f4", "f5",
+  "f6", "f7", "f8", "f9", "f10", "numlock", "scrolllock", "kp7",
+  "kp8", "kp9", "kpminus", "kp4", "kp5", "kp6", "kpplus", "kp1",
+  "kp2", "kp3", "kp0", "kpdot", "iso-level3-shift", "zenkakuhankaku", "102nd", "f11",
+  "f12", "ro", "katakana", "hiragana", "henkan", "katakanahiragana", "muhenkan", "kpjpcomma",
+  "kpenter", "rightcontrol", "kpslash", "sysrq", "rightalt", "linefeed", "home", "up",
+  "pageup", "left", "right", "end", "down", "pagedown", "insert", "delete",
+  "macro", "mute", "volumedown", "volumeup", "power", "kpequal", "kpplusminus", "pause",
+  "scale", "kpcomma", "hangeul", "hanja", "yen", "leftmeta", "rightmeta", "compose",
+  "stop", "again", "props", "undo", "front", "copy", "open", "paste",
+  "find", "cut", "help", "menu", "calc", "setup", "sleep", "wakeup",
+  "file", "sendfile", "deletefile", "xfer", "scrolldown", "scrollup", "www", "msdos",
+  "coffee", "display", "cyclewindows", "mail", "favorites", "computer", "back", "forward",
+  "closecd", "ejectcd", "ejectclosecd", "nextsong", "playpause", "previoussong", "stopcd", "record",
+  "rewind", "phone", "iso", "config", "homepage", "refresh", "exit", "move",
+  "edit", "zoom", "mouseback", "kpleftparen", "kprightparen", "new", "redo", "f13",
+  "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21",
+  "f22", "f23", "f24", "noop", "", "", "", "",
+  "playcd", "pausecd", "scrollleft", "scrollright", "dashboard", "suspend", "close", "play",
+  "fastforward", "bassboost", "print", "hp", "camera", "sound", "question", "email",
+  "chat", "search", "connect", "finance", "sport", "shop", "voicecommand", "cancel",
+  "brightnessdown", "brightnessup", "media", "switchvideomode", "kbdillumtoggle", "kbdillumdown", "kbdillumup", "send",
+  "reply", "forwardmail", "save", "documents", "battery", "bluetooth", "wlan", "uwb",
+  "unknown", "next", "prev", "cycle", "auto", "off", "wwan", "rfkill",
+  "micmute", "leftmouse", "middlemouse", "rightmouse", "mouse1", "mouse2", "fn", "mouseforward",
+];
+
+const layerDescriptors = [
+  "", "layout", "S", "C", "A", "M", "S-C", "S-A", "S-M", "C-A", "C-M", "A-M",
+  "S-C-A", "S-C-M", "S-A-M", "C-A-M", "S-C-A-M",
+];
+const descriptorNames = {
+  "": "base layer",
+  layout: "layout selector",
+  S: "Shift",
+  C: "Control",
+  A: "Alt",
+  M: "Meta",
+};
+const builtinLayers = ["control", "shift", "meta", "alt", "altgr"];
+const actionPresets = [
+  "noop", "layer()", "oneshotm(typing, )", "overload(, )", "overloadt(, , 200)",
+  "timeout(, 300, )", "macro()", "setlayout(en)", "setlayout(ru)",
+];
+const keyGrid = [
+  "escape", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=", "backspace",
+  "tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]", "\\",
+  "capslock", "a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "enter",
+  "leftshift", "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "rightshift",
+  "leftcontrol", "leftmeta", "leftalt", "space", "rightalt", "rightmeta", "compose", "rightcontrol",
+  "leftmouse", "middlemouse", "rightmouse", "mouseback", "mouseforward",
+  "home", "up", "end", "pageup", "left", "down", "right", "pagedown", "insert", "delete",
+  "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+];
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+let device;
+let deviceReady = false;
+let deviceFiles = [];
+let currentFile = defaultFile.name;
+let currentType = defaultFile.type;
+let documentReady = false;
+let loadedText = "";
+let baselineNeedsSave = false;
+let busy = false;
+let dirty = false;
+let editorUpdateTimer = 0;
+let editorLines = [""];
+let logEntries = [];
+let visualModel = { prefix: [], layers: [], suffix: [], trailingNewline: false };
+let selectedLayer = 0;
+let selectedMapping = -1;
+let selectedKey = "";
+let layerFilter = "";
+let keyFilter = "";
+let mappingFilter = "";
+let configKeyGrid = [];
+let configKeyRows = [];
+let configPhysicalLabels = null;
+let cursorMappingKey = "";
+let statusToastTimer = 0;
+let sourceLogVisible = false;
+let debugLogVisible = false;
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, text) {
+  $(id).textContent = text;
+}
+
+function setStatus(kind, text) {
+  const el = $("status-message");
+  clearTimeout(statusToastTimer);
+  el.className = `message ${kind} status-toast active`;
+  el.textContent = text;
+  statusToastTimer = setTimeout(() => {
+    el.classList.remove("active");
+    statusToastTimer = 0;
+  }, TOAST_DURATION_MS);
+}
+
+function setPill(id, kind, text) {
+  const el = $(id);
+  el.className = `status-pill status-${kind}`;
+  el.textContent = text;
+}
+
+function setLastAction(text) {
+  setText("last-action", `${new Date().toLocaleTimeString()} ${text}`);
+}
+
+function setCurrentFileName() {
+  setText("action-current-file", currentFile);
+}
+
+function setDocumentSize(bytes) {
+  setText("doc-size", `${bytes} bytes`);
+}
+
+function setEditorText(text) {
+  $("editor").value = text;
+  editorLines = text.split("\n");
+}
+
+function updateEditorLines() {
+  editorLines = $("editor").value.split("\n");
+}
+
+function clearEditorDocument() {
+  documentReady = false;
+  loadedText = "";
+  baselineNeedsSave = false;
+  setEditorText("");
+  selectedLayer = 0;
+  selectedMapping = -1;
+  selectedKey = "";
+  layerFilter = "";
+  keyFilter = "";
+  mappingFilter = "";
+  $("key-filter").value = "";
+  $("layer-filter").value = "";
+  $("mapping-filter").value = "";
+  setDocumentSize(0);
+  markDirty(false);
+  updateDocumentView();
+}
+
+function selectDefaultFile() {
+  currentFile = defaultFile.name;
+  currentType = defaultFile.type;
+  setCurrentFileName();
+  document.querySelectorAll(".file-btn").forEach(btn => btn.classList.remove("active"));
+}
+
+function loadDefaultConfigJson() {
+  selectDefaultFile();
+  setEditorText(defaultConfigJson);
+  loadedText = defaultConfigJson;
+  baselineNeedsSave = false;
+  documentReady = true;
+  selectedLayer = 0;
+  selectedMapping = -1;
+  selectedKey = "";
+  layerFilter = "";
+  keyFilter = "";
+  mappingFilter = "";
+  $("key-filter").value = "";
+  $("layer-filter").value = "";
+  $("mapping-filter").value = "";
+  setDocumentSize(encoder.encode(defaultConfigJson).length);
+  markDirty(false);
+  updateDocumentView();
+  renderFiles();
+  updateControls();
+}
+
+function updateLineNumbers() {
+  const count = editorLines.length || 1;
+  let numbers = "";
+  for (let i = 1; i <= count; i++)
+    numbers += `${i}\n`;
+  $("line-numbers").textContent = numbers;
+  $("line-numbers").scrollTop = $("editor").scrollTop;
+}
+
+function syncEditorScroll() {
+  $("line-numbers").scrollTop = $("editor").scrollTop;
+  $("editor-highlight").style.transform = `translate(${-$("editor").scrollLeft}px, ${-$("editor").scrollTop}px)`;
+}
+
+function formatLogEntry(entry) {
+  const prefix = entry.level === "info" ? "" : `${entry.level}: `;
+  return `[${entry.stamp}] ${prefix}${entry.text}`;
+}
+
+function visibleLogEntries() {
+  return debugLogVisible ? logEntries : logEntries.filter(entry => entry.level !== "debug");
+}
+
+function allLogText() {
+  return logEntries.map(formatLogEntry).join("\n");
+}
+
+function renderLog() {
+  const visible = visibleLogEntries().map(formatLogEntry);
+  $("tail-log").textContent = visible.slice(-LOG_TAIL_LIMIT).join("\n");
+  $("full-log").textContent = visible.join("\n");
+  $("tail-log").scrollTop = $("tail-log").scrollHeight;
+  $("full-log").scrollTop = $("full-log").scrollHeight;
+  updateLogControls();
+}
+
+function appendLog(level, text) {
+  if (text === undefined) {
+    text = level;
+    level = "info";
+  }
+  const stamp = new Date().toLocaleTimeString();
+  logEntries.push({ stamp, level, text });
+  renderLog();
+}
+
+function updateLogControls() {
+  const empty = !logEntries.length;
+  const visibleCount = visibleLogEntries().length;
+  const debugCount = logEntries.length - visibleCount;
+  const tailCount = Math.min(visibleCount, LOG_TAIL_LIMIT);
+  const hiddenText = debugCount ? `, ${debugCount} debug hidden` : "";
+  const visibleText = visibleCount ? `${visibleCount} entries${hiddenText}` : `${debugCount} debug hidden`;
+  setText("tail-label", empty ? "Recent log: empty" :
+    (visibleCount ? `Recent log: last ${tailCount} of ${visibleText}` : `Recent log: ${visibleText}`));
+  setText("log-entry-count", empty ? "0 entries" : visibleText);
+  $("toggle-debug-log").classList.toggle("primary", debugLogVisible);
+  $("copy-log").disabled = empty;
+  $("download-log").disabled = empty;
+  $("clear-log").disabled = empty;
+}
+
+function setSourceLogVisible(nextVisible) {
+  sourceLogVisible = nextVisible;
+  $("editor-frame").classList.toggle("hidden", sourceLogVisible);
+  $("source-log-frame").classList.toggle("hidden", !sourceLogVisible);
+  $("file-action-view").classList.toggle("hidden", sourceLogVisible);
+  $("log-action-view").classList.toggle("hidden", !sourceLogVisible);
+  $("toggle-log").classList.toggle("primary", sourceLogVisible);
+  $("toggle-log").textContent = sourceLogVisible ? "Editor" : "Log";
+  if (sourceLogVisible) {
+    $("full-log").scrollTop = $("full-log").scrollHeight;
+  } else {
+    requestAnimationFrame(() => {
+      updateEditorLines();
+      updateLineNumbers();
+      updateEditorHighlight();
+      updateCursorKeyHighlight();
+    });
+  }
+}
+
+function setBusy(nextBusy, title = "Operation in progress", text = "Do not unplug, reload, close this tab, or start another operation.") {
+  busy = nextBusy;
+  $("busy-title").textContent = title;
+  $("busy-text").textContent = text;
+  $("busy-progress").style.width = nextBusy ? "4%" : "0";
+  $("busy-progress").setAttribute("aria-valuenow", nextBusy ? "4" : "0");
+  $("busy-progress-label").textContent = nextBusy ? "Preparing..." : "";
+  $("app").setAttribute("aria-busy", nextBusy ? "true" : "false");
+  $("busy-blocker").classList.toggle("hidden", !nextBusy);
+  $("busy-dialog").classList.toggle("hidden", !nextBusy);
+  setPill("op-pill", nextBusy ? "warn" : "ok", nextBusy ? "busy" : "idle");
+  updateControls();
+}
+
+function formatBytes(value) {
+  if (value < 1024)
+    return `${value} B`;
+  if (value < 1024 * 1024)
+    return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function fileTypeFromName(name) {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".json"))
+    return "json";
+  if (lower.endsWith(".conf"))
+    return "conf";
+  return "text";
+}
+
+function fileByName(name) {
+  return [...knownFiles, ...deviceFiles].find(entry => entry.name === name) ||
+    { name, type: fileTypeFromName(name), size: 0, attrs: 0, known: false };
+}
+
+function setProgress(done, total) {
+  const pct = total ? Math.min(100, Math.max(4, Math.round((done / total) * 100))) : 100;
+  $("busy-progress").style.width = `${pct}%`;
+  $("busy-progress").setAttribute("aria-valuenow", String(pct));
+  $("busy-progress-label").textContent = total ? `${formatBytes(done)} / ${formatBytes(total)} (${pct}%)` : `${pct}%`;
+}
+
+function updateControls() {
+  const webhidAvailable = "hid" in navigator;
+  const connected = !!device && device.opened;
+  const canRefresh = connected && !busy;
+  const canOperate = connected && deviceReady && !busy;
+  const canEdit = !busy;
+  const saveErrors = validateCurrentDocument().errors.length;
+  $("connect").disabled = busy || !webhidAvailable;
+  $("refresh").disabled = !canRefresh;
+  $("refresh-files").disabled = !canOperate;
+  $("new-file").disabled = !canOperate;
+  $("load").disabled = !canOperate;
+  $("save").disabled = !canOperate || !dirty || !!saveErrors;
+  $("connect").title = !webhidAvailable ? "WebHID is not available in this browser." :
+    (busy ? "Wait for the current operation to finish." : "Choose a paired ErgoType WebHID device.");
+  $("refresh").title = canRefresh ? "" :
+    (!webhidAvailable ? "WebHID is not available in this browser." : (busy ? "Wait for the current operation to finish." : "Connect a WebHID device before refreshing status."));
+  $("refresh-files").title = canOperate ? "Refresh the device root file list." : "Connect and refresh status before listing files.";
+  $("new-file").title = canOperate ? "Create a new file target on the device." : "Connect and refresh status before creating files.";
+  $("load").title = canOperate ? "Load selected file from device. Shortcut: Ctrl/Cmd+L." : (connected ? "Refresh status before loading." : "Connect a WebHID device before loading.");
+  $("save").title = saveErrors ? "Fix validation errors before saving." :
+    (!dirty ? "No changes to save." : (canOperate ? "Save selected file to device. Shortcut: Ctrl/Cmd+S." : "Connect and refresh status before saving."));
+  $("download-backup").disabled = busy || !documentReady;
+  $("open-local").disabled = busy;
+  $("revert-changes").disabled = busy || !documentReady || !dirty;
+  $("format-file").disabled = !canEdit || !documentReady || (currentType !== "conf" && currentType !== "json");
+  $("format-file").textContent = "Format";
+  $("download-backup").title = documentReady ? "Download the current editor text as a local backup." : "Load or open a file before downloading a backup.";
+  $("open-local").title = busy ? "Wait for the current operation to finish." : "Open a local backup or config file into the selected target. Shortcut: Ctrl/Cmd+O.";
+  $("revert-changes").title = !documentReady ? "Load or open a file before reverting." : (!dirty ? "No local changes to revert." : "Revert to the last loaded or saved text.");
+  $("format-file").title = !documentReady ? "Load or open a file before formatting." : (currentType === "json" || currentType === "conf" ? "Format the current editor text before saving." : "Only .conf and JSON can be formatted.");
+  document.querySelectorAll(".file-btn").forEach(btn => { btn.disabled = busy; });
+  document.querySelectorAll(".file-delete").forEach(btn => { btn.disabled = busy; });
+}
+
+function setDirtyState(nextDirty) {
+  dirty = nextDirty;
+  setPill("dirty-pill", dirty ? "warn" : "ok", dirty ? "modified" : "clean");
+  renderFiles();
+}
+
+function markDirty(nextDirty) {
+  setDirtyState(nextDirty);
+  renderChecks(validateCurrentDocument());
+  updateControls();
+}
+
+function markEditorDirtyFromBaseline() {
+  markDirty(documentReady && (baselineNeedsSave || $("editor").value !== loadedText));
+}
+
+function editorCursorLineText() {
+  const editor = $("editor");
+  const text = editor.value;
+  const start = text.lastIndexOf("\n", Math.max(0, editor.selectionStart - 1)) + 1;
+  const end = text.indexOf("\n", editor.selectionStart);
+  return text.slice(start, end < 0 ? text.length : end);
+}
+
+function updateCursorKeyHighlight() {
+  const line = currentType === "conf" ? editorCursorLineText() : "";
+  const mapping = line.match(/^(\s*[^#=\s][^=]*?)(\s*=\s*)/);
+  const nextKey = mapping ? mapping[1].trim() : "";
+
+  if (cursorMappingKey === nextKey)
+    return;
+
+  cursorMappingKey = nextKey;
+  renderKeyboardPreview();
+}
+
+function scheduleDocumentViewUpdate() {
+  clearTimeout(editorUpdateTimer);
+  editorUpdateTimer = setTimeout(() => {
+    editorUpdateTimer = 0;
+    updateDocumentModel();
+    updateControls();
+  }, 500);
+}
+
+function htmlEscape(text) {
+  return text.replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+function highlightJsonLine(line) {
+  return htmlEscape(line).replace(
+    /(&quot;(?:\\.|[^\\])*?&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (token, stringToken, colon, literal) => {
+      if (stringToken && colon)
+        return `<span class="hl-json-key">${stringToken}</span>${colon}`;
+      if (stringToken)
+        return `<span class="hl-json-string">${stringToken}</span>`;
+      if (literal)
+        return `<span class="hl-json-literal">${literal}</span>`;
+      return `<span class="hl-json-number">${token}</span>`;
+    }
+  );
+}
+
+function highlightConfLine(line) {
+  if (/^\s*#/.test(line)) return `<span class="hl-comment">${htmlEscape(line)}</span>`;
+  if (/^\s*\[[^\]]+\]\s*$/.test(line)) return `<span class="hl-section">${htmlEscape(line)}</span>`;
+  const match = line.match(/^(\s*[^#=\s][^=]*?)(\s*=\s*)(.*)$/);
+  if (!match) return htmlEscape(line);
+  const action = htmlEscape(match[3])
+    .replace(/\b([a-z][a-z0-9_]*)\(/g, '<span class="hl-fn">$1</span>(')
+    .replace(/\b([CMSA]-[a-z0-9_-]+)\b/gi, '<span class="hl-string">$1</span>');
+  return `<span class="hl-key">${htmlEscape(match[1])}</span><span class="hl-eq">${htmlEscape(match[2])}</span>${action}`;
+}
+
+function highlightLine(line) {
+  return currentType === "json" ? highlightJsonLine(line) : highlightConfLine(line);
+}
+
+function updateEditorHighlight() {
+  const editor = $("editor");
+  const style = getComputedStyle(editor);
+  const lineHeight = parseFloat(style.lineHeight) || 18;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const firstLine = Math.max(0, Math.floor(editor.scrollTop / lineHeight) - 5);
+  const lastLine = Math.min(
+    editorLines.length - 1,
+    Math.ceil((editor.scrollTop + editor.clientHeight) / lineHeight) + 5
+  );
+  let html = "";
+
+  for (let i = firstLine; i <= lastLine; i++) {
+    html += `<div class="editor-highlight-line" style="left:${paddingLeft}px;top:${paddingTop + i * lineHeight}px">${highlightLine(editorLines[i])}</div>`;
+  }
+
+  $("editor-highlight").innerHTML = html;
+  syncEditorScroll();
+}
+
+function initDescriptorOptions() {
+  $("descriptor-options").innerHTML = layerDescriptors
+    .map(value => `<option value="${htmlEscape(value)}">`)
+    .join("");
+}
+
+function descriptorTitle(value) {
+  if (descriptorNames[value])
+    return descriptorNames[value];
+  return value.split("-").map(part => descriptorNames[part] || part).join(" + ");
+}
+
+function initVisualDatalists() {
+  const keys = new Set(activeKeyGrid());
+  const actions = new Set(actionPresets);
+  const layers = new Set();
+
+  for (const layer of visualModel.layers) {
+    if (layer.name)
+      layers.add(layer.name);
+    for (const mapping of layer.mappings) {
+      if (mapping.key)
+        keys.add(mapping.key);
+      if (mapping.action)
+        actions.add(mapping.action);
+    }
+  }
+
+  for (const layer of layers) {
+    actions.add(`layer(${layer})`);
+    actions.add(`layerm(${layer}, )`);
+    actions.add(`oneshotm(${layer}, )`);
+  }
+
+  $("layer-options").innerHTML = [...layers].sort()
+    .map(value => `<option value="${htmlEscape(value)}">`)
+    .join("");
+  $("key-options").innerHTML = [...keys].sort()
+    .map(value => `<option value="${htmlEscape(value)}">`)
+    .join("");
+  $("action-options").innerHTML = [...actions].sort()
+    .map(value => `<option value="${htmlEscape(value)}">`)
+    .join("");
+}
+
+function activeKeyGrid() {
+  return configKeyGrid.length ? configKeyGrid : keyGrid;
+}
+
+function activeKeyRows() {
+  if (configKeyRows.length)
+    return configKeyRows;
+  const rows = [];
+  for (let i = 0; i < keyGrid.length; i += FALLBACK_KEY_ROW_SIZE)
+    rows.push(keyGrid.slice(i, i + FALLBACK_KEY_ROW_SIZE));
+  return rows;
+}
+
+function normalizeConfigKey(value) {
+  if (typeof value === "string") {
+    const key = value.trim();
+    return key === "noop" ? "" : key;
+  }
+  if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    return `keycode-${value}`;
+  return "";
+}
+
+function keydLabel(value) {
+  if (typeof value === "number")
+    return Number.isInteger(value) && value >= 0 && value < keycodeNames.length ? keycodeNames[value] : "";
+  if (typeof value !== "string")
+    return "";
+  const key = value.trim();
+  return validKeydNames.has(key) ? key : "";
+}
+
+function duplicateSwitchCell(value) {
+  if (typeof value !== "string")
+    return false;
+  const key = value.trim();
+  return key === "lthumb3" || key === "thunb3";
+}
+
+function encoderMatrixCells(config) {
+  return new Set(encoderCellIds(config).keys());
+}
+
+function encoderCellIds(config) {
+  const cells = new Map();
+  if (!Array.isArray(config.gpio_rows) || !Array.isArray(config.gpio_cols) || !Array.isArray(config.encoders))
+    return cells;
+
+  const lookupPinIndex = pin => {
+    const col = config.gpio_cols.indexOf(pin);
+    if (col >= 0)
+      return col;
+    return config.gpio_rows.indexOf(pin);
+  };
+
+  config.encoders.forEach((enc, idx) => {
+    if (!enc || Array.isArray(enc) || typeof enc !== "object")
+      return;
+    const a = lookupPinIndex(enc.a);
+    const b = lookupPinIndex(enc.b);
+    const c = lookupPinIndex(enc.c);
+    if (a >= 0 && c >= 0)
+      cells.set(`${a}:${c}`, idx === 1 ? "enc2a" : `enc${idx + 1}b`);
+    if (b >= 0 && c >= 0)
+      cells.set(`${b}:${c}`, idx === 1 ? "enc2b" : `enc${idx + 1}a`);
+  });
+
+  return cells;
+}
+
+function matrixLabelsFromConfig(config, keys) {
+  if (!config || !Array.isArray(config.keymap))
+    return null;
+
+  const encoderCells = encoderCellIds(config);
+  const encoderPressIds = { "7:2": "swd59", "7:5": "swd60" };
+  const layoutLogicalIds = { "7:0": "leftwrist", "7:7": "rightwrist" };
+  const thumbSwitchIds = { "7:3": "SW55", "7:4": "SW56", "7:6": "SW57" };
+  const keyIds = new Set(keys.map(key => key.id));
+  const labels = new Map();
+  let sw = 1;
+  for (let row = 0; row < config.keymap.length; row++) {
+    if (!Array.isArray(config.keymap[row]))
+      continue;
+    for (let col = 0; col < config.keymap[row].length; col++) {
+      const cell = `${row}:${col}`;
+      const encoderId = encoderCells.get(cell);
+      if (encoderId) {
+        if (keyIds.has(encoderId))
+          labels.set(encoderId, keydLabel(config.keymap[row][col]));
+        continue;
+      }
+      if (duplicateSwitchCell(config.keymap[row][col]))
+        continue;
+      const value = config.keymap[row][col];
+      const id = layoutLogicalIds[cell] || encoderPressIds[cell] || thumbSwitchIds[cell] || `SW${sw}`;
+      sw++;
+      if (!keyIds.has(id))
+        continue;
+      labels.set(id, keydLabel(value));
+    }
+  }
+  return labels;
+}
+
+function deserializeKleRows(rows) {
+  const keys = [];
+  let current = { x: 0, y: 0, w: 1, h: 1, r: 0, rx: 0, ry: 0, c: "", t: "" };
+
+  for (const row of rows) {
+    if (!Array.isArray(row))
+      continue;
+
+    for (const item of row) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        if (item.r != null)
+          current.r = item.r;
+        if (item.rx != null) {
+          current.rx = item.rx;
+          current.x = item.rx;
+        }
+        if (item.ry != null) {
+          current.ry = item.ry;
+          current.y = item.ry;
+        }
+        if (item.x != null)
+          current.x += item.x;
+        if (item.y != null)
+          current.y += item.y;
+        if (item.w != null)
+          current.w = item.w;
+        if (item.h != null)
+          current.h = item.h;
+        if (item.c != null)
+          current.c = item.c;
+        if (item.t != null)
+          current.t = item.t;
+        continue;
+      }
+
+      if (typeof item === "string") {
+        keys.push({ ...current, id: item });
+        current.x += current.w;
+        current.w = 1;
+        current.h = 1;
+      }
+    }
+
+    current.y++;
+    current.x = current.rx;
+  }
+
+  return keys;
+}
+
+function rotatePoint(x, y, angle, originX, originY) {
+  const radians = angle * Math.PI / 180;
+  const dx = x - originX;
+  const dy = y - originY;
+  return {
+    x: originX + dx * Math.cos(radians) - dy * Math.sin(radians),
+    y: originY + dx * Math.sin(radians) + dy * Math.cos(radians),
+  };
+}
+
+function keyCorners(key) {
+  return [
+    rotatePoint(key.x, key.y, key.r, key.rx, key.ry),
+    rotatePoint(key.x + key.w, key.y, key.r, key.rx, key.ry),
+    rotatePoint(key.x + key.w, key.y + key.h, key.r, key.rx, key.ry),
+    rotatePoint(key.x, key.y + key.h, key.r, key.rx, key.ry),
+  ];
+}
+
+function activeKeyboardKeys() {
+  const layout = keyboardLayouts[activeKeyboardLayoutId];
+  return deserializeKleRows(layout.kle);
+}
+
+function updateConfigKeyGridFromText(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    configPhysicalLabels = null;
+    renderKeyboardPreview();
+    return;
+  }
+  if (!parsed || !Array.isArray(parsed.keymap)) {
+    configPhysicalLabels = null;
+    renderKeyboardPreview();
+    return;
+  }
+
+  const next = [];
+  const rows = [];
+  const seen = new Set();
+  for (const row of parsed.keymap) {
+    if (!Array.isArray(row))
+      continue;
+    const nextRow = [];
+    for (const value of row) {
+      const key = normalizeConfigKey(value);
+      if (!key)
+        continue;
+      nextRow.push(key);
+      if (!seen.has(key)) {
+        seen.add(key);
+        next.push(key);
+      }
+    }
+    if (nextRow.length)
+      rows.push(nextRow);
+  }
+  configKeyGrid = next;
+  configKeyRows = rows;
+  configPhysicalLabels = matrixLabelsFromConfig(parsed, activeKeyboardKeys());
+  renderKeyboardPreview();
+}
+
+function renderKeyboardPreview() {
+  const board = $("keyboard-board");
+  board.innerHTML = "";
+  const layout = keyboardLayouts[activeKeyboardLayoutId];
+  const keys = activeKeyboardKeys();
+  const labels = configPhysicalLabels;
+  const mappedCount = labels ? [...labels.values()].filter(Boolean).length : 0;
+
+  $("keyboard-subtitle").textContent = labels ?
+    `${layout.name}; ${mappedCount}/${keys.length} key labels from config.json.` :
+    `${layout.name}; base SW labels, load config.json for mapped labels.`;
+
+  if (!keys.length) {
+    board.innerHTML = `<div class="keyboard-empty">No keyboard layout loaded.</div>`;
+    return;
+  }
+
+  const ns = "http://www.w3.org/2000/svg";
+  const keyScale = 0.92;
+  const corners = keys.flatMap(keyCorners);
+  const margin = 0.15;
+  const minX = Math.min(...corners.map(point => point.x)) - margin;
+  const minY = Math.min(...corners.map(point => point.y)) - margin;
+  const maxX = Math.max(...corners.map(point => point.x)) + margin;
+  const maxY = Math.max(...corners.map(point => point.y)) + margin;
+  const svg = document.createElementNS(ns, "svg");
+  svg.classList.add("keyboard-svg");
+  svg.setAttribute("viewBox", `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Keyboard physical layout preview");
+
+  const normalGroups = [];
+  const highlightedGroups = [];
+  for (const key of keys) {
+    const logicalLabel = key.id === "leftwrist" || key.id === "rightwrist" ? key.id : "";
+    const label = labels ? (labels.has(key.id) ? labels.get(key.id) : logicalLabel) : key.id;
+    const highlighted = cursorMappingKey && label === cursorMappingKey;
+    const group = document.createElementNS(ns, "g");
+    group.setAttribute("transform", `translate(${key.rx} ${key.ry}) rotate(${key.r}) translate(${-key.rx} ${-key.ry})`);
+
+    const title = document.createElementNS(ns, "title");
+    title.textContent = labels ? `${key.id}: ${label || "unmapped"}` : key.id;
+    group.appendChild(title);
+
+    const shape = document.createElementNS(ns, "rect");
+    shape.classList.add("keyboard-key");
+    if (highlighted)
+      shape.classList.add("cursor-match");
+    const drawW = key.w * keyScale;
+    const drawH = key.h * keyScale;
+    const drawX = key.x + (key.w - drawW) / 2;
+    const drawY = key.y + (key.h - drawH) / 2;
+    shape.setAttribute("x", String(drawX));
+    shape.setAttribute("y", String(drawY));
+    shape.setAttribute("width", String(drawW));
+    shape.setAttribute("height", String(drawH));
+    shape.setAttribute("rx", ".08");
+    if (key.c)
+      shape.setAttribute("fill", key.c);
+    group.appendChild(shape);
+
+    const labelEl = document.createElementNS(ns, "text");
+    labelEl.classList.add("keyboard-label");
+    labelEl.setAttribute("x", String(key.x + key.w / 2));
+    labelEl.setAttribute("y", String(key.y + key.h * 0.46));
+    labelEl.textContent = label;
+    if (key.t)
+      labelEl.setAttribute("fill", key.t);
+    group.appendChild(labelEl);
+
+    const subEl = document.createElementNS(ns, "text");
+    subEl.classList.add("keyboard-sub-label");
+    subEl.setAttribute("x", String(key.x + key.w / 2));
+    subEl.setAttribute("y", String(key.y + key.h * 0.84));
+    subEl.textContent = key.id;
+    group.appendChild(subEl);
+
+    (highlighted ? highlightedGroups : normalGroups).push(group);
+  }
+  for (const group of normalGroups)
+    svg.appendChild(group);
+  for (const group of highlightedGroups)
+    svg.appendChild(group);
+
+  board.appendChild(svg);
+}
+
+function findUnbalancedAction(action) {
+  const stack = [];
+  const pairs = { "(": ")" };
+  const closing = new Set(Object.values(pairs));
+  let quote = "";
+
+  for (const ch of action) {
+    if (quote) {
+      if (ch === quote)
+        quote = "";
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (pairs[ch]) {
+      stack.push(pairs[ch]);
+    } else if (closing.has(ch) && stack.pop() !== ch) {
+      return ch;
+    }
+  }
+
+  return quote || stack.pop() || "";
+}
+
+function referencedLayers(action) {
+  const refs = [];
+  const re = /\b(?:layer|oneshot|toggle|layerm|oneshotm|swapm|togglem|overload|overloadt|overloadt2|overloadtm|overload2|overload3|toggle2|swap2)\(\s*([^,\s)]+)/g;
+  let match;
+
+  while ((match = re.exec(action)) !== null)
+    refs.push(match[1]);
+
+  return refs;
+}
+
+function validateMappingFields(key, action, keyLabel = "Mapping key", actionLabel = "Mapping action") {
+  if (!key || !action)
+    return `${keyLabel} and ${actionLabel.toLowerCase()} are required.`;
+  if (key.includes("=") || key.includes("\n"))
+    return `${keyLabel} cannot contain '=' or a newline.`;
+  if (action.includes("\n"))
+    return `${actionLabel} cannot contain a newline.`;
+  return "";
+}
+
+function validateCurrentDocument() {
+  const result = { errors: [], warnings: [], info: [] };
+  const encodedName = encoder.encode(currentFile);
+  const encodedText = encoder.encode($("editor").value);
+
+  if (encodedName.length === 0 || encodedName.length > 56) result.errors.push({ message: "Selected file name is too long for WebHID write." });
+  if (/[\\/:]/.test(currentFile)) result.errors.push({ message: "Selected file name cannot contain '/', '\\', or ':'." });
+  if (encodedText.length > 0xffffffff) result.errors.push({ message: "File is too large for the WebHID write protocol." });
+  if (!documentReady && !dirty) {
+    result.info.push({ message: `${currentFile} is selected but not loaded yet.` });
+    return result;
+  }
+  if (baselineNeedsSave)
+    result.warnings.push({ message: `Local text will overwrite ${currentFile} on the device.` });
+
+  if (currentType === "json") {
+    try {
+      const parsed = JSON.parse($("editor").value);
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+        result.errors.push({ message: "JSON top level must be an object." });
+      } else {
+        const drivers = parsed.drivers && !Array.isArray(parsed.drivers) && typeof parsed.drivers === "object" ? parsed.drivers : {};
+        ["gpio_rows", "gpio_cols", "keymap", "led_pins", "encoders"].forEach(key => {
+          if (key in parsed && !Array.isArray(parsed[key]))
+            result.warnings.push({ message: `${key} should be an array.` });
+        });
+        ["gpio_rows", "gpio_cols", "led_pins"].forEach(key => {
+          if (Array.isArray(parsed[key])) {
+            parsed[key].forEach((value, idx) => {
+              if (typeof value !== "number")
+                result.warnings.push({ message: `${key}[${idx + 1}] should be a numeric GPIO pin.` });
+            });
+          }
+        });
+        ["uart", "i2c", "spi", "ssd1306", "drivers"].forEach(key => {
+          if (key in parsed && (!parsed[key] || Array.isArray(parsed[key]) || typeof parsed[key] !== "object"))
+            result.warnings.push({ message: `${key} should be an object.` });
+        });
+        ["pmw3360", "pmw3389"].forEach(key => {
+          if (key in drivers && !Array.isArray(drivers[key]))
+            result.warnings.push({ message: `drivers.${key} should be an array.` });
+        });
+        if (Array.isArray(parsed.encoders)) {
+          parsed.encoders.forEach((encoderConfig, idx) => {
+            if (!encoderConfig || Array.isArray(encoderConfig) || typeof encoderConfig !== "object")
+              result.warnings.push({ message: `encoders[${idx + 1}] should be an object.` });
+          });
+        }
+        ["pmw3360", "pmw3389"].forEach(key => {
+          if (Array.isArray(drivers[key])) {
+            drivers[key].forEach((sensorConfig, idx) => {
+              if (!sensorConfig || Array.isArray(sensorConfig) || typeof sensorConfig !== "object")
+                result.warnings.push({ message: `drivers.${key}[${idx + 1}] should be an object.` });
+            });
+          }
+        });
+        const hasMatrix = (Array.isArray(parsed.gpio_rows) && parsed.gpio_rows.length) ||
+          (Array.isArray(parsed.gpio_cols) && parsed.gpio_cols.length);
+        const hasEncoders = Array.isArray(parsed.encoders) && parsed.encoders.length;
+        const hasPmw = (Array.isArray(drivers.pmw3360) && drivers.pmw3360.length) ||
+          (Array.isArray(drivers.pmw3389) && drivers.pmw3389.length);
+        if (!hasMatrix && !hasEncoders && !hasPmw)
+          result.errors.push({ message: "JSON must define at least one input device: matrix GPIOs, encoders, or PMW sensors." });
+        if (hasMatrix) {
+          if (!Array.isArray(parsed.gpio_rows) || !parsed.gpio_rows.length)
+            result.warnings.push({ message: "Matrix config has gpio_cols but no gpio_rows." });
+          if (!Array.isArray(parsed.gpio_cols) || !parsed.gpio_cols.length)
+            result.warnings.push({ message: "Matrix config has gpio_rows but no gpio_cols." });
+          if (!Array.isArray(parsed.keymap)) {
+            result.warnings.push({ message: "Matrix config has no keymap array." });
+          } else {
+            if (Array.isArray(parsed.gpio_rows) && parsed.keymap.length !== parsed.gpio_rows.length)
+              result.warnings.push({ message: `keymap has ${parsed.keymap.length} row(s), gpio_rows has ${parsed.gpio_rows.length}.` });
+            parsed.keymap.forEach((row, idx) => {
+              if (!Array.isArray(row)) {
+                result.warnings.push({ message: `keymap row ${idx + 1} is not an array.` });
+              } else if (Array.isArray(parsed.gpio_cols) && row.length !== parsed.gpio_cols.length) {
+                result.warnings.push({ message: `keymap row ${idx + 1} has ${row.length} item(s), gpio_cols has ${parsed.gpio_cols.length}.` });
+              }
+              if (Array.isArray(row)) {
+                row.forEach((value, colIdx) => {
+                  if (typeof value !== "string" && typeof value !== "number") {
+                    result.warnings.push({ message: `keymap[${idx + 1}][${colIdx + 1}] should be a key name string or numeric keycode.` });
+                  } else if (typeof value === "number" && (!Number.isInteger(value) || value < 0 || value > 255)) {
+                    result.warnings.push({ message: `keymap[${idx + 1}][${colIdx + 1}] numeric keycode should be an integer from 0 to 255.` });
+                  }
+                });
+              }
+            });
+          }
+        }
+        if ("overlay_conf" in parsed && parsed.overlay_conf !== null && typeof parsed.overlay_conf !== "string")
+          result.warnings.push({ message: "overlay_conf should be a .conf filename string or null." });
+        if (typeof parsed.overlay_conf === "string" &&
+            ![...knownFiles, ...deviceFiles].some(entry => entry.type === "conf" && entry.name === parsed.overlay_conf))
+          result.warnings.push({ message: `overlay_conf "${parsed.overlay_conf}" is not one of the listed .conf files.` });
+      }
+    } catch (error) {
+      result.errors.push({ message: `JSON parse error: ${error.message}` });
+    }
+    return result;
+  }
+
+  if (currentType !== "conf")
+    return result;
+
+  const model = parseConf($("editor").value);
+  const layerNames = new Map();
+  const layerNameSet = new Set([...builtinLayers, ...model.layers.map(layer => layer.name).filter(Boolean)]);
+  if (!model.layers.length)
+    result.errors.push({ message: ".conf has no sections." });
+
+  model.layers.forEach((layer, layerIndex) => {
+    const title = layer.name || `section ${layerIndex + 1}`;
+    const sectionTitle = layer.descriptor ? `${layer.name}:${layer.descriptor}` : layer.name;
+    const keys = new Map();
+    if (!layer.name)
+      result.errors.push({ message: `Section ${layerIndex + 1} has empty name.`, line: layer.line });
+    if (layerNames.has(sectionTitle))
+      result.warnings.push({ message: `Duplicate section [${sectionTitle}].`, line: layer.line });
+    layerNames.set(sectionTitle, true);
+    if (layer.name === "global" && layer.descriptor)
+      result.warnings.push({ message: `[global] should not use descriptor "${layer.descriptor}".`, line: layer.line });
+    if (layer.descriptor && !layerDescriptors.includes(layer.descriptor))
+      result.warnings.push({ message: `[${title}] uses custom descriptor "${layer.descriptor}".`, line: layer.line });
+    layer.mappings.forEach((mapping, mappingIndex) => {
+      const isGlobal = layer.name === "global";
+      const mappingLabel = mapping.key || `${isGlobal ? "setting" : "mapping"} ${mappingIndex + 1}`;
+      const mappingError = validateMappingFields(mapping.key, mapping.action, isGlobal ? "Setting" : "Mapping key", isGlobal ? "Value" : "Mapping action");
+      if (mappingError)
+        result.errors.push({ message: `[${title}] ${mappingLabel}: ${mappingError}`, line: mapping.line });
+      if (mapping.action) {
+        const unbalanced = findUnbalancedAction(mapping.action);
+        if (unbalanced)
+          result.errors.push({ message: `[${title}] ${mappingLabel} has unbalanced "${unbalanced}" in action.`, line: mapping.line });
+        for (const ref of referencedLayers(mapping.action)) {
+          if (!layerNameSet.has(ref))
+            result.warnings.push({ message: `[${title}] ${mappingLabel} references "${ref}", but no matching section was found.`, line: mapping.line });
+        }
+      }
+      if (mapping.key) {
+        if (keys.has(mapping.key))
+          result.warnings.push({ message: `[${title}] ${isGlobal ? "sets" : "maps"} "${mapping.key}" more than once.`, line: mapping.line });
+        keys.set(mapping.key, mapping.line);
+      }
+    });
+  });
+
+  return result;
+}
+
+function renderChecks(result) {
+  const checks = $("checks");
+  const summary = $("check-summary");
+  const rows = [];
+  const checkRow = (kind, label, item) => {
+    const text = `${label}${item.line ? ` line ${item.line}` : ""}: ${htmlEscape(item.message)}`;
+    return item.line ?
+      `<div class="check-row ${kind}" data-line="${item.line}" tabindex="0">${text}</div>` :
+      `<div class="check-row ${kind}">${text}</div>`;
+  };
+  if (result.errors.length) {
+    summary.className = "message error";
+    summary.textContent = `Save blocked: ${result.errors.length} error(s), ${result.warnings.length} warning(s).`;
+  } else if (result.warnings.length) {
+    summary.className = "message info";
+    summary.textContent = `Save allowed with confirmation: ${result.warnings.length} warning(s).`;
+  } else if (result.info.length) {
+    summary.className = "message info";
+    summary.textContent = result.info[0].message;
+  } else {
+    summary.className = "message ok";
+    summary.textContent = `Ready to save ${currentFile}.`;
+  }
+  if (result.errors.length) {
+    for (const item of result.errors.slice(0, 6))
+      rows.push(checkRow("error", "Error", item));
+    if (result.errors.length > 6)
+      rows.push(`<div class="check-row error">${result.errors.length - 6} more errors hidden.</div>`);
+  }
+  if (result.warnings.length) {
+    for (const item of result.warnings.slice(0, 6))
+      rows.push(checkRow("warn", "Warning", item));
+    if (result.warnings.length > 6)
+      rows.push(`<div class="check-row warn">${result.warnings.length - 6} more warnings hidden.</div>`);
+  }
+  if (result.info.length) {
+    for (const item of result.info.slice(0, 3))
+      rows.push(`<div class="check-row info">${htmlEscape(item.message)}</div>`);
+  }
+  if (!rows.length)
+    rows.push(`<div class="check-row ok">Checks passed for ${htmlEscape(currentFile)}.</div>`);
+  checks.innerHTML = rows.join("");
+}
+
+function focusEditorLine(line) {
+  if (!line) return;
+  const editor = $("editor");
+  let pos = 0;
+  for (let i = 0; i < line - 1 && i < editorLines.length; i++)
+    pos += editorLines[i].length + 1;
+  editor.focus();
+  editor.setSelectionRange(pos, pos + (editorLines[line - 1] || "").length);
+  const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 18;
+  editor.scrollTop = Math.max(0, (line - 4) * lineHeight);
+  updateEditorHighlight();
+}
+
+function downloadBackup() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const blob = new Blob([$("editor").value], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${currentFile}.${stamp}.bak`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setStatus("ok", `Downloaded backup for ${currentFile}.`);
+  setLastAction(`backup ${currentFile}`);
+}
+
+function localFileType(file) {
+  let name = file.name.toLowerCase();
+  if (name.endsWith(".bak"))
+    name = name.slice(0, -4);
+  if (name.endsWith(".json") || /\.json\.\d{4}-/.test(name))
+    return "json";
+  if (name.endsWith(".conf") || /\.conf\.\d{4}-/.test(name))
+    return "conf";
+  return "";
+}
+
+function openLocalFile(file) {
+  const type = localFileType(file);
+  if (type && type !== currentType &&
+      !confirm(`Open ${file.name} as ${currentFile}? The selected target is ${currentType}, but the local file looks like ${type}.`))
+    return;
+
+  const reader = new FileReader();
+    reader.addEventListener("load", () => {
+    setEditorText(String(reader.result || ""));
+    loadedText = $("editor").value;
+    baselineNeedsSave = true;
+    documentReady = true;
+    selectedLayer = 0;
+    selectedMapping = -1;
+    selectedKey = "";
+    layerFilter = "";
+    keyFilter = "";
+    mappingFilter = "";
+    $("key-filter").value = "";
+    $("layer-filter").value = "";
+    $("mapping-filter").value = "";
+    setDocumentSize(file.size);
+    markEditorDirtyFromBaseline();
+    updateDocumentView();
+    setStatus("ok", `Opened local ${file.name}. Save writes it to ${currentFile}.`);
+    setLastAction(`opened local ${file.name}`);
+  });
+  reader.addEventListener("error", () => {
+    setStatus("error", `Could not open ${file.name}.`);
+  });
+  reader.readAsText(file);
+}
+
+function revertChanges() {
+  if (!dirty || !documentReady) return;
+  if (!confirm(`Revert editor changes for ${currentFile}?`))
+    return;
+  setEditorText(loadedText);
+  setDocumentSize(encoder.encode(loadedText).length);
+  markEditorDirtyFromBaseline();
+  updateDocumentView();
+  setStatus("ok", `Reverted ${currentFile} to the last loaded/saved text.`);
+  setLastAction(`reverted ${currentFile}`);
+}
+
+function updateDocumentView() {
+  updateEditorHighlight();
+  updateDocumentModel();
+  updateCursorKeyHighlight();
+}
+
+function updateDocumentModel() {
+  updateLineNumbers();
+  syncEditorScroll();
+  if (currentType === "json")
+    updateConfigKeyGridFromText($("editor").value);
+  if (currentType === "conf") {
+    visualModel = parseConf($("editor").value);
+    selectedLayer = Math.min(selectedLayer, Math.max(0, visualModel.layers.length - 1));
+  } else {
+    visualModel = { prefix: [], layers: [], suffix: [], trailingNewline: false };
+    selectedLayer = 0;
+    selectedMapping = -1;
+    selectedKey = "";
+  }
+  renderChecks(validateCurrentDocument());
+}
+
+function isErgoTypeWebHid(hidDevice) {
+  return hidDevice.vendorId === 0xcafe &&
+    hidDevice.collections.some(collection => collection.usagePage === 0xff00 && collection.usage === 0x20);
+}
+
+function featureData(response) {
+  const raw = new Uint8Array(response.buffer, response.byteOffset, response.byteLength);
+  return raw[0] === REPORT_ID_WEBHID_CONFIG ? raw.slice(1) : raw;
+}
+
+function getU32(data, offset) {
+  return data[offset] |
+    (data[offset + 1] << 8) |
+    (data[offset + 2] << 16) |
+    (data[offset + 3] << 24);
+}
+
+function putU32(data, offset, value) {
+  data[offset] = value & 0xff;
+  data[offset + 1] = (value >> 8) & 0xff;
+  data[offset + 2] = (value >> 16) & 0xff;
+  data[offset + 3] = (value >> 24) & 0xff;
+}
+
+function pathBody(selectedFile) {
+  const path = encoder.encode(selectedFile);
+  if (path.length === 0 || path.length > 60) throw new Error("bad selected file name length");
+  const body = new Uint8Array(path.length + 1);
+  body[0] = path.length;
+  body.set(path, 1);
+  return body;
+}
+
+function writeBeginBody(selectedFile, fileSize) {
+  const path = encoder.encode(selectedFile);
+  if (path.length === 0 || path.length > 56) throw new Error("bad selected file name length");
+  const body = new Uint8Array(path.length + 5);
+  putU32(body, 0, fileSize);
+  body[4] = path.length;
+  body.set(path, 5);
+  return body;
+}
+
+function webhidError(command, data) {
+  const status = data[2];
+  const fs = data[3];
+  const commandText = commandNames[command] || `command ${command}`;
+  if (status === WEBHID_STATUS_BUSY) return `${commandText}: Device busy, try again.`;
+
+  const statusText = statusNames[status] || `status ${status}`;
+  const fsText = fsResultNames[fs] || `FatFS ${fs}`;
+  return `${commandText} failed: ${statusText}, ${fsText}`;
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function webhidBusyError(command) {
+  const commandText = commandNames[command] || `command ${command}`;
+  const error = new Error(`${commandText}: Device busy, try again.`);
+  error.name = "WebHidBusyError";
+  return error;
+}
+
+function isWebHidBusy(error) {
+  return error && error.name === "WebHidBusyError";
+}
+
+async function featureCommand(command, body = new Uint8Array(), busyRetries = WEBHID_NO_BUSY_RETRY) {
+  const request = new Uint8Array(WEBHID_REPORT_SIZE);
+  request[0] = WEBHID_PROTOCOL_VERSION;
+  request[1] = command;
+  request.set(body, 2);
+  const commandText = commandNames[command] || `command ${command}`;
+  appendLog("debug", `tx ${commandText} (${command}) body=${body.length}`);
+
+  for (let attempt = 0; attempt <= busyRetries; attempt++) {
+    try {
+      await device.sendFeatureReport(REPORT_ID_WEBHID_CONFIG, request);
+    } catch (error) {
+      throw new Error(`send ${commandText} failed: ${error.message || error}`);
+    }
+
+    let response;
+    try {
+      response = await device.receiveFeatureReport(REPORT_ID_WEBHID_CONFIG);
+    } catch (error) {
+      throw new Error(`receive ${commandText} failed: ${error.message || error}`);
+    }
+
+    const data = featureData(response);
+    if (data[0] !== WEBHID_PROTOCOL_VERSION || data[1] !== command) throw new Error("bad response header");
+    if (data[2] === WEBHID_STATUS_OK) return data;
+    if (data[2] !== WEBHID_STATUS_BUSY) throw new Error(webhidError(command, data));
+    if (attempt === busyRetries) throw webhidBusyError(command);
+
+    await delay(WEBHID_BUSY_RETRY_MS);
+  }
+
+  throw webhidBusyError(command);
+}
+
+async function requestStatus() {
+  const data = await featureCommand(WEBHID_CMD_GET_STATUS, new Uint8Array(), WEBHID_BUSY_RETRIES);
+  const totalBytes = getU32(data, 5);
+  const freeBytes = getU32(data, 9);
+  deviceReady = true;
+  setText("storage-free", totalBytes ? formatBytes(freeBytes) : "-");
+  setText("storage-total", totalBytes ? formatBytes(totalBytes) : "-");
+  setPill("status-pill", "ok", "connected");
+  setStatus("ok", "Device status refreshed.");
+  appendLog(`status ok, free ${formatBytes(freeBytes)} / ${formatBytes(totalBytes)}`);
+}
+
+async function selectDevice() {
+  const devices = await navigator.hid.requestDevice({
+    filters: [{ vendorId: 0xcafe, usagePage: 0xff00, usage: 0x20 }],
+  });
+  return devices.find(isErgoTypeWebHid);
+}
+
+async function openDevice(selectedDevice, source) {
+  device = selectedDevice;
+  deviceReady = false;
+  if (!device) {
+    setStatus("error", "No WebHID device selected.");
+    return;
+  }
+
+  setText("device", device.productName || "USB Device");
+  setText("device-meta", `${device.vendorId.toString(16)}:${device.productId.toString(16)}`);
+  appendLog(`${source} ${device.productName}`);
+  if (!device.opened) {
+    try {
+      await device.open();
+    } catch (error) {
+      device = null;
+      deviceReady = false;
+      setText("device", "No device");
+      setText("device-meta", "Device open failed.");
+      setPill("status-pill", "warn", "disconnected");
+      updateControls();
+      throw error;
+    }
+  }
+  try {
+    await requestStatus();
+  } catch (error) {
+    deviceReady = false;
+    setText("device-meta", "Device opened, but status read failed.");
+    setText("storage-free", "-");
+    setText("storage-total", "-");
+    setPill("status-pill", "warn", "status failed");
+    updateControls();
+    throw error;
+  }
+  try {
+    await refreshDeviceFiles(false, false);
+    await reloadConfigKeymap();
+    clearEditorDocument();
+    selectDefaultFile();
+    await loadFile(false);
+  } catch (error) {
+    showError(error);
+  }
+  updateControls();
+}
+
+function markDisconnected(reason) {
+  device = null;
+  deviceReady = false;
+  if (busy)
+    setBusy(false);
+  setText("device", "No device");
+  setText("device-meta", reason);
+  setText("storage-free", "-");
+  setText("storage-total", "-");
+  setPill("status-pill", "warn", "disconnected");
+  setStatus("error", reason);
+  deviceFiles = [];
+  clearEditorDocument();
+  resetConfigKeymap();
+  loadDefaultConfigJson();
+  updateControls();
+}
+
+function showError(error) {
+  const message = String(error.message || error);
+  if (isWebHidBusy(error)) {
+    setStatus("info", "Device busy, try again.");
+    appendLog("debug", message);
+    return;
+  }
+
+  appendLog("error", String(error.stack || error));
+  if (error.name === "NotAllowedError" || message.includes("NotAllowedError")) {
+    setStatus("error", `${message}. Check hidraw permissions or remove the old browser pairing and reconnect.`);
+    appendLog("error", "NotAllowedError: check hidraw permissions or remove old browser pairing and reconnect.");
+  } else {
+    setStatus("error", message);
+  }
+}
+
+function showNoWebHid() {
+  setText("device-meta", "WebHID is not available in this browser. Use Chromium or Chrome.");
+  setPill("status-pill", "error", "no WebHID");
+  setStatus("error", "WebHID is not available in this browser. Use Chromium or Chrome.");
+  updateControls();
+}
+
+async function autoConnect() {
+  if (!("hid" in navigator)) {
+    showNoWebHid();
+    return;
+  }
+  try {
+    const devices = await navigator.hid.getDevices();
+    const selectedDevice = devices.find(isErgoTypeWebHid);
+    if (!selectedDevice) {
+      setStatus("info", "No paired device. Press Connect.");
+      appendLog("no paired device");
+      return;
+    }
+    await openDevice(selectedDevice, "auto");
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function readDeviceFile(selectedFile) {
+  const open = await featureCommand(WEBHID_CMD_FILE_OPEN_READ, pathBody(selectedFile), WEBHID_BUSY_RETRIES);
+  try {
+    const fileSize = getU32(open, 4);
+    const chunks = [];
+    let offset = 0;
+    while (offset < fileSize) {
+      const body = new Uint8Array(4);
+      putU32(body, 0, offset);
+      const data = await featureCommand(WEBHID_CMD_FILE_READ_CHUNK, body);
+      const chunkOffset = getU32(data, 8);
+      const chunkLen = data[12];
+      if (chunkOffset !== offset || chunkLen === 0) throw new Error("bad read chunk");
+      chunks.push(data.slice(WEBHID_FILE_READ_DATA_OFFSET, WEBHID_FILE_READ_DATA_OFFSET + chunkLen));
+      offset += chunkLen;
+    }
+    const fileData = new Uint8Array(fileSize);
+    offset = 0;
+    for (const chunk of chunks) {
+      fileData.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return fileData;
+  } finally {
+    await featureCommand(WEBHID_CMD_FILE_READ_END).catch(() => {});
+  }
+}
+
+async function readDeviceFileList() {
+  const open = await featureCommand(WEBHID_CMD_FILE_LIST_OPEN);
+  const listSize = getU32(open, 4);
+  const chunks = [];
+  let offset = 0;
+  while (offset < listSize) {
+    const body = new Uint8Array(4);
+    putU32(body, 0, offset);
+    const data = await featureCommand(WEBHID_CMD_FILE_LIST_READ_CHUNK, body);
+    const chunkOffset = getU32(data, 8);
+    const chunkLen = data[12];
+    if (chunkOffset !== offset || chunkLen === 0) throw new Error("bad list chunk");
+    chunks.push(data.slice(WEBHID_FILE_LIST_DATA_OFFSET, WEBHID_FILE_LIST_DATA_OFFSET + chunkLen));
+    offset += chunkLen;
+  }
+  const listData = new Uint8Array(listSize);
+  offset = 0;
+  for (const chunk of chunks) {
+    listData.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return decoder.decode(listData).split("\n").filter(Boolean).map(line => {
+    const [sizeText, attrsText, ...nameParts] = line.split("\t");
+    const name = nameParts.join("\t");
+    return {
+      name,
+      size: Number(sizeText) || 0,
+      attrs: Number(attrsText) || 0,
+      type: fileTypeFromName(name),
+      known: knownFiles.some(file => file.name === name),
+    };
+  }).filter(file => file.name);
+}
+
+async function refreshDeviceFiles(showBusy = true, refreshStatus = true) {
+  if (showBusy)
+    setBusy(true, "Refreshing files", "Reading the device file list.");
+  try {
+    deviceFiles = await readDeviceFileList();
+    renderFiles();
+    if (refreshStatus)
+      await requestStatus();
+    setStatus("ok", `Loaded ${deviceFiles.length} file(s) from device.`);
+    setLastAction("refreshed files");
+    appendLog(`files refreshed, ${deviceFiles.length} file(s)`);
+  } finally {
+    if (showBusy)
+      setBusy(false);
+  }
+}
+
+async function deleteDeviceFile(name) {
+  if (!confirm(`Delete ${name} from the device?`))
+    return;
+
+  setBusy(true, "Deleting file", `Deleting ${name}.`);
+  try {
+    await featureCommand(WEBHID_CMD_FILE_DELETE, pathBody(name));
+    if (currentFile === name) {
+      documentReady = false;
+      loadedText = "";
+      baselineNeedsSave = false;
+      setEditorText("");
+      setDocumentSize(0);
+      markDirty(false);
+      updateDocumentView();
+    }
+    await refreshDeviceFiles(false);
+    setStatus("ok", `Deleted ${name}.`);
+    setLastAction(`deleted ${name}`);
+    appendLog(`deleted ${name}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function ensureConfigKeyGrid() {
+  if (configKeyGrid.length || currentFile === "config.json")
+    return;
+  await reloadConfigKeymap();
+}
+
+function resetConfigKeymap() {
+  configKeyGrid = [];
+  configKeyRows = [];
+  configPhysicalLabels = null;
+  renderKeyboardPreview();
+}
+
+async function reloadConfigKeymap() {
+  appendLog("debug", "load config.json keymap");
+  try {
+    updateConfigKeyGridFromText(decoder.decode(await readDeviceFile("config.json")));
+  } catch (error) {
+    resetConfigKeymap();
+    appendLog("error", `config.json keymap load failed: ${error.message || error}`);
+  }
+}
+
+async function loadFile(confirmDirty = true) {
+  if (confirmDirty && dirty && !confirm(`Discard unsaved changes in ${currentFile} and load from device?`))
+    return;
+
+  setBusy(true, "Loading file", "Wait until loading finishes. Do not start Save or switch files.");
+  try {
+    appendLog(`load ${currentFile}`);
+    await ensureConfigKeyGrid();
+    const open = await featureCommand(WEBHID_CMD_FILE_OPEN_READ, pathBody(currentFile), WEBHID_BUSY_RETRIES);
+    let fileSize;
+    let fileData;
+    let chunkCount = 0;
+    try {
+      fileSize = getU32(open, 4);
+      setProgress(fileSize ? 0 : 1, fileSize || 1);
+      const chunks = [];
+      let offset = 0;
+      while (offset < fileSize) {
+        const body = new Uint8Array(4);
+        putU32(body, 0, offset);
+        const data = await featureCommand(WEBHID_CMD_FILE_READ_CHUNK, body);
+        const chunkOffset = getU32(data, 8);
+        const chunkLen = data[12];
+        if (chunkOffset !== offset || chunkLen === 0) throw new Error("bad read chunk");
+        chunks.push(data.slice(WEBHID_FILE_READ_DATA_OFFSET, WEBHID_FILE_READ_DATA_OFFSET + chunkLen));
+        chunkCount++;
+        offset += chunkLen;
+        setProgress(offset, fileSize);
+      }
+      fileData = new Uint8Array(fileSize);
+      offset = 0;
+      for (const chunk of chunks) {
+        fileData.set(chunk, offset);
+        offset += chunk.length;
+      }
+    } finally {
+      await featureCommand(WEBHID_CMD_FILE_READ_END).catch(() => {});
+    }
+    setEditorText(decoder.decode(fileData));
+    loadedText = $("editor").value;
+    baselineNeedsSave = false;
+    documentReady = true;
+    selectedLayer = 0;
+    selectedMapping = -1;
+    selectedKey = "";
+    layerFilter = "";
+    keyFilter = "";
+    mappingFilter = "";
+    $("key-filter").value = "";
+    $("layer-filter").value = "";
+    $("mapping-filter").value = "";
+    setDocumentSize(fileSize);
+    markDirty(false);
+    updateDocumentView();
+    setStatus("ok", `Loaded ${currentFile} (${fileSize} bytes).`);
+    setLastAction(`loaded ${currentFile}`);
+    appendLog(`loaded ${currentFile}, ${formatBytes(fileSize)}, ${chunkCount} chunk(s)`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function saveFile() {
+  const validation = validateCurrentDocument();
+  renderChecks(validation);
+  if (validation.errors.length) {
+    setStatus("error", `Save blocked: ${validation.errors[0].message}`);
+    return;
+  }
+  if (validation.warnings.length) {
+    const warningLines = validation.warnings.slice(0, 5).map(item =>
+      `${item.line ? `line ${item.line}: ` : ""}${item.message}`
+    );
+    if (validation.warnings.length > warningLines.length)
+      warningLines.push(`${validation.warnings.length - warningLines.length} more warning(s) not shown.`);
+    setStatus("info", `Save needs confirmation: ${validation.warnings.length} warning(s).`);
+    if (!confirm(`Save ${currentFile} with ${validation.warnings.length} warning(s)?\n\n${warningLines.join("\n")}`))
+      return;
+  }
+
+  setBusy(true, "Saving file", "Do not unplug, reload, close this tab, switch files, or press another action.");
+  try {
+    const fileData = encoder.encode($("editor").value);
+    let offset = 0;
+    let chunkCount = 0;
+    appendLog(`save ${currentFile} ${fileData.length} bytes`);
+    await featureCommand(WEBHID_CMD_FILE_WRITE_BEGIN, writeBeginBody(currentFile, fileData.length), WEBHID_BUSY_RETRIES);
+    setProgress(fileData.length ? 0 : 1, fileData.length || 1);
+
+    try {
+      while (offset < fileData.length) {
+        const chunk = fileData.slice(offset, offset + WEBHID_FILE_WRITE_DATA_SIZE);
+        const body = new Uint8Array(5 + chunk.length);
+        putU32(body, 0, offset);
+        body[4] = chunk.length;
+        body.set(chunk, 5);
+        await featureCommand(WEBHID_CMD_FILE_WRITE_CHUNK, body, WEBHID_BUSY_RETRIES);
+        offset += chunk.length;
+        chunkCount++;
+        setProgress(offset, fileData.length);
+      }
+      await featureCommand(WEBHID_CMD_FILE_WRITE_COMMIT, new Uint8Array(), WEBHID_BUSY_RETRIES);
+      setProgress(fileData.length || 1, fileData.length || 1);
+      loadedText = $("editor").value;
+      baselineNeedsSave = false;
+      setDocumentSize(fileData.length);
+      markDirty(false);
+      await refreshDeviceFiles(false);
+      setStatus("ok", `Saved ${currentFile} (${fileData.length} bytes).`);
+      setLastAction(`saved ${currentFile}`);
+      appendLog(`saved ${currentFile}, ${formatBytes(fileData.length)}, ${chunkCount} chunk(s)`);
+    } catch (error) {
+      await featureCommand(WEBHID_CMD_FILE_WRITE_ABORT).catch(() => {});
+      throw error;
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+function parseConf(text) {
+  const model = { prefix: [], layers: [], suffix: [], trailingNewline: text.endsWith("\n") };
+  let current = null;
+  const body = model.trailingNewline ? text.slice(0, -1) : text;
+  const lines = body ? body.split("\n") : [];
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const rawLine = lines[lineIndex];
+    const line = lineIndex + 1;
+    const section = rawLine.match(/^\s*\[([^\]:]+)(?::([^\]]+))?\]\s*$/);
+    if (section) {
+      current = { name: section[1].trim(), descriptor: (section[2] || "").trim(), line, entries: [], mappings: [] };
+      model.layers.push(current);
+      continue;
+    }
+    if (!current) {
+      model.prefix.push(rawLine);
+      continue;
+    }
+    const mapping = rawLine.match(/^(\s*[^#=\s][^=]*?)(\s*=\s*)(.*)$/);
+    if (mapping) {
+      const item = { key: mapping[1].trim(), sep: mapping[2], action: mapping[3].trim(), actionText: mapping[3], line };
+      current.mappings.push(item);
+      current.entries.push({ type: "mapping", item });
+    } else {
+      current.entries.push({ type: "raw", value: rawLine, line });
+    }
+  }
+  return model;
+}
+
+function serializeConf(model) {
+  const out = [...model.prefix];
+  for (const layer of model.layers) {
+    const header = layer.descriptor ? `[${layer.name}:${layer.descriptor}]` : `[${layer.name}]`;
+    out.push(header);
+    for (const entry of layer.entries || []) {
+      if (entry.type === "raw") {
+        out.push(entry.value);
+      } else if (entry.item.key) {
+        out.push(`${entry.item.key}${entry.item.sep || " = "}${entry.item.actionText ?? entry.item.action}`);
+      }
+    }
+  }
+  return out.join("\n") + (model.trailingNewline ? "\n" : "");
+}
+
+function addLayerMapping(layer, mapping) {
+  mapping.sep ||= " = ";
+  mapping.actionText ??= mapping.action;
+  layer.mappings.push(mapping);
+  layer.entries.push({ type: "mapping", item: mapping });
+}
+
+function removeLayerMapping(layer, idx) {
+  const mapping = layer.mappings[idx];
+  layer.mappings.splice(idx, 1);
+  const entryIndex = layer.entries.findIndex(entry => entry.item === mapping);
+  if (entryIndex >= 0)
+    layer.entries.splice(entryIndex, 1);
+}
+
+function moveLayerMapping(layer, idx, next) {
+  const current = layer.mappings[idx];
+  const target = layer.mappings[next];
+  [layer.mappings[idx], layer.mappings[next]] = [target, current];
+  const currentEntry = layer.entries.findIndex(entry => entry.item === current);
+  const targetEntry = layer.entries.findIndex(entry => entry.item === target);
+  if (currentEntry >= 0 && targetEntry >= 0)
+    [layer.entries[currentEntry], layer.entries[targetEntry]] = [layer.entries[targetEntry], layer.entries[currentEntry]];
+}
+
+function uniqueLayerName(base) {
+  const names = new Set(visualModel.layers.map(item => item.name));
+  if (!names.has(base))
+    return base;
+  for (let i = 2;; i++) {
+    const name = `${base}-${i}`;
+    if (!names.has(name))
+      return name;
+  }
+}
+
+function firstUnmappedKey(layer) {
+  const mapped = new Set(layer.mappings.map(mapping => mapping.key));
+  return activeKeyGrid().find(key => !mapped.has(key)) || "key";
+}
+
+function cloneLayer(layer, name) {
+  const mappings = new Map();
+  const copy = { name, descriptor: layer.descriptor, entries: [], mappings: [] };
+  for (const entry of layer.entries) {
+    if (entry.type === "raw") {
+      copy.entries.push({ type: "raw", value: entry.value });
+      continue;
+    }
+    const item = { ...entry.item };
+    mappings.set(entry.item, item);
+    copy.mappings.push(item);
+    copy.entries.push({ type: "mapping", item });
+  }
+  for (const mapping of layer.mappings) {
+    if (!mappings.has(mapping))
+      addLayerMapping(copy, { ...mapping });
+  }
+  return copy;
+}
+
+function renderVisual() {
+  const list = $("layer-list");
+  list.innerHTML = "";
+  initVisualDatalists();
+  if (currentType !== "conf") {
+    $("visual-title").textContent = "Visual editor is for .conf files";
+    $("visual-subtitle").textContent = "Select and load a .conf file first.";
+    $("mapping-list").innerHTML = "";
+    $("key-grid").innerHTML = "";
+    $("key-grid").classList.remove("config-grid");
+    $("descriptor-palette").innerHTML = "";
+    $("visual-workbench").classList.add("hidden");
+    $("visual-empty").classList.remove("hidden");
+    $("mapping-table").classList.add("hidden");
+    $("visual-empty").textContent = `${currentFile} is not a .conf file. Use the Text tab for JSON.`;
+    $("layer-filter").title = "";
+    $("selected-key").value = "";
+    $("selected-action").value = "";
+    updateControls();
+    return;
+  }
+
+  let matchingLayerCount = 0;
+  visualModel.layers.forEach((layer, idx) => {
+    const haystack = `${layer.name} ${layer.descriptor}`.toLowerCase();
+    const matchesFilter = !layerFilter || haystack.includes(layerFilter);
+    if (matchesFilter)
+      matchingLayerCount++;
+    if (!matchesFilter && idx !== selectedLayer)
+      return;
+    const row = document.createElement("button");
+    row.className = `layer-row ${idx === selectedLayer ? "active" : ""}`;
+    const desc = layer.name === "global" ? "settings" : layer.descriptor || "base";
+    row.title = `[${layer.name}${layer.descriptor ? `:${layer.descriptor}` : ""}] · ${layer.mappings.length} entries`;
+    row.setAttribute("aria-label", `Select layer ${layer.name}, ${desc}, ${layer.mappings.length} entries`);
+    row.innerHTML = `<div><div class="layer-name">${htmlEscape(layer.name)}</div><div class="layer-desc">${htmlEscape(desc)} · ${layer.mappings.length} entries</div></div><span>›</span>`;
+    row.addEventListener("click", () => {
+      selectedLayer = idx;
+      selectedMapping = -1;
+      selectedKey = "";
+      renderVisual();
+    });
+    list.appendChild(row);
+  });
+  $("layer-filter").title = layerFilter ?
+    `${matchingLayerCount} of ${visualModel.layers.length} layers match the filter. The selected layer stays visible.` :
+    `${visualModel.layers.length} layers`;
+
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) {
+    $("visual-title").textContent = "No layers";
+    $("visual-subtitle").textContent = "Add a layer to start.";
+    $("mapping-list").innerHTML = "";
+    $("key-grid").innerHTML = "";
+    $("key-grid").classList.remove("config-grid");
+    $("descriptor-palette").innerHTML = "";
+    $("visual-workbench").classList.add("hidden");
+    $("visual-empty").classList.remove("hidden");
+    $("mapping-table").classList.add("hidden");
+    $("visual-empty").textContent = documentReady ? "No layers found. Add a layer to start." : "Load from the device, open a local backup, or add a layer to create a new .conf.";
+    $("layer-filter").title = "";
+    $("selected-key").value = "";
+    $("selected-action").value = "";
+    updateControls();
+    return;
+  }
+
+  const isGlobal = layer.name === "global";
+  $("mapping-table").classList.remove("hidden");
+  const keyCounts = new Map();
+  for (const mapping of layer.mappings) {
+    if (!mapping.key)
+      continue;
+    keyCounts.set(mapping.key, (keyCounts.get(mapping.key) || 0) + 1);
+  }
+  const visibleMappings = layer.mappings
+    .map((mapping, idx) => ({ mapping, idx }))
+    .filter(({ mapping }) => {
+      const haystack = `${mapping.key} ${mapping.action}`.toLowerCase();
+      return !mappingFilter || haystack.includes(mappingFilter);
+    });
+  const countText = mappingFilter ? `${visibleMappings.length}/${layer.mappings.length}` : layer.mappings.length;
+  $("visual-title").textContent = `[${!isGlobal && layer.descriptor ? `${layer.name}:${layer.descriptor}` : layer.name}]`;
+  $("visual-subtitle").textContent = isGlobal ? `${countText} settings` : `${countText} mappings`;
+  $("mapping-key-head").textContent = isGlobal ? "Setting" : "Key";
+  $("mapping-action-head").textContent = isGlobal ? "Value" : "Action";
+  $("mapping-filter").placeholder = isGlobal ? "filter settings" : "filter mappings";
+  $("mapping-filter").setAttribute("aria-label", isGlobal ? "Filter settings" : "Filter mappings");
+  $("layer-name").value = layer.name;
+  $("layer-descriptor").value = layer.descriptor;
+  $("descriptor-palette").innerHTML = layerDescriptors.map(value => {
+    const label = value || "base";
+    const active = layer.descriptor === value;
+    const title = descriptorTitle(value);
+    return `<button class="descriptor-btn ${active ? "active" : ""}" data-descriptor="${htmlEscape(value)}" title="${htmlEscape(title)}" aria-label="Descriptor ${htmlEscape(label)}: ${htmlEscape(title)}" ${isGlobal ? "disabled" : ""}>${htmlEscape(label)}</button>`;
+  }).join("");
+  $("add-mapping").textContent = isGlobal ? "Add setting" : "Add mapping";
+  $("visual-workbench").classList.toggle("hidden", isGlobal);
+  $("visual-empty").classList.toggle("hidden", !isGlobal);
+  $("visual-empty").textContent = isGlobal ? "[global] contains settings, not keyboard mappings." : "";
+
+  const keyMap = new Map();
+  layer.mappings.forEach((mapping, idx) => {
+    if (mapping.key && !keyMap.has(mapping.key))
+      keyMap.set(mapping.key, { mapping, idx });
+  });
+
+  const grid = $("key-grid");
+  grid.innerHTML = "";
+  grid.classList.toggle("config-grid", !!configKeyRows.length);
+  let visibleKeyCount = 0;
+  const renderKeycap = key => {
+    const entry = keyMap.get(key);
+    const defaultAction = !entry && layer.name === "main" ? key : "";
+    const haystack = `${key} ${entry ? entry.mapping.action : defaultAction}`.toLowerCase();
+    if (keyFilter && !haystack.includes(keyFilter))
+      return null;
+    visibleKeyCount++;
+    const keycap = document.createElement("button");
+    keycap.className = `keycap ${entry ? "active" : ""} ${defaultAction ? "default" : ""} ${key === selectedKey ? "selected" : ""}`;
+    keycap.dataset.key = key;
+    keycap.setAttribute("aria-label", `${key}: ${entry ? entry.mapping.action : (defaultAction || "unmapped")}`);
+    keycap.title = `${key}: ${entry ? entry.mapping.action : (defaultAction ? `${defaultAction} (default from config.json keymap)` : "unmapped")}`;
+    keycap.innerHTML = `<strong>${htmlEscape(key)}</strong><span>${htmlEscape(entry ? entry.mapping.action : defaultAction)}</span>`;
+    return keycap;
+  };
+  for (const row of activeKeyRows()) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "key-row";
+    rowEl.style.gridTemplateColumns = `repeat(${row.length}, minmax(${KEY_GRID_MIN_SIZE}, 1fr))`;
+    for (const key of row) {
+      const keycap = renderKeycap(key);
+      if (keycap)
+        rowEl.appendChild(keycap);
+    }
+    if (rowEl.childElementCount)
+      grid.appendChild(rowEl);
+  }
+  if (!visibleKeyCount)
+    grid.innerHTML = `<div class="mapping-empty">${keyFilter ? "No keys match the filter." : "No keys available."}</div>`;
+
+  if (selectedMapping >= layer.mappings.length)
+    selectedMapping = -1;
+  const selected = selectedMapping >= 0 ? layer.mappings[selectedMapping] : keyMap.get(selectedKey)?.mapping;
+  $("selected-key").value = selected?.key || selectedKey;
+  $("selected-action").value = selected?.action || (layer.name === "main" && selectedKey ? selectedKey : "") || $("action-preset").value || "noop";
+
+  const mappings = $("mapping-list");
+  mappings.innerHTML = "";
+  if (!visibleMappings.length) {
+    const noun = isGlobal ? "settings" : "mappings";
+    mappings.innerHTML = `<div class="mapping-empty">${mappingFilter ? `No ${noun} match the filter.` : `No ${noun} in this layer.`}</div>`;
+  }
+  visibleMappings.forEach(({ mapping, idx }) => {
+    const row = document.createElement("div");
+    const itemLabel = htmlEscape(mapping.key || `mapping ${idx + 1}`);
+    const keyLabel = isGlobal ? "Setting" : "Mapping key";
+    const actionLabel = isGlobal ? "Value" : "Mapping action";
+    row.className = `mapping-row ${idx === selectedMapping ? "selected" : ""} ${keyCounts.get(mapping.key) > 1 ? "duplicate" : ""}`;
+    if (keyCounts.get(mapping.key) > 1)
+      row.title = `${isGlobal ? "Setting" : "Key"} "${mapping.key}" appears more than once in this layer.`;
+    row.innerHTML = `
+      <div class="mapping-line">${mapping.line ? `line ${mapping.line}` : ""}</div>
+      <div><input data-field="key" data-index="${idx}" list="key-options" value="${htmlEscape(mapping.key)}" title="${htmlEscape(mapping.key)}" aria-label="${keyLabel} ${idx + 1}"></div>
+      <div><input data-field="action" data-index="${idx}" list="action-options" value="${htmlEscape(mapping.action)}" title="${htmlEscape(mapping.action)}" aria-label="${actionLabel} ${idx + 1}"></div>
+      <div class="mapping-actions">
+        <button class="icon" data-move="up" data-index="${idx}" data-disabled="${idx <= 0}" ${idx <= 0 ? "disabled" : ""} title="Move up" aria-label="Move ${itemLabel} up">↑</button>
+        <button class="icon" data-move="down" data-index="${idx}" data-disabled="${idx >= layer.mappings.length - 1}" ${idx >= layer.mappings.length - 1 ? "disabled" : ""} title="Move down" aria-label="Move ${itemLabel} down">↓</button>
+        <button class="icon danger" data-remove="${idx}" title="Remove" aria-label="Remove ${itemLabel}">×</button>
+      </div>`;
+    mappings.appendChild(row);
+  });
+  updateControls();
+}
+
+function syncVisualToText() {
+  documentReady = true;
+  setEditorText(serializeConf(visualModel));
+  setDocumentSize(encoder.encode($("editor").value).length);
+  markEditorDirtyFromBaseline();
+  updateDocumentView();
+}
+
+function syncVisualToTextSoft() {
+  documentReady = true;
+  setEditorText(serializeConf(visualModel));
+  setDocumentSize(encoder.encode($("editor").value).length);
+  markEditorDirtyFromBaseline();
+  updateEditorHighlight();
+  updateLineNumbers();
+  syncEditorScroll();
+  renderChecks(validateCurrentDocument());
+}
+
+function isPlainObject(value) {
+  return value && !Array.isArray(value) && typeof value === "object";
+}
+
+function isScalar(value) {
+  return value === null || typeof value !== "object";
+}
+
+function formatJsonInlineObject(value) {
+  return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}: ${formatJsonInline(item)}`).join(", ")}}`;
+}
+
+function formatJsonInline(value) {
+  if (isPlainObject(value))
+    return formatJsonInlineObject(value);
+  if (Array.isArray(value))
+    return formatJsonInlineArray(value);
+  return JSON.stringify(value);
+}
+
+function formatJsonInlineArray(value) {
+  const items = value.map(formatJsonInline);
+  const width = Math.max(0, ...items.map(item => item.length));
+  return `[${items.map(item => item.padStart(width)).join(", ")}]`;
+}
+
+function formatJsonKeymap(value, indent) {
+  const rows = value.map(row => Array.isArray(row) ? row.map(formatJsonInline) : [formatJsonInline(row)]);
+  const cols = Math.max(0, ...rows.map(row => row.length));
+  const widths = [];
+
+  for (let col = 0; col < cols; col++)
+    widths[col] = Math.max(0, ...rows.map(row => row[col] ? row[col].length : 0));
+
+  const pad = " ".repeat(indent + 2);
+  const lines = rows.map(row => {
+    const cells = row.map((cell, col) => cell.padStart(widths[col]));
+    return `${pad}[ ${cells.join(", ")} ]`;
+  });
+
+  return `[\n${lines.join(",\n")}\n${" ".repeat(indent)}]`;
+}
+
+function formatJsonObjectArray(value, indent) {
+  const keys = Object.keys(value[0]);
+  const rows = value.map(item => keys.map(key => formatJsonInline(item[key])));
+  const widths = [];
+
+  for (let col = 0; col < keys.length; col++)
+    widths[col] = Math.max(0, ...rows.map(row => row[col].length));
+
+  const pad = " ".repeat(indent + 2);
+  const lines = rows.map(row => {
+    const items = row.map((cell, col) => `${JSON.stringify(keys[col])}: ${cell.padStart(widths[col])}`);
+    return `${pad}{${items.join(", ")}}`;
+  });
+
+  return `[\n${lines.join(",\n")}\n${" ".repeat(indent)}]`;
+}
+
+function formatJsonValue(value, indent = 0, key = "") {
+  if (Array.isArray(value)) {
+    if (key === "keymap")
+      return formatJsonKeymap(value, indent);
+    if (value.every(isScalar))
+      return formatJsonInlineArray(value);
+    if (value.every(item => isPlainObject(item) && Object.values(item).every(isScalar))) {
+      return formatJsonObjectArray(value, indent);
+    }
+    const pad = " ".repeat(indent + 2);
+    return `[\n${value.map(item => `${pad}${formatJsonValue(item, indent + 2)}`).join(",\n")}\n${" ".repeat(indent)}]`;
+  }
+
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    const pad = " ".repeat(indent + 2);
+    return `{\n${entries.map(([itemKey, item]) => `${pad}${JSON.stringify(itemKey)}: ${formatJsonValue(item, indent + 2, itemKey)}`).join(",\n")}\n${" ".repeat(indent)}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function formatCurrentFile() {
+  if (dirty && !confirm(`Format ${currentFile}? This rewrites the editor text before Save.`))
+    return;
+
+  if (currentType === "conf") {
+    visualModel = parseConf($("editor").value);
+    syncVisualToText();
+    setDocumentSize(encoder.encode($("editor").value).length);
+    setStatus("ok", "Formatted .conf.");
+    setLastAction(`formatted ${currentFile}`);
+    return;
+  }
+
+  if (currentType === "json") {
+    try {
+      setEditorText(formatJsonValue(JSON.parse($("editor").value)) + "\n");
+      documentReady = true;
+      setDocumentSize(encoder.encode($("editor").value).length);
+      markEditorDirtyFromBaseline();
+      updateDocumentView();
+      setStatus("ok", "Formatted JSON.");
+      setLastAction(`formatted ${currentFile}`);
+    } catch (error) {
+      setStatus("error", `JSON parse error: ${error.message}`);
+      renderChecks(validateCurrentDocument());
+    }
+  }
+}
+
+function selectFile(file) {
+  if (file.name === currentFile)
+    return true;
+  if (dirty && !confirm(`Discard unsaved changes in ${currentFile}?`))
+    return false;
+
+  currentFile = file.name;
+  currentType = file.type;
+  documentReady = false;
+  loadedText = "";
+  baselineNeedsSave = false;
+  selectedLayer = 0;
+  selectedMapping = -1;
+  selectedKey = "";
+  layerFilter = "";
+  keyFilter = "";
+  mappingFilter = "";
+  $("key-filter").value = "";
+  $("layer-filter").value = "";
+  $("mapping-filter").value = "";
+  setCurrentFileName();
+  document.querySelectorAll(".file-btn").forEach(btn => btn.classList.remove("active"));
+  setEditorText("");
+  setDocumentSize(0);
+  markDirty(false);
+  setStatus("info", `Selected ${currentFile}.`);
+  updateDocumentView();
+  updateControls();
+  return true;
+}
+
+function renderFiles() {
+  const knownList = $("known-file-list");
+  const list = $("file-list");
+  knownList.innerHTML = "";
+  list.innerHTML = "";
+
+  const appendFileButton = (file, label) => {
+    const active = documentReady && file.name === currentFile;
+    const btn = document.createElement("button");
+    btn.className = `file-btn ${active ? "active" : ""}`;
+    btn.dataset.file = file.name;
+    btn.setAttribute("aria-current", active ? "true" : "false");
+    btn.setAttribute("aria-label", `${active ? "Selected target" : "Select target"} ${file.name}${label ? `, ${label}` : ""}`);
+    btn.title = `${active ? "Selected target" : "Select target"}: ${file.name}${label ? ` (${label})` : ""}`;
+    btn.innerHTML = `<span>${htmlEscape(file.name)}</span>${label ? `<small>${htmlEscape(label)}</small>` : ""}`;
+    btn.addEventListener("click", async () => {
+      if (!selectFile(fileByName(file.name)))
+        return;
+      if (device && device.opened && deviceReady && !busy)
+        await runLoad();
+    });
+    return btn;
+  };
+
+  knownFiles.forEach(file => {
+    const listed = deviceFiles.find(entry => entry.name === file.name);
+    const label = file.name === currentFile && dirty ? "modified" : (listed ? formatBytes(listed.size) : "");
+    knownList.appendChild(appendFileButton(file, label));
+  });
+
+  if (!deviceFiles.length) {
+    const empty = document.createElement("div");
+    empty.className = "side-hint";
+    empty.textContent = "Press Refresh to read files from the device.";
+    list.appendChild(empty);
+    return;
+  }
+
+  deviceFiles.forEach(file => {
+    const row = document.createElement("div");
+    row.className = "file-row";
+    row.appendChild(appendFileButton(file, formatBytes(file.size)));
+    const remove = document.createElement("button");
+    remove.className = "file-delete";
+    remove.textContent = "Del";
+    remove.title = `Delete ${file.name} from the device.`;
+    remove.setAttribute("aria-label", `Delete ${file.name}`);
+    remove.addEventListener("click", async event => {
+      event.stopPropagation();
+      try {
+        await deleteDeviceFile(file.name);
+      } catch (error) {
+        showError(error);
+      }
+    });
+    row.appendChild(remove);
+    list.appendChild(row);
+  });
+}
+
+async function runLoad() {
+  try { await loadFile(); } catch (error) { showError(error); }
+}
+
+async function runSave() {
+  try { await saveFile(); } catch (error) { showError(error); }
+}
+
+function runOpenLocal() {
+  if (busy)
+    return;
+  if (dirty && !confirm(`Replace unsaved editor contents for ${currentFile}?`))
+    return;
+  $("local-file").click();
+}
+
+function createNewFile() {
+  if (busy || !device || !device.opened || !deviceReady)
+    return;
+  if (dirty && !confirm(`Replace unsaved editor contents for ${currentFile}?`))
+    return;
+
+  const name = prompt("New file name", "new.conf");
+  if (!name)
+    return;
+  const trimmed = name.trim();
+  const encodedName = encoder.encode(trimmed);
+  if (!trimmed || encodedName.length > 56 || /[\\/:]/.test(trimmed)) {
+    setStatus("error", "File name must be 1-56 bytes and cannot contain '/', '\\', or ':'.");
+    return;
+  }
+
+  currentFile = trimmed;
+  currentType = fileTypeFromName(currentFile);
+  if (!deviceFiles.some(file => file.name === currentFile) && !knownFiles.some(file => file.name === currentFile))
+    deviceFiles.push({ name: currentFile, type: currentType, size: 0, attrs: 0, known: false });
+  setEditorText(currentType === "conf" ? "[main]\n" : (currentType === "json" ? "{\n}\n" : ""));
+  setDocumentSize(encoder.encode($("editor").value).length);
+  loadedText = "";
+  baselineNeedsSave = true;
+  documentReady = true;
+  selectedLayer = 0;
+  selectedMapping = -1;
+  selectedKey = "";
+  layerFilter = "";
+  keyFilter = "";
+  mappingFilter = "";
+  $("key-filter").value = "";
+  $("layer-filter").value = "";
+  $("mapping-filter").value = "";
+  setCurrentFileName();
+  markEditorDirtyFromBaseline();
+  updateDocumentView();
+  renderFiles();
+  setStatus("ok", `Created local ${currentFile}. Save writes it to the device.`);
+  setLastAction(`new ${currentFile}`);
+}
+
+function setSelectedAction() {
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return false;
+
+  const key = $("selected-key").value.trim();
+  const action = $("selected-action").value.trim();
+  const validationError = validateMappingFields(key, action);
+  if (validationError) {
+    setStatus("error", validationError);
+    return false;
+  }
+
+  let idx = selectedMapping >= 0 ? selectedMapping : layer.mappings.findIndex(mapping => mapping.key === key);
+  if (idx < 0) {
+    addLayerMapping(layer, { key, action });
+    idx = layer.mappings.length - 1;
+  } else {
+    layer.mappings[idx].key = key;
+    layer.mappings[idx].action = action;
+    layer.mappings[idx].actionText = action;
+  }
+  selectedMapping = idx;
+  selectedKey = key;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Set ${key} in [${layer.name}].`);
+  return true;
+}
+
+$("connect").addEventListener("click", async () => {
+  try {
+    await openDevice(await selectDevice(), "selected");
+  } catch (error) {
+    showError(error);
+  }
+});
+
+$("refresh").addEventListener("click", async () => {
+  try {
+    setBusy(true, "Refreshing status", "Wait for status refresh to finish.");
+    await requestStatus();
+    await reloadConfigKeymap();
+    await loadFile(false);
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$("refresh-files").addEventListener("click", async () => {
+  try {
+    await refreshDeviceFiles();
+  } catch (error) {
+    showError(error);
+  }
+});
+
+$("load").addEventListener("click", async () => {
+  await runLoad();
+});
+
+$("save").addEventListener("click", async () => {
+  await runSave();
+});
+
+$("download-backup").addEventListener("click", () => {
+  downloadBackup();
+});
+
+$("open-local").addEventListener("click", () => {
+  runOpenLocal();
+});
+
+$("new-file").addEventListener("click", () => {
+  createNewFile();
+});
+
+$("revert-changes").addEventListener("click", () => {
+  revertChanges();
+});
+
+$("local-file").addEventListener("change", () => {
+  const file = $("local-file").files[0];
+  $("local-file").value = "";
+  if (file) openLocalFile(file);
+});
+
+window.addEventListener("keydown", event => {
+  if (!event.ctrlKey && !event.metaKey)
+    return;
+
+  const key = event.key.toLowerCase();
+  if (key === "s") {
+    event.preventDefault();
+    if (!$("save").disabled) runSave();
+  } else if (key === "o") {
+    event.preventDefault();
+    if (!$("open-local").disabled) runOpenLocal();
+  } else if (key === "l") {
+    event.preventDefault();
+    if (!$("load").disabled) runLoad();
+  }
+});
+
+$("editor").addEventListener("input", () => {
+  documentReady = true;
+  updateEditorLines();
+  setDirtyState(documentReady && (baselineNeedsSave || $("editor").value !== loadedText));
+  updateEditorHighlight();
+  updateCursorKeyHighlight();
+  scheduleDocumentViewUpdate();
+});
+
+$("editor").addEventListener("keydown", event => {
+  if ((!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== "a")
+    return;
+
+  event.preventDefault();
+  $("editor").select();
+});
+
+$("editor").addEventListener("scroll", () => {
+  updateEditorHighlight();
+});
+
+$("editor").addEventListener("click", updateCursorKeyHighlight);
+$("editor").addEventListener("keyup", updateCursorKeyHighlight);
+$("editor").addEventListener("select", updateCursorKeyHighlight);
+
+$("checks").addEventListener("click", event => {
+  const row = event.target.closest("[data-line]");
+  if (!row || !row.dataset.line) return;
+  if (window.getSelection().toString())
+    return;
+  focusEditorLine(Number(row.dataset.line));
+});
+
+$("checks").addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ")
+    return;
+  const row = event.target.closest("[data-line]");
+  if (!row || !row.dataset.line)
+    return;
+  event.preventDefault();
+  focusEditorLine(Number(row.dataset.line));
+});
+
+$("format-file").addEventListener("click", () => {
+  formatCurrentFile();
+});
+
+$("apply-visual").addEventListener("click", () => {
+  syncVisualToText();
+  setStatus("ok", "Visual model applied to source text.");
+  setLastAction(`applied visual ${currentFile}`);
+});
+
+$("add-layer").addEventListener("click", () => {
+  const name = uniqueLayerName("new-layer");
+  visualModel.layers.push({ name: name, descriptor: "", entries: [], mappings: [] });
+  selectedLayer = visualModel.layers.length - 1;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Added layer [${name}].`);
+});
+
+$("move-layer-up").addEventListener("click", () => {
+  if (selectedLayer <= 0) return;
+  const name = visualModel.layers[selectedLayer].name;
+  [visualModel.layers[selectedLayer - 1], visualModel.layers[selectedLayer]] =
+    [visualModel.layers[selectedLayer], visualModel.layers[selectedLayer - 1]];
+  selectedLayer--;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Moved layer [${name}] up.`);
+});
+
+$("move-layer-down").addEventListener("click", () => {
+  if (selectedLayer >= visualModel.layers.length - 1) return;
+  const name = visualModel.layers[selectedLayer].name;
+  [visualModel.layers[selectedLayer], visualModel.layers[selectedLayer + 1]] =
+    [visualModel.layers[selectedLayer + 1], visualModel.layers[selectedLayer]];
+  selectedLayer++;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Moved layer [${name}] down.`);
+});
+
+$("duplicate-layer").addEventListener("click", () => {
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return;
+  const name = uniqueLayerName(`${layer.name}-copy`);
+  visualModel.layers.splice(selectedLayer + 1, 0, cloneLayer(layer, name));
+  selectedLayer++;
+  selectedMapping = -1;
+  selectedKey = "";
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Duplicated layer as [${name}].`);
+});
+
+$("remove-layer").addEventListener("click", () => {
+  if (!visualModel.layers[selectedLayer]) return;
+  const name = visualModel.layers[selectedLayer].name;
+  if (!confirm(`Remove layer [${name}]?`))
+    return;
+  visualModel.layers.splice(selectedLayer, 1);
+  selectedLayer = Math.max(0, selectedLayer - 1);
+  selectedMapping = -1;
+  selectedKey = "";
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Removed layer [${name}].`);
+});
+
+$("rename-layer").addEventListener("click", () => {
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return;
+  const nextName = $("layer-name").value.trim();
+  const nextDescriptor = $("layer-descriptor").value.trim();
+  if (!nextName) {
+    setStatus("error", "Layer name is required.");
+    return;
+  }
+  if (/[:\]]/.test(nextName)) {
+    setStatus("error", "Layer name cannot contain ':' or ']'.");
+    return;
+  }
+  if (/[:\]]/.test(nextDescriptor)) {
+    setStatus("error", "Layer descriptor cannot contain ':' or ']'.");
+    return;
+  }
+  if (visualModel.layers.some((item, idx) => idx !== selectedLayer && item.name === nextName && item.descriptor === nextDescriptor)) {
+    setStatus("error", `Layer [${nextName}${nextDescriptor ? `:${nextDescriptor}` : ""}] already exists.`);
+    return;
+  }
+  const oldName = layer.name;
+  layer.name = nextName;
+  layer.descriptor = nextDescriptor;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Updated layer [${oldName}] to [${layer.name}${layer.descriptor ? `:${layer.descriptor}` : ""}].`);
+});
+
+$("descriptor-palette").addEventListener("click", event => {
+  const button = event.target.closest("[data-descriptor]");
+  const layer = visualModel.layers[selectedLayer];
+  if (!button || !layer || layer.name === "global")
+    return;
+
+  layer.descriptor = button.dataset.descriptor;
+  $("layer-descriptor").value = layer.descriptor;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Set [${layer.name}] descriptor to ${layer.descriptor || "base"}.`);
+});
+
+$("add-mapping").addEventListener("click", () => {
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return;
+  const isGlobal = layer.name === "global";
+  const key = isGlobal ? "setting" : firstUnmappedKey(layer);
+  addLayerMapping(layer, { key, action: isGlobal ? "value" : $("action-preset").value || "noop" });
+  selectedMapping = layer.mappings.length - 1;
+  selectedKey = isGlobal ? "" : key;
+  renderVisual();
+  syncVisualToText();
+  setStatus("ok", `Added ${isGlobal ? "setting" : "mapping"} in [${layer.name}].`);
+});
+
+$("action-preset").addEventListener("change", () => {
+  if (!$("action-preset").value) return;
+  $("selected-action").value = $("action-preset").value;
+  if ($("selected-key").value.trim())
+    setSelectedAction();
+});
+
+$("layer-filter").addEventListener("input", () => {
+  layerFilter = $("layer-filter").value.trim().toLowerCase();
+  renderVisual();
+});
+
+$("key-filter").addEventListener("input", () => {
+  keyFilter = $("key-filter").value.trim().toLowerCase();
+  renderVisual();
+});
+
+$("mapping-filter").addEventListener("input", () => {
+  mappingFilter = $("mapping-filter").value.trim().toLowerCase();
+  renderVisual();
+});
+
+$("key-grid").addEventListener("click", event => {
+  const keycap = event.target.closest(".keycap");
+  const layer = visualModel.layers[selectedLayer];
+  if (!keycap || !layer) return;
+
+  selectedKey = keycap.dataset.key;
+  selectedMapping = layer.mappings.findIndex(mapping => mapping.key === selectedKey);
+  if (selectedMapping < 0) {
+    if (layer.name === "main") {
+      $("selected-key").value = selectedKey;
+      $("selected-action").value = selectedKey;
+      renderVisual();
+      setStatus("ok", `Selected default ${selectedKey} in [main].`);
+      return;
+    }
+    addLayerMapping(layer, { key: selectedKey, action: $("action-preset").value || "noop" });
+    selectedMapping = layer.mappings.length - 1;
+    syncVisualToTextSoft();
+    setStatus("ok", `Added mapping ${selectedKey} in [${layer.name}].`);
+  }
+  renderVisual();
+});
+
+$("set-selected-action").addEventListener("click", () => {
+  setSelectedAction();
+});
+
+$("mapping-list").addEventListener("input", event => {
+  const input = event.target.closest("input");
+  if (!input) return;
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return;
+  selectedMapping = Number(input.dataset.index);
+  layer.mappings[selectedMapping][input.dataset.field] = input.value;
+  if (input.dataset.field === "action")
+    layer.mappings[selectedMapping].actionText = input.value;
+  selectedKey = layer.mappings[selectedMapping].key;
+  $("selected-key").value = layer.mappings[selectedMapping].key;
+  $("selected-action").value = layer.mappings[selectedMapping].action;
+  syncVisualToTextSoft();
+});
+
+$("mapping-list").addEventListener("focusin", event => {
+  const input = event.target.closest("input");
+  const layer = visualModel.layers[selectedLayer];
+  if (!input || !layer) return;
+  selectedMapping = Number(input.dataset.index);
+  selectedKey = layer.mappings[selectedMapping].key;
+  $("selected-key").value = layer.mappings[selectedMapping].key;
+  $("selected-action").value = layer.mappings[selectedMapping].action;
+});
+
+$("mapping-list").addEventListener("click", event => {
+  const layer = visualModel.layers[selectedLayer];
+  if (!layer) return;
+  const remove = event.target.closest("[data-remove]");
+  const move = event.target.closest("[data-move]");
+  if (remove) {
+    const idx = Number(remove.dataset.remove);
+    const key = layer.mappings[idx].key;
+    removeLayerMapping(layer, idx);
+    selectedMapping = Math.min(idx, layer.mappings.length - 1);
+    selectedKey = selectedMapping >= 0 ? layer.mappings[selectedMapping].key : "";
+    setStatus("ok", `Removed ${key || "mapping"} from [${layer.name}].`);
+  } else if (move) {
+    const idx = Number(move.dataset.index);
+    const delta = move.dataset.move === "up" ? -1 : 1;
+    const next = idx + delta;
+    if (next < 0 || next >= layer.mappings.length) return;
+    const key = layer.mappings[idx].key;
+    moveLayerMapping(layer, idx, next);
+    selectedMapping = next;
+    selectedKey = layer.mappings[next].key;
+    setStatus("ok", `Moved ${key || "mapping"} ${delta < 0 ? "up" : "down"} in [${layer.name}].`);
+  } else {
+    return;
+  }
+  renderVisual();
+  syncVisualToText();
+});
+
+$("copy-log").addEventListener("click", async () => {
+  if (!logEntries.length)
+    return;
+  try {
+    await navigator.clipboard.writeText(allLogText());
+    setStatus("ok", "Log copied.");
+  } catch (error) {
+    setStatus("error", `Copy failed: ${error.message || error}`);
+  }
+});
+
+$("download-log").addEventListener("click", () => {
+  if (!logEntries.length)
+    return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const blob = new Blob([allLogText() + "\n"], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `ergotype-webhid.${stamp}.log`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setStatus("ok", "Log downloaded.");
+});
+
+$("toggle-debug-log").addEventListener("click", () => {
+  debugLogVisible = !debugLogVisible;
+  renderLog();
+});
+
+$("clear-log").addEventListener("click", () => {
+  if (!logEntries.length)
+    return;
+  logEntries = [];
+  renderLog();
+  setStatus("ok", "Log cleared.");
+});
+
+$("toggle-log").addEventListener("click", () => {
+  setSourceLogVisible(!sourceLogVisible);
+});
+
+$("open-full-log").addEventListener("click", () => {
+  setSourceLogVisible(true);
+});
+
+window.addEventListener("beforeunload", event => {
+  if (!busy && !dirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+const webhidAvailable = "hid" in navigator;
+
+if (webhidAvailable) {
+  navigator.hid.addEventListener("disconnect", event => {
+    if (!isErgoTypeWebHid(event.device))
+      return;
+    appendLog(`disconnect ${event.device.productName}`);
+    markDisconnected("Device disconnected.");
+  });
+
+  navigator.hid.addEventListener("connect", event => {
+    if (!isErgoTypeWebHid(event.device))
+      return;
+    appendLog(`connect ${event.device.productName}`);
+    if (!device || !device.opened)
+      autoConnect();
+  });
+}
+
+initDescriptorOptions();
+initVisualDatalists();
+renderFiles();
+renderKeyboardPreview();
+loadDefaultConfigJson();
+updateDocumentView();
+updateLogControls();
+if (webhidAvailable)
+  autoConnect();
+else
+  showNoWebHid();
+</script>

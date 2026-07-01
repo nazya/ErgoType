@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>ErgoType &middot; Nazarii Tupitsa</title>
+    <meta name="description" content="ErgoType subsite." />
+    <link rel="stylesheet" href="../styles/global.css" />
+  </head>
+  <body id="top">
+    <a class="to-top-hit" href="#top" aria-label="Back to top" title="Back to top"></a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="../">Home</a>
+        <div class="header-right">
+          <nav class="nav" aria-label="Primary">
+            <a href="../papers/">Papers</a>
+            <a href="./" aria-current="page">ErgoType</a>
+          </nav>
+          <button class="theme-toggle" type="button" data-theme-toggle="true" aria-pressed="false" aria-label="Toggle theme" title="Toggle theme">
+            <span class="theme-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap page-content">
+      <h1>ErgoType</h1>
+      <p>
+        ErgoType firmware is an extremely powerful QMK alternative. It is mainly a port of
+        <a href="https://github.com/rvaiya/keyd" target="_blank" rel="noopener">keyd</a> with added functionality. For now it is approaching a release supporting Raspberry Pi Pico, but it is already stable and fully usable -
+        <a href="https://github.com/nazya/ErgoType" target="_blank" rel="noopener">check it out</a>!
+      </p>
+      <p>
+        The <a href="./webhid/">WebHID configuration editor</a> can edit ErgoType configuration files directly from a Chromium-based browser.
+      </p>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>&copy; <span id="year"></span> Nazarii Tupitsa &middot; <a class="footer-link" href="../credits/">Credits</a></span>
+      </div>
+    </footer>
+    <script>
+      document.getElementById("year").textContent = String(new Date().getFullYear());
+    </script>
+    <script src="../scripts/totop.js"></script>
+    <script src="../scripts/layout.js"></script>
+    <script src="../scripts/theme.js"></script>
+  </body>
+</html>

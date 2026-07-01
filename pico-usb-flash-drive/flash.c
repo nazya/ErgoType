@@ -30,12 +30,13 @@ bool flash_fat_read(int block, uint8_t *buffer) {
 
 typedef struct {
     int block;
-    uint8_t *buffer;
+    const uint8_t *buffer;
+    unsigned count;
 } flash_arg_t;
 
 void _flash_fat_write(flash_arg_t* args) {
     int block = args->block;
-    uint8_t* buffer = args->buffer;
+    const uint8_t* buffer = args->buffer;
 
     /*
      * NOTE: Flash memory must be erased and updated in blocks of 4096 bytes
@@ -49,7 +50,10 @@ void _flash_fat_write(flash_arg_t* args) {
     int flash_sector_fat_offset = (block * FAT_BLOCK_SIZE) % FLASH_SECTOR_SIZE;
     // Retrieve the data in the flash memory sector and update only the data for the FAT sector.
     memcpy(data, (uint8_t *)(XIP_BASE + FLASH_FAT_OFFSET + FLASH_SECTOR_SIZE * flash_sector), sizeof(data));
-    memcpy(data + flash_sector_fat_offset, buffer, FAT_BLOCK_SIZE);
+    memcpy(data + flash_sector_fat_offset, buffer, FAT_BLOCK_SIZE * args->count);
+
+    if (memcmp(data, (uint8_t *)(XIP_BASE + FLASH_FAT_OFFSET + FLASH_SECTOR_SIZE * flash_sector), sizeof(data)) == 0)
+        return;
 
     // Clear and update flash sectors.
     flash_range_erase(FLASH_FAT_OFFSET + flash_sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
@@ -57,7 +61,11 @@ void _flash_fat_write(flash_arg_t* args) {
 }
 
 bool flash_fat_write(int block, uint8_t *buffer) {
-    flash_arg_t args = { .block = block, .buffer = buffer };
+    return flash_fat_write_blocks(block, buffer, 1);
+}
+
+bool flash_fat_write_blocks(int block, const uint8_t *buffer, unsigned count) {
+    flash_arg_t args = { .block = block, .buffer = buffer, .count = count };
     int res = flash_safe_execute(( void* )_flash_fat_write, &args, 1000);
     return res == PICO_OK;
 }

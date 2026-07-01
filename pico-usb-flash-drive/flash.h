@@ -19,5 +19,6 @@
 void flash_fat_initialize(void);
 bool flash_fat_read(int block, uint8_t *buffer);
 bool flash_fat_write(int block, uint8_t *buffer);
+bool flash_fat_write_blocks(int block, const uint8_t *buffer, unsigned count);
 
 #endif
