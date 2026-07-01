@@ -48,10 +48,19 @@ DRESULT disk_write(BYTE drv, const BYTE *buff, LBA_t sector, UINT count) {
     if (sector >= FAT_BLOCK_NUM || (sector + count) > FAT_BLOCK_NUM) {
         return RES_PARERR;
     }
-    for (UINT i = 0; i < count; ++i) {
-        if (!flash_fat_write((int)(sector + i), (uint8_t *)(buff + (i * FAT_BLOCK_SIZE)))) {
+    for (UINT i = 0; i < count;) {
+        LBA_t block = sector + i;
+        UINT flash_sector_offset = (UINT)(block % (FLASH_SECTOR_SIZE / FAT_BLOCK_SIZE));
+        UINT group = (FLASH_SECTOR_SIZE / FAT_BLOCK_SIZE) - flash_sector_offset;
+
+        if (group > count - i)
+            group = count - i;
+
+        if (!flash_fat_write_blocks((int)block, buff + (i * FAT_BLOCK_SIZE), group)) {
             return RES_ERROR;
         }
+
+        i += group;
     }
     return RES_OK;
 }

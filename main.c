@@ -26,7 +26,8 @@
 #include "pointing/pointer.h"
 #include "log.h"
 
-#define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
+// #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
+#define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -40,6 +41,7 @@ uint8_t mode; // read by USB descriptor callbacks
 uint8_t hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
 SemaphoreHandle_t log_mutex;
 SemaphoreHandle_t stdio_tusb_cdc_mutex;
+SemaphoreHandle_t fatfs_mutex;
 QueueHandle_t vkbd_event_queue;
 QueueHandle_t input_event_queue;
 
@@ -168,7 +170,10 @@ static void app_task(void *pvParameters)
     mode_resolution_t mode_resolution = resolve_mode(&config, base_mode, nr_pressed);
     mode = mode_resolution.mode;
 
-    if (mode == HID) {
+    fatfs_mutex = xSemaphoreCreateMutex();
+
+    // if (mode == HID) {
+    if (mode == HID && hid_output_profile != HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
         xTaskCreateAffinitySet(tusb_device_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     } else {
