@@ -23,7 +23,7 @@ Using the RP2040 ProMicro, left-hand part configured as. Demo video: https://www
 }
 ```
 
-Then `keyd.conf` example (save as `keyd.conf` in the root of the MSC drive, then reboot into HID mode to apply):
+Example `default.conf` (save it in the root of the MSC drive, then reboot into HID mode to apply):
 
 ```ini
 [global]
@@ -32,11 +32,8 @@ overload_tap_timeout = 200
 chord_timeout = 50
 
 [main]
-# Tap: space, Hold: nav layer.
-space = overload(nav, space)
-
-# Tap: escape, Hold: control layer.
-capslock = overload(control, esc)
+# Tap: escape, Hold: nav layer.
+capslock = overload(nav, esc)
 
 # Optional: oneshot shift for easier capitalization.
 leftshift = oneshot(shift)
