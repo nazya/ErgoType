@@ -1,7 +1,7 @@
 # Boot modes (MSC vs HID)
 
 ErgoType supports two USB modes:
-- **MSC**: Mass Storage Class (exposes the on-flash FAT volume so you can edit `config.json` / `keyd.conf`)
+- **MSC**: Mass Storage Class (exposes the on-flash FAT volume so you can edit `config.json`, `default.conf`, and overlays)
 - **HID**: Human Interface Device (keyboard + optional pointing)
 
 Mode is resolved at boot by `main.c`.
@@ -24,6 +24,19 @@ If base mode is HID, firmware can still choose MSC at boot:
 - `nr_pressed_msc`: if `msc_pin` is unset/invalid and `nr_pressed >= nr_pressed_msc` → MSC
 
 Note: `nr_pressed_*` counting depends on the matrix (`gpio_rows`/`gpio_cols`) being configured, because it scans the matrix once at boot.
+
+## HID output profile
+
+Default HID profile is **NKRO**.
+
+- **NKRO**: full keyboard bitmap, mouse interface, Consumer Control report, WebHID config interface.
+- **Boot/legacy**: boot keyboard interface + boot mouse interface, for hosts that need boot protocol compatibility.
+
+Hold exactly one non-encoder key at boot:
+
+- `l`: select Boot/legacy HID profile and clear the keyd overlay
+
+WebHID is available only in the NKRO HID profile.
 
 ## Forcing filesystem re-init
 
