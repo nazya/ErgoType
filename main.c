@@ -212,7 +212,10 @@ static void app_task(void *pvParameters)
         configASSERT(devmon_queue);
         devmon_init();
 
-        xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE, NULL, TUSB_PRIORITY, CORE1, NULL);
+        BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
+                                                          NULL, TUSB_PRIORITY, CORE1, NULL);
+        if (host_task_ret != pdPASS)
+            err("tusb host task create failed ret=%ld", (long)host_task_ret);
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
