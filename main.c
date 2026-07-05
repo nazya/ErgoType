@@ -28,6 +28,7 @@
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
+#define TUH_STACK_SIZE 1024
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -49,6 +50,7 @@ static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOU
 
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
+void tusb_host_task(void* pvParameters); // usb_host/task.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
@@ -209,6 +211,8 @@ static void app_task(void *pvParameters)
         devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct device));
         configASSERT(devmon_queue);
         devmon_init();
+
+        xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE, NULL, TUSB_PRIORITY, CORE1, NULL);
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 

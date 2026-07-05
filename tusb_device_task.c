@@ -21,7 +21,14 @@ void tusb_device_task(void *pvParameters)
     // - new:  tusb_init(rhport, tusb_rhport_init_t*), with tusb_init(void) kept via macro compat.
     //
     // Use the 0-arg form to compile on both.
+    tusb_rhport_init_t dev_init = {
+        .role = TUSB_ROLE_DEVICE,
+        .speed = TUSB_SPEED_AUTO,
+    };
+    (void)tusb_init(BOARD_TUD_RHPORT, &dev_init);
+#if 0
     (void)tusb_init();
+#endif
 
     if (board_init_after_tusb) {
         board_init_after_tusb();

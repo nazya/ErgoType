@@ -54,6 +54,7 @@ endif()
 # Ensure Pico SDK's TinyUSB is built with the FreeRTOS OSAL (CFG_TUSB_OS).
 # This must be set before pico_sdk_init() (where tinyusb_device/tinyusb_board targets are created).
 set(TINYUSB_OPT_OS OPT_OS_FREERTOS)
+set(PICO_PIO_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/Pico-PIO-USB)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
@@ -76,6 +77,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/test.c
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
@@ -127,6 +129,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         pico_unique_id
         tinyusb_additions
         tinyusb_device
+        tinyusb_host
+        tinyusb_pico_pio_usb
         tinyusb_board
 
         hardware_sync
@@ -148,6 +152,7 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         PICO_STDIO_STACK_BUFFER_SIZE=256 # use a small printf on stack buffer
         PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000000 # avoid discarding long CDC bursts under load
+        PICO_DEFAULT_PIO_USB_DP_PIN=21
 )
 
 # add url via pico_set_program_url
