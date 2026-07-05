@@ -15,12 +15,13 @@
 #include "linux/include/linux/usb.h"
 
 int hid_core_init(void);
+int input_port_init(void);
 int hid_builtin_drivers_init(void);
 
 extern const struct hid_ll_driver tuh_hid_ll_driver;
 
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
-#define HID_HOST_EVENT_CAP 8
+#define HID_HOST_EVENT_CAP 64
 #define HID_HOST_LOG_STACK_SIZE 1024
 #define HID_HOST_LOG_PRIORITY (configMAX_PRIORITIES - 3)
 #define HID_HOST_LOG_CORE ((UBaseType_t)(1u << 0))
@@ -29,13 +30,20 @@ enum hid_host_event_type {
     HID_HOST_EVENT_TASK_START,
     HID_HOST_EVENT_INIT,
     HID_HOST_EVENT_CORE_INIT,
+    HID_HOST_EVENT_INPUT_PORT_INIT,
     HID_HOST_EVENT_DRIVER_INIT,
+    HID_HOST_EVENT_TUSB_CONFIGURE,
+    HID_HOST_EVENT_TUSB_INIT,
+    HID_HOST_EVENT_MOUNT_STAGE,
     HID_HOST_EVENT_MOUNT,
     HID_HOST_EVENT_ADD_OK,
     HID_HOST_EVENT_ADD_FAIL,
     HID_HOST_EVENT_UMOUNT,
     HID_HOST_EVENT_REPORT,
     HID_HOST_EVENT_REPORT_SKIP,
+    HID_HOST_EVENT_INPUT_EVENT,
+    HID_HOST_EVENT_INPUT_CAPS,
+    HID_HOST_EVENT_INPUT_STATE,
 };
 
 struct hid_host_event {
@@ -61,6 +69,56 @@ static void hid_host_push_event(struct hid_host_event const *event)
 {
     if (!hid_host_event_queue || xQueueSend(hid_host_event_queue, event, 0) != pdPASS)
         hid_host_event_dropped++;
+}
+
+void hid_host_trace_input_event(struct hid_device *hid, unsigned int type, unsigned int code, int value)
+{
+    if (!hid)
+        return;
+
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_INPUT_EVENT,
+        .dev_addr = hid->dev_addr,
+        .instance = hid->instance,
+        .proto = type,
+        .len = code,
+        .result = value,
+    });
+}
+
+void hid_host_trace_input_caps(struct hid_device *hid, uint8_t caps, uint8_t rel_flags,
+                               uint8_t abs_flags, uint8_t has_key)
+{
+    if (!hid)
+        return;
+
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_INPUT_CAPS,
+        .dev_addr = hid->dev_addr,
+        .instance = hid->instance,
+        .proto = caps,
+        .first = {
+            rel_flags,
+            abs_flags,
+            has_key,
+            0,
+        },
+    });
+}
+
+void hid_host_trace_input_state(struct hid_device *hid, uint8_t state, uint16_t detail, int result)
+{
+    if (!hid)
+        return;
+
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_INPUT_STATE,
+        .dev_addr = hid->dev_addr,
+        .instance = hid->instance,
+        .proto = state,
+        .len = detail,
+        .result = result,
+    });
 }
 
 static struct hid_device *hid_host_lookup(uint8_t dev_addr, uint8_t instance)
@@ -129,11 +187,34 @@ static void hid_host_log_event(struct hid_host_event const *event)
         else
             dbg("hid core init ok");
         break;
+    case HID_HOST_EVENT_INPUT_PORT_INIT:
+        if (event->result)
+            err("hid input port init failed ret=%d", event->result);
+        else
+            dbg("hid input port init ok");
+        break;
     case HID_HOST_EVENT_DRIVER_INIT:
         if (event->result)
             err("hid drivers init failed ret=%d", event->result);
         else
             dbg("hid drivers init ok");
+        break;
+    case HID_HOST_EVENT_TUSB_CONFIGURE:
+        if (event->result)
+            err("tuh configure failed ret=%d", event->result);
+        else
+            dbg("tuh configure ok");
+        break;
+    case HID_HOST_EVENT_TUSB_INIT:
+        if (event->result)
+            err("tusb host init failed ret=%d", event->result);
+        else
+            dbg("tusb host init ok");
+        break;
+    case HID_HOST_EVENT_MOUNT_STAGE:
+        dbg("tuh hid mount stage=%d dev=%u inst=%u vid=%04x pid=%04x proto=%u desc_len=%u",
+            event->result, event->dev_addr, event->instance, event->vid, event->pid,
+            event->proto, event->desc_len);
         break;
     case HID_HOST_EVENT_MOUNT:
         dbg("tuh hid mount dev=%u inst=%u vid=%04x pid=%04x proto=%u desc_len=%u",
@@ -152,9 +233,6 @@ static void hid_host_log_event(struct hid_host_event const *event)
         dbg("tuh hid umount dev=%u inst=%u", event->dev_addr, event->instance);
         break;
     case HID_HOST_EVENT_REPORT:
-        dbg2("tuh hid parsed report dev=%u inst=%u len=%u first=%02x %02x %02x %02x",
-             event->dev_addr, event->instance, event->len,
-             event->first[0], event->first[1], event->first[2], event->first[3]);
         if (!event->receive_ok)
             err("tuh hid receive rearm failed dev=%u inst=%u", event->dev_addr, event->instance);
         break;
@@ -163,6 +241,19 @@ static void hid_host_log_event(struct hid_host_event const *event)
             event->dev_addr, event->instance, event->len, event->result);
         if (!event->receive_ok)
             err("tuh hid receive rearm failed dev=%u inst=%u", event->dev_addr, event->instance);
+        break;
+    case HID_HOST_EVENT_INPUT_EVENT:
+        dbg2("hid input event dev=%u inst=%u type=%u code=%u value=%d",
+             event->dev_addr, event->instance, event->proto, event->len, event->result);
+        break;
+    case HID_HOST_EVENT_INPUT_CAPS:
+        dbg("hid input caps dev=%u inst=%u caps=%02x rel=%02x abs=%02x key=%u",
+            event->dev_addr, event->instance, event->proto,
+            event->first[0], event->first[1], event->first[2]);
+        break;
+    case HID_HOST_EVENT_INPUT_STATE:
+        dbg("hid input state dev=%u inst=%u state=%u detail=%u result=%d",
+            event->dev_addr, event->instance, event->proto, event->len, event->result);
         break;
     }
 
@@ -225,6 +316,13 @@ void tusb_host_task(void *pvParameters)
         .result = ret,
     });
     if (!ret) {
+        ret = input_port_init();
+        hid_host_push_event(&(struct hid_host_event){
+            .type = HID_HOST_EVENT_INPUT_PORT_INIT,
+            .result = ret,
+        });
+    }
+    if (!ret) {
         ret = hid_builtin_drivers_init();
         hid_host_push_event(&(struct hid_host_event){
             .type = HID_HOST_EVENT_DRIVER_INIT,
@@ -241,8 +339,24 @@ void tusb_host_task(void *pvParameters)
 
     pio_cfg.pin_dp = PICO_DEFAULT_PIO_USB_DP_PIN;
     pio_cfg.pinout = PIO_USB_PINOUT_DMDP;
-    (void)tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
-    (void)tusb_init(BOARD_TUH_RHPORT, &host_init);
+    ret = tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg) ? 0 : -EIO;
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_TUSB_CONFIGURE,
+        .result = ret,
+    });
+    if (ret)
+        while (1)
+            vTaskDelay(portMAX_DELAY);
+
+    tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
+    ret = tusb_init(BOARD_TUH_RHPORT, &host_init) ? 0 : -EIO;
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_TUSB_INIT,
+        .result = ret,
+    });
+    if (ret)
+        while (1)
+            vTaskDelay(portMAX_DELAY);
 
     while (1) {
         tuh_task();
@@ -312,6 +426,16 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
     int ret;
 
     tuh_vid_pid_get(dev_addr, &vid, &pid);
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 0,
+    });
 
     if (!desc_report || !desc_len) {
         hid_host_push_event(&(struct hid_host_event){
@@ -333,6 +457,16 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
         });
         return;
     }
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 1,
+    });
 
     rdesc = kmemdup(desc_report, desc_len, GFP_KERNEL);
     if (!rdesc) {
@@ -345,20 +479,70 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
         });
         return;
     }
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 2,
+    });
 
     ret = hid_host_fill_device(hid, dev_addr, instance, rdesc, desc_len);
     if (ret < 0)
         goto fail;
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 3,
+    });
 
     ret = hid_host_insert(hid);
     if (ret < 0)
         goto fail;
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 4,
+    });
 
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 5,
+    });
     ret = hid_add_device(hid);
     if (ret < 0) {
         hid_host_remove_slot(hid);
         goto fail;
     }
+    hid_host_push_event(&(struct hid_host_event){
+        .type = HID_HOST_EVENT_MOUNT_STAGE,
+        .dev_addr = dev_addr,
+        .instance = instance,
+        .proto = proto,
+        .vid = vid,
+        .pid = pid,
+        .desc_len = desc_len,
+        .result = 6,
+    });
 
     receive_ok = tuh_hid_receive_report(dev_addr, instance);
     hid_host_push_event(&(struct hid_host_event){
@@ -376,6 +560,8 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
         .dev_addr = dev_addr,
         .instance = instance,
     });
+    hid->ll_rdesc = NULL;
+    hid->ll_rsize = 0;
     kfree(rdesc);
     return;
 

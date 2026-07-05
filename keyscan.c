@@ -383,10 +383,10 @@ void keyscan_task(void* pvParameters) {
         .id = "cafe:1001",
         .name = "keyboard",
     };
-    onboard_keyboard.events = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
-    configASSERT(onboard_keyboard.events);
+    onboard_keyboard.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+    configASSERT(onboard_keyboard.ev_queue);
     device_add(&onboard_keyboard);
-    keyscan_event_queue = onboard_keyboard.events;
+    keyscan_event_queue = onboard_keyboard.ev_queue;
 
     if (0) {
         struct device_event ev = {0};

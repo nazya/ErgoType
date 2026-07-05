@@ -22,11 +22,12 @@
 #define CAP_KEY		0x8
 
 struct device {
-	QueueHandle_t events;
+	QueueHandle_t ev_queue;
 	uint8_t capabilities;
-	const char *id;
-	const char *name;
+	char id[16];
+	char name[32];
 	void *data;
+	void (*destroy)(struct device *dev);
 };
 
 struct device_event {
@@ -38,6 +39,7 @@ struct device_event {
 		/* All absolute values are relative to a resolution of 1024x1024. */
 		DEV_MOUSE_MOVE_ABS,
 		DEV_MOUSE_SCROLL,
+		DEV_RESET,
 
 		DEV_REMOVED,
 	} type;
@@ -50,11 +52,11 @@ struct device_event {
 };
 
 extern QueueHandle_t devmon_queue;
-extern struct device device_table[MAX_DEVICES];
+extern struct device *device_table[MAX_DEVICES];
 extern size_t device_table_sz;
 
 void devmon_init(void);
-void device_add(const struct device *dev);
+int device_add(struct device *dev);
 void device_delete(struct device *dev);
 struct device_event *device_read_event(struct device *dev);
 QueueSetMemberHandle_t device_select(int timeout);

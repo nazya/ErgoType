@@ -831,7 +831,8 @@ void hiddev_free(struct kref *ref)
 	hid_close_report(hid);
 	hid_free_bpf_rdesc(hid);
 	kfree(hid->dev_rdesc);
-	sema_destroy(&hid->driver_input_lock);
+	// sema_destroy(&hid->driver_input_lock);
+	// Callback-driven slice does not allocate driver_input_lock.
 	kfree(hid);
 }
 
@@ -2137,7 +2138,8 @@ int hid_report_raw_event(struct hid_device *hid, enum hid_report_type type, u8 *
 	struct hid_report *report;
 	// struct hid_driver *hdrv;
 	// struct hid_device keeps the matched driver pointer const in this port.
-	const struct hid_driver *hdrv;
+	// const struct hid_driver *hdrv;
+	// Driver report hooks are disabled in the callback-driven generic slice.
 	int max_buffer_size = HID_MAX_BUFFER_SIZE;
 	u32 rsize, csize = size;
 	size_t bsize = bufsize;
@@ -2192,9 +2194,11 @@ int hid_report_raw_event(struct hid_device *hid, enum hid_report_type type, u8 *
 
 	if (hid->claimed != HID_CLAIMED_HIDRAW && report->maxfield) {
 		hid_process_report(hid, report, cdata, interrupt);
-		hdrv = hid->driver;
-		if (hdrv && hdrv->report)
-			hdrv->report(hid, report);
+		// hdrv = hid->driver;
+		// if (hdrv && hdrv->report)
+		// 	hdrv->report(hid, report);
+		// Vendor report hooks can run driver-specific side effects; keep them
+		// disabled until the async driver lifecycle is implemented.
 	}
 
 	if (hid->claimed & HID_CLAIMED_INPUT)
@@ -2215,27 +2219,31 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	struct hid_report_enum *report_enum;
 	// struct hid_driver *hdrv;
 	// struct hid_device keeps the matched driver pointer const in this port.
-	const struct hid_driver *hdrv;
+	// const struct hid_driver *hdrv;
+	// Driver raw_event hooks are disabled in the callback-driven generic slice.
 	struct hid_report *report;
 	int ret = 0;
 
 	if (!hid)
 		return -ENODEV;
 
-	ret = down_trylock(&hid->driver_input_lock);
-	if (lock_already_taken && !ret) {
-		up(&hid->driver_input_lock);
-		return -EINVAL;
-	} else if (!lock_already_taken && ret) {
-		return -EBUSY;
-	}
+	// ret = down_trylock(&hid->driver_input_lock);
+	// if (lock_already_taken && !ret) {
+	// 	up(&hid->driver_input_lock);
+	// 	return -EINVAL;
+	// } else if (!lock_already_taken && ret) {
+	// 	return -EBUSY;
+	// }
+	// Callback-driven slice has no driver thread semaphore; report callbacks
+	// must enter Linux parsing without FreeRTOS semaphore traffic.
+	(void)lock_already_taken;
 
 	if (!hid->driver) {
 		ret = -ENODEV;
 		goto unlock;
 	}
 	report_enum = hid->report_enum + type;
-	hdrv = hid->driver;
+	// hdrv = hid->driver;
 
 	data = dispatch_hid_bpf_device_event(hid, type, data, &bufsize, &size, interrupt,
 					     source, from_bpf);
@@ -2261,17 +2269,20 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 		goto unlock;
 	}
 
-	if (hdrv && hdrv->raw_event && hid_match_report(hid, report)) {
-		ret = hdrv->raw_event(hid, report, data, size);
-		if (ret < 0)
-			goto unlock;
-	}
+	// if (hdrv && hdrv->raw_event && hid_match_report(hid, report)) {
+	// 	ret = hdrv->raw_event(hid, report, data, size);
+	// 	if (ret < 0)
+	// 		goto unlock;
+	// }
+	// Vendor raw_event hooks are disabled until the async driver lifecycle
+	// exists; generic report parsing below stays active.
 
 	ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
 
 unlock:
-	if (!lock_already_taken)
-		up(&hid->driver_input_lock);
+	// if (!lock_already_taken)
+	// 	up(&hid->driver_input_lock);
+	// See callback-driven no-semaphore note above.
 	return ret;
 }
 
@@ -2428,17 +2439,20 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 
 	/* Drivers with the ->raw_event callback set are not required to connect
 	 * to any other listener. */
-	if (!hdev->claimed && !hdev->driver->raw_event) {
+	// if (!hdev->claimed && !hdev->driver->raw_event) {
+	// Driver raw_event hooks are disabled in this slice, so raw_event presence
+	// must not count as a listener.
+	if (!hdev->claimed) {
 		hid_err(hdev, "device has no listeners, quitting\n");
 		return -ENODEV;
 	}
 
 	hid_process_ordering(hdev);
 
-	if ((hdev->claimed & HID_CLAIMED_INPUT) &&
-			(connect_mask & HID_CONNECT_FF) && hdev->ff_init)
-		hdev->ff_init(hdev);
-	// FF core/memless lifecycle is wired; full Linux userspace effect ownership is still not wired.
+	// if ((hdev->claimed & HID_CLAIMED_INPUT) &&
+	// 		(connect_mask & HID_CONNECT_FF) && hdev->ff_init)
+	// 	hdev->ff_init(hdev);
+	// FF is outside the callback-driven keyboard/mouse slice; do not run FF init here.
 
 	// Upstream Linux has no keyd device queue. This port registers after HID input exists,
 	// so physical TinyUSB devices and Logitech DJ virtual children use the same boundary.
@@ -2584,22 +2598,28 @@ EXPORT_SYMBOL_GPL(hid_hw_stop);
  */
 int hid_hw_open(struct hid_device *hdev)
 {
-	int ret;
+	// int ret;
+	// Port removed ll_open_lock assignment below; already-open HID inputs must
+	// still return success instead of an uninitialized stack value.
+	int ret = 0;
 
-	ret = mutex_lock_killable(&hdev->ll_open_lock);
-	if (ret)
-		return ret;
+	// ret = mutex_lock_killable(&hdev->ll_open_lock);
+	// if (ret)
+	// 	return ret;
+	// TinyUSB callback-driven slice has no competing open/close worker; do not block.
 
 	if (!hdev->ll_open_count++) {
 		ret = hdev->ll_driver->open(hdev);
 		if (ret)
 			hdev->ll_open_count--;
 
-		if (hdev->driver->on_hid_hw_open)
-			hdev->driver->on_hid_hw_open(hdev);
+		// if (hdev->driver->on_hid_hw_open)
+		// 	hdev->driver->on_hid_hw_open(hdev);
+		// Driver open hooks are disabled in this generic callback-driven slice.
 	}
 
-	mutex_unlock(&hdev->ll_open_lock);
+	// mutex_unlock(&hdev->ll_open_lock);
+	// See nonblocking callback-driven note above.
 	return ret;
 }
 EXPORT_SYMBOL_GPL(hid_hw_open);
@@ -2615,14 +2635,17 @@ EXPORT_SYMBOL_GPL(hid_hw_open);
  */
 void hid_hw_close(struct hid_device *hdev)
 {
-	mutex_lock(&hdev->ll_open_lock);
+	// mutex_lock(&hdev->ll_open_lock);
+	// TinyUSB callback-driven slice has no competing open/close worker; do not block.
 	if (!--hdev->ll_open_count) {
 		hdev->ll_driver->close(hdev);
 
-		if (hdev->driver->on_hid_hw_close)
-			hdev->driver->on_hid_hw_close(hdev);
+		// if (hdev->driver->on_hid_hw_close)
+		// 	hdev->driver->on_hid_hw_close(hdev);
+		// Driver close hooks are disabled in this generic callback-driven slice.
 	}
-	mutex_unlock(&hdev->ll_open_lock);
+	// mutex_unlock(&hdev->ll_open_lock);
+	// See nonblocking callback-driven note above.
 }
 EXPORT_SYMBOL_GPL(hid_hw_close);
 
@@ -2839,9 +2862,10 @@ static ssize_t new_id_store(struct device_driver *drv, const char *buf,
 	dynid->id.product = product;
 	dynid->id.driver_data = driver_data;
 
-	spin_lock(&rt->dyn_lock);
+	// spin_lock(&rt->dyn_lock);
+	// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
 	list_add_tail(&dynid->list, &rt->dyn_list);
-	spin_unlock(&rt->dyn_lock);
+	// spin_unlock(&rt->dyn_lock);
 
 	ret = driver_attach(&rt->driver);
 
@@ -2859,12 +2883,13 @@ static void hid_free_dynids(struct hid_driver_runtime *rt)
 {
 	struct hid_dynid *dynid, *n;
 
-	spin_lock(&rt->dyn_lock);
+	// spin_lock(&rt->dyn_lock);
+	// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
 	list_for_each_entry_safe(dynid, n, &rt->dyn_list, list) {
 		list_del(&dynid->list);
 		kfree(dynid);
 	}
-	spin_unlock(&rt->dyn_lock);
+	// spin_unlock(&rt->dyn_lock);
 }
 
 const struct hid_device_id *hid_match_device(struct hid_device *hdev,
@@ -2874,14 +2899,15 @@ const struct hid_device_id *hid_match_device(struct hid_device *hdev,
 	struct hid_dynid *dynid;
 
 	if (rt) {
-		spin_lock(&rt->dyn_lock);
+		// spin_lock(&rt->dyn_lock);
+		// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
 		list_for_each_entry(dynid, &rt->dyn_list, list) {
 			if (hid_match_one_id(hdev, &dynid->id)) {
-				spin_unlock(&rt->dyn_lock);
+				// spin_unlock(&rt->dyn_lock);
 				return &dynid->id;
 			}
 		}
-		spin_unlock(&rt->dyn_lock);
+		// spin_unlock(&rt->dyn_lock);
 	}
 
 	return hid_match_id(hdev, hdrv->id_table);
@@ -3038,8 +3064,9 @@ static int hid_device_probe(struct device *dev)
 	const struct hid_driver *hdrv = to_hid_driver(dev->driver);
 	int ret = 0;
 
-	if (down_interruptible(&hdev->driver_input_lock))
-		return -EINTR;
+	// if (down_interruptible(&hdev->driver_input_lock))
+	// 	return -EINTR;
+	// Probe runs in the TinyUSB mount callback slice; no driver thread may block it.
 
 	hdev->io_started = false;
 	clear_bit(ffs(HID_STAT_REPROBED), &hdev->status);
@@ -3047,8 +3074,9 @@ static int hid_device_probe(struct device *dev)
 	if (!hdev->driver)
 		ret = __hid_device_probe(hdev, hdrv);
 
-	if (!hdev->io_started)
-		up(&hdev->driver_input_lock);
+	// if (!hdev->io_started)
+	// 	up(&hdev->driver_input_lock);
+	// See nonblocking callback-driven probe note above.
 
 	return ret;
 }
@@ -3060,7 +3088,8 @@ static void hid_device_remove(struct device *dev)
 	// struct hid_device keeps the matched driver pointer const in this port.
 	const struct hid_driver *hdrv;
 
-	down(&hdev->driver_input_lock);
+	// down(&hdev->driver_input_lock);
+	// Remove runs in the TinyUSB unmount callback slice; no driver thread may block it.
 	hdev->io_started = false;
 
 	hdrv = hdev->driver;
@@ -3077,8 +3106,9 @@ static void hid_device_remove(struct device *dev)
 		hdev->driver = NULL;
 	}
 
-	if (!hdev->io_started)
-		up(&hdev->driver_input_lock);
+	// if (!hdev->io_started)
+	// 	up(&hdev->driver_input_lock);
+	// See nonblocking callback-driven remove note above.
 }
 
 static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
@@ -3236,8 +3266,9 @@ struct hid_device *hid_allocate_device(void)
 	// No waitqueue implementation in this port.
 	INIT_LIST_HEAD(&hdev->debug_list);
 	spin_lock_init(&hdev->debug_list_lock);
-	sema_init(&hdev->driver_input_lock, 1);
-	mutex_init(&hdev->ll_open_lock);
+	// sema_init(&hdev->driver_input_lock, 1);
+	// mutex_init(&hdev->ll_open_lock);
+	// Callback-driven slice has no driver/open worker; do not allocate blocking locks.
 	kref_init(&hdev->ref);
 
 	// #ifdef CONFIG_HID_BATTERY_STRENGTH

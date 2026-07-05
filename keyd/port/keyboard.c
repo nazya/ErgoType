@@ -441,6 +441,11 @@ static void clear(struct keyboard *kbd)
 	reset_keystate(kbd);
 }
 
+void kbd_reset(struct keyboard *kbd)
+{
+	clear(kbd);
+}
+
 static void setlayout(struct keyboard *kbd, uint8_t idx)
 {
 	clear(kbd);

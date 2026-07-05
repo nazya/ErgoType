@@ -28,7 +28,7 @@
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
-#define TUH_STACK_SIZE 1024
+#define TUH_STACK_SIZE 4096
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -208,7 +208,7 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
 
-        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct device));
+        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct device *));
         configASSERT(devmon_queue);
         devmon_init();
 
