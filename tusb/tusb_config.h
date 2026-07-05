@@ -21,6 +21,14 @@
 #define BOARD_TUD_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
 #endif
 
+#ifndef BOARD_TUH_RHPORT
+#define BOARD_TUH_RHPORT      1
+#endif
+
+#ifndef BOARD_TUH_MAX_SPEED
+#define BOARD_TUH_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
+#endif
+
 //--------------------------------------------------------------------
 // COMMON CONFIGURATION
 //--------------------------------------------------------------------
@@ -31,6 +39,8 @@
 #endif
 
 #define CFG_TUSB_RHPORT0_MODE     (OPT_MODE_DEVICE | BOARD_TUD_MAX_SPEED)
+#define CFG_TUSB_RHPORT1_MODE     (OPT_MODE_HOST | BOARD_TUH_MAX_SPEED)
+#define CFG_TUH_RPI_PIO_USB       1
 
 // This examples use FreeRTOS
 #ifndef CFG_TUSB_OS
@@ -48,6 +58,7 @@
 
 // Enable Device stack
 #define CFG_TUD_ENABLED           1
+#define CFG_TUH_ENABLED           1
 
 // TinyUSB device task event queue depth (used when CFG_TUSB_OS != OPT_OS_NONE).
 // Default in TinyUSB is 16. With FreeRTOS OSAL on RP2040 (SMP) + multiple classes
@@ -111,6 +122,22 @@
 // partial/discarded output when the stdio backend hits its stdout timeout.
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512
+
+#define CFG_TUH_ENUMERATION_BUFSIZE 512 // Host descriptor/control scratch buffer; each byte is .bss. 512->256 saves 256 B, but too small skips/fails long config or HID report descriptors.
+
+#ifndef CFG_TUH_MEM_SECTION
+#define CFG_TUH_MEM_SECTION
+#endif
+
+#ifndef CFG_TUH_MEM_ALIGN
+#define CFG_TUH_MEM_ALIGN        __attribute__ ((aligned(4)))
+#endif
+
+#define CFG_TUH_HUB              1  // USB hub class support. 1 costs one host hub/device slot plus hub state; 0 saves roughly 100-200 B but external hubs stop working.
+#define CFG_TUH_DEVICE_MAX       4  // Max directly managed non-hub USB devices. Each extra slot costs one usbh_device_t, roughly 80-100 B. Direct ErgoType-to-ErgoType needs 1.
+#define CFG_TUH_HID              4  // Max HID interfaces, not report IDs. Peer ErgoType NKRO needs 3: keyboard/consumer, mouse, WebHID. Each extra costs HID state plus IN/OUT buffers.
+#define CFG_TUH_HID_EPIN_BUFSIZE 64 // Interrupt IN buffer per HID interface. Cost is CFG_TUH_HID bytes per byte here. 64 keeps full-speed HID reports safe.
+#define CFG_TUH_HID_EPOUT_BUFSIZE 64 // Interrupt OUT buffer per HID interface. Cost is CFG_TUH_HID bytes per byte here. Current ErgoType peer has no HID OUT endpoint, so 1/0 can save about 252-256 B when CFG_TUH_HID=4.
 
 
 #ifdef __cplusplus
