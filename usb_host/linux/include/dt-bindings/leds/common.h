@@ -1,0 +1,6 @@
+#ifndef USB_HOST_DT_BINDINGS_LEDS_COMMON_H
+#define USB_HOST_DT_BINDINGS_LEDS_COMMON_H
+
+#define LED_FUNCTION_KBD_BACKLIGHT "kbd_backlight"
+
+#endif
