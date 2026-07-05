@@ -746,14 +746,15 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		field->usages_priorities[usage_index] |=
 			(0xff - field->slot_idx) << 16;
 
-	if (device->driver->input_mapping) {
-		int ret = device->driver->input_mapping(device, hidinput, field,
-				usage, &bit, &max);
-		if (ret > 0)
-			goto mapped;
-		if (ret < 0)
-			goto ignore;
-	}
+	// if (device->driver->input_mapping) {
+	// 	int ret = device->driver->input_mapping(device, hidinput, field,
+	// 			usage, &bit, &max);
+	// 	if (ret > 0)
+	// 		goto mapped;
+	// 	if (ret < 0)
+	// 		goto ignore;
+	// }
+	// Driver input_mapping hooks are disabled in the callback-driven generic slice.
 
 	switch (usage->hid & HID_USAGE_PAGE) {
 	case HID_UP_UNDEFINED:
@@ -1404,15 +1405,16 @@ mapped:
 	if (!bit)
 		return;
 
-	if (device->driver->input_mapped &&
-	    device->driver->input_mapped(device, hidinput, field, usage,
-					 &bit, &max) < 0) {
-		/*
-		 * The driver indicated that no further generic handling
-		 * of the usage is desired.
-		 */
-		return;
-	}
+	// if (device->driver->input_mapped &&
+	//     device->driver->input_mapped(device, hidinput, field, usage,
+	// 				 &bit, &max) < 0) {
+	// 	/*
+	// 	 * The driver indicated that no further generic handling
+	// 	 * of the usage is desired.
+	// 	 */
+	// 	return;
+	// }
+	// Driver input_mapped hooks are disabled in the callback-driven generic slice.
 
 	set_bit(usage->type, input->evbit);
 
@@ -1584,9 +1586,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		if (!hat_dir)
 			hat_dir = (value - usage->hat_min) * 8 / (usage->hat_max - usage->hat_min + 1) + 1;
 		if (hat_dir < 0 || hat_dir > 8) hat_dir = 0;
-		// Proxy taps copy raw HID usage metadata before Linux transforms;
-		// input_event() remains the authoritative input path.
-		input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 		input_event(input, usage->type, usage->code    , hid_hat_to_axis[hat_dir].x);
 		input_event(input, usage->type, usage->code + 1, hid_hat_to_axis[hat_dir].y);
 		return;
@@ -1635,7 +1634,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 			 * There is no invert to release the tool, let hid_input
 			 * send BTN_TOUCH with scancode and release the tool after.
 			 */
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hid_report_release_tool(report, input, BTN_TOOL_RUBBER);
 			return;
 		}
@@ -1650,11 +1648,9 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		 * If invert is set, we store BTN_TOOL_RUBBER.
 		 */
 		if (value) {
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hid_report_set_tool(report, input, BTN_TOOL_RUBBER);
 		} else if (!report->tool_active) {
 			/* tool_active not set means Invert and Eraser are not set */
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hid_report_release_tool(report, input, BTN_TOOL_RUBBER);
 		}
 
@@ -1673,10 +1669,8 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 				report->tool = usage->code;
 
 			/* drivers may have changed the value behind our back, resend it */
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hid_report_set_tool(report, input, report->tool);
 		} else {
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hid_report_release_tool(report, input, usage->code);
 		}
 
@@ -1701,7 +1695,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 			int b = field->logical_maximum;
 
 			if (value > a + ((b - a) >> 3)) {
-				input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 				input_event(input, EV_KEY, BTN_TOUCH, 1);
 				report->tool_active = true;
 			}
@@ -1726,7 +1719,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 	case EV_REL:
 		if (usage->code == REL_WHEEL_HI_RES ||
 		    usage->code == REL_HWHEEL_HI_RES) {
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			hidinput_handle_scroll(usage, input, value);
 			return;
 		}
@@ -1739,7 +1731,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 			int direction = value > 0 ? KEY_VOLUMEUP : KEY_VOLUMEDOWN;
 			int i;
 
-			input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 			for (i = 0; i < count; i++) {
 				input_event(input, EV_KEY, direction, 1);
 				input_sync(input);
@@ -1776,7 +1767,6 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 	    (!test_bit(usage->code, input->key)) == value)
 		input_event(input, EV_MSC, MSC_SCAN, usage->hid);
 
-	input_port_proxy_hid_usage_event(hid, input, field, usage, value);
 	input_event(input, usage->type, usage->code, value);
 
 	if ((field->flags & HID_MAIN_ITEM_RELATIVE) &&
@@ -1910,8 +1900,11 @@ static int hidinput_input_event(struct input_dev *dev, unsigned int type,
 	struct hid_field *field;
 	int offset;
 
+	// if (type == EV_FF)
+	// 	return input_ff_event(dev, type, code, value);
+	// FF is outside the callback-driven keyboard/mouse slice.
 	if (type == EV_FF)
-		return input_ff_event(dev, type, code, value);
+		return -1;
 
 	if (type != EV_LED)
 		return -1;
@@ -1923,7 +1916,9 @@ static int hidinput_input_event(struct input_dev *dev, unsigned int type,
 
 	hid_set_field(field, offset, value);
 
-	schedule_work(&hid->led_work);
+	// schedule_work(&hid->led_work);
+	// LED output reports need the future async control/output path; do not
+	// enter Linux workqueue glue in the callback-driven slice.
 	return 0;
 }
 
@@ -2009,7 +2004,8 @@ static void hidinput_change_resolution_multipliers(struct hid_device *hid)
 {
 	struct hid_report_enum *rep_enum;
 	struct hid_report *rep;
-	int ret;
+	// int ret;
+	// SET_REPORT hardware request is disabled in this callback-driven slice.
 
 	rep_enum = &hid->report_enum[HID_FEATURE_REPORT];
 	list_for_each_entry(rep, &rep_enum->report_list, list) {
@@ -2017,12 +2013,19 @@ static void hidinput_change_resolution_multipliers(struct hid_device *hid)
 								     rep, true);
 
 		if (update_needed) {
+#if 0
+			/*
+			 * Temporarily disabled for callback-driven HID host.
+			 * This is the SET_REPORT half of the same hardware request
+			 * lifecycle as GET_REPORT + hid_hw_wait() above.
+			 */
 			ret = __hid_request(hid, rep, HID_REQ_SET_REPORT);
 			if (ret) {
 				__hidinput_change_resolution_multipliers(hid,
 								    rep, false);
 				return;
 			}
+#endif
 		}
 	}
 
@@ -2055,8 +2058,9 @@ static void report_features(struct hid_device *hid)
 					hidinput_setup_battery(hid, HID_FEATURE_REPORT,
 							       rep->field[i], false);
 
-				if (drv->feature_mapping)
-					drv->feature_mapping(hid, rep->field[i], usage);
+				// if (drv->feature_mapping)
+				// 	drv->feature_mapping(hid, rep->field[i], usage);
+				// Driver feature_mapping hooks are disabled in this slice.
 			}
 		}
 }
@@ -2401,9 +2405,10 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 	hidinput_change_resolution_multipliers(hid);
 
 	list_for_each_entry_safe(hidinput, next, &hid->inputs, list) {
-		if (drv->input_configured &&
-		    drv->input_configured(hid, hidinput))
-			goto out_unwind;
+		// if (drv->input_configured &&
+		//     drv->input_configured(hid, hidinput))
+		// 	goto out_unwind;
+		// Driver input_configured hooks are disabled in this slice.
 
 		if (!hidinput_has_been_populated(hidinput)) {
 			/* no need to register an input device not populated */

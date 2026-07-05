@@ -50,13 +50,6 @@ typedef long loff_t;
 typedef unsigned long kernel_ulong_t;
 typedef unsigned int umode_t;
 
-typedef int (*hid_compat_exec_fn_t)(void *data);
-int hid_compat_executor_init(void);
-bool hid_compat_in_executor(void);
-void hid_compat_executor_kick(void);
-int hid_compat_exec_sync(hid_compat_exec_fn_t fn, void *data);
-int hid_compat_exec_async(hid_compat_exec_fn_t fn, void *data);
-
 /*
  * Temporary callback-driven host slice: keep Linux descriptor/report/input
  * parsing, but do not enable subsystems that need hardware control requests,
@@ -163,20 +156,7 @@ struct delayed_work {
 #define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->canceling = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
 #define INIT_DELAYED_WORK(dwork, fn) do { INIT_WORK(&(dwork)->work, (fn)); (dwork)->wq = NULL; (dwork)->due = 0; (dwork)->delayed_pending = 0; (dwork)->next = NULL; } while (0)
 #define to_delayed_work(work) container_of(work, struct delayed_work, work)
-int hid_compat_workqueue_init(void);
-bool hid_compat_workqueue_poll(void);
-TickType_t hid_compat_workqueue_next_timeout(void);
-bool schedule_work(struct work_struct *work);
-bool hid_compat_queue_work(struct workqueue_struct *wq, struct work_struct *work);
-bool hid_compat_flush_work(struct work_struct *work);
-struct workqueue_struct *hid_compat_create_singlethread_workqueue(const char *name);
-void hid_compat_destroy_workqueue(struct workqueue_struct *wq);
 void cancel_work_sync(struct work_struct *work);
-bool hid_compat_queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-				   unsigned long delay);
-bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay);
-bool cancel_delayed_work(struct delayed_work *dwork);
-bool cancel_delayed_work_sync(struct delayed_work *dwork);
 static inline bool delayed_work_pending(struct delayed_work *dwork)
 {
 	return dwork->delayed_pending || dwork->work.pending;
@@ -1593,77 +1573,86 @@ static inline void kfreep(void *ptr)
 
 static inline SemaphoreHandle_t hid_compat_mutex_handle(struct mutex *mutex)
 {
-        SemaphoreHandle_t handle;
+        // SemaphoreHandle_t handle;
+	// Callback-driven HID slice must not allocate or block on FreeRTOS semaphores.
+	(void)mutex;
+	return NULL;
 
-        if (mutex->handle)
-                return mutex->handle;
+        // if (mutex->handle)
+        //         return mutex->handle;
 
         // Linux DEFINE_MUTEX produces a ready static mutex. FreeRTOS mutexes need
         // runtime construction, so static mutexes are created on first use.
-	        handle = xSemaphoreCreateMutex();
-	        if (!handle) {
-	                return NULL;
-	        }
+	// handle = xSemaphoreCreateMutex();
+	// if (!handle) {
+	//         return NULL;
+	// }
 
-        taskENTER_CRITICAL();
-        if (!mutex->handle) {
-                mutex->handle = handle;
-                handle = NULL;
-        }
-        taskEXIT_CRITICAL();
+        // taskENTER_CRITICAL();
+        // if (!mutex->handle) {
+        //         mutex->handle = handle;
+        //         handle = NULL;
+        // }
+        // taskEXIT_CRITICAL();
 
-        if (handle)
-                vSemaphoreDelete(handle);
+        // if (handle)
+        //         vSemaphoreDelete(handle);
 
-        return mutex->handle;
+        // return mutex->handle;
 }
 
 static inline void mutex_init(struct mutex *mutex)
 {
-        mutex->handle = xSemaphoreCreateMutex();
+        // mutex->handle = xSemaphoreCreateMutex();
+	// Callback-driven HID slice does not allocate FreeRTOS mutexes.
+        mutex->handle = NULL;
         mutex->locked = 0;
 }
 
 static inline int mutex_lock_killable(struct mutex *mutex)
 {
-        SemaphoreHandle_t handle = hid_compat_mutex_handle(mutex);
+        // SemaphoreHandle_t handle = hid_compat_mutex_handle(mutex);
+	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
 
-        if (!handle)
-                return -ENOMEM;
+        // if (!handle)
+        //         return -ENOMEM;
 
-        xSemaphoreTake(handle, portMAX_DELAY);
+        // xSemaphoreTake(handle, portMAX_DELAY);
         mutex->locked = 1;
         return 0;
 }
 
 static inline void mutex_lock(struct mutex *mutex)
 {
-        SemaphoreHandle_t handle = hid_compat_mutex_handle(mutex);
+        // SemaphoreHandle_t handle = hid_compat_mutex_handle(mutex);
+	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
 
-        if (!handle)
-                return;
+        // if (!handle)
+        //         return;
 
-        xSemaphoreTake(handle, portMAX_DELAY);
+        // xSemaphoreTake(handle, portMAX_DELAY);
         mutex->locked = 1;
 }
 
 static inline void mutex_unlock(struct mutex *mutex)
 {
-        SemaphoreHandle_t handle = mutex->handle;
+        // SemaphoreHandle_t handle = mutex->handle;
+	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
 
         mutex->locked = 0;
-        if (handle)
-                xSemaphoreGive(handle);
+        // if (handle)
+        //         xSemaphoreGive(handle);
 }
 
 static inline void mutex_destroy(struct mutex *mutex)
 {
-        SemaphoreHandle_t handle = mutex->handle;
+        // SemaphoreHandle_t handle = mutex->handle;
+	// Callback-driven HID slice does not allocate FreeRTOS mutexes.
 
         mutex->handle = NULL;
         mutex->locked = 0;
-        if (handle)
-                vSemaphoreDelete(handle);
+        // if (handle)
+        //         vSemaphoreDelete(handle);
 }
 
 static inline bool mutex_is_locked(struct mutex *mutex)
@@ -1673,75 +1662,95 @@ static inline bool mutex_is_locked(struct mutex *mutex)
 
 static inline int down_interruptible(struct semaphore *sem)
 {
-	return xSemaphoreTake(sem->handle, portMAX_DELAY) == pdPASS ? 0 : -EINTR;
+	// return xSemaphoreTake(sem->handle, portMAX_DELAY) == pdPASS ? 0 : -EINTR;
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)sem;
+	return 0;
 }
 
 static inline void down(struct semaphore *sem)
 {
-	xSemaphoreTake(sem->handle, portMAX_DELAY);
+	// xSemaphoreTake(sem->handle, portMAX_DELAY);
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)sem;
 }
 
 static inline int down_trylock(struct semaphore *sem)
 {
-	return xSemaphoreTake(sem->handle, 0) == pdPASS ? 0 : 1;
+	// return xSemaphoreTake(sem->handle, 0) == pdPASS ? 0 : 1;
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)sem;
+	return 0;
 }
 
 static inline void up(struct semaphore *sem)
 {
-	xSemaphoreGive(sem->handle);
+	// xSemaphoreGive(sem->handle);
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)sem;
 }
 
 static inline void sema_init(struct semaphore *sem, int val)
 {
-	sem->handle = xSemaphoreCreateCounting(val, val);
+	// sem->handle = xSemaphoreCreateCounting(val, val);
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)val;
+	sem->handle = NULL;
 }
 
 static inline void sema_destroy(struct semaphore *sem)
 {
-	vSemaphoreDelete(sem->handle);
+	// vSemaphoreDelete(sem->handle);
+	// Callback-driven HID slice does not allocate or block on Linux semaphores.
+	(void)sem;
 }
 
 static inline SemaphoreHandle_t hid_compat_spin_handle(spinlock_t *lock)
 {
-        SemaphoreHandle_t handle;
+        // SemaphoreHandle_t handle;
+	// Callback-driven HID slice treats Linux spinlocks as nonblocking no-ops.
+	(void)lock;
+	return NULL;
 
-        if (lock->handle)
-                return lock->handle;
+        // if (lock->handle)
+        //         return lock->handle;
 
-	        handle = xSemaphoreCreateMutex();
-	        if (!handle) {
-	                abort();
-	        }
+	// handle = xSemaphoreCreateMutex();
+	// if (!handle) {
+	//         abort();
+	// }
 
-        if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
-                if (!lock->handle) {
-                        lock->handle = handle;
-                        handle = NULL;
-                }
-                if (handle)
-                        vSemaphoreDelete(handle);
-                return lock->handle;
-        }
+        // if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        //         if (!lock->handle) {
+        //                 lock->handle = handle;
+        //                 handle = NULL;
+        //         }
+        //         if (handle)
+        //                 vSemaphoreDelete(handle);
+        //         return lock->handle;
+        // }
 
-        taskENTER_CRITICAL();
-        if (!lock->handle) {
-                lock->handle = handle;
-                handle = NULL;
-        }
-        taskEXIT_CRITICAL();
+        // taskENTER_CRITICAL();
+        // if (!lock->handle) {
+        //         lock->handle = handle;
+        //         handle = NULL;
+        // }
+        // taskEXIT_CRITICAL();
 
-        if (handle)
-                vSemaphoreDelete(handle);
+        // if (handle)
+        //         vSemaphoreDelete(handle);
 
-        return lock->handle;
+        // return lock->handle;
 }
 
 static inline void hid_compat_spin_lock_init(spinlock_t *lock)
 {
-	        lock->handle = xSemaphoreCreateMutex();
-	        if (!lock->handle) {
-	                abort();
-	        }
+	// lock->handle = xSemaphoreCreateMutex();
+	// if (!lock->handle) {
+	//         abort();
+	// }
+	// Callback-driven HID slice does not allocate FreeRTOS spinlock mutexes.
+	lock->handle = NULL;
 }
 
 static inline bool hid_compat_scheduler_started(void)
@@ -1751,16 +1760,20 @@ static inline bool hid_compat_scheduler_started(void)
 
 static inline void hid_compat_spin_lock(spinlock_t *lock)
 {
-        TickType_t wait = hid_compat_scheduler_started() ? portMAX_DELAY : 0;
+        // TickType_t wait = hid_compat_scheduler_started() ? portMAX_DELAY : 0;
+	// Callback-driven HID slice treats Linux spinlocks as nonblocking no-ops.
+	(void)lock;
 
-	        if (xSemaphoreTake(hid_compat_spin_handle(lock), wait) != pdPASS) {
-	                abort();
-	        }
+	// if (xSemaphoreTake(hid_compat_spin_handle(lock), wait) != pdPASS) {
+	//         abort();
+	// }
 }
 
 static inline void hid_compat_spin_unlock(spinlock_t *lock)
 {
-        xSemaphoreGive(lock->handle);
+        // xSemaphoreGive(lock->handle);
+	// Callback-driven HID slice treats Linux spinlocks as nonblocking no-ops.
+	(void)lock;
 }
 
 static inline unsigned long hid_compat_spin_lock_irqsave(spinlock_t *lock)

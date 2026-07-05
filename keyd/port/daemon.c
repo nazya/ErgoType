@@ -260,6 +260,9 @@ static int event_handler(struct event *ev)
 							timeout = process_keypress(active_kbd, KEYD_SCROLL_DOWN, ev->timestamp);
 				}
 				break;
+			case DEV_RESET:
+				kbd_reset(kbd);
+				break;
 			default:
 				break;
 			}

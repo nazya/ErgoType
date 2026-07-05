@@ -120,84 +120,11 @@ struct input_value {
 	__s32 value;
 };
 
-#define INPUT_PORT_PROXY_VALUES	16
-#define INPUT_PORT_PROXY_STRING	64
-#define INPUT_PORT_PROXY_DEVICE_REPORT_SIZE CFG_TUD_HID_EP_BUFSIZE
-
-/*
- * Firmware proxy ABI: copied Linux input batches, raw HID usage metadata,
- * device snapshots, ABS info, retained handles, and FF-by-id helpers.
- * INPUT_CLK_* order follows upstream; port ktime_t stores one scalar value.
- */
+/* INPUT_CLK_* order follows upstream; port ktime_t stores one scalar value. */
 #define INPUT_CLK_REAL		0
 #define INPUT_CLK_MONO		1
 #define INPUT_CLK_BOOT		2
 #define INPUT_CLK_MAX		3
-
-struct input_port_proxy_batch {
-	__u32 sequence;
-	__u32 dropped_before;
-	__u32 hid_id;
-	__u32 input_proxy_id;
-	__u32 hid_vendor;
-	__u32 hid_product;
-	__u32 hid_version;
-	__u16 input_bustype;
-	__u16 input_vendor;
-	__u16 input_product;
-	__u16 input_version;
-	__u8 dev_addr;
-	__u8 instance;
-	ktime_t timestamp[INPUT_CLK_MAX];
-	unsigned int value_offset;
-	unsigned int value_count;
-	unsigned int value_total;
-	struct input_value values[INPUT_PORT_PROXY_VALUES];
-};
-
-struct input_port_proxy_hid_usage_event {
-	__u32 sequence;
-	__u32 dropped_before;
-	__u32 hid_id;
-	__u32 input_proxy_id;
-	__u32 hid_vendor;
-	__u32 hid_product;
-	__u32 hid_version;
-	__u8 dev_addr;
-	__u8 instance;
-	ktime_t timestamp[INPUT_CLK_MAX];
-	__u8 report_type;
-	__u32 report_id;
-	__u32 report_application;
-	__u32 field_application;
-	__u32 field_physical;
-	__u32 field_logical;
-	__u32 field_flags;
-	__u32 field_report_offset;
-	__u32 field_report_size;
-	__u32 field_report_count;
-	__u32 field_index;
-	__u32 usage_hid;
-	__u32 usage_collection_index;
-	__u32 usage_index;
-	__u16 ev_type;
-	__u16 ev_code;
-	__s32 value;
-};
-
-struct input_port_proxy_device_report_event {
-	__u32 sequence;
-	__u32 dropped_before;
-	__u8 instance;
-	__u8 report_id;
-	__u8 report_type;
-	__u16 len;
-	__u8 data[INPUT_PORT_PROXY_DEVICE_REPORT_SIZE];
-};
-
-typedef u32 input_port_proxy_handle_t;
-
-#define INPUT_PORT_PROXY_INVALID_HANDLE 0
 
 #define INPUT_DEVICE_ID_EV_MAX		0x1f
 #define INPUT_DEVICE_ID_KEY_MAX		0x2ff
@@ -303,57 +230,6 @@ struct input_device_id {
 #define FF_AUTOCENTER		0x61
 #define FF_MAX_EFFECTS		FF_GAIN
 
-struct input_port_proxy_device_snapshot {
-	__u32 input_proxy_id;
-	struct input_id id;
-	char name[INPUT_PORT_PROXY_STRING];
-	char phys[INPUT_PORT_PROXY_STRING];
-	char uniq[INPUT_PORT_PROXY_STRING];
-	__u32 hint_events_per_packet;
-	__u32 users;
-	__u8 registered;
-	__u8 going_away;
-	__u8 inhibited;
-	__u8 has_absinfo;
-	__u8 has_ff;
-	unsigned long propbit[BITS_TO_LONGS(INPUT_PROP_CNT)];
-	unsigned long evbit[BITS_TO_LONGS(EV_CNT)];
-	unsigned long keybit[BITS_TO_LONGS(KEY_CNT)];
-	unsigned long relbit[BITS_TO_LONGS(REL_CNT)];
-	unsigned long absbit[BITS_TO_LONGS(ABS_CNT)];
-	unsigned long mscbit[BITS_TO_LONGS(MSC_CNT)];
-	unsigned long ledbit[BITS_TO_LONGS(LED_CNT)];
-	unsigned long sndbit[BITS_TO_LONGS(SND_CNT)];
-	unsigned long ffbit[BITS_TO_LONGS(FF_CNT)];
-	unsigned long swbit[BITS_TO_LONGS(SW_CNT)];
-	unsigned long key[BITS_TO_LONGS(KEY_CNT)];
-	unsigned long led[BITS_TO_LONGS(LED_CNT)];
-	unsigned long snd[BITS_TO_LONGS(SND_CNT)];
-	unsigned long sw[BITS_TO_LONGS(SW_CNT)];
-};
-
-struct input_port_ff_proxy_snapshot {
-	__u32 input_proxy_id;
-	__u32 max_effects;
-	__u32 uploaded_effects;
-	__u8 has_upload;
-	__u8 has_erase;
-	__u8 has_playback;
-	__u8 has_set_gain;
-	__u8 has_set_autocenter;
-	__u8 has_destroy;
-	unsigned long dev_ffbit[BITS_TO_LONGS(FF_CNT)];
-	unsigned long ffbit[BITS_TO_LONGS(FF_CNT)];
-	unsigned long effect_owners[BITS_TO_LONGS(FF_MAX_EFFECTS)];
-};
-
-struct input_port_ff_effect_snapshot {
-	__u32 input_proxy_id;
-	__s32 effect_id;
-	__u8 owned;
-	struct ff_effect effect;
-};
-
 struct ff_device;
 struct hid_device;
 struct hid_field;
@@ -417,7 +293,10 @@ struct input_dev {
 	struct input_handle *grab;
 
 	spinlock_t event_lock;
-	SemaphoreHandle_t port_event_lock;
+	// Work3 used a FreeRTOS mutex here to serialize proxy/driver-side input
+	// snapshots. The callback-driven slice keeps input_port_event_lock()
+	// as a no-op, so do not store a mutex handle in active input_dev state.
+	// SemaphoreHandle_t port_event_lock;
 	struct mutex mutex;
 
 	unsigned int users;
@@ -443,12 +322,16 @@ struct input_dev {
 
 static inline void input_port_event_lock(struct input_dev *dev)
 {
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Callback-driven slice has no input worker; never block HID callbacks.
+	(void)dev;
 }
 
 static inline void input_port_event_unlock(struct input_dev *dev)
 {
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
+	(void)dev;
 }
 
 struct input_handler {
@@ -583,48 +466,6 @@ int input_ff_erase(struct input_dev *dev, int effect_id, struct file *file);
 int input_ff_flush(struct input_dev *dev, struct file *file);
 struct input_dev *input_find_device_by_name(const char *name);
 int input_for_each_device(int (*fn)(struct input_dev *dev, void *data), void *data);
-int input_port_for_each_ff_device(int (*fn)(struct input_dev *dev, void *data), void *data);
-int input_port_ff_upload(struct input_dev *dev, struct ff_effect *effect);
-void input_port_ff_playback(struct input_dev *dev, int effect_id, int value);
-int input_port_ff_erase(struct input_dev *dev, int effect_id);
-int input_port_ff_flush(struct input_dev *dev);
-int input_port_ff_get_snapshot(__u32 input_proxy_id,
-			       struct input_port_ff_proxy_snapshot *snapshot);
-int input_port_ff_get_next_snapshot(__u32 after_input_proxy_id,
-				    struct input_port_ff_proxy_snapshot *snapshot);
-int input_port_ff_get_effect_snapshot(__u32 input_proxy_id, int effect_id,
-				      struct input_port_ff_effect_snapshot *snapshot);
-int input_port_ff_upload_by_id(__u32 input_proxy_id, struct ff_effect *effect);
-void input_port_ff_playback_by_id(__u32 input_proxy_id, int effect_id, int value);
-int input_port_ff_erase_by_id(__u32 input_proxy_id, int effect_id);
-int input_port_ff_flush_by_id(__u32 input_proxy_id);
-void input_port_proxy_event_batch(const struct input_port_proxy_batch *batch);
-void input_port_proxy_hid_usage_event(struct hid_device *hid, struct input_dev *dev,
-				      struct hid_field *field, struct hid_usage *usage,
-				      __s32 value);
-int input_port_proxy_open(input_port_proxy_handle_t *handle);
-int input_port_proxy_release(input_port_proxy_handle_t handle);
-unsigned int input_port_proxy_poll(input_port_proxy_handle_t handle);
-int input_port_proxy_read(input_port_proxy_handle_t handle,
-			  struct input_port_proxy_batch *batch);
-unsigned int input_port_proxy_poll_hid_usage(input_port_proxy_handle_t handle);
-int input_port_proxy_read_hid_usage(input_port_proxy_handle_t handle,
-				    struct input_port_proxy_hid_usage_event *event);
-unsigned int input_port_proxy_poll_device_report(input_port_proxy_handle_t handle);
-int input_port_proxy_read_device_report(input_port_proxy_handle_t handle,
-					struct input_port_proxy_device_report_event *event);
-int input_port_proxy_revoke(input_port_proxy_handle_t handle);
-int input_port_proxy_get_device_snapshot(__u32 input_proxy_id,
-					 struct input_port_proxy_device_snapshot *snapshot);
-int input_port_proxy_get_next_device_snapshot(__u32 after_input_proxy_id,
-					      struct input_port_proxy_device_snapshot *snapshot);
-int input_port_proxy_get_absinfo(__u32 input_proxy_id, unsigned int axis,
-				 struct input_absinfo *absinfo);
-void input_port_queue_device_report(uint8_t instance, uint8_t report_id,
-				    uint8_t report_type, uint8_t const *data,
-				    uint16_t len);
-bool input_port_process_device_reports(void);
-int input_port_events_init(void);
 int input_port_init(void);
 int input_port_activate_hid(struct hid_device *hid);
 void input_port_deactivate_hid(struct hid_device *hid);

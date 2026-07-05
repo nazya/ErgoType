@@ -68,12 +68,8 @@ struct input_dev *input_allocate_device(void)
 		kfree(dev);
 		return NULL;
 	}
-	dev->port_event_lock = xSemaphoreCreateMutex();
-	if (!dev->port_event_lock) {
-		kfree(dev->vals);
-		kfree(dev);
-		return NULL;
-	}
+	// dev->port_event_lock = xSemaphoreCreateMutex();
+	// Callback-driven slice has no input worker; do not allocate a blocking lock.
 
 	device_initialize(&dev->dev);
 	// mutex_init(&dev->mutex);
@@ -114,7 +110,8 @@ void input_free_device(struct input_dev *dev)
 	input_mt_destroy_slots(dev);
 	kfree(dev->absinfo);
 	kfree(dev->vals);
-	vSemaphoreDelete(dev->port_event_lock);
+	// vSemaphoreDelete(dev->port_event_lock);
+	// Callback-driven slice does not allocate port_event_lock.
 	kfree(dev);
 }
 
@@ -411,12 +408,14 @@ int input_register_handle(struct input_handle *handle)
 	// else
 	// 	list_add_tail_rcu(&handle->d_node, &dev->h_list);
 	// This port has no RCU input core; filters still go before normal handlers.
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Callback-driven slice has no concurrent input worker; do not block in HID callbacks.
 	if (handler->filter)
 		list_add(&handle->d_node, &dev->h_list);
 	else
 		list_add_tail(&handle->d_node, &dev->h_list);
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 	// list_add_tail_rcu(&handle->h_node, &handler->h_list);
 	// Port list has no RCU variant.
 	list_add_tail(&handle->h_node, &handler->h_list);
@@ -429,9 +428,11 @@ void input_unregister_handle(struct input_handle *handle)
 {
 	struct input_dev *dev = handle->dev;
 
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Callback-driven slice has no concurrent input worker; do not block in HID callbacks.
 	list_del(&handle->d_node);
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 	// list_del_rcu(&handle->h_node);
 	list_del(&handle->h_node); // Port list has no RCU variant.
 }
@@ -547,8 +548,9 @@ void input_close_device(struct input_handle *handle)
 		 */
 		// synchronize_rcu();
 		// Port input core has no RCU.
-		xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
-		xSemaphoreGive(dev->port_event_lock);
+		// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+		// xSemaphoreGive(dev->port_event_lock);
+		// Callback-driven slice has no RCU wait point; do not block on close.
 	}
 }
 
@@ -1168,9 +1170,11 @@ static void input_handle_event_locked(struct input_dev *dev,
 void input_handle_event(struct input_dev *dev,
 			unsigned int type, unsigned int code, int value)
 {
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Callback-driven slice has no concurrent input worker; do not block in report path.
 	input_handle_event_locked(dev, type, code, value);
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 }
 
 void input_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
@@ -1302,11 +1306,13 @@ static void input_disconnect_device(struct input_dev *dev)
 	 * generate events even after we done here but they will not
 	 * reach any handlers.
 	 */
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Unregister runs from the same host callback/task slice; do not block.
 	if (input_dev_release_keys(dev)) {
 		input_handle_event_locked(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 
 	list_for_each_entry(handle, &dev->h_list, d_node)
 		while (handle->open) {
@@ -1322,12 +1328,14 @@ void input_reset_device(struct input_dev *dev)
 	// guard(mutex)(&dev->mutex);
 	// guard(spinlock_irqsave)(&dev->event_lock);
 	// Port input core has no mutex/event_lock guards.
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Reset is synchronous in this slice; no blocking event lock.
 	input_dev_toggle(dev, true);
 	if (input_dev_release_keys(dev)) {
 		input_handle_event_locked(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	xSemaphoreGive(dev->port_event_lock);
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 }
 
 /*
@@ -1342,7 +1350,8 @@ static void input_repeat_key(struct timer_list *t)
 	// guard(spinlock_irqsave)(&dev->event_lock);
 	// Port input core has no event_lock; timer callbacks and input processing run
 	// from the HID driver task's Linux workqueue/timer pump.
-	xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
+	// Software repeat worker is not active in the callback-driven slice.
 	if (!dev->inhibited &&
 	    test_bit(dev->repeat_key, dev->key) &&
 	    is_event_supported(dev->repeat_key, dev->keybit, KEY_MAX)) {
@@ -1356,56 +1365,31 @@ static void input_repeat_key(struct timer_list *t)
 			mod_timer(&dev->timer, jiffies +
 					msecs_to_jiffies(dev->rep[REP_PERIOD]));
 	}
-	xSemaphoreGive(dev->port_event_lock);
-}
-
-static int input_find_device_by_name_exec(void *data)
-{
-	struct input_find_cmd *cmd = data;
-	struct input_dev *dev;
-
-	list_for_each_entry(dev, &input_dev_list, node)
-		if (!strcmp(dev->name, cmd->name)) {
-			cmd->dev = dev;
-			return 0;
-		}
-
-	cmd->dev = NULL;
-	return 0;
+	// xSemaphoreGive(dev->port_event_lock);
+	// See nonblocking callback-driven note above.
 }
 
 struct input_dev *input_find_device_by_name(const char *name)
 {
-	struct input_find_cmd cmd = {
-		.name = name,
-		.dev = NULL,
-	};
+	struct input_dev *dev;
 
-	(void)hid_compat_exec_sync(input_find_device_by_name_exec, &cmd);
-	return cmd.dev;
+	list_for_each_entry(dev, &input_dev_list, node)
+		if (!strcmp(dev->name, name))
+			return dev;
+
+	return NULL;
 }
 
-static int input_for_each_device_exec(void *data)
+int input_for_each_device(int (*fn)(struct input_dev *dev, void *data), void *data)
 {
-	struct input_for_each_cmd *cmd = data;
 	struct input_dev *dev;
 
 	list_for_each_entry(dev, &input_dev_list, node) {
-		int ret = cmd->fn(dev, cmd->data);
+		int ret = fn(dev, data);
 
 		if (ret)
 			return ret;
 	}
 
 	return 0;
-}
-
-int input_for_each_device(int (*fn)(struct input_dev *dev, void *data), void *data)
-{
-	struct input_for_each_cmd cmd = {
-		.fn = fn,
-		.data = data,
-	};
-
-	return hid_compat_exec_sync(input_for_each_device_exec, &cmd);
 }

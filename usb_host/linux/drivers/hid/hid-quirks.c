@@ -1214,7 +1214,8 @@ static int hid_modify_dquirk(const struct hid_device_id *id,
 	hdev->product = q_new->hid_bl_item.product = id->product;
 	q_new->hid_bl_item.driver_data = quirks;
 
-	mutex_lock(&dquirks_lock);
+	// mutex_lock(&dquirks_lock);
+	// Callback-driven generic slice has no runtime dynamic-quirk writer.
 
 	list_for_each_entry(q, &dquirks_list, node) {
 
@@ -1232,7 +1233,8 @@ static int hid_modify_dquirk(const struct hid_device_id *id,
 	if (!list_edited)
 		list_add_tail(&q_new->node, &dquirks_list);
 
-	mutex_unlock(&dquirks_lock);
+	// mutex_unlock(&dquirks_lock);
+	// See nonblocking callback-driven note above.
 
  out:
 	kfree(hdev);
@@ -1252,14 +1254,16 @@ static void hid_remove_all_dquirks(__u16 bus)
 {
 	struct quirks_list_struct *q, *temp;
 
-	mutex_lock(&dquirks_lock);
+	// mutex_lock(&dquirks_lock);
+	// Firmware has no runtime dynamic-quirk writer/unload race in this slice.
 	list_for_each_entry_safe(q, temp, &dquirks_list, node) {
 		if (bus == HID_BUS_ANY || bus == q->hid_bl_item.bus) {
 			list_del(&q->node);
 			kfree(q);
 		}
 	}
-	mutex_unlock(&dquirks_lock);
+	// mutex_unlock(&dquirks_lock);
+	// See nonblocking firmware-slice note above.
 
 }
 
@@ -1383,13 +1387,15 @@ unsigned long hid_lookup_quirk(const struct hid_device *hdev)
 		}
 	}
 
-	mutex_lock(&dquirks_lock);
+	// mutex_lock(&dquirks_lock);
+	// Mount callback must not block; dynamic quirks are not mutated at runtime.
 	quirk_entry = hid_exists_dquirk(hdev);
 	if (quirk_entry)
 		quirks = quirk_entry->driver_data;
 	else
 		quirks = hid_gets_squirk(hdev);
-	mutex_unlock(&dquirks_lock);
+	// mutex_unlock(&dquirks_lock);
+	// See nonblocking mount-callback note above.
 
 	return quirks;
 }
