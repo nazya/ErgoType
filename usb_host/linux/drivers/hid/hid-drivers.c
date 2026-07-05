@@ -40,9 +40,11 @@ int hid_builtin_drivers_init(void)
 		if (ret)
 			return ret;
 #endif
-		if (strcmp((*driver)->name, "hid-generic"))
-			continue;
-
+		/*
+		 * This source slice only links hid-generic plus vendor drivers whose
+		 * active hooks are report_fixup/input_mapping/simple probe. Drivers
+		 * needing raw_event/workqueue/wait/GET_REPORT remain out of CMake.
+		 */
 		ret = hid_register_driver(*driver);
 		if (ret)
 			return ret;

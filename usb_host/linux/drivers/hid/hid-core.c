@@ -2331,6 +2331,16 @@ int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 
 }
 EXPORT_SYMBOL_GPL(hid_safe_input_report);
 
+bool hid_is_usb(const struct hid_device *hdev)
+{
+	/*
+	 * Upstream gets this identity from the USB HID transport. The TinyUSB
+	 * mount glue stores BUS_USB in hdev->bus before hid_add_device().
+	 */
+	return hdev->bus == BUS_USB;
+}
+EXPORT_SYMBOL_GPL(hid_is_usb);
+
 bool hid_match_one_id(const struct hid_device *hdev,
 		      const struct hid_device_id *id)
 {

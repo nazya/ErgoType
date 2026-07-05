@@ -755,6 +755,16 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 	// 		goto ignore;
 	// }
 	// Driver input_mapping hooks are disabled in the callback-driven generic slice.
+	// Re-enabled for the vendor-driver slice that only links nonblocking
+	// report_fixup/input_mapping/simple-probe drivers.
+	if (device->driver->input_mapping) {
+		int ret = device->driver->input_mapping(device, hidinput, field,
+				usage, &bit, &max);
+		if (ret > 0)
+			goto mapped;
+		if (ret < 0)
+			goto ignore;
+	}
 
 	switch (usage->hid & HID_USAGE_PAGE) {
 	case HID_UP_UNDEFINED:
@@ -1415,6 +1425,17 @@ mapped:
 	// 	return;
 	// }
 	// Driver input_mapped hooks are disabled in the callback-driven generic slice.
+	// Re-enabled for the vendor-driver slice that only links nonblocking
+	// report_fixup/input_mapping/simple-probe drivers.
+	if (device->driver->input_mapped &&
+	    device->driver->input_mapped(device, hidinput, field, usage,
+				 &bit, &max) < 0) {
+		/*
+		 * The driver indicated that no further generic handling
+		 * of the usage is desired.
+		 */
+		return;
+	}
 
 	set_bit(usage->type, input->evbit);
 
