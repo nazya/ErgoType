@@ -12,9 +12,14 @@
 /*
  */
 
-#include "../../include/linux/hid.h"
+// #include <linux/hid.h>
+// #include <linux/export.h>
+// #include <linux/slab.h>
+// #include <linux/mutex.h>
 // #include <linux/input/elan-i2c-ids.h>
-// Port: elan-i2c ACPI ids are not imported yet; the matching branch below is left next to this include.
+// Port uses local compatibility include paths directly; elan-i2c ACPI ids are
+// not imported yet, and the matching branch below stays visible.
+#include "../../include/linux/hid.h"
 
 #include "hid-ids.h"
 

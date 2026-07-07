@@ -2349,6 +2349,8 @@ bool hid_match_one_id(const struct hid_device *hdev,
 		(id->vendor == HID_ANY_ID || id->vendor == hdev->vendor) &&
 		(id->product == HID_ANY_ID || id->product == hdev->product);
 }
+// Upstream keeps hid_match_one_id() local to hid-core; this port exports it so
+// lightweight built-in vendor-driver registration glue can reuse upstream match logic.
 EXPORT_SYMBOL_GPL(hid_match_one_id);
 
 const struct hid_device_id *hid_match_id(const struct hid_device *hdev,

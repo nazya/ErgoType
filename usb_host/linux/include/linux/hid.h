@@ -1,6 +1,12 @@
 #ifndef __HID_H
 #define __HID_H
 
+/*
+ * Reduced Linux HID compatibility contract for the firmware port. The active
+ * parser/driver C files stay close to upstream Linux; this header carries only
+ * the declarations/macros those files need plus local transport fields.
+ */
+
 #include "hid_compat.h"
 #include "power_supply.h"
 #include "tusb.h"

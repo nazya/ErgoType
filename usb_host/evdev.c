@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include "../../include/linux/hid.h"
-#include "../../../forward.h"
-#include "../../../hid_port.h"
+/*
+ * Port note: upstream drivers/input/evdev.c exposes input events through
+ * userspace file descriptors. This firmware keeps the upstream input_handler
+ * shape and sends Linux-style EV_* records to the KeyD device queue instead.
+ * KeyD device.c performs the upstream-style EV_* -> device_event conversion
+ * that Linux keyd normally performs after read(fd, input_event).
+ */
+#include "linux/include/linux/hid.h"
+#include "evdev.h"
+#include "hid_port.h"
 
-#include "uapi/linux/input-event-codes.h"
+#include "linux/include/uapi/linux/input-event-codes.h"
 
-#define INPUT_PORT_ABS_MAX 1023
+static struct input_handler evdev_handler;
 
-static struct input_handler input_port_handler;
-
-static int input_port_abs_to_mouse(struct hid_device *hid, struct input_dev *dev)
+static int evdev_abs_to_mouse(struct hid_device *hid, struct input_dev *dev)
 {
 	struct hid_input *hidinput;
 
@@ -40,7 +45,7 @@ static int input_port_abs_to_mouse(struct hid_device *hid, struct input_dev *dev
 	return 0;
 }
 
-static uint8_t input_port_caps(struct hid_device *hid, struct input_dev *dev)
+static uint8_t evdev_caps(struct hid_device *hid, struct input_dev *dev)
 {
 	uint8_t caps = 0;
 	struct hid_input *hidinput;
@@ -49,16 +54,16 @@ static uint8_t input_port_caps(struct hid_device *hid, struct input_dev *dev)
 
 	for (unsigned int i = 0; i < BITS_TO_LONGS(KEY_CNT); i++)
 		if (dev->keybit[i])
-			caps |= FORWARD_CAP_KEY;
+			caps |= EVDEV_CAP_KEY;
 
 	if (test_bit(REL_X, dev->relbit) || test_bit(REL_Y, dev->relbit) ||
 	    test_bit(REL_WHEEL, dev->relbit) || test_bit(REL_HWHEEL, dev->relbit))
-		caps |= FORWARD_CAP_MOUSE;
+		caps |= EVDEV_CAP_MOUSE;
 
 	if (test_bit(ABS_X, dev->absbit) &&
 	    test_bit(ABS_Y, dev->absbit) &&
-	    input_port_abs_to_mouse(hid, dev))
-		caps |= FORWARD_CAP_MOUSE_ABS;
+	    evdev_abs_to_mouse(hid, dev))
+		caps |= EVDEV_CAP_MOUSE_ABS;
 
 	list_for_each_entry(hidinput, &hid->inputs, list) {
 		if (hidinput->input != dev)
@@ -68,11 +73,11 @@ static uint8_t input_port_caps(struct hid_device *hid, struct input_dev *dev)
 		switch (hidinput->application) {
 		case HID_GD_KEYBOARD:
 		case HID_GD_KEYPAD:
-			caps |= FORWARD_CAP_KEY | FORWARD_CAP_KEYBOARD;
+			caps |= EVDEV_CAP_KEY | EVDEV_CAP_KEYBOARD;
 			break;
 		case HID_GD_MOUSE:
 		case HID_GD_POINTER:
-			caps |= FORWARD_CAP_MOUSE;
+			caps |= EVDEV_CAP_MOUSE;
 			break;
 		default:
 			break;
@@ -86,11 +91,11 @@ static uint8_t input_port_caps(struct hid_device *hid, struct input_dev *dev)
 			switch (report->application) {
 			case HID_GD_KEYBOARD:
 			case HID_GD_KEYPAD:
-				caps |= FORWARD_CAP_KEY | FORWARD_CAP_KEYBOARD;
+				caps |= EVDEV_CAP_KEY | EVDEV_CAP_KEYBOARD;
 				break;
 			case HID_GD_MOUSE:
 			case HID_GD_POINTER:
-				caps |= FORWARD_CAP_MOUSE;
+				caps |= EVDEV_CAP_MOUSE;
 				break;
 			default:
 				break;
@@ -101,7 +106,7 @@ static uint8_t input_port_caps(struct hid_device *hid, struct input_dev *dev)
 	return caps;
 }
 
-static int input_port_dev_in_hid_inputs(struct hid_device *hid, struct input_dev *dev)
+static int evdev_dev_in_hid_inputs(struct hid_device *hid, struct input_dev *dev)
 {
 	struct hid_input *hidinput;
 
@@ -115,18 +120,17 @@ static int input_port_dev_in_hid_inputs(struct hid_device *hid, struct input_dev
 	return 0;
 }
 
-static int32_t input_port_abs_value(struct input_absinfo *abs)
+static void evdev_configure_abs_dev(void *keyd_device, struct input_dev *dev)
 {
-	__s64 value = abs->value - abs->minimum;
-	__s64 range = abs->maximum - abs->minimum;
-
-	if (!range)
-		return 0;
-
-	return (int32_t)(value * INPUT_PORT_ABS_MAX / range);
+	if (test_bit(ABS_X, dev->absbit) && test_bit(ABS_Y, dev->absbit))
+		evdev_configure_abs(keyd_device,
+				      dev->absinfo[ABS_X].minimum,
+				      dev->absinfo[ABS_X].maximum,
+				      dev->absinfo[ABS_Y].minimum,
+				      dev->absinfo[ABS_Y].maximum);
 }
 
-static int input_port_open_hid_handle(struct input_handle *handle, void *data)
+static int evdev_open_hid_handle(struct input_handle *handle, void *data)
 {
 	if (input_get_drvdata(handle->dev) == data && !handle->open) {
 		struct hid_device *hid = data;
@@ -140,18 +144,19 @@ static int input_port_open_hid_handle(struct input_handle *handle, void *data)
 		hid_host_trace_input_state(hid, 1, handle->open, ret);
 		if (ret)
 			return ret;
-		forward_add_device_caps(hid->keyd_device, input_port_caps(hid, handle->dev));
+		evdev_add_device_caps(hid->keyd_device, evdev_caps(hid, handle->dev));
+		evdev_configure_abs_dev(hid->keyd_device, handle->dev);
 	}
 
 	return 0;
 }
 
-int input_port_activate_hid(struct hid_device *hid)
+int evdev_activate_hid(struct hid_device *hid)
 {
-	return input_handler_for_each_handle(&input_port_handler, hid, input_port_open_hid_handle);
+	return input_handler_for_each_handle(&evdev_handler, hid, evdev_open_hid_handle);
 }
 
-static int input_port_close_hid_handle(struct input_handle *handle, void *data)
+static int evdev_close_hid_handle(struct input_handle *handle, void *data)
 {
 	if (input_get_drvdata(handle->dev) == data && handle->open)
 		input_close_device(handle);
@@ -159,25 +164,17 @@ static int input_port_close_hid_handle(struct input_handle *handle, void *data)
 	return 0;
 }
 
-void input_port_deactivate_hid(struct hid_device *hid)
+void evdev_deactivate_hid(struct hid_device *hid)
 {
-	input_handler_for_each_handle(&input_port_handler, hid, input_port_close_hid_handle);
+	input_handler_for_each_handle(&evdev_handler, hid, evdev_close_hid_handle);
 }
 
-static unsigned int input_port_events(struct input_handle *handle,
+static unsigned int evdev_events(struct input_handle *handle,
 				      struct input_value *vals,
 				      unsigned int count)
 {
 	struct input_dev *dev = handle->dev;
 	struct hid_device *hid = input_get_drvdata(dev);
-	int32_t rel_x = 0;
-	int32_t rel_y = 0;
-	int32_t scroll_x = 0;
-	int32_t scroll_y = 0;
-	int abs_changed = 0;
-	int abs_mouse = test_bit(ABS_X, dev->absbit) &&
-			test_bit(ABS_Y, dev->absbit) &&
-			input_port_abs_to_mouse(hid, dev);
 
 	hid_host_trace_input_state(hid, 2, count, handle->open);
 
@@ -188,45 +185,39 @@ static unsigned int input_port_events(struct input_handle *handle,
 
 		switch (type) {
 		case EV_KEY:
-			hid_host_trace_input_event(hid, type, code, value);
-			/* Upstream keyd/src/device.c ignores EV_KEY repeat value 2. */
-			if (value == 2)
-				break;
-			forward_key(hid->keyd_device, code, !!value);
-			break;
 		case EV_REL:
 			hid_host_trace_input_event(hid, type, code, value);
-			if (code == REL_X)
-				rel_x += value;
-			else if (code == REL_Y)
-				rel_y += value;
-			else if (code == REL_HWHEEL)
-				scroll_x += value;
-			else if (code == REL_WHEEL)
-				scroll_y += value;
 			break;
 		case EV_ABS:
-			if ((code == ABS_X || code == ABS_Y) && abs_mouse)
-				abs_changed = 1;
+			if ((code == ABS_X || code == ABS_Y) &&
+			    evdev_abs_to_mouse(hid, dev))
+				hid_host_trace_input_event(hid, type, code, value);
 			break;
 		default:
 			break;
 		}
+
+		switch (type) {
+		case EV_KEY:
+		case EV_REL:
+		case EV_ABS:
+		case EV_SYN:
+		case EV_LED:
+			evdev_input_event(hid->keyd_device, type, code, value);
+			break;
+		default:
+			/*
+			 * Current KeyD boundary has no sink for the rest of the
+			 * Linux input stream. Keep the upstream input pipeline
+			 * intact and stop unsupported event types here.
+			 */
+			break;
+		}
 	}
-
-	if (rel_x || rel_y)
-		forward_mouse_move(hid->keyd_device, rel_x, rel_y);
-	if (scroll_x || scroll_y)
-		forward_mouse_scroll(hid->keyd_device, scroll_x, scroll_y);
-	if (abs_changed)
-		forward_mouse_move_abs(hid->keyd_device,
-				       input_port_abs_value(&dev->absinfo[ABS_X]),
-				       input_port_abs_value(&dev->absinfo[ABS_Y]));
-
 	return count;
 }
 
-static int input_port_connect(struct input_handler *handler,
+static int evdev_connect(struct input_handler *handler,
 			      struct input_dev *dev,
 			      const struct input_device_id *id)
 {
@@ -262,10 +253,11 @@ static int input_port_connect(struct input_handler *handler,
 		ret = input_open_device(handle);
 		if (ret)
 			goto err_unregister;
-		forward_add_device_caps(hid->keyd_device, input_port_caps(hid, dev));
-	} else if (hid && !input_port_dev_in_hid_inputs(hid, dev)) {
-		hid->keyd_device = forward_register_device(hid->vendor, hid->product,
-							   input_port_caps(hid, dev));
+		evdev_add_device_caps(hid->keyd_device, evdev_caps(hid, dev));
+		evdev_configure_abs_dev(hid->keyd_device, dev);
+	} else if (hid && !evdev_dev_in_hid_inputs(hid, dev)) {
+		hid->keyd_device = evdev_register_device(hid->vendor, hid->product,
+							   evdev_caps(hid, dev));
 		if (!hid->keyd_device) {
 			ret = -EAGAIN;
 			goto err_unregister;
@@ -274,12 +266,13 @@ static int input_port_connect(struct input_handler *handler,
 		ret = input_open_device(handle);
 		if (ret)
 			goto err_unregister_keyd;
+		evdev_configure_abs_dev(hid->keyd_device, dev);
 	}
 
 	return 0;
 
 err_unregister_keyd:
-	forward_unregister_device(hid->keyd_device);
+	evdev_unregister_device(hid->keyd_device);
 	hid->keyd_device = NULL;
 err_unregister:
 	input_unregister_handle(handle);
@@ -288,26 +281,26 @@ err_free:
 	return ret;
 }
 
-static void input_port_disconnect(struct input_handle *handle)
+static void evdev_disconnect(struct input_handle *handle)
 {
 	input_unregister_handle(handle);
 	kfree(handle);
 }
 
-static const struct input_device_id input_port_ids[] = {
+static const struct input_device_id evdev_ids[] = {
 	{ .flags = INPUT_DEVICE_ID_MATCH_BUS, .bustype = BUS_USB },
 	{ },
 };
 
-static struct input_handler input_port_handler = {
-	.events = input_port_events,
-	.connect = input_port_connect,
-	.disconnect = input_port_disconnect,
-	.name = "ergotype-input-port",
-	.id_table = input_port_ids,
+static struct input_handler evdev_handler = {
+	.events = evdev_events,
+	.connect = evdev_connect,
+	.disconnect = evdev_disconnect,
+	.name = "ergotype-evdev",
+	.id_table = evdev_ids,
 };
 
-int input_port_init(void)
+int evdev_init(void)
 {
-	return input_register_handler(&input_port_handler);
+	return input_register_handler(&evdev_handler);
 }

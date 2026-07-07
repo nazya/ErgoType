@@ -21,11 +21,34 @@
 #define CAP_KEYBOARD	0x4
 #define CAP_KEY		0x8
 
+#define DEVICE_INPUT_REMOVED	0xffffu
+#define DEVICE_INPUT_RESET	0xfffeu
+
+/*
+ * Upstream keyd reads Linux struct input_event from an evdev fd. Firmware
+ * queues keep only the fields keyd consumes here; timestamping stays in
+ * evloop.c.
+ */
+struct input_event {
+	uint16_t type;
+	uint16_t code;
+	int32_t value;
+};
+
 struct device {
 	QueueHandle_t ev_queue;
 	uint8_t capabilities;
 	char id[16];
 	char name[32];
+	int32_t _maxx;
+	int32_t _maxy;
+	int32_t _minx;
+	int32_t _miny;
+	int32_t _pending_rel_x;
+	int32_t _pending_rel_y;
+	int32_t _pending_abs_x;
+	int32_t _pending_abs_y;
+	uint8_t _pending_abs;
 	void *data;
 	void (*destroy)(struct device *dev);
 };

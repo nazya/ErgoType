@@ -29,6 +29,8 @@ static const struct hid_driver hid_generic;
 
 static int __check_hid_generic(struct device_driver *drv, void *data)
 {
+	// struct hid_driver *hdrv = to_hid_driver(drv);
+	// struct hid_device keeps the matched driver pointer const in this port.
 	const struct hid_driver *hdrv = to_hid_driver(drv);
 	struct hid_device *hdev = data;
 
@@ -65,6 +67,8 @@ static int hid_generic_probe(struct hid_device *hdev,
 {
 	int ret;
 
+	// Upstream uses id through generic driver matching; this port keeps the
+	// signature but does not need the matched id in the generic probe body.
 	(void)id;
 
 	hdev->quirks |= HID_QUIRK_INPUT_PER_APP;

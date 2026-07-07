@@ -53,6 +53,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "jconfig.h"
 #include "device.h"
 #include "keys.h"
+#include "uapi/linux/input-event-codes.h"
 
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
@@ -80,13 +81,13 @@ static inline bool matrix_pressed(const matrix_row_t *matrix, uint8_t row, uint8
 
 static void send_key_tap(QueueHandle_t queue, uint8_t code)
 {
-    struct device_event ev = {0};
-    ev.type = DEV_KEY;
+    struct input_event ev = {0};
+    ev.type = EV_KEY;
     ev.code = code;
 
-    ev.pressed = 1;
+    ev.value = 1;
     xQueueSendToBack(queue, &ev, portMAX_DELAY);
-    ev.pressed = 0;
+    ev.value = 0;
     xQueueSendToBack(queue, &ev, portMAX_DELAY);
 }
 
@@ -375,22 +376,22 @@ void keyscan_task(void* pvParameters) {
     static encoder_state_t encoder_states[MAX_ENCODERS];
 
     // struct event ev;
-    struct device_event devev;
-    devev.type = DEV_KEY;
+    struct input_event devev;
+    devev.type = EV_KEY;
 
     struct device onboard_keyboard = {
         .capabilities = CAP_KEY | CAP_KEYBOARD,
         .id = "cafe:1001",
         .name = "keyboard",
     };
-    onboard_keyboard.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+    onboard_keyboard.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
     configASSERT(onboard_keyboard.ev_queue);
     device_add(&onboard_keyboard);
     keyscan_event_queue = onboard_keyboard.ev_queue;
 
     if (0) {
-        struct device_event ev = {0};
-        ev.type = DEV_REMOVED;
+        struct input_event ev = {0};
+        ev.type = DEVICE_INPUT_REMOVED;
         xQueueSendToBack(keyscan_event_queue, &ev, portMAX_DELAY);
         vTaskDelete(NULL);
     }
@@ -441,7 +442,7 @@ void keyscan_task(void* pvParameters) {
                 bool pressed = (debounced_matrix[row] & col_mask) != 0;
                 uint8_t code = config->matrix.keymap[row][col];
 
-                devev.pressed = pressed;
+                devev.value = pressed;
                 devev.code = code;
                 xQueueSendToBack(keyscan_event_queue, &devev, portMAX_DELAY);
                 
