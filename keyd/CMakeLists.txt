@@ -30,6 +30,7 @@ add_library(keyd
 target_include_directories(keyd PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/..
   ${CMAKE_CURRENT_LIST_DIR}/../rtos
+  ${CMAKE_CURRENT_LIST_DIR}/../usb_host/linux/include
 )
 
 target_link_libraries(keyd

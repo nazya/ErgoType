@@ -120,6 +120,13 @@ struct input_value {
 	__s32 value;
 };
 
+/*
+ * Work3 carried a firmware proxy ABI here for copied input batches, raw HID
+ * usage taps, device snapshots, and FF-by-id helpers. That ABI is not upstream
+ * Linux and is deferred in this callback-driven slice; keep only the active
+ * Linux input definitions and the final KeyD boundary declarations below.
+ */
+
 /* INPUT_CLK_* order follows upstream; port ktime_t stores one scalar value. */
 #define INPUT_CLK_REAL		0
 #define INPUT_CLK_MONO		1
@@ -466,10 +473,6 @@ int input_ff_erase(struct input_dev *dev, int effect_id, struct file *file);
 int input_ff_flush(struct input_dev *dev, struct file *file);
 struct input_dev *input_find_device_by_name(const char *name);
 int input_for_each_device(int (*fn)(struct input_dev *dev, void *data), void *data);
-int input_port_init(void);
-int input_port_activate_hid(struct hid_device *hid);
-void input_port_deactivate_hid(struct hid_device *hid);
-
 static inline int input_abs_get_val(struct input_dev *dev, unsigned int axis)
 {
 	return dev->absinfo ? dev->absinfo[axis].value : 0;

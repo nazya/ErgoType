@@ -2,10 +2,17 @@
 #include <stdint.h>
 #include <string.h>
 
+/*
+ * Upstream Linux: no equivalent. This file owns the TinyUSB host task,
+ * TinyUSB HID callbacks, and the local lookup/lifetime glue that feeds the
+ * Linux-shaped HID core from firmware callback context.
+ */
+
 #include "pio_usb.h"
 #include "tusb.h"
 
 #include "log.h"
+#include "evdev.h"
 
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -15,7 +22,6 @@
 #include "linux/include/linux/usb.h"
 
 int hid_core_init(void);
-int input_port_init(void);
 int hid_builtin_drivers_init(void);
 
 extern const struct hid_ll_driver tuh_hid_ll_driver;
@@ -30,7 +36,7 @@ enum hid_host_event_type {
     HID_HOST_EVENT_TASK_START,
     HID_HOST_EVENT_INIT,
     HID_HOST_EVENT_CORE_INIT,
-    HID_HOST_EVENT_INPUT_PORT_INIT,
+    HID_HOST_EVENT_EVDEV_INIT,
     HID_HOST_EVENT_DRIVER_INIT,
     HID_HOST_EVENT_TUSB_CONFIGURE,
     HID_HOST_EVENT_TUSB_INIT,
@@ -187,11 +193,11 @@ static void hid_host_log_event(struct hid_host_event const *event)
         else
             dbg("hid core init ok");
         break;
-    case HID_HOST_EVENT_INPUT_PORT_INIT:
+    case HID_HOST_EVENT_EVDEV_INIT:
         if (event->result)
-            err("hid input port init failed ret=%d", event->result);
+            err("hid evdev init failed ret=%d", event->result);
         else
-            dbg("hid input port init ok");
+            dbg("hid evdev init ok");
         break;
     case HID_HOST_EVENT_DRIVER_INIT:
         if (event->result)
@@ -316,9 +322,9 @@ void tusb_host_task(void *pvParameters)
         .result = ret,
     });
     if (!ret) {
-        ret = input_port_init();
+        ret = evdev_init();
         hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_INPUT_PORT_INIT,
+            .type = HID_HOST_EVENT_EVDEV_INIT,
             .result = ret,
         });
     }

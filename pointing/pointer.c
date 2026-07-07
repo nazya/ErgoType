@@ -16,21 +16,34 @@
 #include "pmw3389.h"
 #include "pointer.h"
 #include "device.h"
+#include "uapi/linux/input-event-codes.h"
 
 static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
 static uint32_t mot_pin_bits[30];
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
 
-static void send_pointing_event(QueueHandle_t queue, uint8_t type, int32_t x, int32_t y)
+static void send_pointing_input_event(QueueHandle_t queue, uint16_t type, uint16_t code, int32_t value)
 {
-    struct device_event ev = {
+    struct input_event ev = {
         .type = type,
-        .x = x,
-        .y = y,
+        .code = code,
+        .value = value,
     };
 
     xQueueSendToBack(queue, &ev, portMAX_DELAY);
+}
+
+static void send_pointing_event(QueueHandle_t queue, uint8_t type, int32_t x, int32_t y)
+{
+    if (type == DEV_MOUSE_SCROLL) {
+        send_pointing_input_event(queue, EV_REL, REL_HWHEEL, x);
+        send_pointing_input_event(queue, EV_REL, REL_WHEEL, y);
+    } else {
+        send_pointing_input_event(queue, EV_REL, REL_X, x);
+        send_pointing_input_event(queue, EV_REL, REL_Y, y);
+    }
+    send_pointing_input_event(queue, EV_SYN, SYN_REPORT, 0);
 }
 
 static void mot_irq_handler(uint gpio, uint32_t events)
@@ -105,7 +118,7 @@ void pointing_device_task(void *pvParameters)
             .id = "pmw3360",
             .name = "pmw3360",
         };
-        pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+        pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
         configASSERT(pmw3360_devices[i].ev_queue);
         device_add(&pmw3360_devices[i]);
         pmw3360_queues[i] = pmw3360_devices[i].ev_queue;
@@ -120,7 +133,7 @@ void pointing_device_task(void *pvParameters)
             .id = "pmw3389",
             .name = "pmw3389",
         };
-        pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct device_event));
+        pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
         configASSERT(pmw3389_devices[i].ev_queue);
         device_add(&pmw3389_devices[i]);
         pmw3389_queues[i] = pmw3389_devices[i].ev_queue;

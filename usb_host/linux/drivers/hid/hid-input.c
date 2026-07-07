@@ -47,7 +47,6 @@ static const unsigned char hid_keyboard[256] = {
 	150,158,159,128,136,177,178,176,142,152,173,140,unk,unk,unk,unk
 };
 
-/* Upstream Linux context. */
 static const struct {
 	__s32 x;
 	__s32 y;
@@ -746,17 +745,6 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		field->usages_priorities[usage_index] |=
 			(0xff - field->slot_idx) << 16;
 
-	// if (device->driver->input_mapping) {
-	// 	int ret = device->driver->input_mapping(device, hidinput, field,
-	// 			usage, &bit, &max);
-	// 	if (ret > 0)
-	// 		goto mapped;
-	// 	if (ret < 0)
-	// 		goto ignore;
-	// }
-	// Driver input_mapping hooks are disabled in the callback-driven generic slice.
-	// Re-enabled for the vendor-driver slice that only links nonblocking
-	// report_fixup/input_mapping/simple-probe drivers.
 	if (device->driver->input_mapping) {
 		int ret = device->driver->input_mapping(device, hidinput, field,
 				usage, &bit, &max);
@@ -1069,7 +1057,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 			 * This event is reported when eraser tip touches the surface.
 			 * Actual eraser (BTN_TOOL_RUBBER) is set and released either
 			 * by Invert if tool reports proximity or by Eraser directly.
-		 */
+			 */
 			if (!test_bit(BTN_TOOL_RUBBER, input->keybit)) {
 				device->quirks |= HID_QUIRK_NOINVERT;
 				set_bit(BTN_TOOL_RUBBER, input->keybit);
@@ -1415,21 +1403,9 @@ mapped:
 	if (!bit)
 		return;
 
-	// if (device->driver->input_mapped &&
-	//     device->driver->input_mapped(device, hidinput, field, usage,
-	// 				 &bit, &max) < 0) {
-	// 	/*
-	// 	 * The driver indicated that no further generic handling
-	// 	 * of the usage is desired.
-	// 	 */
-	// 	return;
-	// }
-	// Driver input_mapped hooks are disabled in the callback-driven generic slice.
-	// Re-enabled for the vendor-driver slice that only links nonblocking
-	// report_fixup/input_mapping/simple-probe drivers.
 	if (device->driver->input_mapped &&
 	    device->driver->input_mapped(device, hidinput, field, usage,
-				 &bit, &max) < 0) {
+					 &bit, &max) < 0) {
 		/*
 		 * The driver indicated that no further generic handling
 		 * of the usage is desired.
@@ -1668,12 +1644,11 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		/*
 		 * If invert is set, we store BTN_TOOL_RUBBER.
 		 */
-		if (value) {
+		if (value)
 			hid_report_set_tool(report, input, BTN_TOOL_RUBBER);
-		} else if (!report->tool_active) {
+		else if (!report->tool_active)
 			/* tool_active not set means Invert and Eraser are not set */
 			hid_report_release_tool(report, input, BTN_TOOL_RUBBER);
-		}
 
 		/* no further processing */
 		return;

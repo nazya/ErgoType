@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#include "forward.h"
+#include "evdev.h"
 #include "hid_port.h"
 #include "linux/include/linux/hid-input.h"
 #include "linux/include/uapi/linux/input-event-codes.h"
@@ -42,25 +42,25 @@ static uint8_t hidinput_device_caps(struct hid_device *hid)
 
 		for (unsigned int i = 0; i < BITS_TO_LONGS(KEY_CNT); i++)
 			if (input->keybit[i])
-				caps |= FORWARD_CAP_KEY;
+				caps |= EVDEV_CAP_KEY;
 
 		if (test_bit(REL_X, input->relbit) || test_bit(REL_Y, input->relbit) ||
 		    test_bit(REL_WHEEL, input->relbit) || test_bit(REL_HWHEEL, input->relbit))
-			caps |= FORWARD_CAP_MOUSE;
+			caps |= EVDEV_CAP_MOUSE;
 
 		if (test_bit(ABS_X, input->absbit) &&
 		    test_bit(ABS_Y, input->absbit) &&
 		    hidinput_abs_to_mouse(hidinput))
-			caps |= FORWARD_CAP_MOUSE_ABS;
+			caps |= EVDEV_CAP_MOUSE_ABS;
 
 		switch (hidinput->application) {
 		case HID_GD_KEYBOARD:
 		case HID_GD_KEYPAD:
-			caps |= FORWARD_CAP_KEY | FORWARD_CAP_KEYBOARD;
+			caps |= EVDEV_CAP_KEY | EVDEV_CAP_KEYBOARD;
 			break;
 		case HID_GD_MOUSE:
 		case HID_GD_POINTER:
-			caps |= FORWARD_CAP_MOUSE;
+			caps |= EVDEV_CAP_MOUSE;
 			break;
 		default:
 			break;
@@ -70,6 +70,8 @@ static uint8_t hidinput_device_caps(struct hid_device *hid)
 	return caps;
 }
 
+// Upstream Linux: no equivalent; debug-only firmware trace for the current
+// KeyD boundary capabilities without logging synchronously from callbacks.
 static void hidinput_trace_device_caps(struct hid_device *hid, uint8_t caps)
 {
 	uint8_t rel_flags = 0;
@@ -117,8 +119,8 @@ int hid_port_register_device(struct hid_device *hid)
 	if (hid->keyd_device) {
 		// async_err("HID port reactivate");
 		// TinyUSB mount/register path must not log synchronously from callback flow.
-		forward_add_device_caps(hid->keyd_device, hidinput_device_caps(hid));
-		return input_port_activate_hid(hid);
+		evdev_add_device_caps(hid->keyd_device, hidinput_device_caps(hid));
+		return evdev_activate_hid(hid);
 	}
 
 	caps = hidinput_device_caps(hid);
@@ -126,19 +128,19 @@ int hid_port_register_device(struct hid_device *hid)
 	// input_open_device(handle);
 	// This port has no Linux userspace open; the always-on input handler is
 	// activated after the keyd queue exists.
-	hid->keyd_device = forward_register_device(hid->vendor, hid->product, caps);
+	hid->keyd_device = evdev_register_device(hid->vendor, hid->product, caps);
 	if (!hid->keyd_device) {
-		// async_err("HID forward reg fail");
+		// async_err("HID evdev reg fail");
 		// TinyUSB mount/register path must not log synchronously from callback flow.
 		return -EAGAIN;
 	}
 
-	ret = input_port_activate_hid(hid);
+	ret = evdev_activate_hid(hid);
 	if (ret < 0) {
 		// async_err("HID input act fail");
 		// TinyUSB mount/register path must not log synchronously from callback flow.
-		input_port_deactivate_hid(hid);
-		forward_unregister_device(hid->keyd_device);
+		evdev_deactivate_hid(hid);
+		evdev_unregister_device(hid->keyd_device);
 		hid->keyd_device = NULL;
 		return ret;
 	}
@@ -159,7 +161,7 @@ void hid_port_unregister_device(struct hid_device *hid)
 	 */
 	// input_close_device(handle);
 	// The keyd-visible device is the consumer that opened input handles.
-	input_port_deactivate_hid(hid);
-	forward_unregister_device(hid->keyd_device);
+	evdev_deactivate_hid(hid);
+	evdev_unregister_device(hid->keyd_device);
 	hid->keyd_device = NULL;
 }

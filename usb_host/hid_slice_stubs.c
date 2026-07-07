@@ -1,6 +1,12 @@
 #include "linux/include/linux/hid.h"
 #include "linux/include/linux/hidraw.h"
 
+/*
+ * Upstream Linux implements hidraw, work cancellation, and input timers in
+ * separate subsystems. The callback-driven HID host slice keeps those call
+ * sites linkable but inactive until proxy/raw/workqueue ownership is wired.
+ */
+
 int hidraw_init(void)
 {
     return 0;
@@ -12,6 +18,10 @@ void hidraw_exit(void)
 
 int hidraw_connect(struct hid_device *hid)
 {
+    /*
+     * Upstream hid_connect() calls hidraw_connect() for HID_CONNECT_HIDRAW.
+     * Firmware has no active hidraw listener yet, so leave HIDRAW unclaimed.
+     */
     (void)hid;
     return -ENOSYS;
 }
@@ -23,6 +33,10 @@ void hidraw_disconnect(struct hid_device *hid)
 
 int hidraw_report_event(struct hid_device *hid, u8 *data, int len)
 {
+    /*
+     * Upstream buffers this for hidraw readers. Current proxy/raw boundary is
+     * not wired, so keep the report parser path running and drop at the edge.
+     */
     (void)hid;
     (void)data;
     (void)len;
@@ -31,6 +45,7 @@ int hidraw_report_event(struct hid_device *hid, u8 *data, int len)
 
 void cancel_work_sync(struct work_struct *work)
 {
+    /* Upstream waits for queued work; this slice does not schedule work. */
     (void)work;
 }
 

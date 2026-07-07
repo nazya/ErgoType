@@ -32,9 +32,9 @@ int hid_builtin_drivers_init(void)
 	for (driver = __start_hid_drivers; driver < __stop_hid_drivers; driver++) {
 #if 0
 		/*
-		 * Old port path registered every imported vendor driver. Temporarily
-		 * disabled while callback-driven HID host has no async driver
-		 * GET_REPORT/workqueue continuation model.
+		 * Earlier WIP tried to make hid-drivers.c decide which imported
+		 * drivers are safe. Keep selection in CMake instead, so this loop
+		 * stays Linux-shaped and registers the linked allowlist only.
 		 */
 		ret = hid_register_driver(*driver);
 		if (ret)

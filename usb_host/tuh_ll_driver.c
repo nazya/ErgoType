@@ -3,14 +3,29 @@
 #include "linux/include/linux/hid.h"
 #include "linux/include/linux/usb.h"
 
+/*
+ * Upstream Linux uses usbhid as the low-level HID transport. This file is the
+ * TinyUSB hid_ll_driver adapter and keeps synchronous hardware requests as
+ * explicit no-op/ENOSYS boundaries until async control/report handling exists.
+ */
+
 static int tuh_ll_start(struct hid_device *hdev)
 {
+    /*
+     * Upstream usbhid start may arm polling, reset LEDs, and enable wakeup.
+     * Current callback slice arms interrupt IN from TinyUSB mount/report
+     * callbacks and leaves control/output side effects disabled.
+     */
     (void)hdev;
     return 0;
 }
 
 static void tuh_ll_stop(struct hid_device *hdev)
 {
+    /*
+     * Upstream usbhid stop cancels URBs and queued delayed work. Current slice
+     * has no transport queues/work items to drain here.
+     */
     (void)hdev;
 }
 
@@ -26,6 +41,10 @@ static int tuh_ll_open(struct hid_device *hdev)
 
 static void tuh_ll_close(struct hid_device *hdev)
 {
+    /*
+     * Upstream close kills interrupt IN unless ALWAYS_POLL is active. Current
+     * slice keeps receive ownership in TinyUSB callbacks.
+     */
     (void)hdev;
 }
 
@@ -54,10 +73,16 @@ static int tuh_ll_parse(struct hid_device *hdev)
         }
     }
 
+    // ret = usbhid_parse(hid);
+    // TinyUSB supplies the report descriptor to tuh_hid_mount_cb(); this
+    // ll_driver consumes it here so hid_add_device() keeps upstream parse flow.
     ret = hid_parse_report(hdev, hdev->ll_rdesc, hdev->ll_rsize);
     if (ret)
         return ret;
 
+    // hid->quirks |= quirks;
+    // hid_device_probe() recomputes quirks from initial_quirks after parse();
+    // keep transport-added usbhid_parse() quirks alive.
     hdev->initial_quirks |= transport_quirks;
     hdev->quirks |= quirks;
     return 0;
@@ -67,6 +92,7 @@ static void tuh_ll_request(struct hid_device *hdev, struct hid_report *report,
                            enum hid_class_request reqtype)
 {
     /*
+     * usbhid_submit_report(hdev, report, reqtype);
      * Hardware request path intentionally disabled for this bring-up step.
      * Later this becomes async request/response/continuation, not hid_hw_wait().
      */
@@ -78,6 +104,7 @@ static void tuh_ll_request(struct hid_device *hdev, struct hid_report *report,
 static int tuh_ll_wait(struct hid_device *hdev)
 {
     /*
+     * usbhid_wait_io(hdev);
      * Do not block TinyUSB callbacks. This slice keeps parser/input behavior
      * active while sync hardware wait semantics are deferred.
      */
@@ -89,6 +116,10 @@ static int tuh_ll_raw_request(struct hid_device *hdev, unsigned char reportnum,
                               __u8 *buf, size_t len, unsigned char rtype,
                               int reqtype)
 {
+    /*
+     * Upstream raw GET/SET report is backed by synchronous USB control
+     * transfers. Current slice has no async continuation yet.
+     */
     (void)hdev;
     (void)reportnum;
     (void)buf;
@@ -100,6 +131,10 @@ static int tuh_ll_raw_request(struct hid_device *hdev, unsigned char reportnum,
 
 static int tuh_ll_output_report(struct hid_device *hdev, __u8 *buf, size_t len)
 {
+    /*
+     * Upstream may send output reports through interrupt OUT or control SET.
+     * Current callback-driven slice has no nonblocking output queue yet.
+     */
     (void)hdev;
     (void)buf;
     (void)len;
@@ -108,6 +143,11 @@ static int tuh_ll_output_report(struct hid_device *hdev, __u8 *buf, size_t len)
 
 static int tuh_ll_idle(struct hid_device *hdev, int report, int idle, int reqtype)
 {
+    /*
+     * return hid_set_idle(dev, ifnum, report, idle);
+     * SET_IDLE is a synchronous control request; keep it deferred with the
+     * rest of the hardware request path.
+     */
     (void)hdev;
     (void)report;
     (void)idle;
