@@ -120,8 +120,8 @@ Result:
 - `input-mt.c` is upstream-shaped. Active diffs are local include paths and
   commented lockdep/guard replacements at FreeRTOS event-lock boundary points.
 - `ff-core.c` is upstream-shaped. Active diffs replace Linux `guard()` /
-  `scoped_guard()` helpers with explicit mutex and `input_port_event_lock()`
-  calls, with upstream lines left visible.
+  `scoped_guard()` helpers with direct statements, with upstream lines left
+  visible.
 - `input.c` is not line-preserving upstream. It is a reduced in-memory input
   core slice: Linux char device/procfs/sysfs/IDA/RCU/poller/userspace
   machinery is not present, while the HID input event batching/handler path

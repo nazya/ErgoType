@@ -2,19 +2,20 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "FreeRTOS.h"
+
 #include "device.h"
 #include "keys.h"
 #include "log.h"
 #include "uapi/linux/input-event-codes.h"
 
-static QueueSetHandle_t device_events;
 struct device *device_table[MAX_DEVICES];
 size_t device_table_sz;
 
-static uint8_t resolve_device_capabilities(const struct device_input_info *info,
+static uint8_t resolve_device_capabilities(const struct port_input_dev *port_dev,
 					   uint32_t *num_keys,
-					   uint8_t *relmask,
-					   uint8_t *absmask)
+					   int *has_rel,
+					   int *has_abs)
 {
 	const uint32_t keyboard_mask = 1<<KEY_1  | 1<<KEY_2 | 1<<KEY_3 |
 					1<<KEY_4 | 1<<KEY_5 | 1<<KEY_6 |
@@ -22,7 +23,7 @@ static uint8_t resolve_device_capabilities(const struct device_input_info *info,
 					1<<KEY_0 | 1<<KEY_Q | 1<<KEY_W |
 					1<<KEY_E | 1<<KEY_R | 1<<KEY_T |
 					1<<KEY_Y;
-	const uint32_t *mask = info->keymask;
+	const unsigned long *mask = port_dev->keybit;
 	uint8_t capabilities = 0;
 	int has_brightness_key;
 
@@ -30,35 +31,41 @@ static uint8_t resolve_device_capabilities(const struct device_input_info *info,
 	// 	perror("ioctl: ev_key");
 	// 	return 0;
 	// }
-	// Port: firmware input producer already copied EV_KEY bits from input_dev.
+	// Port: the firmware input producer supplied an EV_KEY bitmap snapshot.
 
 	// if (ioctl(fd, EVIOCGBIT(EV_REL, 1), relmask) < 0) {
 	// 	perror("ioctl: ev_rel");
 	// 	return 0;
 	// }
-	// Port: firmware input producer already copied EV_REL bits from input_dev.
+	// Port: the firmware input producer supplied an EV_REL bitmap snapshot.
 
 	// if (ioctl(fd, EVIOCGBIT(EV_ABS, 1), absmask) < 0) {
 	// 	perror("ioctl: ev_abs");
 	// 	return 0;
 	// }
-	// Port: firmware input producer already copied EV_ABS bits from input_dev.
+	// Port: the firmware input producer supplied an EV_ABS bitmap snapshot.
 
 	// *num_keys = 0;
 	// for (i = 0; i < sizeof(mask)/sizeof(mask[0]); i++)
 	// 	*num_keys += __builtin_popcount(mask[i]);
-	// Port: firmware input producer already counted keys from input_dev.
-	*num_keys = info->num_keys;
-	*relmask = info->relmask;
-	*absmask = info->absmask;
+	// Port: count/read the supplied snapshots here where upstream keyd does ioctl.
+	*num_keys = 0;
+	for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(KEY_CNT); i++)
+		*num_keys += __builtin_popcountl(port_dev->keybit[i]);
+	*has_rel = 0;
+	for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(REL_CNT); i++)
+		*has_rel |= port_dev->relbit[i] != 0;
+	*has_abs = 0;
+	for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(ABS_CNT); i++)
+		*has_abs |= port_dev->absbit[i] != 0;
 
 	if (*num_keys)
 		capabilities |= CAP_KEY;
 
-	if (*relmask || *absmask)
+	if (*has_rel || *has_abs)
 		capabilities |= CAP_MOUSE;
 
-	if (*absmask)
+	if (*has_abs)
 		capabilities |= CAP_MOUSE_ABS;
 
 	/*
@@ -80,21 +87,16 @@ static uint8_t resolve_device_capabilities(const struct device_input_info *info,
 	return capabilities;
 }
 
-int device_init(struct device *dev, uint16_t vendor, uint16_t product,
-		const struct device_input_info *info)
+int device_init(const struct port_input_dev *port_dev, struct device *dev)
 {
 	uint32_t num_keys;
-	uint8_t relmask;
-	uint8_t absmask;
+	int has_rel;
+	int has_abs;
 	uint8_t capabilities;
 
-	// memset(dev, 0, sizeof *dev);
-	// Port: the firmware producer allocates a zeroed device wrapper before calling
-	// this fd-less device_init() equivalent.
-	if (!dev || !info)
-		return -EINVAL;
+	memset(dev, 0, sizeof *dev);
 
-	capabilities = resolve_device_capabilities(info, &num_keys, &relmask, &absmask);
+	capabilities = resolve_device_capabilities(port_dev, &num_keys, &has_rel, &has_abs);
 
 	// if (ioctl(fd, EVIOCGNAME(sizeof(dev->name)), dev->name) == -1) {
 	// 	keyd_log("ERROR: could not fetch device name of %s\n", dev->path);
@@ -102,7 +104,7 @@ int device_init(struct device *dev, uint16_t vendor, uint16_t product,
 	// }
 	// Port: no input fd/name ioctl exists; use the stable firmware VID:PID id
 	// as the visible device name until USB string descriptors are wired.
-	snprintf(dev->id, sizeof(dev->id), "%04x:%04x", vendor, product);
+	snprintf(dev->id, sizeof(dev->id), "%04x:%04x", port_dev->vendor, port_dev->product);
 	snprintf(dev->name, sizeof(dev->name), "%s", dev->id);
 
 	if (!capabilities)
@@ -114,61 +116,27 @@ int device_init(struct device *dev, uint16_t vendor, uint16_t product,
 	// 	return -1;
 	// }
 	// Port: firmware input producer already copied ABS_X range.
-		dev->_minx = info->minx;
-		dev->_maxx = info->maxx;
+		dev->_minx = port_dev->abs_x.minimum;
+		dev->_maxx = port_dev->abs_x.maximum;
 
 	// if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) < 0) {
 	// 	perror("ioctl");
 	// 	return -1;
 	// }
 	// Port: firmware input producer already copied ABS_Y range.
-		dev->_miny = info->miny;
-		dev->_maxy = info->maxy;
+		dev->_miny = port_dev->abs_y.minimum;
+		dev->_maxy = port_dev->abs_y.maximum;
 	}
 
 	// dev->capabilities = capabilities;
 	// Port: same assignment, after fd-less ioctl replacement above.
 	dev->capabilities = capabilities;
 	dev->data = NULL;
+	dev->ev_queue = port_dev->ev_queue;
+	if (port_dev->name)
+		snprintf(dev->name, sizeof(dev->name), "%s", port_dev->name);
 
 	return 0;
-}
-
-void devmon_init(void)
-{
-	BaseType_t rc;
-
-	device_events = xQueueCreateSet(DEVICE_EVENT_SET_LEN);
-	configASSERT(device_events);
-	rc = xQueueAddToSet(devmon_queue, device_events);
-	configASSERT(rc == pdPASS);
-}
-
-int device_add(struct device *dev)
-{
-	BaseType_t add_rc;
-	BaseType_t send_rc;
-
-	add_rc = xQueueAddToSet(dev->ev_queue, device_events);
-	if (add_rc != pdPASS)
-		return -ENOSPC;
-
-	send_rc = xQueueSendToBack(devmon_queue, &dev, 0);
-	if (send_rc != pdPASS) {
-		xQueueRemoveFromSet(dev->ev_queue, device_events);
-		return -EAGAIN;
-	}
-
-	return 0;
-}
-
-void device_delete(struct device *dev)
-{
-	xQueueRemoveFromSet(dev->ev_queue, device_events);
-	vQueueDelete(dev->ev_queue);
-	dev->ev_queue = NULL;
-	if (dev->destroy)
-		dev->destroy(dev);
 }
 
 struct device_event *device_read_event(struct device *dev)
@@ -408,13 +376,4 @@ struct device_event *device_read_event(struct device *dev)
 	}
 
 	return &devev;
-}
-
-QueueSetMemberHandle_t device_select(int timeout)
-{
-	TickType_t xTicksToWait = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
-	QueueSetMemberHandle_t ready;
-
-	ready = xQueueSelectFromSet(device_events, xTicksToWait);
-	return ready;
 }

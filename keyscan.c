@@ -51,9 +51,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "queue.h"
 
 #include "jconfig.h"
-#include "device.h"
+#include "devmon.h"
 #include "keys.h"
-#include "uapi/linux/input-event-codes.h"
 
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
@@ -379,15 +378,24 @@ void keyscan_task(void* pvParameters) {
     struct input_event devev;
     devev.type = EV_KEY;
 
-    struct device onboard_keyboard = {
-        .capabilities = CAP_KEY | CAP_KEYBOARD,
-        .id = "cafe:1001",
-        .name = "keyboard",
+    struct port_input_dev port_dev = {
+        .vendor = 0x0000,
+        .product = 0x0001,
+        .name = "onboard-keyboard",
     };
-    onboard_keyboard.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
-    configASSERT(onboard_keyboard.ev_queue);
-    device_add(&onboard_keyboard);
-    keyscan_event_queue = onboard_keyboard.ev_queue;
+    const uint8_t keyboard_keys[] = {
+        KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8,
+        KEY_9, KEY_0, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y,
+    };
+    for (size_t i = 0; i < sizeof(keyboard_keys) / sizeof(keyboard_keys[0]); i++) {
+        uint8_t code = keyboard_keys[i];
+        input_bitmap_set(code, port_dev.keybit);
+    }
+    port_dev.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
+    configASSERT(port_dev.ev_queue);
+    int add_rc = devmon_add_device(&port_dev);
+    configASSERT(add_rc == 0);
+    keyscan_event_queue = port_dev.ev_queue;
 
     if (0) {
         struct input_event ev = {0};

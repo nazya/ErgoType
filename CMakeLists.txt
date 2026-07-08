@@ -76,6 +76,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
         # ${CMAKE_CURRENT_LIST_DIR}/test.c
         ${CMAKE_CURRENT_LIST_DIR}/main.c
+        ${CMAKE_CURRENT_LIST_DIR}/devmon.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_queue.c

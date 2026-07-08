@@ -14,51 +14,42 @@
 
 static struct input_handler evdev_handler;
 
-static uint8_t evdev_mask8(const unsigned long *bits)
+static void evdev_copy_absinfo(struct input_absinfo_snapshot *dst,
+			       const struct input_absinfo *src)
 {
-	uint8_t mask = 0;
-
-	for (unsigned int i = 0; i < 8; i++)
-		if (test_bit(i, bits))
-			mask |= BIT(i);
-
-	return mask;
+	dst->value = src->value;
+	dst->minimum = src->minimum;
+	dst->maximum = src->maximum;
+	dst->fuzz = src->fuzz;
+	dst->flat = src->flat;
+	dst->resolution = src->resolution;
 }
 
-static uint32_t evdev_count_keys(struct input_dev *dev)
+static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
+						  uint16_t vendor,
+						  uint16_t product)
 {
-	uint32_t count = 0;
+	struct port_input_dev port_dev = {0};
 
-	for (unsigned int i = 0; i < BITS_TO_LONGS(KEY_CNT); i++)
-		count += __builtin_popcountl(dev->keybit[i]);
+	port_dev.vendor = vendor;
+	port_dev.product = product;
+	port_dev.name = src->name ? src->name : "usb-hid";
+	memcpy(port_dev.keybit, src->keybit, sizeof(port_dev.keybit));
+	memcpy(port_dev.relbit, src->relbit, sizeof(port_dev.relbit));
+	memcpy(port_dev.absbit, src->absbit, sizeof(port_dev.absbit));
+	memcpy(port_dev.propbit, src->propbit, sizeof(port_dev.propbit));
 
-	return count;
-}
-
-static void evdev_copy_keymask(uint32_t *mask, struct input_dev *dev)
-{
-	for (unsigned int bit = 0; bit < EVDEV_KEYMASK_WORDS * 32; bit++)
-		if (test_bit(bit, dev->keybit))
-			mask[bit / 32] |= BIT(bit % 32);
-}
-
-static struct evdev_input_info evdev_input_info(struct input_dev *dev)
-{
-	struct evdev_input_info info = {0};
-
-	evdev_copy_keymask(info.keymask, dev);
-	info.num_keys = evdev_count_keys(dev);
-	info.relmask = evdev_mask8(dev->relbit);
-	info.absmask = evdev_mask8(dev->absbit);
-
-	if (test_bit(ABS_X, dev->absbit) && test_bit(ABS_Y, dev->absbit)) {
-		info.minx = dev->absinfo[ABS_X].minimum;
-		info.maxx = dev->absinfo[ABS_X].maximum;
-		info.miny = dev->absinfo[ABS_Y].minimum;
-		info.maxy = dev->absinfo[ABS_Y].maximum;
+	/*
+	 * This is the compression point from full Linux input_dev state to the
+	 * devmon queue snapshot. KeyD currently mirrors only EVIOCGABS(ABS_X/Y);
+	 * extend this struct/function if a future path needs more absinfo.
+	 */
+	if (test_bit(ABS_X, src->absbit) && test_bit(ABS_Y, src->absbit)) {
+		evdev_copy_absinfo(&port_dev.abs_x, &src->absinfo[ABS_X]);
+		evdev_copy_absinfo(&port_dev.abs_y, &src->absinfo[ABS_Y]);
 	}
 
-	return info;
+	return port_dev;
 }
 
 static unsigned int evdev_events(struct input_handle *handle,
@@ -97,7 +88,7 @@ static int evdev_connect(struct input_handler *handler,
 			      const struct input_device_id *id)
 {
 	struct hid_device *hid = input_get_drvdata(dev);
-	struct evdev_input_info info;
+	struct port_input_dev port_dev;
 	struct input_handle *handle;
 	void *event_dev;
 	int ret;
@@ -119,8 +110,8 @@ static int evdev_connect(struct input_handler *handler,
 	handle->dev = dev;
 	handle->handler = handler;
 	handle->name = handler->name;
-	info = evdev_input_info(dev);
-	event_dev = evdev_register_device(hid->vendor, hid->product, &info);
+	port_dev = evdev_port_input_dev(dev, hid->vendor, hid->product);
+	event_dev = evdev_register_device(&port_dev);
 	if (!event_dev) {
 		ret = -EAGAIN;
 		goto err_free;

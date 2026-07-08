@@ -19,6 +19,7 @@
 #include "semphr.h"
 
 #include "flash.h"
+#include "devmon.h"
 #include "keyd.h"
 #include "vkbd/vkbd_event.h"
 #include "jconfig.h"
@@ -208,7 +209,7 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
 
-        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct device *));
+        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct port_input_dev));
         configASSERT(devmon_queue);
         devmon_init();
 
