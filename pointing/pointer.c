@@ -9,6 +9,7 @@
 #include "queue.h"
 #include "task.h"
 
+#include "accel/filter.h"
 #include "devmon.h"
 #include "jconfig.h"
 #include "log.h"
@@ -20,6 +21,48 @@ static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
 static uint32_t mot_pin_bits[30];
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
+enum {
+    FILTER_CURVE_SCALE = 20,
+};
+static const int32_t move_filter_points_q10[] = {
+    FILTER_Q10(0, FILTER_CURVE_SCALE),
+    FILTER_Q10(1, FILTER_CURVE_SCALE),
+    FILTER_Q10(4, FILTER_CURVE_SCALE),
+    FILTER_Q10(10, FILTER_CURVE_SCALE),
+    FILTER_Q10(20, FILTER_CURVE_SCALE),
+    FILTER_Q10(50, FILTER_CURVE_SCALE),
+    FILTER_Q10(90, FILTER_CURVE_SCALE),
+};
+static const int32_t scroll_filter_points_q10[] = {
+    FILTER_Q10(0, FILTER_CURVE_SCALE),
+    FILTER_Q10(1, FILTER_CURVE_SCALE),
+    FILTER_Q10(4, FILTER_CURVE_SCALE),
+    FILTER_Q10(10, FILTER_CURVE_SCALE),
+    FILTER_Q10(20, FILTER_CURVE_SCALE),
+    FILTER_Q10(50, FILTER_CURVE_SCALE),
+    FILTER_Q10(90, FILTER_CURVE_SCALE),
+};
+static const struct filter_params move_filter_params = {
+    .profile = FILTER_PROFILE_CUSTOM,
+    .speed_q10 = FILTER_Q10(0, 1),
+    .custom_step_q10 = FILTER_Q10(30, FILTER_CURVE_SCALE),
+    .custom_points_q10 = move_filter_points_q10,
+    .custom_npoints = sizeof(move_filter_points_q10) / sizeof(move_filter_points_q10[0]),
+    .adaptive_velocity_averaging = true,
+};
+static const struct filter_params scroll_filter_params = {
+    .profile = FILTER_PROFILE_CUSTOM,
+    .speed_q10 = FILTER_Q10(0, 1),
+    .custom_step_q10 = FILTER_Q10(30, FILTER_CURVE_SCALE),
+    .custom_points_q10 = scroll_filter_points_q10,
+    .custom_npoints = sizeof(scroll_filter_points_q10) / sizeof(scroll_filter_points_q10[0]),
+    .adaptive_velocity_averaging = true,
+};
+
+struct pointing_filter {
+    struct filter_state *state;
+    const struct filter_params *params;
+};
 
 static void send_pointing_input_event(QueueHandle_t queue, uint16_t type, uint16_t code, int32_t value)
 {
@@ -32,8 +75,14 @@ static void send_pointing_input_event(QueueHandle_t queue, uint16_t type, uint16
     xQueueSendToBack(queue, &ev, portMAX_DELAY);
 }
 
-static void send_pointing_event(QueueHandle_t queue, bool scroll, int32_t x, int32_t y)
+static void send_pointing_event(QueueHandle_t queue,
+                                bool scroll,
+                                struct pointing_filter *filter,
+                                int32_t x,
+                                int32_t y)
 {
+    filter_process(filter->state, filter->params, &x, &y);
+
     if (scroll) {
         send_pointing_input_event(queue, EV_REL, REL_HWHEEL, x);
         send_pointing_input_event(queue, EV_REL, REL_WHEEL, y);
@@ -103,6 +152,15 @@ void pointing_device_task(void *pvParameters)
     struct port_input_dev pmw3389_devices[MAX_PMW3389];
     QueueHandle_t pmw3360_queues[MAX_PMW3360];
     QueueHandle_t pmw3389_queues[MAX_PMW3389];
+    struct pointing_filter move_filter = { .params = &move_filter_params };
+    struct pointing_filter scroll_filter = { .params = &scroll_filter_params };
+
+    move_filter.state = pvPortMalloc(sizeof *move_filter.state);
+    scroll_filter.state = pvPortMalloc(sizeof *scroll_filter.state);
+    configASSERT(move_filter.state);
+    configASSERT(scroll_filter.state);
+    filter_init(move_filter.state, move_filter.params, DEFAULT_MOUSE_DPI);
+    filter_init(scroll_filter.state, scroll_filter.params, DEFAULT_MOUSE_DPI);
 
     for (uint8_t bus = 0; bus < MAX_SPI; ++bus) {
         if (config->spi_mask & (uint8_t)(1u << bus)) {
@@ -161,8 +219,11 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3360_get_deltas(&config->pmw3360[i], &dx, &dy);
+            bool scroll = config->pmw3360[i].role == SENSOR_ROLE_SCROLL;
+            struct pointing_filter *filter = scroll ? &scroll_filter : &move_filter;
             send_pointing_event(pmw3360_queues[i],
-                                config->pmw3360[i].role == SENSOR_ROLE_SCROLL,
+                                scroll,
+                                filter,
                                 dx,
                                 dy);
         }
@@ -173,8 +234,11 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy);
+            bool scroll = config->pmw3389[i].role == SENSOR_ROLE_SCROLL;
+            struct pointing_filter *filter = scroll ? &scroll_filter : &move_filter;
             send_pointing_event(pmw3389_queues[i],
-                                config->pmw3389[i].role == SENSOR_ROLE_SCROLL,
+                                scroll,
+                                filter,
                                 dx,
                                 dy);
         }
