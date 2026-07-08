@@ -80,7 +80,6 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_queue.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/tuh_ll_driver.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_port.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_slice_stubs.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-input.c

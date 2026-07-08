@@ -2,181 +2,70 @@
 /*
  * Port note: upstream drivers/input/evdev.c exposes input events through
  * userspace file descriptors. This firmware keeps the upstream input_handler
- * shape and sends Linux-style EV_* records to the KeyD device queue instead.
- * KeyD device.c performs the upstream-style EV_* -> device_event conversion
- * that Linux keyd normally performs after read(fd, input_event).
+ * shape and sends Linux-style EV_* records to a firmware evdev queue instead
+ * of userspace eventX file descriptors.
  */
+#include <string.h>
+
 #include "linux/include/linux/hid.h"
 #include "evdev.h"
-#include "hid_port.h"
 
 #include "linux/include/uapi/linux/input-event-codes.h"
 
 static struct input_handler evdev_handler;
 
-static int evdev_abs_to_mouse(struct hid_device *hid, struct input_dev *dev)
+static uint8_t evdev_mask8(const unsigned long *bits)
 {
-	struct hid_input *hidinput;
+	uint8_t mask = 0;
 
-	if (test_bit(INPUT_PROP_POINTER, dev->propbit) ||
-	    test_bit(INPUT_PROP_DIRECT, dev->propbit))
-		return 1;
+	for (unsigned int i = 0; i < 8; i++)
+		if (test_bit(i, bits))
+			mask |= BIT(i);
 
-	list_for_each_entry(hidinput, &hid->inputs, list) {
-		if (hidinput->input != dev)
-			continue;
-
-		switch (hidinput->application) {
-		case HID_GD_MOUSE:
-		case HID_GD_POINTER:
-		case HID_DG_DIGITIZER:
-		case HID_DG_PEN:
-		case HID_DG_TOUCHSCREEN:
-		case HID_DG_TOUCHPAD:
-		case HID_DG_STYLUS:
-		case HID_DG_PUCK:
-		case HID_DG_FINGER:
-			return 1;
-		default:
-			return 0;
-		}
-	}
-
-	return 0;
+	return mask;
 }
 
-static uint8_t evdev_caps(struct hid_device *hid, struct input_dev *dev)
+static uint32_t evdev_count_keys(struct input_dev *dev)
 {
-	uint8_t caps = 0;
-	struct hid_input *hidinput;
-	struct hid_report *report;
-	int matched_hidinput = 0;
+	uint32_t count = 0;
 
 	for (unsigned int i = 0; i < BITS_TO_LONGS(KEY_CNT); i++)
-		if (dev->keybit[i])
-			caps |= EVDEV_CAP_KEY;
+		count += __builtin_popcountl(dev->keybit[i]);
 
-	if (test_bit(REL_X, dev->relbit) || test_bit(REL_Y, dev->relbit) ||
-	    test_bit(REL_WHEEL, dev->relbit) || test_bit(REL_HWHEEL, dev->relbit))
-		caps |= EVDEV_CAP_MOUSE;
+	return count;
+}
 
-	if (test_bit(ABS_X, dev->absbit) &&
-	    test_bit(ABS_Y, dev->absbit) &&
-	    evdev_abs_to_mouse(hid, dev))
-		caps |= EVDEV_CAP_MOUSE_ABS;
+static void evdev_copy_keymask(uint32_t *mask, struct input_dev *dev)
+{
+	for (unsigned int bit = 0; bit < EVDEV_KEYMASK_WORDS * 32; bit++)
+		if (test_bit(bit, dev->keybit))
+			mask[bit / 32] |= BIT(bit % 32);
+}
 
-	list_for_each_entry(hidinput, &hid->inputs, list) {
-		if (hidinput->input != dev)
-			continue;
+static struct evdev_input_info evdev_input_info(struct input_dev *dev)
+{
+	struct evdev_input_info info = {0};
 
-		matched_hidinput = 1;
-		switch (hidinput->application) {
-		case HID_GD_KEYBOARD:
-		case HID_GD_KEYPAD:
-			caps |= EVDEV_CAP_KEY | EVDEV_CAP_KEYBOARD;
-			break;
-		case HID_GD_MOUSE:
-		case HID_GD_POINTER:
-			caps |= EVDEV_CAP_MOUSE;
-			break;
-		default:
-			break;
-		}
+	evdev_copy_keymask(info.keymask, dev);
+	info.num_keys = evdev_count_keys(dev);
+	info.relmask = evdev_mask8(dev->relbit);
+	info.absmask = evdev_mask8(dev->absbit);
 
-		break;
+	if (test_bit(ABS_X, dev->absbit) && test_bit(ABS_Y, dev->absbit)) {
+		info.minx = dev->absinfo[ABS_X].minimum;
+		info.maxx = dev->absinfo[ABS_X].maximum;
+		info.miny = dev->absinfo[ABS_Y].minimum;
+		info.maxy = dev->absinfo[ABS_Y].maximum;
 	}
 
-	if (!matched_hidinput) {
-		list_for_each_entry(report, &hid->report_enum[HID_INPUT_REPORT].report_list, list) {
-			switch (report->application) {
-			case HID_GD_KEYBOARD:
-			case HID_GD_KEYPAD:
-				caps |= EVDEV_CAP_KEY | EVDEV_CAP_KEYBOARD;
-				break;
-			case HID_GD_MOUSE:
-			case HID_GD_POINTER:
-				caps |= EVDEV_CAP_MOUSE;
-				break;
-			default:
-				break;
-			}
-		}
-	}
-
-	return caps;
-}
-
-static int evdev_dev_in_hid_inputs(struct hid_device *hid, struct input_dev *dev)
-{
-	struct hid_input *hidinput;
-
-	if (!hid->inputs.next)
-		return 0;
-
-	list_for_each_entry(hidinput, &hid->inputs, list)
-		if (hidinput->input == dev)
-			return 1;
-
-	return 0;
-}
-
-static void evdev_configure_abs_dev(void *keyd_device, struct input_dev *dev)
-{
-	if (test_bit(ABS_X, dev->absbit) && test_bit(ABS_Y, dev->absbit))
-		evdev_configure_abs(keyd_device,
-				      dev->absinfo[ABS_X].minimum,
-				      dev->absinfo[ABS_X].maximum,
-				      dev->absinfo[ABS_Y].minimum,
-				      dev->absinfo[ABS_Y].maximum);
-}
-
-static int evdev_open_hid_handle(struct input_handle *handle, void *data)
-{
-	if (input_get_drvdata(handle->dev) == data && !handle->open) {
-		struct hid_device *hid = data;
-		int ret;
-
-		/*
-		 * Linux opens input handles from userspace. Firmware has one
-		 * always-on KeyD consumer after hid-input mapped the device.
-		 */
-		ret = input_open_device(handle);
-		hid_host_trace_input_state(hid, 1, handle->open, ret);
-		if (ret)
-			return ret;
-		evdev_add_device_caps(hid->keyd_device, evdev_caps(hid, handle->dev));
-		evdev_configure_abs_dev(hid->keyd_device, handle->dev);
-	}
-
-	return 0;
-}
-
-int evdev_activate_hid(struct hid_device *hid)
-{
-	return input_handler_for_each_handle(&evdev_handler, hid, evdev_open_hid_handle);
-}
-
-static int evdev_close_hid_handle(struct input_handle *handle, void *data)
-{
-	if (input_get_drvdata(handle->dev) == data && handle->open)
-		input_close_device(handle);
-
-	return 0;
-}
-
-void evdev_deactivate_hid(struct hid_device *hid)
-{
-	input_handler_for_each_handle(&evdev_handler, hid, evdev_close_hid_handle);
+	return info;
 }
 
 static unsigned int evdev_events(struct input_handle *handle,
 				      struct input_value *vals,
 				      unsigned int count)
 {
-	struct input_dev *dev = handle->dev;
-	struct hid_device *hid = input_get_drvdata(dev);
-
-	hid_host_trace_input_state(hid, 2, count, handle->open);
+	void *event_dev = handle->private;
 
 	for (unsigned int i = 0; i < count; i++) {
 		unsigned int type = vals[i].type;
@@ -186,30 +75,16 @@ static unsigned int evdev_events(struct input_handle *handle,
 		switch (type) {
 		case EV_KEY:
 		case EV_REL:
-			hid_host_trace_input_event(hid, type, code, value);
-			break;
-		case EV_ABS:
-			if ((code == ABS_X || code == ABS_Y) &&
-			    evdev_abs_to_mouse(hid, dev))
-				hid_host_trace_input_event(hid, type, code, value);
-			break;
-		default:
-			break;
-		}
-
-		switch (type) {
-		case EV_KEY:
-		case EV_REL:
 		case EV_ABS:
 		case EV_SYN:
 		case EV_LED:
-			evdev_input_event(hid->keyd_device, type, code, value);
+			evdev_input_event(event_dev, type, code, value);
 			break;
 		default:
 			/*
-			 * Current KeyD boundary has no sink for the rest of the
-			 * Linux input stream. Keep the upstream input pipeline
-			 * intact and stop unsupported event types here.
+			 * The firmware evdev queue currently carries the event
+			 * classes consumed by the input remapper. Keep the upstream
+			 * input pipeline intact and stop unsupported event types here.
 			 */
 			break;
 		}
@@ -222,7 +97,9 @@ static int evdev_connect(struct input_handler *handler,
 			      const struct input_device_id *id)
 {
 	struct hid_device *hid = input_get_drvdata(dev);
+	struct evdev_input_info info;
 	struct input_handle *handle;
+	void *event_dev;
 	int ret;
 
 	(void)id;
@@ -230,7 +107,7 @@ static int evdev_connect(struct input_handler *handler,
 	if (!hid && dev->dev.parent && dev->dev.parent->bus == &hid_bus_type) {
 		// input_set_drvdata(input_dev, hid);
 		// Some upstream drivers allocate extra input_dev objects from &hdev->dev
-		// without storing HID drvdata. The port needs that link for KeyD forwarding.
+		// without storing HID drvdata. The firmware evdev layer needs that link.
 		hid = to_hid_device(dev->dev.parent);
 		input_set_drvdata(dev, hid);
 	}
@@ -242,40 +119,30 @@ static int evdev_connect(struct input_handler *handler,
 	handle->dev = dev;
 	handle->handler = handler;
 	handle->name = handler->name;
+	info = evdev_input_info(dev);
+	event_dev = evdev_register_device(hid->vendor, hid->product, &info);
+	if (!event_dev) {
+		ret = -EAGAIN;
+		goto err_free;
+	}
+	handle->private = event_dev;
 
 	ret = input_register_handle(handle);
 	if (ret)
-		goto err_free;
+		goto err_unregister_device;
 
-	if (hid && hid->keyd_device) {
-		// Linux opens input handles from userspace; this port has one always-on
-		// consumer and opens late driver-created input devices immediately.
-		ret = input_open_device(handle);
-		if (ret)
-			goto err_unregister;
-		evdev_add_device_caps(hid->keyd_device, evdev_caps(hid, dev));
-		evdev_configure_abs_dev(hid->keyd_device, dev);
-	} else if (hid && !evdev_dev_in_hid_inputs(hid, dev)) {
-		hid->keyd_device = evdev_register_device(hid->vendor, hid->product,
-							   evdev_caps(hid, dev));
-		if (!hid->keyd_device) {
-			ret = -EAGAIN;
-			goto err_unregister;
-		}
-
-		ret = input_open_device(handle);
-		if (ret)
-			goto err_unregister_keyd;
-		evdev_configure_abs_dev(hid->keyd_device, dev);
-	}
+	// retval = input_open_device(&evdev->handle);
+	// Firmware has no userspace open(eventX); keep the evdev handle always open.
+	ret = input_open_device(handle);
+	if (ret)
+		goto err_unregister;
 
 	return 0;
 
-err_unregister_keyd:
-	evdev_unregister_device(hid->keyd_device);
-	hid->keyd_device = NULL;
 err_unregister:
 	input_unregister_handle(handle);
+err_unregister_device:
+	evdev_unregister_device(event_dev);
 err_free:
 	kfree(handle);
 	return ret;
@@ -283,7 +150,12 @@ err_free:
 
 static void evdev_disconnect(struct input_handle *handle)
 {
+	void *event_dev = handle->private;
+
+	if (handle->open)
+		input_close_device(handle);
 	input_unregister_handle(handle);
+	evdev_unregister_device(event_dev);
 	kfree(handle);
 }
 

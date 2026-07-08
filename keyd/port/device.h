@@ -11,6 +11,7 @@
 
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "uapi/linux/input-event-codes.h"
 
 #define MAX_DEVICES 8
 #define DEVICE_EVENT_QUEUE_LEN 16
@@ -23,9 +24,10 @@
 
 #define DEVICE_INPUT_REMOVED	0xffffu
 #define DEVICE_INPUT_RESET	0xfffeu
+#define DEVICE_INPUT_KEYMASK_WORDS	(BTN_LEFT / 32 + 1)
 
 /*
- * Upstream keyd reads Linux struct input_event from an evdev fd. Firmware
+ * Upstream keyd reads Linux struct input_event from an input fd. Firmware
  * queues keep only the fields keyd consumes here; timestamping stays in
  * evloop.c.
  */
@@ -33,6 +35,17 @@ struct input_event {
 	uint16_t type;
 	uint16_t code;
 	int32_t value;
+};
+
+struct device_input_info {
+	uint32_t keymask[DEVICE_INPUT_KEYMASK_WORDS];
+	uint32_t num_keys;
+	uint8_t relmask;
+	uint8_t absmask;
+	int32_t minx;
+	int32_t maxx;
+	int32_t miny;
+	int32_t maxy;
 };
 
 struct device {
@@ -79,6 +92,8 @@ extern struct device *device_table[MAX_DEVICES];
 extern size_t device_table_sz;
 
 void devmon_init(void);
+int device_init(struct device *dev, uint16_t vendor, uint16_t product,
+		const struct device_input_info *info);
 int device_add(struct device *dev);
 void device_delete(struct device *dev);
 struct device_event *device_read_event(struct device *dev);

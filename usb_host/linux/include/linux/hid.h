@@ -653,7 +653,11 @@ struct hid_device {
 
 	unsigned int id;						/* system unique id */
 
-	/* TinyUSB/FreeRTOS port extension. */
+	/*
+	 * Port-only TinyUSB callback identity. Upstream Linux gets this context
+	 * through usbhid/usb_interface objects; TinyUSB callbacks pass dev_addr
+	 * and HID instance, so the firmware lookup stores both on hid_device.
+	 */
 	u8 dev_addr;
 	u8 instance;
 	u32 ll_generation;
@@ -663,13 +667,14 @@ struct hid_device {
 	bool ll_always_poll;
 	bool ll_resume_running;
 	unsigned long ll_resume_deadline;
+	/*
+	 * Port-only minimal USB core shim. Upstream hid_device is parented by
+	 * Linux USB core objects; firmware embeds just enough usb_device,
+	 * usb_host_interface, and usb_interface state for imported HID code.
+	 */
 	struct usb_device usb_dev;
 	struct usb_host_interface usb_altsetting;
 	struct usb_interface usb_intf;
-	void *keyd_device;
-	hid_keyboard_report_t prev_keyboard;
-	u8 prev_mods;
-	u8 prev_buttons;
 };
 
 #define to_hid_device(pdev) \

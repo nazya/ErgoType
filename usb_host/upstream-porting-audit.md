@@ -12,8 +12,8 @@ as the previous porting worktree, not as Linux upstream.
 ## Scope Audited
 
 - current TinyUSB HID host glue: `usb_host/task.c`, `usb_host/tuh_ll_driver.c`
-- current HID/input boundary glue: `usb_host/hid_port.c`, `usb_host/evdev.c`,
-  `usb_host/evdev_queue.c`
+- current HID/input boundary glue: `usb_host/evdev.c`,
+  `keyd/port/device.c`
 - active Linux HID/input core files in CMake
 - active lightweight vendor HID drivers in CMake
 - active Linux compatibility headers used by the HID slice
@@ -42,16 +42,16 @@ files needed for ordinary file-based comparison:
   `evdev_*` names. This is not a line-preserving upstream evdev port; it keeps
   the input_handler shape and replaces userspace fd delivery with KeyD queue
   delivery.
-- `evdev_queue.c`: split the firmware queue boundary from the input_handler
-  side. It replaces upstream evdev per-client fd buffers with a KeyD queue.
+- `keyd/port/device.c`: owns the firmware queue replacement for upstream
+  keyd's evdev fd path while still using the existing `devmon_queue`.
 - `tuh_ll_driver.c`: added/expanded explicit upstream usbhid lifecycle anchors
   around parse/request/wait/raw/output/idle no-op boundaries.
 - `hid-drivers.c`: clarified that driver safety selection is the CMake
   allowlist, while the registration loop stays Linux-shaped.
 - `task.c`: added an `Upstream Linux: no equivalent` comment for the TinyUSB
   host callback/lifetime glue.
-- `hid_port.c`: marked the debug capability trace helper as firmware boundary
-  glue.
+- `hid_port.c`: removed after evdev became the always-open firmware event
+  producer.
 - `input.c`: removed stale wording that still referenced the old HID driver
   task/workqueue pump, documented the removed Work3 executor wrappers, and
   added a top-level note that this is a reduced input core slice.

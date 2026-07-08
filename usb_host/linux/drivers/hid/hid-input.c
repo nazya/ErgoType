@@ -2471,4 +2471,4 @@ EXPORT_SYMBOL_GPL(hidinput_reset_resume);
 #endif
 #endif
 
-/* Device capability summary is implemented in usb_host/hid_port.c. */
+/* Device capability summary is implemented by the firmware evdev/device queue. */
