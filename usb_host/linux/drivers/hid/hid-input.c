@@ -1975,16 +1975,11 @@ static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
 				if (hid->quirks & HID_QUIRK_NO_INIT_REPORTS)
 					return update_needed;
 
-#if 0
-				/*
-				 * Temporarily disabled for callback-driven HID host.
-				 * This upstream path needs synchronous GET_REPORT +
-				 * hid_hw_wait(); restore it as async request continuation.
-				 */
-				hid_hw_request(hid, report, HID_REQ_GET_REPORT);
-				hid_hw_wait(hid);
-				get_report_completed = true;
-#endif
+				// hid_hw_request(hid, report, HID_REQ_GET_REPORT);
+				// hid_hw_wait(hid);
+				// get_report_completed = true;
+				// This upstream path needs synchronous GET_REPORT +
+				// hid_hw_wait(); restore it as async request continuation.
 				return update_needed;
 			}
 
@@ -2009,19 +2004,14 @@ static void hidinput_change_resolution_multipliers(struct hid_device *hid)
 								     rep, true);
 
 		if (update_needed) {
-#if 0
-			/*
-			 * Temporarily disabled for callback-driven HID host.
-			 * This is the SET_REPORT half of the same hardware request
-			 * lifecycle as GET_REPORT + hid_hw_wait() above.
-			 */
-			ret = __hid_request(hid, rep, HID_REQ_SET_REPORT);
-			if (ret) {
-				__hidinput_change_resolution_multipliers(hid,
-								    rep, false);
-				return;
-			}
-#endif
+			// ret = __hid_request(hid, rep, HID_REQ_SET_REPORT);
+			// if (ret) {
+			// 	__hidinput_change_resolution_multipliers(hid,
+			// 					    rep, false);
+			// 	return;
+			// }
+			// This is the SET_REPORT half of the same hardware request
+			// lifecycle as GET_REPORT + hid_hw_wait() above.
 		}
 	}
 
@@ -2465,10 +2455,9 @@ void hidinput_reset_resume(struct hid_device *hid)
 }
 EXPORT_SYMBOL_GPL(hidinput_reset_resume);
 
-#if 0
-#ifdef CONFIG_HID_KUNIT_TEST
-#include "hid-input-test.c"
-#endif
-#endif
+// #ifdef CONFIG_HID_KUNIT_TEST
+// #include "hid-input-test.c"
+// #endif
+// Firmware build does not include Linux KUnit test objects.
 
 /* Device capability summary is implemented by the firmware evdev/device queue. */
