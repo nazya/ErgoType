@@ -186,16 +186,18 @@ struct device_event *device_read_event(struct device *dev)
 
 			break;
 		case REL_X:
-			devev.type = DEV_MOUSE_MOVE;
-			devev.x = ev.value;
-			devev.y = 0;
+			/*
+			 * Queue and emit a single event on SYN to account for
+			 * programs which are particular about input grouping.
+			 */
+			dev->_pending_rel_x += ev.value;
 
+			return NULL;
 			break;
 		case REL_Y:
-			devev.type = DEV_MOUSE_MOVE;
-			devev.y = ev.value;
-			devev.x = 0;
+			dev->_pending_rel_y += ev.value;
 
+			return NULL;
 			break;
 //		case REL_WHEEL_HI_RES:
 //			/* TODO: implement me */
@@ -208,6 +210,18 @@ struct device_event *device_read_event(struct device *dev)
 			return NULL;
 		}
 
+		break;
+	case EV_SYN:
+		if (dev->_pending_rel_x || dev->_pending_rel_y) {
+			devev.type = DEV_MOUSE_MOVE;
+			devev.y = dev->_pending_rel_y;
+			devev.x = dev->_pending_rel_x;
+
+			dev->_pending_rel_y = 0;
+			dev->_pending_rel_x = 0;
+		} else {
+			return NULL;
+		}
 		break;
 	case EV_ABS:
 		switch (ev.code) {
