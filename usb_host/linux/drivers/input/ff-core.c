@@ -160,11 +160,9 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	}
 
 	// scoped_guard(spinlock_irq, &dev->event_lock) {
-	// FreeRTOS port maps input event serialization to port_event_lock.
-	input_port_event_lock(dev);
+	// Callback-driven slice has no active input event lock.
 	ff->effects[id] = *effect;
 	ff->effect_owners[id] = file;
-	input_port_event_unlock(dev);
 
 	mutex_unlock(&ff->mutex);
 	return 0;
@@ -186,20 +184,16 @@ static int erase_effect(struct input_dev *dev, int effect_id,
 		return error;
 
 	// scoped_guard(spinlock_irq, &dev->event_lock) {
-	// FreeRTOS port maps input event serialization to port_event_lock.
-	input_port_event_lock(dev);
+	// Callback-driven slice has no active input event lock.
 	ff->playback(dev, effect_id, 0);
 	ff->effect_owners[effect_id] = NULL;
-	input_port_event_unlock(dev);
 
 	if (ff->erase) {
 		error = ff->erase(dev, effect_id);
 		if (error) {
 			// scoped_guard(spinlock_irq, &dev->event_lock)
-			// FreeRTOS port maps input event serialization to port_event_lock.
-			input_port_event_lock(dev);
+			// Callback-driven slice has no active input event lock.
 			ff->effect_owners[effect_id] = file;
-			input_port_event_unlock(dev);
 
 			return error;
 		}

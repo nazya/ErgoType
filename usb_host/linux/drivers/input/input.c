@@ -348,10 +348,8 @@ static void input_handle_event_locked(struct input_dev *dev,
 void input_handle_event(struct input_dev *dev,
 			unsigned int type, unsigned int code, int value)
 {
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Callback-driven slice has no concurrent input worker; do not block in report path.
 	input_handle_event_locked(dev, type, code, value);
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 }
 
@@ -540,8 +538,6 @@ void input_close_device(struct input_handle *handle)
 		 */
 		// synchronize_rcu();
 		// Port input core has no RCU.
-		// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
-		// xSemaphoreGive(dev->port_event_lock);
 		// Callback-driven slice has no RCU wait point; do not block on close.
 	}
 }
@@ -598,12 +594,10 @@ static void input_disconnect_device(struct input_dev *dev)
 	 * generate events even after we done here but they will not
 	 * reach any handlers.
 	 */
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Unregister runs from the same host callback/task slice; do not block.
 	if (input_dev_release_keys(dev)) {
 		input_handle_event_locked(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 
 	list_for_each_entry(handle, &dev->h_list, d_node)
@@ -870,13 +864,11 @@ void input_reset_device(struct input_dev *dev)
 	// guard(mutex)(&dev->mutex);
 	// guard(spinlock_irqsave)(&dev->event_lock);
 	// Port input core has no mutex/event_lock guards.
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Reset is synchronous in this slice; no blocking event lock.
 	input_dev_toggle(dev, true);
 	if (input_dev_release_keys(dev)) {
 		input_handle_event_locked(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 }
 
@@ -898,7 +890,6 @@ struct input_dev *input_allocate_device(void)
 		kfree(dev);
 		return NULL;
 	}
-	// dev->port_event_lock = xSemaphoreCreateMutex();
 	// Callback-driven slice has no input worker; do not allocate a blocking lock.
 
 	device_initialize(&dev->dev);
@@ -940,8 +931,6 @@ void input_free_device(struct input_dev *dev)
 	input_mt_destroy_slots(dev);
 	kfree(dev->absinfo);
 	kfree(dev->vals);
-	// vSemaphoreDelete(dev->port_event_lock);
-	// Callback-driven slice does not allocate port_event_lock.
 	kfree(dev);
 }
 void input_abs_set_res(struct input_dev *dev, unsigned int axis, int resolution)
@@ -1291,13 +1280,11 @@ int input_register_handle(struct input_handle *handle)
 	// else
 	// 	list_add_tail_rcu(&handle->d_node, &dev->h_list);
 	// This port has no RCU input core; filters still go before normal handlers.
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Callback-driven slice has no concurrent input worker; do not block in HID callbacks.
 	if (handler->filter)
 		list_add(&handle->d_node, &dev->h_list);
 	else
 		list_add_tail(&handle->d_node, &dev->h_list);
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 	// list_add_tail_rcu(&handle->h_node, &handler->h_list);
 	// Port list has no RCU variant.
@@ -1311,10 +1298,8 @@ void input_unregister_handle(struct input_handle *handle)
 {
 	struct input_dev *dev = handle->dev;
 
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Callback-driven slice has no concurrent input worker; do not block in HID callbacks.
 	list_del(&handle->d_node);
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 	// list_del_rcu(&handle->h_node);
 	list_del(&handle->h_node); // Port list has no RCU variant.
@@ -1336,7 +1321,6 @@ static void input_repeat_key(struct timer_list *t)
 	// guard(spinlock_irqsave)(&dev->event_lock);
 	// Port input core has no event_lock; software repeat work is inactive in
 	// the callback-driven slice.
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
 	// Software repeat worker is not active in the callback-driven slice.
 	if (!dev->inhibited &&
 	    test_bit(dev->repeat_key, dev->key) &&
@@ -1351,7 +1335,6 @@ static void input_repeat_key(struct timer_list *t)
 			mod_timer(&dev->timer, jiffies +
 					msecs_to_jiffies(dev->rep[REP_PERIOD]));
 	}
-	// xSemaphoreGive(dev->port_event_lock);
 	// See nonblocking callback-driven note above.
 }
 

@@ -9,14 +9,12 @@
 #include "queue.h"
 #include "task.h"
 
-#include "device.h"
+#include "devmon.h"
 #include "jconfig.h"
 #include "log.h"
 #include "pmw3360.h"
 #include "pmw3389.h"
 #include "pointer.h"
-#include "device.h"
-#include "uapi/linux/input-event-codes.h"
 
 static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
@@ -34,9 +32,9 @@ static void send_pointing_input_event(QueueHandle_t queue, uint16_t type, uint16
     xQueueSendToBack(queue, &ev, portMAX_DELAY);
 }
 
-static void send_pointing_event(QueueHandle_t queue, uint8_t type, int32_t x, int32_t y)
+static void send_pointing_event(QueueHandle_t queue, bool scroll, int32_t x, int32_t y)
 {
-    if (type == DEV_MOUSE_SCROLL) {
+    if (scroll) {
         send_pointing_input_event(queue, EV_REL, REL_HWHEEL, x);
         send_pointing_input_event(queue, EV_REL, REL_WHEEL, y);
     } else {
@@ -101,8 +99,8 @@ static void spi_bus_init_once(uint8_t bus, const config_t *config)
 void pointing_device_task(void *pvParameters)
 {
     const config_t *config = (const config_t *)pvParameters;
-    struct device pmw3360_devices[MAX_PMW3360];
-    struct device pmw3389_devices[MAX_PMW3389];
+    struct port_input_dev pmw3360_devices[MAX_PMW3360];
+    struct port_input_dev pmw3389_devices[MAX_PMW3389];
     QueueHandle_t pmw3360_queues[MAX_PMW3360];
     QueueHandle_t pmw3389_queues[MAX_PMW3389];
 
@@ -113,14 +111,19 @@ void pointing_device_task(void *pvParameters)
     }
 
     for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
-        pmw3360_devices[i] = (struct device) {
-            .capabilities = CAP_MOUSE,
-            .id = "pmw3360",
+        pmw3360_devices[i] = (struct port_input_dev) {
+            .vendor = 0x0000,
+            .product = 0x0002,
             .name = "pmw3360",
         };
+        input_bitmap_set(REL_X, pmw3360_devices[i].relbit);
+        input_bitmap_set(REL_Y, pmw3360_devices[i].relbit);
+        input_bitmap_set(REL_WHEEL, pmw3360_devices[i].relbit);
+        input_bitmap_set(REL_HWHEEL, pmw3360_devices[i].relbit);
         pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
         configASSERT(pmw3360_devices[i].ev_queue);
-        device_add(&pmw3360_devices[i]);
+        int add_rc = devmon_add_device(&pmw3360_devices[i]);
+        configASSERT(add_rc == 0);
         pmw3360_queues[i] = pmw3360_devices[i].ev_queue;
 
         pmw3360_init(&config->pmw3360[i]);
@@ -128,14 +131,19 @@ void pointing_device_task(void *pvParameters)
     }
 
     for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
-        pmw3389_devices[i] = (struct device) {
-            .capabilities = CAP_MOUSE,
-            .id = "pmw3389",
+        pmw3389_devices[i] = (struct port_input_dev) {
+            .vendor = 0x0000,
+            .product = 0x0002,
             .name = "pmw3389",
         };
+        input_bitmap_set(REL_X, pmw3389_devices[i].relbit);
+        input_bitmap_set(REL_Y, pmw3389_devices[i].relbit);
+        input_bitmap_set(REL_WHEEL, pmw3389_devices[i].relbit);
+        input_bitmap_set(REL_HWHEEL, pmw3389_devices[i].relbit);
         pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
         configASSERT(pmw3389_devices[i].ev_queue);
-        device_add(&pmw3389_devices[i]);
+        int add_rc = devmon_add_device(&pmw3389_devices[i]);
+        configASSERT(add_rc == 0);
         pmw3389_queues[i] = pmw3389_devices[i].ev_queue;
 
         pmw3389_init(&config->pmw3389[i]);
@@ -154,7 +162,7 @@ void pointing_device_task(void *pvParameters)
             int16_t dy = 0;
             pmw3360_get_deltas(&config->pmw3360[i], &dx, &dy);
             send_pointing_event(pmw3360_queues[i],
-                                config->pmw3360[i].role == SENSOR_ROLE_SCROLL ? DEV_MOUSE_SCROLL : DEV_MOUSE_MOVE,
+                                config->pmw3360[i].role == SENSOR_ROLE_SCROLL,
                                 dx,
                                 dy);
         }
@@ -166,7 +174,7 @@ void pointing_device_task(void *pvParameters)
             int16_t dy = 0;
             pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy);
             send_pointing_event(pmw3389_queues[i],
-                                config->pmw3389[i].role == SENSOR_ROLE_SCROLL ? DEV_MOUSE_SCROLL : DEV_MOUSE_MOVE,
+                                config->pmw3389[i].role == SENSOR_ROLE_SCROLL,
                                 dx,
                                 dy);
         }

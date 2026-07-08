@@ -12,8 +12,11 @@
  */
 
 #include <stddef.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
+#include "portable.h"
+#include "queue.h"
 #include "task.h"
 
 #include "keyd.h"
@@ -39,9 +42,11 @@ int evloop(int (*event_handler)(struct event *ev))
 
 		int start_time;
 		int elapsed;
+		TickType_t wait_ticks;
 
 		start_time = get_time_ms();
-		ready = device_select(timeout);
+		wait_ticks = timeout > 0 ? pdMS_TO_TICKS(timeout) : portMAX_DELAY;
+		ready = xQueueSelectFromSet(devmon_event_set, wait_ticks);
 		ev.timestamp = get_time_ms();
 		elapsed = ev.timestamp - start_time;
 
@@ -76,7 +81,10 @@ int evloop(int (*event_handler)(struct event *ev))
 
 				timeout = event_handler(&ev);
 
-				device_delete(dev);
+				xQueueRemoveFromSet(dev->ev_queue, devmon_event_set);
+				vQueueDelete(dev->ev_queue);
+				dev->ev_queue = NULL;
+				vPortFree(dev);
 				device_table[i] = NULL;
 				handled_device = 1;
 				removed = 1;
@@ -104,11 +112,17 @@ int evloop(int (*event_handler)(struct event *ev))
 		if (ready != devmon_queue && handled_device)
 			continue;
 
+		struct port_input_dev port_dev;
 		struct device *dev;
+		int ret;
 
-		if (xQueueReceive(devmon_queue, &dev, 0) != pdPASS)
+		if (xQueueReceive(devmon_queue, &port_dev, 0) != pdPASS)
 			continue;
 
+		dev = pvPortMalloc(sizeof *dev);
+		configASSERT(dev);
+		ret = device_init(&port_dev, dev);
+		configASSERT(ret == 0);
 		configASSERT(device_table_sz < MAX_DEVICES);
 		device_table[device_table_sz++] = dev;
 

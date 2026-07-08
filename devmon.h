@@ -1,0 +1,68 @@
+#pragma once
+
+#include <stdint.h>
+
+#include "FreeRTOS.h"
+#include "queue.h"
+#include "uapi/linux/input-event-codes.h"
+
+#define MAX_DEVICES 8
+#define DEVICE_EVENT_QUEUE_LEN 16
+#define DEVICE_EVENT_SET_LEN (MAX_DEVICES * DEVICE_EVENT_QUEUE_LEN + MAX_DEVICES)
+
+#define DEVICE_INPUT_REMOVED	0xffffu
+#define DEVICE_INPUT_RESET	0xfffeu
+#define INPUT_BITS_PER_LONG	(sizeof(unsigned long) * 8u)
+#define INPUT_BITS_TO_LONGS(nr)	(((nr) + INPUT_BITS_PER_LONG - 1u) / INPUT_BITS_PER_LONG)
+
+/*
+ * Same fields as Linux struct input_absinfo. Keep the snapshot type local so
+ * devmon.h does not pull linux/input.h and the HID compat runtime into KeyD.
+ */
+struct input_absinfo_snapshot {
+	int32_t value;
+	int32_t minimum;
+	int32_t maximum;
+	int32_t fuzz;
+	int32_t flat;
+	int32_t resolution;
+};
+
+static inline void input_bitmap_set(unsigned int bit, unsigned long *bitmap)
+{
+	bitmap[bit / INPUT_BITS_PER_LONG] |= 1ul << (bit % INPUT_BITS_PER_LONG);
+}
+
+/*
+ * Upstream keyd reads Linux struct input_event from an input fd. Firmware
+ * queues keep only the fields keyd consumes; timestamping stays in evloop.c.
+ */
+struct input_event {
+	uint16_t type;
+	uint16_t code;
+	int32_t value;
+};
+
+/*
+ * devmon_queue carries this compact snapshot by value. Producers may build it
+ * from a full Linux input_dev, but KeyD only needs the EVIOCGBIT-style bitmaps
+ * and EVIOCGABS ranges below during device add; the full input_dev pointer
+ * stays owned by the Linux input layer.
+ */
+struct port_input_dev {
+	QueueHandle_t ev_queue;
+	uint16_t vendor;
+	uint16_t product;
+	const char *name;
+	unsigned long keybit[INPUT_BITS_TO_LONGS(KEY_CNT)];
+	unsigned long relbit[INPUT_BITS_TO_LONGS(REL_CNT)];
+	unsigned long absbit[INPUT_BITS_TO_LONGS(ABS_CNT)];
+	unsigned long propbit[INPUT_BITS_TO_LONGS(INPUT_PROP_CNT)];
+	struct input_absinfo_snapshot abs_x;
+	struct input_absinfo_snapshot abs_y;
+};
+
+extern QueueHandle_t devmon_queue;
+extern QueueSetHandle_t devmon_event_set;
+void devmon_init(void);
+int devmon_add_device(const struct port_input_dev *port_dev);

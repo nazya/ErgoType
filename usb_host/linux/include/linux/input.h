@@ -300,10 +300,6 @@ struct input_dev {
 	struct input_handle *grab;
 
 	spinlock_t event_lock;
-	// Work3 used a FreeRTOS mutex here to serialize proxy/driver-side input
-	// snapshots. The callback-driven slice keeps input_port_event_lock()
-	// as a no-op, so do not store a mutex handle in active input_dev state.
-	// SemaphoreHandle_t port_event_lock;
 	struct mutex mutex;
 
 	unsigned int users;
@@ -326,20 +322,6 @@ struct input_dev {
 
 	bool inhibited;
 };
-
-static inline void input_port_event_lock(struct input_dev *dev)
-{
-	// xSemaphoreTake(dev->port_event_lock, portMAX_DELAY);
-	// Callback-driven slice has no input worker; never block HID callbacks.
-	(void)dev;
-}
-
-static inline void input_port_event_unlock(struct input_dev *dev)
-{
-	// xSemaphoreGive(dev->port_event_lock);
-	// See nonblocking callback-driven note above.
-	(void)dev;
-}
 
 struct input_handler {
 	void *private;

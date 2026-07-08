@@ -2233,8 +2233,8 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	// } else if (!lock_already_taken && ret) {
 	// 	return -EBUSY;
 	// }
-	// Callback-driven slice has no driver thread semaphore; report callbacks
-	// must enter Linux parsing without FreeRTOS semaphore traffic.
+	// Callback-driven slice has no driver thread wait; report callbacks
+	// must enter Linux parsing without FreeRTOS blocking traffic.
 	(void)lock_already_taken;
 
 	if (!hid->driver) {
@@ -2281,7 +2281,7 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 unlock:
 	// if (!lock_already_taken)
 	// 	up(&hid->driver_input_lock);
-	// See callback-driven no-semaphore note above.
+	// See callback-driven no-blocking note above.
 	return ret;
 }
 
