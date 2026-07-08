@@ -47,9 +47,6 @@ enum hid_host_event_type {
     HID_HOST_EVENT_UMOUNT,
     HID_HOST_EVENT_REPORT,
     HID_HOST_EVENT_REPORT_SKIP,
-    HID_HOST_EVENT_INPUT_EVENT,
-    HID_HOST_EVENT_INPUT_CAPS,
-    HID_HOST_EVENT_INPUT_STATE,
 };
 
 struct hid_host_event {
@@ -75,56 +72,6 @@ static void hid_host_push_event(struct hid_host_event const *event)
 {
     if (!hid_host_event_queue || xQueueSend(hid_host_event_queue, event, 0) != pdPASS)
         hid_host_event_dropped++;
-}
-
-void hid_host_trace_input_event(struct hid_device *hid, unsigned int type, unsigned int code, int value)
-{
-    if (!hid)
-        return;
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_INPUT_EVENT,
-        .dev_addr = hid->dev_addr,
-        .instance = hid->instance,
-        .proto = type,
-        .len = code,
-        .result = value,
-    });
-}
-
-void hid_host_trace_input_caps(struct hid_device *hid, uint8_t caps, uint8_t rel_flags,
-                               uint8_t abs_flags, uint8_t has_key)
-{
-    if (!hid)
-        return;
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_INPUT_CAPS,
-        .dev_addr = hid->dev_addr,
-        .instance = hid->instance,
-        .proto = caps,
-        .first = {
-            rel_flags,
-            abs_flags,
-            has_key,
-            0,
-        },
-    });
-}
-
-void hid_host_trace_input_state(struct hid_device *hid, uint8_t state, uint16_t detail, int result)
-{
-    if (!hid)
-        return;
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_INPUT_STATE,
-        .dev_addr = hid->dev_addr,
-        .instance = hid->instance,
-        .proto = state,
-        .len = detail,
-        .result = result,
-    });
 }
 
 static struct hid_device *hid_host_lookup(uint8_t dev_addr, uint8_t instance)
@@ -247,19 +194,6 @@ static void hid_host_log_event(struct hid_host_event const *event)
             event->dev_addr, event->instance, event->len, event->result);
         if (!event->receive_ok)
             err("tuh hid receive rearm failed dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    case HID_HOST_EVENT_INPUT_EVENT:
-        dbg2("hid input event dev=%u inst=%u type=%u code=%u value=%d",
-             event->dev_addr, event->instance, event->proto, event->len, event->result);
-        break;
-    case HID_HOST_EVENT_INPUT_CAPS:
-        dbg("hid input caps dev=%u inst=%u caps=%02x rel=%02x abs=%02x key=%u",
-            event->dev_addr, event->instance, event->proto,
-            event->first[0], event->first[1], event->first[2]);
-        break;
-    case HID_HOST_EVENT_INPUT_STATE:
-        dbg("hid input state dev=%u inst=%u state=%u detail=%u result=%d",
-            event->dev_addr, event->instance, event->proto, event->len, event->result);
         break;
     }
 

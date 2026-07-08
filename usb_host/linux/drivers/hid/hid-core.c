@@ -40,7 +40,6 @@
 #include "../../include/linux/hid-input.h"
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
-#include "../../../hid_port.h"
 #include "hid-ids.h"
 
 /*
@@ -2466,16 +2465,6 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 	// 	hdev->ff_init(hdev);
 	// FF is outside the callback-driven keyboard/mouse slice; do not run FF init here.
 
-	// Upstream Linux has no keyd device queue. This port registers after HID input exists,
-	// so physical TinyUSB devices and Logitech DJ virtual children use the same boundary.
-	if (hdev->claimed & HID_CLAIMED_INPUT) {
-		ret = hid_port_register_device(hdev);
-		if (ret) {
-			hid_disconnect(hdev);
-			return ret;
-		}
-	}
-
 	len = 0;
 	if (hdev->claimed & HID_CLAIMED_INPUT)
 		len += sprintf(buf + len, "input");
@@ -2544,9 +2533,6 @@ void hid_disconnect(struct hid_device *hdev)
 	device_remove_file(&hdev->dev, &dev_attr_country); // Remove the in-memory attr.
 	if (hdev->claimed & HID_CLAIMED_INPUT)
 		hidinput_disconnect(hdev);
-	// Upstream Linux has no keyd device queue. This port unregisters after input teardown so key-up flush can run first.
-	if (hdev->keyd_device)
-		hid_port_unregister_device(hdev);
 	if (hdev->claimed & HID_CLAIMED_HIDDEV)
 		hdev->hiddev_disconnect(hdev);
 	if (hdev->claimed & HID_CLAIMED_HIDRAW)

@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "device.h"
 #include "keys.h"
@@ -8,6 +10,129 @@
 static QueueSetHandle_t device_events;
 struct device *device_table[MAX_DEVICES];
 size_t device_table_sz;
+
+static uint8_t resolve_device_capabilities(const struct device_input_info *info,
+					   uint32_t *num_keys,
+					   uint8_t *relmask,
+					   uint8_t *absmask)
+{
+	const uint32_t keyboard_mask = 1<<KEY_1  | 1<<KEY_2 | 1<<KEY_3 |
+					1<<KEY_4 | 1<<KEY_5 | 1<<KEY_6 |
+					1<<KEY_7 | 1<<KEY_8 | 1<<KEY_9 |
+					1<<KEY_0 | 1<<KEY_Q | 1<<KEY_W |
+					1<<KEY_E | 1<<KEY_R | 1<<KEY_T |
+					1<<KEY_Y;
+	const uint32_t *mask = info->keymask;
+	uint8_t capabilities = 0;
+	int has_brightness_key;
+
+	// if (ioctl(fd, EVIOCGBIT(EV_KEY, (BTN_LEFT/32+1)*4), mask) < 0) {
+	// 	perror("ioctl: ev_key");
+	// 	return 0;
+	// }
+	// Port: firmware input producer already copied EV_KEY bits from input_dev.
+
+	// if (ioctl(fd, EVIOCGBIT(EV_REL, 1), relmask) < 0) {
+	// 	perror("ioctl: ev_rel");
+	// 	return 0;
+	// }
+	// Port: firmware input producer already copied EV_REL bits from input_dev.
+
+	// if (ioctl(fd, EVIOCGBIT(EV_ABS, 1), absmask) < 0) {
+	// 	perror("ioctl: ev_abs");
+	// 	return 0;
+	// }
+	// Port: firmware input producer already copied EV_ABS bits from input_dev.
+
+	// *num_keys = 0;
+	// for (i = 0; i < sizeof(mask)/sizeof(mask[0]); i++)
+	// 	*num_keys += __builtin_popcount(mask[i]);
+	// Port: firmware input producer already counted keys from input_dev.
+	*num_keys = info->num_keys;
+	*relmask = info->relmask;
+	*absmask = info->absmask;
+
+	if (*num_keys)
+		capabilities |= CAP_KEY;
+
+	if (*relmask || *absmask)
+		capabilities |= CAP_MOUSE;
+
+	if (*absmask)
+		capabilities |= CAP_MOUSE_ABS;
+
+	/*
+	 * If the device can emit KEY_BRIGHTNESSUP we treat it as a keyboard.
+	 *
+	 * This is mainly to accommodate laptops with brightness buttons which create
+	 * a different device node from the main keyboard for some hotkeys.
+	 *
+	 * NOTE: This will subsume anything that can emit a brightness key and may produce
+	 * false positives which need to be explcitly excluded by the user if they use
+	 * the wildcard id.
+	 */
+	has_brightness_key = mask[KEY_BRIGHTNESSUP/32] &
+			     (1 << (KEY_BRIGHTNESSUP % 32));
+
+	if (((mask[0] & keyboard_mask) == keyboard_mask) || has_brightness_key)
+		capabilities |= CAP_KEYBOARD;
+
+	return capabilities;
+}
+
+int device_init(struct device *dev, uint16_t vendor, uint16_t product,
+		const struct device_input_info *info)
+{
+	uint32_t num_keys;
+	uint8_t relmask;
+	uint8_t absmask;
+	uint8_t capabilities;
+
+	// memset(dev, 0, sizeof *dev);
+	// Port: the firmware producer allocates a zeroed device wrapper before calling
+	// this fd-less device_init() equivalent.
+	if (!dev || !info)
+		return -EINVAL;
+
+	capabilities = resolve_device_capabilities(info, &num_keys, &relmask, &absmask);
+
+	// if (ioctl(fd, EVIOCGNAME(sizeof(dev->name)), dev->name) == -1) {
+	// 	keyd_log("ERROR: could not fetch device name of %s\n", dev->path);
+	// 	return -1;
+	// }
+	// Port: no input fd/name ioctl exists; use the stable firmware VID:PID id
+	// as the visible device name until USB string descriptors are wired.
+	snprintf(dev->id, sizeof(dev->id), "%04x:%04x", vendor, product);
+	snprintf(dev->name, sizeof(dev->name), "%s", dev->id);
+
+	if (!capabilities)
+		return -EINVAL;
+
+	if (capabilities & CAP_MOUSE_ABS) {
+	// if (ioctl(fd, EVIOCGABS(ABS_X), &absinfo) < 0) {
+	// 	perror("ioctl");
+	// 	return -1;
+	// }
+	// Port: firmware input producer already copied ABS_X range.
+		dev->_minx = info->minx;
+		dev->_maxx = info->maxx;
+
+	// if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) < 0) {
+	// 	perror("ioctl");
+	// 	return -1;
+	// }
+	// Port: firmware input producer already copied ABS_Y range.
+		dev->_miny = info->miny;
+		dev->_maxy = info->maxy;
+	}
+
+	// dev->capabilities = capabilities;
+	// Port: same assignment, after fd-less ioctl replacement above.
+	dev->capabilities = capabilities;
+	dev->data = NULL;
+
+	return 0;
+}
 
 void devmon_init(void)
 {
@@ -62,7 +187,7 @@ struct device_event *device_read_event(struct device *dev)
 	// 		return &devev;
 	// 	}
 	// }
-	// Port: dev->ev_queue replaces the upstream evdev fd. The queued
+	// Port: dev->ev_queue replaces the upstream input fd. The queued
 	// struct input_event is the firmware subset documented in device.h;
 	// removal/reset are explicit sentinel events because there is no read()
 	// error path.
@@ -122,7 +247,8 @@ struct device_event *device_read_event(struct device *dev)
 			devev.type = DEV_MOUSE_MOVE_ABS;
 			// devev.x = (ev.value * 1024) / (dev->_maxx - dev->_minx);
 			// Port: HID absolute ranges may have non-zero logical minimum.
-			devev.x = ((ev.value - dev->_minx) * 1024) / (dev->_maxx - dev->_minx);
+			devev.x = ((ev.value - dev->_minx) * 1024) /
+				  (dev->_maxx - dev->_minx);
 			devev.y = 0;
 
 			break;
@@ -130,7 +256,8 @@ struct device_event *device_read_event(struct device *dev)
 			devev.type = DEV_MOUSE_MOVE_ABS;
 			// devev.y = (ev.value * 1024) / (dev->_maxy - dev->_miny);
 			// Port: HID absolute ranges may have non-zero logical minimum.
-			devev.y = ((ev.value - dev->_miny) * 1024) / (dev->_maxy - dev->_miny);
+			devev.y = ((ev.value - dev->_miny) * 1024) /
+				  (dev->_maxy - dev->_miny);
 			devev.x = 0;
 
 			break;
