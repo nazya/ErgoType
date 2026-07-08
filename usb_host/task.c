@@ -11,11 +11,10 @@
 #include "pio_usb.h"
 #include "tusb.h"
 
-#include "log.h"
+#include "stdio_tusb_cdc.h"
 #include "evdev.h"
 
 #include "FreeRTOS.h"
-#include "queue.h"
 #include "task.h"
 
 #include "linux/include/linux/hid.h"
@@ -27,52 +26,8 @@ int hid_builtin_drivers_init(void);
 extern const struct hid_ll_driver tuh_hid_ll_driver;
 
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
-#define HID_HOST_EVENT_CAP 64
-#define HID_HOST_LOG_STACK_SIZE 1024
-#define HID_HOST_LOG_PRIORITY (configMAX_PRIORITIES - 3)
-#define HID_HOST_LOG_CORE ((UBaseType_t)(1u << 0))
-
-enum hid_host_event_type {
-    HID_HOST_EVENT_TASK_START,
-    HID_HOST_EVENT_INIT,
-    HID_HOST_EVENT_CORE_INIT,
-    HID_HOST_EVENT_EVDEV_INIT,
-    HID_HOST_EVENT_DRIVER_INIT,
-    HID_HOST_EVENT_TUSB_CONFIGURE,
-    HID_HOST_EVENT_TUSB_INIT,
-    HID_HOST_EVENT_MOUNT_STAGE,
-    HID_HOST_EVENT_MOUNT,
-    HID_HOST_EVENT_ADD_OK,
-    HID_HOST_EVENT_ADD_FAIL,
-    HID_HOST_EVENT_UMOUNT,
-    HID_HOST_EVENT_REPORT,
-    HID_HOST_EVENT_REPORT_SKIP,
-};
-
-struct hid_host_event {
-    enum hid_host_event_type type;
-    uint8_t dev_addr;
-    uint8_t instance;
-    uint8_t proto;
-    uint8_t first[4];
-    uint16_t vid;
-    uint16_t pid;
-    uint16_t desc_len;
-    uint16_t len;
-    int result;
-    bool receive_ok;
-};
-
-static QueueHandle_t hid_host_event_queue;
-static uint32_t hid_host_event_dropped;
 
 static struct hid_device *hid_host_devices[HID_HOST_MAX_DEVICES];
-
-static void hid_host_push_event(struct hid_host_event const *event)
-{
-    if (!hid_host_event_queue || xQueueSend(hid_host_event_queue, event, 0) != pdPASS)
-        hid_host_event_dropped++;
-}
 
 static struct hid_device *hid_host_lookup(uint8_t dev_addr, uint8_t instance)
 {
@@ -122,116 +77,6 @@ struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int
     return NULL;
 }
 
-static void hid_host_log_event(struct hid_host_event const *event)
-{
-    switch (event->type) {
-    case HID_HOST_EVENT_TASK_START:
-        dbg("hid host task start");
-        break;
-    case HID_HOST_EVENT_INIT:
-        if (event->result)
-            err("hid linux init failed ret=%d", event->result);
-        else
-            dbg("hid linux init ok");
-        break;
-    case HID_HOST_EVENT_CORE_INIT:
-        if (event->result)
-            err("hid core init failed ret=%d", event->result);
-        else
-            dbg("hid core init ok");
-        break;
-    case HID_HOST_EVENT_EVDEV_INIT:
-        if (event->result)
-            err("hid evdev init failed ret=%d", event->result);
-        else
-            dbg("hid evdev init ok");
-        break;
-    case HID_HOST_EVENT_DRIVER_INIT:
-        if (event->result)
-            err("hid drivers init failed ret=%d", event->result);
-        else
-            dbg("hid drivers init ok");
-        break;
-    case HID_HOST_EVENT_TUSB_CONFIGURE:
-        if (event->result)
-            err("tuh configure failed ret=%d", event->result);
-        else
-            dbg("tuh configure ok");
-        break;
-    case HID_HOST_EVENT_TUSB_INIT:
-        if (event->result)
-            err("tusb host init failed ret=%d", event->result);
-        else
-            dbg("tusb host init ok");
-        break;
-    case HID_HOST_EVENT_MOUNT_STAGE:
-        dbg("tuh hid mount stage=%d dev=%u inst=%u vid=%04x pid=%04x proto=%u desc_len=%u",
-            event->result, event->dev_addr, event->instance, event->vid, event->pid,
-            event->proto, event->desc_len);
-        break;
-    case HID_HOST_EVENT_MOUNT:
-        dbg("tuh hid mount dev=%u inst=%u vid=%04x pid=%04x proto=%u desc_len=%u",
-            event->dev_addr, event->instance, event->vid, event->pid, event->proto, event->desc_len);
-        if (!event->receive_ok)
-            err("tuh hid receive start failed dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    case HID_HOST_EVENT_ADD_OK:
-        dbg("hid add ok dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    case HID_HOST_EVENT_ADD_FAIL:
-        err("hid add failed dev=%u inst=%u ret=%d",
-            event->dev_addr, event->instance, event->result);
-        break;
-    case HID_HOST_EVENT_UMOUNT:
-        dbg("tuh hid umount dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    case HID_HOST_EVENT_REPORT:
-        if (!event->receive_ok)
-            err("tuh hid receive rearm failed dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    case HID_HOST_EVENT_REPORT_SKIP:
-        err("tuh hid report skipped dev=%u inst=%u len=%u ret=%d",
-            event->dev_addr, event->instance, event->len, event->result);
-        if (!event->receive_ok)
-            err("tuh hid receive rearm failed dev=%u inst=%u", event->dev_addr, event->instance);
-        break;
-    }
-
-    if (hid_host_event_dropped) {
-        uint32_t dropped = hid_host_event_dropped;
-        hid_host_event_dropped = 0;
-        err("tuh hid dropped %lu debug events", (unsigned long)dropped);
-    }
-}
-
-static void hid_host_log_task(void *pvParameters)
-{
-    struct hid_host_event event;
-
-    (void)pvParameters;
-
-    while (1) {
-        if (xQueueReceive(hid_host_event_queue, &event, portMAX_DELAY) == pdTRUE)
-            hid_host_log_event(&event);
-    }
-}
-
-static void hid_host_start_log_task(void)
-{
-    BaseType_t ret;
-
-    hid_host_event_queue = xQueueCreate(HID_HOST_EVENT_CAP, sizeof(struct hid_host_event));
-    if (!hid_host_event_queue)
-        return;
-
-    ret = xTaskCreateAffinitySet(hid_host_log_task, NULL, HID_HOST_LOG_STACK_SIZE, NULL,
-                                 HID_HOST_LOG_PRIORITY, HID_HOST_LOG_CORE, NULL);
-    if (ret != pdPASS) {
-        vQueueDelete(hid_host_event_queue);
-        hid_host_event_queue = NULL;
-    }
-}
-
 void tusb_host_task(void *pvParameters)
 {
     int ret;
@@ -244,59 +89,43 @@ void tusb_host_task(void *pvParameters)
     };
     pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
 
-    hid_host_start_log_task();
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_TASK_START,
-    });
-
     ret = hid_core_init();
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_CORE_INIT,
-        .result = ret,
-    });
-    if (!ret) {
-        ret = evdev_init();
-        hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_EVDEV_INIT,
-            .result = ret,
-        });
-    }
-    if (!ret) {
-        ret = hid_builtin_drivers_init();
-        hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_DRIVER_INIT,
-            .result = ret,
-        });
-    }
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_INIT,
-        .result = ret,
-    });
-    if (ret)
+    if (ret) {
+        async_msg("ERR: HID_CORE_FAIL");
         while (1)
             vTaskDelay(portMAX_DELAY);
+    }
+
+    ret = evdev_init();
+    if (ret) {
+        async_msg("ERR: HID_EVDEV_FAIL");
+        while (1)
+            vTaskDelay(portMAX_DELAY);
+    }
+
+    ret = hid_builtin_drivers_init();
+    if (ret) {
+        async_msg("ERR: HID_DRIVER_FAIL");
+        while (1)
+            vTaskDelay(portMAX_DELAY);
+    }
 
     pio_cfg.pin_dp = PICO_DEFAULT_PIO_USB_DP_PIN;
     pio_cfg.pinout = PIO_USB_PINOUT_DMDP;
     ret = tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg) ? 0 : -EIO;
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_TUSB_CONFIGURE,
-        .result = ret,
-    });
-    if (ret)
+    if (ret) {
+        async_msg("ERR: TUH_CONFIG_FAIL");
         while (1)
             vTaskDelay(portMAX_DELAY);
+    }
 
     tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
     ret = tusb_init(BOARD_TUH_RHPORT, &host_init) ? 0 : -EIO;
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_TUSB_INIT,
-        .result = ret,
-    });
-    if (ret)
+    if (ret) {
+        async_msg("ERR: TUSB_HOST_FAIL");
         while (1)
             vTaskDelay(portMAX_DELAY);
+    }
 
     while (1) {
         tuh_task();
@@ -359,159 +188,54 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
 {
     struct hid_device *hid;
     uint8_t *rdesc;
-    uint16_t vid = 0;
-    uint16_t pid = 0;
-    uint8_t proto = tuh_hid_interface_protocol(dev_addr, instance);
-    bool receive_ok = false;
     int ret;
 
-    tuh_vid_pid_get(dev_addr, &vid, &pid);
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 0,
-    });
-
     if (!desc_report || !desc_len) {
-        hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_ADD_FAIL,
-            .dev_addr = dev_addr,
-            .instance = instance,
-            .result = -EINVAL,
-        });
+        async_msg("ERR: HID_DESC_MISSING");
         return;
     }
 
     hid = hid_allocate_device();
     if (IS_ERR(hid)) {
-        hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_ADD_FAIL,
-            .dev_addr = dev_addr,
-            .instance = instance,
-            .result = PTR_ERR(hid),
-        });
+        async_msg("ERR: HID_ALLOC_FAIL");
         return;
     }
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 1,
-    });
 
     rdesc = kmemdup(desc_report, desc_len, GFP_KERNEL);
     if (!rdesc) {
         hid_destroy_device(hid);
-        hid_host_push_event(&(struct hid_host_event){
-            .type = HID_HOST_EVENT_ADD_FAIL,
-            .dev_addr = dev_addr,
-            .instance = instance,
-            .result = -ENOMEM,
-        });
+        async_msg("ERR: HID_DESC_ALLOC_FAIL");
         return;
     }
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 2,
-    });
 
     ret = hid_host_fill_device(hid, dev_addr, instance, rdesc, desc_len);
-    if (ret < 0)
+    if (ret < 0) {
+        async_msg("ERR: HID_FILL_FAIL");
         goto fail;
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 3,
-    });
+    }
 
     ret = hid_host_insert(hid);
-    if (ret < 0)
+    if (ret < 0) {
+        async_msg("ERR: HID_TABLE_FULL");
         goto fail;
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 4,
-    });
+    }
 
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 5,
-    });
     ret = hid_add_device(hid);
     if (ret < 0) {
         hid_host_remove_slot(hid);
+        async_msg("ERR: HID_ADD_FAIL");
         goto fail;
     }
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT_STAGE,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .result = 6,
-    });
 
-    receive_ok = tuh_hid_receive_report(dev_addr, instance);
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_MOUNT,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .proto = proto,
-        .vid = vid,
-        .pid = pid,
-        .desc_len = desc_len,
-        .receive_ok = receive_ok,
-    });
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_ADD_OK,
-        .dev_addr = dev_addr,
-        .instance = instance,
-    });
+    bool receive_ok = tuh_hid_receive_report(dev_addr, instance);
+    if (!receive_ok)
+        async_msg("ERR: HID_RX_START_FAIL");
     hid->ll_rdesc = NULL;
     hid->ll_rsize = 0;
     kfree(rdesc);
     return;
 
 fail:
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_ADD_FAIL,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .result = ret,
-    });
     kfree(rdesc);
     hid_destroy_device(hid);
 }
@@ -524,22 +248,19 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
         hid_host_remove_slot(hid);
         hid_destroy_device(hid);
     }
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = HID_HOST_EVENT_UMOUNT,
-        .dev_addr = dev_addr,
-        .instance = instance,
-    });
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
 {
     struct hid_device *hid = hid_host_lookup(dev_addr, instance);
-    uint8_t report_buf[CFG_TUH_HID_EPIN_BUFSIZE];
-    bool receive_ok;
+    uint8_t protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
     int ret = -ENODEV;
 
-    if (hid) {
+    if (protocol_mode == HID_PROTOCOL_BOOT) {
+        async_msg("WARN: HID_PROTOCOL_BOOT");
+    } else if (hid) {
+        uint8_t report_buf[CFG_TUH_HID_EPIN_BUFSIZE];
+
         // ret = hid_safe_input_report(hid, HID_INPUT_REPORT, (u8 *)report,
         //                             CFG_TUH_HID_EPIN_BUFSIZE, len, 1);
         /*
@@ -551,22 +272,13 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
         memcpy(report_buf, report, len);
         ret = hid_safe_input_report(hid, HID_INPUT_REPORT, report_buf,
                                     sizeof(report_buf), len, 1);
+        if (ret < 0)
+            async_msg("ERR: HID_REPORT_SKIP");
+    } else {
+        async_msg("ERR: HID_REPORT_SKIP");
     }
 
-    receive_ok = tuh_hid_receive_report(dev_addr, instance);
-
-    hid_host_push_event(&(struct hid_host_event){
-        .type = ret < 0 ? HID_HOST_EVENT_REPORT_SKIP : HID_HOST_EVENT_REPORT,
-        .dev_addr = dev_addr,
-        .instance = instance,
-        .len = len,
-        .first = {
-            len > 0 ? report[0] : 0,
-            len > 1 ? report[1] : 0,
-            len > 2 ? report[2] : 0,
-            len > 3 ? report[3] : 0,
-        },
-        .result = ret,
-        .receive_ok = receive_ok,
-    });
+    bool receive_ok = tuh_hid_receive_report(dev_addr, instance);
+    if (!receive_ok)
+        async_msg("ERR: HID_RX_REARM_FAIL");
 }

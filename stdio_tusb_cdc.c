@@ -1,5 +1,8 @@
 #include "stdio_tusb_cdc.h"
 
+#include <stdio.h>
+#include <string.h>
+
 #include "tusb.h"
 
 #include "device/usbd_pvt.h"
@@ -37,8 +40,25 @@ static bool cdc_was_connected;
 static bool cdc_settled;
 static bool cdc_settled_once;
 static TimerHandle_t cdc_settle_timer;
+static char async_msgbuf[ASYNC_MSG_BUFSIZE];
+static size_t async_msg_len;
+static volatile uint8_t async_msg_pending;
 
 static void stdio_tusb_cdc_kick_cb(void *);
+
+void _async_msg(const char *s)
+{
+	if (async_msg_pending)
+		return;
+
+	snprintf(async_msgbuf, sizeof(async_msgbuf) - 1u, "%s", s);
+	async_msg_len = strlen(async_msgbuf);
+	async_msgbuf[async_msg_len++] = '\r';
+	async_msgbuf[async_msg_len++] = '\n';
+	async_msg_pending = 1;
+
+	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+}
 
 static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 {
@@ -173,6 +193,16 @@ void stdio_tusb_cdc_poll(void)
     uint32_t wrote_bytes = 0;
     bool still_pending = false;
     while (1) {
+		if (async_msg_pending) {
+			if (tud_cdc_write_available() < async_msg_len)
+				break;
+
+			tud_cdc_write(async_msgbuf, async_msg_len);
+			tud_cdc_write_flush();
+			async_msg_pending = 0;
+			continue;
+		}
+
         uint32_t n = tud_cdc_write_available();
         if (!n)
             break;
