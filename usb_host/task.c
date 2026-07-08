@@ -540,10 +540,8 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     int ret = -ENODEV;
 
     if (hid) {
-#if 0
-        ret = hid_safe_input_report(hid, HID_INPUT_REPORT, (u8 *)report,
-                                    CFG_TUH_HID_EPIN_BUFSIZE, len, 1);
-#endif
+        // ret = hid_safe_input_report(hid, HID_INPUT_REPORT, (u8 *)report,
+        //                             CFG_TUH_HID_EPIN_BUFSIZE, len, 1);
         /*
          * hid_safe_input_report() may zero-pad short reports in-place. TinyUSB
          * gives us a const callback buffer, so give the Linux parser a writable
