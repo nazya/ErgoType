@@ -2218,8 +2218,7 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	struct hid_report_enum *report_enum;
 	// struct hid_driver *hdrv;
 	// struct hid_device keeps the matched driver pointer const in this port.
-	// const struct hid_driver *hdrv;
-	// Driver raw_event hooks are disabled in the callback-driven generic slice.
+	const struct hid_driver *hdrv;
 	struct hid_report *report;
 	int ret = 0;
 
@@ -2242,7 +2241,7 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 		goto unlock;
 	}
 	report_enum = hid->report_enum + type;
-	// hdrv = hid->driver;
+	hdrv = hid->driver;
 
 	data = dispatch_hid_bpf_device_event(hid, type, data, &bufsize, &size, interrupt,
 					     source, from_bpf);
@@ -2273,8 +2272,14 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	// 	if (ret < 0)
 	// 		goto unlock;
 	// }
-	// Vendor raw_event hooks are disabled until the async driver lifecycle
-	// exists; generic report parsing below stays active.
+	// TinyUSB delivers this path from a receive callback, so only raw_event
+	// hooks explicitly audited as nonblocking are enabled.
+	if (hdrv && hdrv->raw_event && hdrv->raw_event_callback_safe &&
+	    hid_match_report(hid, report)) {
+		ret = hdrv->raw_event(hid, report, data, size);
+		if (ret < 0)
+			goto unlock;
+	}
 
 	ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
 
@@ -2451,9 +2456,9 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 	/* Drivers with the ->raw_event callback set are not required to connect
 	 * to any other listener. */
 	// if (!hdev->claimed && !hdev->driver->raw_event) {
-	// Driver raw_event hooks are disabled in this slice, so raw_event presence
-	// must not count as a listener.
-	if (!hdev->claimed) {
+	// Only callback-safe raw_event hooks can be listener-only in this port.
+	if (!hdev->claimed &&
+	    !(hdev->driver->raw_event && hdev->driver->raw_event_callback_safe)) {
 		hid_err(hdev, "device has no listeners, quitting\n");
 		return -ENODEV;
 	}

@@ -52,6 +52,8 @@ static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOU
 // FreeRTOS tasks
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void tusb_host_task(void* pvParameters); // usb_host/task.c
+int hid_async_init(void); // usb_host/hid_async.c
+void hid_async_task(void *pvParameters); // usb_host/hid_async.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
@@ -212,6 +214,13 @@ static void app_task(void *pvParameters)
         devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct port_input_dev));
         configASSERT(devmon_queue);
         devmon_init();
+
+        int hid_async_ret = hid_async_init();
+        if (hid_async_ret < 0)
+            async_msg("ERR: HID_ASYNC_INIT_FAIL");
+        else
+            xTaskCreateAffinitySet(hid_async_task, NULL, MIN_STACK_SIZE, NULL,
+                                   IDLE_PRIORITY + 3, CORE1, NULL);
 
         BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
                                                           NULL, TUSB_PRIORITY, CORE1, NULL);

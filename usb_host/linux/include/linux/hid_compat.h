@@ -1896,6 +1896,15 @@ static inline u32 get_unaligned_le32(const u8 *p)
 	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
 
+// Linux put_unaligned_le32(); local copy avoids pulling Linux unaligned headers.
+static inline void put_unaligned_le32(u32 value, u8 *p)
+{
+	p[0] = (u8)value;
+	p[1] = (u8)(value >> 8);
+	p[2] = (u8)(value >> 16);
+	p[3] = (u8)(value >> 24);
+}
+
 // Linux sign_extend32(); local copy avoids pulling bitops headers.
 static inline s32 sign_extend32(u32 value, unsigned int index)
 {

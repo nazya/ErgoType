@@ -42,8 +42,10 @@ int hid_builtin_drivers_init(void)
 #endif
 		/*
 		 * This source slice only links hid-generic plus vendor drivers whose
-		 * active hooks are report_fixup/input_mapping/simple probe. Drivers
-		 * needing raw_event/workqueue/wait/GET_REPORT remain out of CMake.
+		 * active hooks are report_fixup/usage_table/input_mapping/input_mapped/
+		 * input_configured/event/simple probe, async-converted Vivaldi
+		 * feature_mapping, and Kye's async SET_REPORT probe path. Drivers
+		 * needing raw_event/workqueue/wait/sync GET_REPORT remain out of CMake.
 		 */
 		ret = hid_register_driver(*driver);
 		if (ret)
