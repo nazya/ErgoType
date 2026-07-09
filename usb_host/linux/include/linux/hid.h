@@ -680,6 +680,13 @@ struct hid_device {
 #define to_hid_device(pdev) \
 	container_of(pdev, struct hid_device, dev)
 
+// #define hid_to_usb_dev(hid_dev) to_usb_device(hid_dev->dev.parent->parent)
+// This port has the same hid_device -> usb_interface -> usb_device parent chain.
+static inline struct usb_device *hid_to_usb_dev(struct hid_device *hid_dev)
+{
+	return to_usb_device(hid_dev->dev.parent->parent);
+}
+
 static inline void *hid_get_drvdata(struct hid_device *hdev)
 {
 	return dev_get_drvdata(&hdev->dev);
@@ -774,6 +781,10 @@ struct hid_driver {
 	const struct hid_report_id *report_table;
 	int (*raw_event)(struct hid_device *hdev, struct hid_report *report,
 			u8 *data, int size);
+	/* Upstream has no callback-safety marker; this port only runs raw_event
+	 * hooks audited as nonblocking from the TinyUSB receive callback path.
+	 */
+	bool raw_event_callback_safe;
 	const struct hid_usage_id *usage_table;
 	int (*event)(struct hid_device *hdev, struct hid_field *field,
 			struct hid_usage *usage, __s32 value);

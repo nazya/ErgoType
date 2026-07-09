@@ -1,81 +1,18 @@
 #include <stdbool.h>
 #include <stdint.h>
-#include <string.h>
-
-/*
- * Upstream Linux: no equivalent. This file owns the TinyUSB host task,
- * TinyUSB HID callbacks, and the local lookup/lifetime glue that feeds the
- * Linux-shaped HID core from firmware callback context.
- */
 
 #include "pio_usb.h"
 #include "tusb.h"
 
 #include "stdio_tusb_cdc.h"
 #include "evdev.h"
+#include "hid_async.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "linux/include/linux/hid.h"
-#include "linux/include/linux/usb.h"
-
 int hid_core_init(void);
 int hid_builtin_drivers_init(void);
-
-extern const struct hid_ll_driver tuh_hid_ll_driver;
-
-#define HID_HOST_MAX_DEVICES CFG_TUH_HID
-
-static struct hid_device *hid_host_devices[HID_HOST_MAX_DEVICES];
-
-static struct hid_device *hid_host_lookup(uint8_t dev_addr, uint8_t instance)
-{
-    for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
-        struct hid_device *hid = hid_host_devices[i];
-
-        if (hid && hid->dev_addr == dev_addr && hid->instance == instance)
-            return hid;
-    }
-
-    return NULL;
-}
-
-static int hid_host_insert(struct hid_device *hid)
-{
-    for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
-        if (!hid_host_devices[i]) {
-            hid_host_devices[i] = hid;
-            return 0;
-        }
-    }
-
-    return -ENOMEM;
-}
-
-static void hid_host_remove_slot(struct hid_device *hid)
-{
-    for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
-        if (hid_host_devices[i] == hid) {
-            hid_host_devices[i] = NULL;
-            return;
-        }
-    }
-}
-
-struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int ifnum)
-{
-    for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
-        struct hid_device *hid = hid_host_devices[i];
-
-        if (hid && hid->usb_dev.dev_addr == dev->dev_addr &&
-            hid->usb_intf.cur_altsetting &&
-            hid->usb_intf.cur_altsetting->desc.bInterfaceNumber == ifnum)
-            return &hid->usb_intf;
-    }
-
-    return NULL;
-}
 
 void tusb_host_task(void *pvParameters)
 {
@@ -130,155 +67,4 @@ void tusb_host_task(void *pvParameters)
     while (1) {
         tuh_task();
     }
-}
-
-static int hid_host_fill_device(struct hid_device *hid, uint8_t dev_addr, uint8_t instance,
-                                uint8_t const *desc_report, uint16_t desc_len)
-{
-    uint16_t vid = 0;
-    uint16_t pid = 0;
-    uint8_t proto = tuh_hid_interface_protocol(dev_addr, instance);
-    tuh_itf_info_t itf_info;
-
-    memset(&itf_info, 0, sizeof(itf_info));
-    tuh_vid_pid_get(dev_addr, &vid, &pid);
-    tuh_hid_itf_get_info(dev_addr, instance, &itf_info);
-
-    device_initialize(&hid->usb_dev.dev);
-    device_initialize(&hid->usb_intf.dev);
-
-    hid->dev_addr = dev_addr;
-    hid->instance = instance;
-    hid->usb_dev.dev_addr = dev_addr;
-    hid->usb_dev.descriptor.idVendor = vid;
-    hid->usb_dev.descriptor.idProduct = pid;
-
-    hid->usb_altsetting.desc.bInterfaceNumber = itf_info.desc.bInterfaceNumber;
-    hid->usb_altsetting.desc.bInterfaceSubClass = itf_info.desc.bInterfaceSubClass;
-    hid->usb_altsetting.desc.bInterfaceProtocol = itf_info.desc.bInterfaceProtocol;
-    hid->usb_altsetting.desc.bNumEndpoints = itf_info.desc.bNumEndpoints;
-    hid->usb_intf.altsetting = &hid->usb_altsetting;
-    hid->usb_intf.cur_altsetting = &hid->usb_altsetting;
-    hid->usb_intf.dev.parent = &hid->usb_dev.dev;
-    hid->dev.parent = &hid->usb_intf.dev;
-    usb_set_intfdata(&hid->usb_intf, hid);
-
-    hid->ll_driver = &tuh_hid_ll_driver;
-    hid->ll_rdesc = desc_report;
-    hid->ll_rsize = desc_len;
-    init_waitqueue_head(&hid->ll_wait);
-
-    hid->bus = BUS_USB;
-    hid->vendor = vid;
-    hid->product = pid;
-    hid->version = 0;
-    if (proto == HID_ITF_PROTOCOL_MOUSE)
-        hid->type = HID_TYPE_USBMOUSE;
-    else if (proto == HID_ITF_PROTOCOL_NONE)
-        hid->type = HID_TYPE_USBNONE;
-
-    snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x", hid->vendor, hid->product);
-    usb_make_path(&hid->usb_dev, hid->phys, sizeof(hid->phys));
-    strlcat(hid->phys, "/input", sizeof(hid->phys));
-
-    return 0;
-}
-
-void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_report, uint16_t desc_len)
-{
-    struct hid_device *hid;
-    uint8_t *rdesc;
-    int ret;
-
-    if (!desc_report || !desc_len) {
-        async_msg("ERR: HID_DESC_MISSING");
-        return;
-    }
-
-    hid = hid_allocate_device();
-    if (IS_ERR(hid)) {
-        async_msg("ERR: HID_ALLOC_FAIL");
-        return;
-    }
-
-    rdesc = kmemdup(desc_report, desc_len, GFP_KERNEL);
-    if (!rdesc) {
-        hid_destroy_device(hid);
-        async_msg("ERR: HID_DESC_ALLOC_FAIL");
-        return;
-    }
-
-    ret = hid_host_fill_device(hid, dev_addr, instance, rdesc, desc_len);
-    if (ret < 0) {
-        async_msg("ERR: HID_FILL_FAIL");
-        goto fail;
-    }
-
-    ret = hid_host_insert(hid);
-    if (ret < 0) {
-        async_msg("ERR: HID_TABLE_FULL");
-        goto fail;
-    }
-
-    ret = hid_add_device(hid);
-    if (ret < 0) {
-        hid_host_remove_slot(hid);
-        async_msg("ERR: HID_ADD_FAIL");
-        goto fail;
-    }
-
-    bool receive_ok = tuh_hid_receive_report(dev_addr, instance);
-    if (!receive_ok)
-        async_msg("ERR: HID_RX_START_FAIL");
-    hid->ll_rdesc = NULL;
-    hid->ll_rsize = 0;
-    kfree(rdesc);
-    return;
-
-fail:
-    kfree(rdesc);
-    hid_destroy_device(hid);
-}
-
-void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
-{
-    struct hid_device *hid = hid_host_lookup(dev_addr, instance);
-
-    if (hid) {
-        hid_host_remove_slot(hid);
-        hid_destroy_device(hid);
-    }
-}
-
-void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len)
-{
-    struct hid_device *hid = hid_host_lookup(dev_addr, instance);
-    uint8_t protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
-    int ret = -ENODEV;
-
-    if (protocol_mode == HID_PROTOCOL_BOOT) {
-        async_msg("WARN: HID_PROTOCOL_BOOT");
-    } else if (hid) {
-        uint8_t report_buf[CFG_TUH_HID_EPIN_BUFSIZE];
-
-        // ret = hid_safe_input_report(hid, HID_INPUT_REPORT, (u8 *)report,
-        //                             CFG_TUH_HID_EPIN_BUFSIZE, len, 1);
-        /*
-         * hid_safe_input_report() may zero-pad short reports in-place. TinyUSB
-         * gives us a const callback buffer, so give the Linux parser a writable
-         * transport-sized copy without allocating in the callback.
-         */
-        memset(report_buf, 0, sizeof(report_buf));
-        memcpy(report_buf, report, len);
-        ret = hid_safe_input_report(hid, HID_INPUT_REPORT, report_buf,
-                                    sizeof(report_buf), len, 1);
-        if (ret < 0)
-            async_msg("ERR: HID_REPORT_SKIP");
-    } else {
-        async_msg("ERR: HID_REPORT_SKIP");
-    }
-
-    bool receive_ok = tuh_hid_receive_report(dev_addr, instance);
-    if (!receive_ok)
-        async_msg("ERR: HID_RX_REARM_FAIL");
 }
