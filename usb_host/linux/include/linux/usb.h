@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 
+#include "asm/byteorder.h"
 #include "hid_compat.h"
 
 // Upstream Linux USB core is not ported; this header keeps only the USB identity,
@@ -16,17 +17,25 @@
 #define USB_DIR_IN 0x80
 #define USB_TYPE_STANDARD 0
 #define USB_TYPE_CLASS 0x20
+#define USB_TYPE_VENDOR 0x40
 #define USB_RECIP_DEVICE 0
 #define USB_RECIP_INTERFACE 0x01
 #define USB_REQ_GET_STATUS TUSB_REQ_GET_STATUS
+#define USB_REQ_CLEAR_FEATURE 1
 #define USB_REQ_GET_DESCRIPTOR TUSB_REQ_GET_DESCRIPTOR
 #define USB_STATUS_TYPE_STANDARD USB_TYPE_STANDARD
 #define USB_STATUS_TYPE_PTM 1
 #define USB_DT_STRING TUSB_DESC_STRING
 #define PIPE_CONTROL 2
+#define PIPE_INTERRUPT 3
 #define USB_CTRL_GET_TIMEOUT 5000
 #define USB_CTRL_SET_TIMEOUT 5000
 #define USB_MAX_SYNCHRONOUS_TIMEOUT 60000
+#define USB_HOST_ENDPOINT_MAX 4
+#define USB_DT_ENDPOINT TUSB_DESC_ENDPOINT
+#define USB_ENDPOINT_XFER_INT TUSB_XFER_INTERRUPT
+#define USB_ENDPOINT_DIR_MASK 0x80
+#define USB_ENDPOINT_XFER_MASK 0x03
 
 struct usb_device_descriptor {
 	__le16 idVendor;
@@ -38,9 +47,25 @@ struct usb_device_descriptor {
 	u8 iSerialNumber;
 };
 
+struct usb_config_descriptor {
+	u8 bNumInterfaces;
+};
+
+struct usb_host_config {
+	struct usb_config_descriptor desc;
+};
+
 struct usb_device {
 	struct device dev;
+	struct usb_device *parent;
 	struct usb_device_descriptor descriptor;
+	// struct usb_host_config *config;
+	// struct usb_host_config *actconfig;
+	// Firmware supports one active TinyUSB configuration and stores only the
+	// descriptor fields imported HID drivers currently inspect.
+	struct usb_host_config config_storage;
+	struct usb_host_config *config;
+	struct usb_host_config *actconfig;
 	char *product;
 	char *manufacturer;
 	char *serial;
@@ -54,6 +79,8 @@ struct usb_device {
 	u8 hub_addr;
 	u8 hub_port;
 	u8 speed;
+	u8 portnum;
+	int maxchild;
 	bool topology_valid;
 };
 
@@ -64,8 +91,25 @@ struct usb_interface_descriptor {
 	u8 bNumEndpoints;
 };
 
+struct usb_endpoint_descriptor {
+	u8 bLength;
+	u8 bDescriptorType;
+	u8 bEndpointAddress;
+	u8 bmAttributes;
+	__le16 wMaxPacketSize;
+	u8 bInterval;
+};
+
+struct usb_host_endpoint {
+	struct usb_endpoint_descriptor desc;
+};
+
 struct usb_host_interface {
 	struct usb_interface_descriptor desc;
+	// struct usb_host_endpoint *endpoint;
+	// Firmware stores a small fixed endpoint snapshot in the local
+	// usb_interface shim instead of allocating Linux USB core altsettings.
+	struct usb_host_endpoint endpoint[USB_HOST_ENDPOINT_MAX];
 	bool has_interrupt_out;
 	u8 interrupt_out_endpoint;
 };
@@ -76,6 +120,9 @@ struct usb_interface {
 	struct usb_host_interface *cur_altsetting;
 	int wireless_status;
 };
+
+extern const struct device_type usb_device_type;
+extern const struct device_type usb_if_device_type;
 
 static inline struct usb_interface *to_usb_interface(struct device *dev)
 {
@@ -120,6 +167,19 @@ static inline void *usb_get_intfdata(struct usb_interface *intf)
 }
 
 struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int ifnum);
+struct usb_device *usb_hub_find_child(struct usb_device *hdev, int port1);
+
+/**
+ * usb_hub_for_each_child - iterate over all child devices on the hub
+ * @hdev:  USB device belonging to the usb hub
+ * @port1: portnum associated with child device
+ * @child: child device pointer
+ */
+#define usb_hub_for_each_child(hdev, port1, child) \
+	for (port1 = 1,	child =	usb_hub_find_child(hdev, port1); \
+			port1 <= hdev->maxchild; \
+			child = usb_hub_find_child(hdev, ++port1)) \
+		if (!child) continue; else
 
 static inline int usb_set_wireless_status(struct usb_interface *iface, int status)
 {
@@ -138,10 +198,98 @@ static inline unsigned int __create_pipe(struct usb_device *dev,
 
 #define usb_pipein(pipe)	((pipe) & USB_DIR_IN)
 #define usb_pipeout(pipe)	(!usb_pipein(pipe))
+#define usb_pipeendpoint(pipe)	(((pipe) >> 15) & 0x0f)
 #define usb_sndctrlpipe(dev, endpoint)	\
 	((PIPE_CONTROL << 30) | __create_pipe(dev, endpoint))
 #define usb_rcvctrlpipe(dev, endpoint)	\
 	((PIPE_CONTROL << 30) | __create_pipe(dev, endpoint) | USB_DIR_IN)
+#define usb_sndintpipe(dev, endpoint)	\
+	((PIPE_INTERRUPT << 30) | __create_pipe(dev, endpoint))
+#define usb_rcvintpipe(dev, endpoint)	\
+	((PIPE_INTERRUPT << 30) | __create_pipe(dev, endpoint) | USB_DIR_IN)
+
+static inline bool usb_endpoint_xfer_int(const struct usb_endpoint_descriptor *epd)
+{
+	return (epd->bmAttributes & USB_ENDPOINT_XFER_MASK) == USB_ENDPOINT_XFER_INT;
+}
+
+static inline bool usb_check_int_endpoints(const struct usb_interface *intf,
+					   const u8 *ep_addrs)
+{
+	const struct usb_host_interface *alt = intf->cur_altsetting;
+
+	for (size_t i = 0; ep_addrs[i]; i++) {
+		bool found = false;
+
+		for (u8 j = 0; j < alt->desc.bNumEndpoints; j++) {
+			const struct usb_endpoint_descriptor *desc = &alt->endpoint[j].desc;
+
+			if (desc->bEndpointAddress == ep_addrs[i] &&
+			    usb_endpoint_xfer_int(desc)) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+			return false;
+	}
+
+	return true;
+}
+
+#if 0
+/*
+ * Deferred: current linked HID drivers do not use Linux URB transport or
+ * synchronous descriptor/status/string helpers. Keep the upstream-shaped USB
+ * control surface here, but do not expose it until a worker/state-machine path
+ * can execute these requests outside TinyUSB callbacks.
+ */
+struct usb_ctrlrequest {
+	u8 bRequestType;
+	u8 bRequest;
+	__le16 wValue;
+	__le16 wIndex;
+	__le16 wLength;
+} __packed;
+
+struct urb;
+typedef void (*usb_complete_t)(struct urb *);
+
+struct urb {
+	struct usb_device *dev;
+	unsigned int pipe;
+	int status;
+	void *transfer_buffer;
+	u32 transfer_buffer_length;
+	u32 actual_length;
+	unsigned char *setup_packet;
+	void *context;
+	usb_complete_t complete;
+};
+
+struct urb *usb_alloc_urb(int iso_packets, gfp_t mem_flags);
+void usb_free_urb(struct urb *urb);
+int usb_submit_urb(struct urb *urb, gfp_t mem_flags);
+void usb_kill_urb(struct urb *urb);
+
+static inline void usb_fill_control_urb(struct urb *urb,
+					struct usb_device *dev,
+					unsigned int pipe,
+					unsigned char *setup_packet,
+					void *transfer_buffer,
+					int buffer_length,
+					usb_complete_t complete_fn,
+					void *context)
+{
+	urb->dev = dev;
+	urb->pipe = pipe;
+	urb->setup_packet = setup_packet;
+	urb->transfer_buffer = transfer_buffer;
+	urb->transfer_buffer_length = buffer_length;
+	urb->complete = complete_fn;
+	urb->context = context;
+}
 
 int tuh_usb_control_msg(struct usb_device *dev, unsigned int pipe,
 			u8 request, u8 requesttype, u16 value, u16 index,
@@ -466,5 +614,6 @@ static inline int usb_get_std_status(struct usb_device *dev,
 	return usb_get_status(dev, recip, USB_STATUS_TYPE_STANDARD, target,
 		data);
 }
+#endif
 
 #endif

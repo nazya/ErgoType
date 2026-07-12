@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,11 +53,25 @@ typedef unsigned int umode_t;
 /*
  * Temporary callback-driven host slice: keep Linux descriptor/report/input
  * parsing, but do not enable subsystems that need hardware control requests,
- * workqueue continuations, or userspace/class proxy surfaces yet.
+ * blocking workqueue waits, or userspace/class proxy surfaces yet.
  */
+// #define CONFIG_HID_BATTERY_STRENGTH 1
+// Firmware power_supply proxy is deferred; current linked HID drivers do not
+// require battery class registration.
 #undef CONFIG_HID_BATTERY_STRENGTH
+// Firmware has a bounded hiddev proxy boundary instead of Linux hiddev fds.
+#define CONFIG_USB_HIDDEV 1
+/*
+ * These driver/subsystem configs are kept disabled because the current CMake
+ * HID allowlist does not link the corresponding upstream drivers or required
+ * Linux subsystem proxy. Re-enable one at a time with the driver and hardware
+ * or emulator check that proves the async boundary is complete.
+ */
 #undef CONFIG_DRAGONRISE_FF
 #undef CONFIG_GREENASIA_FF
+#undef CONFIG_HID_GOOGLE_STADIA_FF
+#undef CONFIG_HID_HAPTIC
+#undef CONFIG_HID_NTRIG
 #undef CONFIG_HID_ACRUX_FF
 #undef CONFIG_HID_CORSAIR_VOID
 #undef CONFIG_HID_PID
@@ -67,9 +82,12 @@ typedef unsigned int umode_t;
 #undef CONFIG_LOGIG940_FF
 #undef CONFIG_LOGIRUMBLEPAD2_FF
 #undef CONFIG_LOGITECH_FF
+#undef CONFIG_NVIDIA_SHIELD_FF
 #undef CONFIG_LOGIWHEELS_FF
+#undef CONFIG_HID_MEGAWORLD_FF
 #undef CONFIG_PANTHERLORD_FF
 #undef CONFIG_SMARTJOYPLUS_FF
+#undef CONFIG_HID_THRUSTMASTER
 #undef CONFIG_THRUSTMASTER_FF
 #undef CONFIG_ZEROPLUS_FF
 #define __user
@@ -143,23 +161,6 @@ struct work_struct {
 	struct work_struct *next;
 };
 
-struct delayed_work {
-	struct work_struct work;
-	struct workqueue_struct *wq;
-	unsigned long due;
-	uint8_t delayed_pending;
-	struct delayed_work *next;
-};
-
-#define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->canceling = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
-#define INIT_DELAYED_WORK(dwork, fn) do { INIT_WORK(&(dwork)->work, (fn)); (dwork)->wq = NULL; (dwork)->due = 0; (dwork)->delayed_pending = 0; (dwork)->next = NULL; } while (0)
-#define to_delayed_work(work) container_of(work, struct delayed_work, work)
-void cancel_work_sync(struct work_struct *work);
-static inline bool delayed_work_pending(struct delayed_work *dwork)
-{
-	return dwork->delayed_pending || dwork->work.pending;
-}
-
 struct timer_list {
 	void (*function)(struct timer_list *timer);
 	unsigned long expires;
@@ -167,6 +168,42 @@ struct timer_list {
 	uint8_t running;
 	struct timer_list *next;
 };
+
+struct delayed_work {
+	struct work_struct work;
+	struct timer_list timer;
+	struct workqueue_struct *wq;
+	uint8_t delayed_pending;
+};
+
+#define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->canceling = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
+void hid_delayed_work_timer(struct timer_list *timer);
+#define INIT_DELAYED_WORK(dwork, fn) do { INIT_WORK(&(dwork)->work, (fn)); timer_setup(&(dwork)->timer, hid_delayed_work_timer, 0); (dwork)->wq = NULL; (dwork)->delayed_pending = 0; } while (0)
+// Upstream deferrable work can skip wakeups for idle CPUs. Firmware has no
+// matching power-idle worker mode, so it uses the regular delayed-work bridge.
+#define INIT_DEFERRABLE_WORK(dwork, fn) INIT_DELAYED_WORK(dwork, fn)
+#define to_delayed_work(work) container_of(work, struct delayed_work, work)
+extern struct workqueue_struct *system_wq;
+int hid_workqueue_init(void);
+void hid_workqueue_task(void *pvParameters);
+bool queue_work(struct workqueue_struct *wq, struct work_struct *work);
+bool schedule_work(struct work_struct *work);
+bool flush_work(struct work_struct *work);
+bool cancel_work_sync(struct work_struct *work);
+struct workqueue_struct *create_singlethread_workqueue(const char *name);
+void destroy_workqueue(struct workqueue_struct *wq);
+bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
+			unsigned long delay);
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay);
+bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
+		      unsigned long delay);
+bool cancel_delayed_work_sync(struct delayed_work *dwork);
+int hid_timer_init(void);
+void hid_timer_task(void *pvParameters);
+static inline bool delayed_work_pending(struct delayed_work *dwork)
+{
+	return dwork->delayed_pending || dwork->work.pending;
+}
 
 struct file {
 	int unused;
@@ -213,13 +250,20 @@ typedef int atomic_t;
 #define EPROTO 71
 #define ENXIO 6
 #define EAGAIN 11
+#define EINPROGRESS 115
 #define EREMOTEIO 121
 #define ETIMEDOUT 110
 #define E2BIG 7
+#define EEXIST 17
+#define EMSGSIZE 90
 
 #define BIT(n) (1u << (n))
 #define BIT_ULL(n) (1ULL << (n))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define min3(x, y, z) min(min((x), (y)), (z))
+// Linux flexible-array allocation helper; keep upstream driver allocation
+// expressions such as struct_size(data, leds, n) unchanged.
+#define struct_size(p, member, count) (sizeof(*(p)) + sizeof((p)->member[0]) * (count))
 #define IS_BUILTIN(option) (option)
 #define IS_MODULE(option) 0
 #define IS_ENABLED(option) (option)
@@ -234,10 +278,15 @@ typedef int atomic_t;
 #define MODULE_DEVICE_TABLE(type, name)
 #define MODULE_AUTHOR(name)
 #define MODULE_DESCRIPTION(desc)
+#define MODULE_INFO(tag, info)
 #define MODULE_LICENSE(license)
+#define MODULE_SOFTDEP(dep)
 #define module_param(name, type, perm)
 #define module_param_named(name, value, type, perm)
 #define module_param_array_named(name, array, type, nump, perm)
+#define module_param_cb(name, ops, arg, perm)
+// Linux module parameters are not writable runtime knobs in firmware.
+#define module_param_call(name, set, get, arg, perm)
 #define MODULE_PARM_DESC(name, desc)
 typedef int (*linux_initcall_t)(void);
 #define __LINUX_INITCALL_CONCAT(a, b) a##b
@@ -253,6 +302,49 @@ typedef int (*linux_initcall_t)(void);
 #define module_exit(fn)
 #define module_driver(__driver, __register, __unregister, ...)
 #define ATOMIC_INIT(v) (v)
+struct kernel_param {
+	void *arg;
+};
+struct kernel_param_ops {
+	int (*set)(const char *val, const struct kernel_param *kp);
+	int (*get)(char *buffer, const struct kernel_param *kp);
+};
+static inline int param_set_bool(const char *val, const struct kernel_param *kp)
+{
+	bool value;
+
+	if (!strcmp(val, "1") || !strcmp(val, "y") || !strcmp(val, "Y") ||
+	    !strcmp(val, "true")) {
+		value = true;
+	} else if (!strcmp(val, "0") || !strcmp(val, "n") ||
+		   !strcmp(val, "N") || !strcmp(val, "false")) {
+		value = false;
+	} else {
+		return -EINVAL;
+	}
+
+	*(bool *)kp->arg = value;
+	return 0;
+}
+static inline int param_get_bool(char *buffer, const struct kernel_param *kp)
+{
+	return sprintf(buffer, "%c", *(bool *)kp->arg ? 'Y' : 'N');
+}
+static inline int param_get_uint(char *buffer, const struct kernel_param *kp)
+{
+	return sprintf(buffer, "%u", *(unsigned int *)kp->arg);
+}
+static inline bool try_module_get(struct module *module)
+{
+	// try_module_get(THIS_MODULE) pins a Linux module; firmware never unloads.
+	(void)module;
+	return true;
+}
+static inline void module_put(struct module *module)
+{
+	// module_put(THIS_MODULE) drops a Linux module ref; firmware never unloads.
+	(void)module;
+}
 #define U8_MAX ((u8)~0U)
 #define S16_MAX INT16_MAX
 #define S16_MIN INT16_MIN
@@ -264,6 +356,7 @@ typedef int (*linux_initcall_t)(void);
 #define BUG_ON(x) configASSERT(!(x))
 #define unlikely(x) (x)
 #define min(x, y) ((x) < (y) ? (x) : (y))
+#define max(x, y) ((x) > (y) ? (x) : (y))
 #define IS_ERR(ptr) ((uintptr_t)(ptr) >= (uintptr_t)-4095)
 #define PTR_ERR(ptr) ((long)(ptr))
 #define ERR_PTR(err) ((void *)(intptr_t)(err))
@@ -280,6 +373,7 @@ typedef int (*linux_initcall_t)(void);
 #define dev_dbg(dev, fmt, ...) do { (void)(dev); } while (0)
 #define dev_warn(dev, fmt, ...) do { (void)(dev); } while (0)
 #define dev_err(dev, fmt, ...) do { (void)(dev); } while (0)
+#define dev_err_probe(dev, err, fmt, ...) ((void)(dev), (err))
 #define dev_err_once(dev, fmt, ...) do { static bool __done; if (!__done) { __done = true; dev_err(dev, fmt, ##__VA_ARGS__); } } while (0)
 #define dev_notice_once(dev, fmt, ...) do { static bool __done; if (!__done) { __done = true; dev_notice(dev, fmt, ##__VA_ARGS__); } } while (0)
 #define dev_warn_once(dev, fmt, ...) do { static bool __done; if (!__done) { __done = true; dev_warn(dev, fmt, ##__VA_ARGS__); } } while (0)
@@ -322,6 +416,8 @@ typedef int (*linux_initcall_t)(void);
 #define S_IWGRP 0020
 #define S_IROTH 0004
 #define S_IRUGO (S_IRUSR | S_IRGRP | S_IROTH)
+#define __ATTR(_name, _mode, _show, _store) \
+	{ .attr = { .name = #_name, .mode = (_mode) }, .show = (_show), .store = (_store) }
 #define DEVICE_ATTR(_name, _mode, _show, _store) \
 	struct device_attribute dev_attr_##_name = { .attr = { .name = #_name, .mode = (_mode) }, .show = (_show), .store = (_store) }
 #define DEVICE_ATTR_RW(_name) \
@@ -402,11 +498,13 @@ static inline int list_empty(const struct list_head *head)
 
 #define list_entry(ptr, type, member) ((type *)((char *)(ptr) - offsetof(type, member)))
 #define list_first_entry(ptr, type, member) list_entry((ptr)->next, type, member)
+#define list_last_entry(ptr, type, member) list_entry((ptr)->prev, type, member)
 #define list_for_each(pos, head) \
 	for (pos = (head)->next; pos != (head); pos = pos->next)
 #define list_for_each_entry(pos, head, member) \
 	for (pos = list_entry((head)->next, typeof(*pos), member); &pos->member != (head); pos = list_entry(pos->member.next, typeof(*pos), member))
 #define list_is_last(list, head) ((list)->next == (head))
+#define list_is_singular(head) (!list_empty(head) && (head)->next == (head)->prev)
 #define list_first_entry_or_null(ptr, type, member) \
 	(list_empty(ptr) ? NULL : list_entry((ptr)->next, type, member))
 #define list_next_entry_or_null(pos, head, member) \
@@ -424,6 +522,7 @@ struct attribute {
 struct bin_attribute {
 	struct attribute attr;
 	size_t size;
+	void *private;
 	ssize_t (*read)(struct file *filp, struct kobject *kobj,
 			const struct bin_attribute *attr,
 			char *buf, loff_t off, size_t count);
@@ -433,9 +532,10 @@ struct bin_attribute {
 };
 
 struct attribute_group {
-	struct attribute **attrs;
+	const char *name;
+	struct attribute * const *attrs;
 	umode_t (*is_visible)(struct kobject *kobj, struct attribute *attr, int n);
-	const struct bin_attribute **bin_attrs;
+	const struct bin_attribute * const *bin_attrs;
 };
 
 struct device_attribute {
@@ -470,10 +570,14 @@ struct kobj_uevent_env {
 struct device;
 struct hid_driver;
 
+struct device_type {
+	const char *name;
+};
+
 struct bus_type {
 	const char *name;
-	const struct attribute_group **dev_groups;
-	const struct attribute_group **drv_groups;
+	const struct attribute_group * const *dev_groups;
+	const struct attribute_group * const *drv_groups;
 	int (*match)(struct device *dev, const struct device_driver *drv);
 	int (*probe)(struct device *dev);
 	void (*remove)(struct device *dev);
@@ -487,10 +591,15 @@ struct device_driver {
 	const struct bus_type *bus;
 	struct module *owner;
 	const char *mod_name;
-	const struct attribute_group **dev_groups;
+	const struct attribute_group * const *dev_groups;
 	const struct hid_driver *hid_driver;
 	struct list_head bus_node;
 	struct list_head attrs;
+};
+
+struct class {
+	const char *name;
+	const struct attribute_group * const *dev_groups;
 };
 
 struct device_attr_entry {
@@ -511,6 +620,7 @@ struct driver_attr_entry {
 struct device {
 	const struct bus_type *bus;
 	struct device *parent;
+	const struct device_type *type;
 	struct device_driver *driver;
 	void (*release)(struct device *dev);
 	void *data;
@@ -534,15 +644,23 @@ struct device_node {
 
 #define DEVICE_ATTR_RO(_name) \
 	struct device_attribute dev_attr_##_name = { .attr = { .name = #_name, .mode = S_IRUSR }, .show = _name##_show }
+#define __BIN_ATTR(_name, _mode, _read, _write, _size) { \
+	.attr = { .name = #_name, .mode = (_mode) }, \
+	.read = (_read), \
+	.write = (_write), \
+	.size = (_size), \
+}
+#define BIN_ATTR(_name, _mode, _read, _write, _size) \
+	struct bin_attribute bin_attr_##_name = __BIN_ATTR(_name, _mode, _read, _write, _size)
 #define BIN_ATTR_RO(_name, _size) \
-	struct bin_attribute bin_attr_##_name = { .attr = { .name = #_name, .mode = S_IRUSR }, .size = (_size), .read = _name##_read }
+	struct bin_attribute bin_attr_##_name = __BIN_ATTR(_name, S_IRUSR, _name##_read, NULL, _size)
 #define DRIVER_ATTR_WO(_name) \
 	struct driver_attribute driver_attr_##_name = { .attr = { .name = #_name, .mode = S_IWUSR }, .store = _name##_store }
 #define ATTRIBUTE_GROUPS(_name) \
 	static const struct attribute_group _name##_group = { .attrs = _name##_attrs }; \
-	static const struct attribute_group *_name##_groups[] = { &_name##_group, NULL }
+	static const struct attribute_group * const _name##_groups[] = { &_name##_group, NULL }
 #define __ATTRIBUTE_GROUPS(_name) \
-	static const struct attribute_group *_name##_groups[] = { &_name##_group, NULL }
+	static const struct attribute_group * const _name##_groups[] = { &_name##_group, NULL }
 
 static inline int atomic_inc_return(atomic_t *v)
 {
@@ -606,8 +724,8 @@ static inline int sysfs_create_bin_file(struct kobject *kobj, const struct bin_a
 static inline void sysfs_remove_bin_file(struct kobject *kobj, const struct bin_attribute *attr);
 static inline int driver_sysfs_create_group(struct device_driver *drv, const struct attribute_group *grp);
 static inline void driver_sysfs_remove_group(struct device_driver *drv, const struct attribute_group *grp);
-static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group **groups);
-static inline void device_sysfs_remove_groups(struct device *dev, const struct attribute_group **groups);
+static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group * const *groups);
+static inline void device_sysfs_remove_groups(struct device *dev, const struct attribute_group * const *groups);
 static inline int kobject_uevent(struct kobject *kobj, enum kobject_action action);
 
 static inline int device_probe(struct device *dev)
@@ -637,9 +755,9 @@ static inline int device_probe(struct device *dev)
 	return -ENODEV;
 }
 
-static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group **groups)
+static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group * const *groups)
 {
-	const struct attribute_group **group;
+	const struct attribute_group * const *group;
 
 	if (!groups)
 		return 0;
@@ -659,9 +777,9 @@ static inline int device_sysfs_create_groups(struct device *dev, const struct at
 	return 0;
 }
 
-static inline void device_sysfs_remove_groups(struct device *dev, const struct attribute_group **groups)
+static inline void device_sysfs_remove_groups(struct device *dev, const struct attribute_group * const *groups)
 {
-	const struct attribute_group **group;
+	const struct attribute_group * const *group;
 
 	if (!groups)
 		return;
@@ -758,7 +876,7 @@ static inline int driver_attach(struct device_driver *drv);
 static inline int driver_register(struct device_driver *drv)
 {
 	struct bus_type *bus = (struct bus_type *)drv->bus;
-	const struct attribute_group **group;
+	const struct attribute_group * const *group;
 
 	INIT_LIST_HEAD(&drv->bus_node);
 	INIT_LIST_HEAD(&drv->attrs);
@@ -783,10 +901,21 @@ static inline int driver_register(struct device_driver *drv)
 	return 0;
 }
 
+static inline int class_register(const struct class *class)
+{
+	(void)class;
+	return 0;
+}
+
+static inline void class_unregister(const struct class *class)
+{
+	(void)class;
+}
+
 static inline void driver_unregister(struct device_driver *drv)
 {
 	struct bus_type *bus = (struct bus_type *)drv->bus;
-	const struct attribute_group **group;
+	const struct attribute_group * const *group;
 	struct device *dev;
 
 	list_for_each_entry(dev, &bus->devices, bus_node) {
@@ -970,6 +1099,48 @@ static inline int kstrtouint(const char *s, unsigned int base, unsigned int *res
 		return -ERANGE;
 
 	*res = (unsigned int)v;
+	return 0;
+}
+
+static inline int kstrtoul(const char *s, unsigned int base, unsigned long *res)
+{
+	char *endp;
+	unsigned long long v;
+
+	if (base > 16)
+		return -EINVAL;
+	if (*s == '+')
+		s++;
+	if (*s == '-' || *s == ' ' || (*s >= '\t' && *s <= '\r'))
+		return -EINVAL;
+
+	v = strtoull(s, &endp, base);
+	if (endp == s || !hid_compat_kstr_end_ok(endp))
+		return -EINVAL;
+	if (v > ULONG_MAX)
+		return -ERANGE;
+
+	*res = (unsigned long)v;
+	return 0;
+}
+
+static inline int kstrtoint(const char *s, unsigned int base, int *res)
+{
+	char *endp;
+	long long v;
+
+	if (base > 16)
+		return -EINVAL;
+	if (*s == ' ' || (*s >= '\t' && *s <= '\r'))
+		return -EINVAL;
+
+	v = strtoll(s, &endp, base);
+	if (endp == s || !hid_compat_kstr_end_ok(endp))
+		return -EINVAL;
+	if (v < INT_MIN || v > INT_MAX)
+		return -ERANGE;
+
+	*res = (int)v;
 	return 0;
 }
 
@@ -1245,8 +1416,8 @@ static inline void driver_remove_file(struct device_driver *drv, const struct dr
 static inline int sysfs_create_group(struct kobject *kobj, const struct attribute_group *grp)
 {
 	struct device *dev = kobj_to_dev(kobj);
-	struct attribute **attr;
-	const struct bin_attribute **bin_attr;
+	struct attribute * const *attr;
+	const struct bin_attribute * const *bin_attr;
 
 	if (grp->attrs)
 		for (attr = grp->attrs; *attr; attr++) {
@@ -1288,8 +1459,8 @@ static inline int sysfs_create_group(struct kobject *kobj, const struct attribut
 static inline void sysfs_remove_group(struct kobject *kobj, const struct attribute_group *grp)
 {
 	struct device *dev = kobj_to_dev(kobj);
-	struct attribute **attr;
-	const struct bin_attribute **bin_attr;
+	struct attribute * const *attr;
+	const struct bin_attribute * const *bin_attr;
 
 	if (grp->attrs)
 		for (attr = grp->attrs; *attr; attr++)
@@ -1301,7 +1472,7 @@ static inline void sysfs_remove_group(struct kobject *kobj, const struct attribu
 
 static inline int driver_sysfs_create_group(struct device_driver *drv, const struct attribute_group *grp)
 {
-	struct attribute **attr;
+	struct attribute * const *attr;
 
 	for (attr = grp->attrs; *attr; attr++) {
 		int ret = driver_create_file(drv, container_of(*attr, struct driver_attribute, attr));
@@ -1320,7 +1491,7 @@ static inline int driver_sysfs_create_group(struct device_driver *drv, const str
 
 static inline void driver_sysfs_remove_group(struct device_driver *drv, const struct attribute_group *grp)
 {
-	struct attribute **attr;
+	struct attribute * const *attr;
 
 	for (attr = grp->attrs; *attr; attr++)
 		driver_remove_file(drv, container_of(*attr, struct driver_attribute, attr));
@@ -1470,6 +1641,13 @@ static inline void *kzalloc(size_t size, int flags)
 {
 	(void)flags;
 	return pvPortCalloc(1, size);
+}
+
+// Linux kcalloc(count, size, flags) compatibility shim.
+static inline void *kcalloc(size_t count, size_t size, int flags)
+{
+	(void)flags;
+	return pvPortCalloc(count, size);
 }
 
 // Linux vzalloc(size) compatibility shim.
@@ -1963,6 +2141,13 @@ static inline int __test_and_set_bit(unsigned int nr, unsigned long *addr)
 	return test_and_set_bit(nr, addr);
 }
 
+// Minimal local copy of Linux locked bitops; taskENTER_CRITICAL() provides the
+// firmware-side atomicity that Linux gets from the bit lock primitive.
+static inline int test_and_set_bit_lock(unsigned int nr, unsigned long *addr)
+{
+	return test_and_set_bit(nr, addr);
+}
+
 // Minimal local copy of Linux bitops used by work flags.
 static inline int test_and_clear_bit(unsigned int nr, unsigned long *addr)
 {
@@ -1978,6 +2163,11 @@ static inline int test_and_clear_bit(unsigned int nr, unsigned long *addr)
 static inline int __test_and_clear_bit(unsigned int nr, unsigned long *addr)
 {
 	return test_and_clear_bit(nr, addr);
+}
+
+static inline void clear_bit_unlock(unsigned int nr, unsigned long *addr)
+{
+	clear_bit(nr, addr);
 }
 
 #define for_each_set_bit(bit, addr, size) \
@@ -2011,6 +2201,7 @@ int timer_delete_sync(struct timer_list *timer);
 #define secs_to_jiffies(sec) ((unsigned long)(sec) * (unsigned long)configTICK_RATE_HZ)
 #define msecs_to_jiffies(ms) ((unsigned long)(((uint64_t)(ms) * configTICK_RATE_HZ + 999u) / 1000u))
 #define jiffies_to_msecs(j) ((unsigned int)(((uint64_t)(j) * 1000u) / configTICK_RATE_HZ))
+#define jiffies_to_usecs(j) ((unsigned int)(((uint64_t)(j) * 1000000u) / configTICK_RATE_HZ))
 #define timer_container_of(var, timer, member) container_of(timer, typeof(*var), member)
 #define le16_to_cpu(x) (x)
 

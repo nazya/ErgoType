@@ -1898,11 +1898,8 @@ static int hidinput_input_event(struct input_dev *dev, unsigned int type,
 	struct hid_field *field;
 	int offset;
 
-	// if (type == EV_FF)
-	// 	return input_ff_event(dev, type, code, value);
-	// FF is outside the callback-driven keyboard/mouse slice.
 	if (type == EV_FF)
-		return -1;
+		return input_ff_event(dev, type, code, value);
 
 	if (type != EV_LED)
 		return -1;
@@ -1914,10 +1911,7 @@ static int hidinput_input_event(struct input_dev *dev, unsigned int type,
 
 	hid_set_field(field, offset, value);
 
-	// schedule_work(&hid->led_work);
-	// Firmware has no Linux workqueue; hidinput_led_worker() now reaches the
-	// nonblocking ll_driver->request() path and only queues SET_REPORT.
-	hidinput_led_worker(&hid->led_work);
+	schedule_work(&hid->led_work);
 	return 0;
 }
 

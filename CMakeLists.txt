@@ -81,8 +81,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/usbhid.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_async.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_queue.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_slice_stubs.c
+        # Deferred hidraw calls are documented inline in hid-core.c.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-input.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-generic.c
@@ -90,10 +93,15 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-quirks.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-appleir.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
+        # Deferred: HIDDEV-forced driver; keep out until hiddev proxy coverage is
+        # hardware/emulator tested for this path.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-belkin.c
-        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cherry.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-chicony.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cherry.c
+        # Deferred: mixed driver file; CM6533 raw/hiddev path is disabled in
+        # source, and HS100B-only enablement should be tested explicitly.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cmedia.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-creative-sb0540.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cypress.c
@@ -103,11 +111,13 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gembird.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gyration.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-glorious.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-huawei.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-holtek-kbd.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-holtek-mouse.c
-        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-huawei.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-icade.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ite.c
+        # Deferred: keep Jabra out until this driver has explicit hardware/emulator
+        # coverage; the generic pre-probe descriptor path is now available.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-jabra.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kensington.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-keytouch.c
@@ -120,14 +130,17 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ortek.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-penmount.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-petalynx.c
+        # Deferred: HIDDEV-forced audio/headset path; keep out until hiddev proxy
+        # behavior is tested for this driver.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-plantronics.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-primax.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-pxrc.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rapoo.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-razer.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rapoo.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-redragon.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-retrode.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-saitek.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-samsung.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-semitek.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-sigmamicro.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-speedlink.c
@@ -137,18 +150,31 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-topseed.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-twinhan.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-viewsonic.c
-        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-waltop.c
+        # Deferred: Vivaldi keyboard stack needs the matching fmap/input support
+        # path enabled and tested as a unit.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-vivaldi-common.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-vivaldi.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-vrc2.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-waltop.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-xiaomi.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-xinmo.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-zydacron.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/input.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/input-mt.c
+        # Deferred with hid-vivaldi*.c above.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/vivaldi-fmap.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-core.c
+        # Deferred: memless FF needs a linked FF driver and hardware/emulator
+        # coverage for effect upload/playback lifecycle.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-memless.c
+        # Deferred: LED/backlight class proxies are not needed by the current HID
+        # allowlist.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/video/backlight/backlight.c
+        # Deferred: CONFIG_HID_BATTERY_STRENGTH is disabled until the
+        # power_supply proxy has matching driver/hardware coverage.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/power/supply/power_supply_core.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
