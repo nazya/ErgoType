@@ -30,7 +30,6 @@
 #include "task.h"
 #include "common/tusb_common.h"
 
-
 void vApplicationMallocFailedHook(void)
 {
   taskDISABLE_INTERRUPTS();

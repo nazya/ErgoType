@@ -4,9 +4,10 @@
 #include "hid_compat.h"
 
 /*
- * Work3 implemented a firmware workqueue bridge here. The callback-driven HID
- * slice keeps work_struct types for upstream declarations, but does not expose
- * queue_work()/flush_work() entry points until driver continuations are wired.
+ * Upstream Linux workqueues run kernel workers and allow blocking flush/cancel
+ * calls. The firmware bridge keeps queue_work() / schedule_work() nonblocking;
+ * flush_work() and cancel_work_sync() may block only after HID disconnect has
+ * been handed from TinyUSB callbacks to the usbhid disconnect task.
  */
 
 #endif

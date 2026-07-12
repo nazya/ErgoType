@@ -781,8 +781,9 @@ struct hid_driver {
 	const struct hid_report_id *report_table;
 	int (*raw_event)(struct hid_device *hdev, struct hid_report *report,
 			u8 *data, int size);
-	/* Upstream has no callback-safety marker; this port only runs raw_event
-	 * hooks audited as nonblocking from the TinyUSB receive callback path.
+	/* Upstream has no callback-safety marker; this port uses it only to keep
+	 * audited nonblocking raw_event hooks inline in the TinyUSB callback path.
+	 * Other raw_event hooks are deferred to the HID async task.
 	 */
 	bool raw_event_callback_safe;
 	const struct hid_usage_id *usage_table;
@@ -1050,14 +1051,18 @@ static inline const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const 
 						 unsigned int *size) { return rdesc; }
 int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, u32 size, int interrupt);
 int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, size_t bufsize, u32 size, int interrupt);
+int hid_deferred_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, size_t bufsize, u32 size, int interrupt);
 void hid_output_report(struct hid_report *report, __u8 *data);
 u8 *hid_alloc_report_buf(struct hid_report *report, gfp_t flags);
 struct hid_report *hid_validate_values(struct hid_device *hid,
 				       enum hid_report_type type, unsigned int id,
 				       unsigned int field_index,
 				       unsigned int report_counts);
+struct hid_field *hid_find_field(struct hid_device *hdev, unsigned int report_type,
+				 unsigned int application, unsigned int usage);
 int hid_set_field(struct hid_field *field, unsigned offset, __s32 value);
 void hid_setup_resolution_multiplier(struct hid_device *hid);
+__s32 hidinput_calc_abs_res(const struct hid_field *field, __u16 code);
 int hidinput_connect(struct hid_device *hid, unsigned int force);
 void hidinput_disconnect(struct hid_device *hid);
 void hidinput_reset_resume(struct hid_device *hid);

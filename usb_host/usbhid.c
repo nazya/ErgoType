@@ -1,25 +1,76 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
+#include "FreeRTOS.h"
+#include "queue.h"
+#include "task.h"
 #include "tusb.h"
+#include "host/hcd.h"
 #include "host/usbh_pvt.h"
 
 #include "hid_async.h"
 #include "stdio_tusb_cdc.h"
 #include "linux/include/linux/hid.h"
+#include "linux/include/linux/hiddev.h"
 #include "linux/include/linux/usb.h"
 
 /*
- * TinyUSB-to-Linux USB HID transport glue. Upstream Linux keeps this shape in
- * drivers/hid/usbhid/hid-core.c; this port uses TinyUSB as the USB backend.
+ * TinyUSB-to-Linux USB HID transport glue.
+ *
+ * This is not a line-preserving port of drivers/hid/usbhid/hid-core.c. It owns
+ * the firmware boundary that upstream usbhid normally gets from Linux USB core:
+ * device/interface snapshots before hid_add_device(), HID ll_driver callbacks,
+ * async report/control submission, and disconnect handoff out of TinyUSB
+ * callbacks.
  */
 
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
 #define HID_HOST_RAW_INTERFACE_MAX HID_HOST_MAX_DEVICES
+#define USBHID_DISCONNECT_QUEUE_LEN HID_HOST_MAX_DEVICES
+#define USBHID_STRING_LANGID 0x0409u
+#define USBHID_USB_DEVICE_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
+#define USBHID_USB_MAXCHILD 31
+#define USBHID_PENDING_HID_MAX HID_HOST_MAX_DEVICES
 
 static const struct hid_ll_driver usb_hid_driver;
+const struct device_type usb_device_type = {
+	.name = "usb_device",
+};
+const struct device_type usb_if_device_type = {
+	.name = "usb_interface",
+};
 static struct hid_device *usbhid_devices[HID_HOST_MAX_DEVICES];
+static QueueHandle_t usbhid_disconnect_queue;
+
+struct usbhid_pending_hid_probe {
+	bool valid;
+	uint8_t instance;
+	uint16_t desc_len;
+	uint8_t *desc_report;
+};
+
+enum usbhid_preprobe_stage {
+	USBHID_PREPROBE_DEVICE_DESC,
+	USBHID_PREPROBE_LANGID,
+	USBHID_PREPROBE_PRODUCT,
+	USBHID_PREPROBE_MANUFACTURER,
+	USBHID_PREPROBE_SERIAL,
+	USBHID_PREPROBE_DONE,
+};
+
+struct usbhid_usb_device {
+	bool valid;
+	bool have_device_desc;
+	bool device_desc_requested;
+	uint8_t pending_desc_dev_addr;
+	enum usbhid_preprobe_stage preprobe_stage;
+	uint16_t string_langid;
+	struct usb_device dev;
+	tusb_desc_device_t device_desc;
+	struct usbhid_pending_hid_probe pending_hid[USBHID_PENDING_HID_MAX];
+};
 
 struct usbhid_raw_interface {
 	bool valid;
@@ -27,9 +78,214 @@ struct usbhid_raw_interface {
 	uint8_t ifnum;
 	uint8_t subclass;
 	uint8_t protocol;
+	uint8_t endpoint_count;
+	struct usb_host_endpoint endpoint[USB_HOST_ENDPOINT_MAX];
 };
 
+static struct usb_device usbhid_root_hub;
+static bool usbhid_root_hub_valid;
+static struct usbhid_usb_device *usbhid_usb_devices[USBHID_USB_DEVICE_MAX];
 static struct usbhid_raw_interface usbhid_raw_interfaces[HID_HOST_RAW_INTERFACE_MAX];
+
+static void usbhid_usb_device_init_config(struct usb_device *dev)
+{
+	dev->config = &dev->config_storage;
+	dev->actconfig = &dev->config_storage;
+}
+
+static void usbhid_usb_device_apply_topology(struct usb_device *dev)
+{
+	hcd_devtree_info_t info;
+
+	/*
+	 * Upstream Linux USB core fills bus/devpath/topology before usbhid_probe().
+	 * TinyUSB keeps the same data in its device tree; copy it into the local
+	 * usb_device shim so imported HID drivers see stable USB identity fields.
+	 */
+	hcd_devtree_get_info(dev->dev_addr, &info);
+	dev->rhport = info.rhport;
+	dev->hub_addr = info.hub_addr;
+	dev->hub_port = info.hub_port;
+	dev->portnum = info.hub_port;
+	dev->speed = info.speed;
+	dev->topology_valid = true;
+}
+
+static struct usb_device *usbhid_usb_root_hub(uint8_t rhport)
+{
+	if (!usbhid_root_hub_valid) {
+		device_initialize(&usbhid_root_hub.dev);
+		usbhid_root_hub.dev.type = &usb_device_type;
+		usbhid_usb_device_init_config(&usbhid_root_hub);
+		usbhid_root_hub.maxchild = USBHID_USB_MAXCHILD;
+		usbhid_root_hub_valid = true;
+	}
+
+	usbhid_root_hub.rhport = rhport;
+	usbhid_root_hub.topology_valid = true;
+	return &usbhid_root_hub;
+}
+
+static struct usbhid_usb_device *usbhid_usb_device_find(uint8_t dev_addr)
+{
+	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
+
+		if (entry && entry->valid && entry->dev.dev_addr == dev_addr)
+			return entry;
+	}
+
+	return NULL;
+}
+
+static struct usbhid_usb_device *usbhid_usb_device_slot(uint8_t dev_addr)
+{
+	struct usbhid_usb_device *free_slot = NULL;
+
+	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
+
+		if (entry && entry->valid && entry->dev.dev_addr == dev_addr)
+			return entry;
+		if (entry && !entry->valid && !free_slot)
+			free_slot = entry;
+		if (!entry && !free_slot) {
+			entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+			if (!entry)
+				return NULL;
+			usbhid_usb_devices[i] = entry;
+			free_slot = entry;
+		}
+	}
+
+	return free_slot;
+}
+
+static struct usb_device *usbhid_usb_device_parent(struct usb_device *dev)
+{
+	struct usbhid_usb_device *hub;
+
+	if (dev->hub_addr) {
+		hub = usbhid_usb_device_find(dev->hub_addr);
+		if (hub)
+			return &hub->dev;
+	}
+
+	return usbhid_usb_root_hub(dev->rhport);
+}
+
+static void usbhid_usb_device_copy(struct usbhid_usb_device *entry,
+				   const struct usb_device *src,
+				   bool have_device_desc)
+{
+	struct usb_device *dst = &entry->dev;
+
+	if (have_device_desc || !entry->have_device_desc)
+		dst->descriptor = src->descriptor;
+	if (src->actconfig && src->actconfig->desc.bNumInterfaces)
+		dst->config_storage.desc = src->actconfig->desc;
+	usbhid_usb_device_init_config(dst);
+	dst->dev_addr = src->dev_addr;
+	dst->rhport = src->rhport;
+	dst->hub_addr = src->hub_addr;
+	dst->hub_port = src->hub_port;
+	dst->portnum = src->portnum;
+	dst->speed = src->speed;
+	dst->topology_valid = src->topology_valid;
+	dst->maxchild = USBHID_USB_MAXCHILD;
+	dst->parent = usbhid_usb_device_parent(dst);
+	if (src->product && src->product[0]) {
+		strscpy(dst->product_buf, src->product, sizeof(dst->product_buf));
+		dst->product = dst->product_buf;
+	}
+	if (have_device_desc)
+		entry->have_device_desc = true;
+}
+
+static struct usbhid_usb_device *
+usbhid_usb_device_upsert(const struct usb_device *src, bool have_device_desc)
+{
+	struct usbhid_usb_device *entry = usbhid_usb_device_slot(src->dev_addr);
+
+	if (!entry)
+		return NULL;
+
+	if (!entry->valid) {
+		memset(entry, 0, sizeof(*entry));
+		device_initialize(&entry->dev.dev);
+		entry->dev.dev.type = &usb_device_type;
+		usbhid_usb_device_init_config(&entry->dev);
+	}
+	entry->valid = true;
+	usbhid_usb_device_copy(entry, src, have_device_desc);
+	return entry;
+}
+
+static struct usbhid_usb_device *usbhid_usb_device_prepare(uint8_t dev_addr)
+{
+	struct usb_device dev = { 0 };
+	uint16_t vid;
+	uint16_t pid;
+
+	dev.dev_addr = dev_addr;
+	usbhid_usb_device_apply_topology(&dev);
+	dev.maxchild = USBHID_USB_MAXCHILD;
+	dev.parent = usbhid_usb_device_parent(&dev);
+	if (tuh_vid_pid_get(dev_addr, &vid, &pid)) {
+		dev.descriptor.idVendor = vid;
+		dev.descriptor.idProduct = pid;
+	}
+
+	return usbhid_usb_device_upsert(&dev, false);
+}
+
+static void usbhid_pending_hid_probe_clear(struct usbhid_pending_hid_probe *probe)
+{
+	kfree(probe->desc_report);
+	memset(probe, 0, sizeof(*probe));
+}
+
+static void usbhid_usb_device_drop_pending_hid(struct usbhid_usb_device *entry)
+{
+	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++)
+		usbhid_pending_hid_probe_clear(&entry->pending_hid[i]);
+}
+
+static void usbhid_usb_device_drop_pending_hid_instance(struct usbhid_usb_device *entry,
+							uint8_t instance)
+{
+	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
+		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
+
+		if (probe->valid && probe->instance == instance) {
+			usbhid_pending_hid_probe_clear(probe);
+			return;
+		}
+	}
+}
+
+static void usbhid_usb_device_remove(uint8_t dev_addr)
+{
+	struct usbhid_usb_device *entry = usbhid_usb_device_find(dev_addr);
+
+	if (entry) {
+		usbhid_usb_device_drop_pending_hid(entry);
+		entry->valid = false;
+	}
+}
+
+struct usb_device *usb_hub_find_child(struct usb_device *hdev, int port1)
+{
+	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
+
+		if (entry && entry->valid && entry->dev.parent == hdev &&
+		    entry->dev.portnum == port1)
+			return &entry->dev;
+	}
+
+	return NULL;
+}
 
 static bool usbhid_raw_interface_init(void)
 {
@@ -43,10 +299,37 @@ static bool usbhid_raw_interface_deinit(void)
 	return true;
 }
 
+static void usbhid_usb_device_count_interfaces(uint8_t rhport, uint8_t dev_addr,
+					       tusb_desc_interface_t const *desc,
+					       uint16_t max_len)
+{
+	struct usbhid_usb_device *entry;
+	struct usb_device dev = { 0 };
+	const uint8_t *p = (const uint8_t *)desc;
+	const uint8_t *end = p + max_len;
+
+	dev.dev_addr = dev_addr;
+	usbhid_usb_device_apply_topology(&dev);
+	dev.rhport = rhport;
+	entry = usbhid_usb_device_upsert(&dev, false);
+	if (!entry)
+		return;
+
+	while (p + 2 <= end && p[0] >= 2 && p + p[0] <= end) {
+		if (p[1] == TUSB_DESC_INTERFACE)
+			entry->dev.config_storage.desc.bNumInterfaces++;
+
+		p += p[0];
+	}
+}
+
 static void usbhid_raw_interface_store(uint8_t dev_addr,
-				       tusb_desc_interface_t const *desc)
+				       tusb_desc_interface_t const *desc,
+				       uint16_t max_len)
 {
 	struct usbhid_raw_interface *free_slot = NULL;
+	const uint8_t *p;
+	const uint8_t *end;
 
 	for (size_t i = 0; i < HID_HOST_RAW_INTERFACE_MAX; i++) {
 		struct usbhid_raw_interface *raw = &usbhid_raw_interfaces[i];
@@ -72,6 +355,32 @@ static void usbhid_raw_interface_store(uint8_t dev_addr,
 	free_slot->ifnum = desc->bInterfaceNumber;
 	free_slot->subclass = desc->bInterfaceSubClass;
 	free_slot->protocol = desc->bInterfaceProtocol;
+	free_slot->endpoint_count = 0;
+	memset(free_slot->endpoint, 0, sizeof(free_slot->endpoint));
+
+	p = (const uint8_t *)desc + desc->bLength;
+	end = (const uint8_t *)desc + max_len;
+	while (p + 2 <= end && p[0] >= 2 && p + p[0] <= end) {
+		if (p[1] == TUSB_DESC_INTERFACE)
+			break;
+
+		if (p[1] == USB_DT_ENDPOINT &&
+		    free_slot->endpoint_count < USB_HOST_ENDPOINT_MAX) {
+			const tusb_desc_endpoint_t *ep =
+				(const tusb_desc_endpoint_t *)p;
+			struct usb_host_endpoint *host_ep =
+				&free_slot->endpoint[free_slot->endpoint_count++];
+
+			host_ep->desc.bLength = ep->bLength;
+			host_ep->desc.bDescriptorType = ep->bDescriptorType;
+			host_ep->desc.bEndpointAddress = ep->bEndpointAddress;
+			host_ep->desc.bmAttributes = ep->bmAttributes.xfer;
+			host_ep->desc.wMaxPacketSize = ep->wMaxPacketSize;
+			host_ep->desc.bInterval = ep->bInterval;
+		}
+
+		p += p[0];
+	}
 }
 
 static const struct usbhid_raw_interface *
@@ -101,11 +410,13 @@ static bool usbhid_raw_interface_open(uint8_t rhport, uint8_t dev_addr,
 				      tusb_desc_interface_t const *desc,
 				      uint16_t max_len)
 {
-	(void)rhport;
-	(void)max_len;
-
+	// Upstream Linux USB core has already parsed the active configuration
+	// before usbhid_probe(). The TinyUSB app driver sees each interface
+	// descriptor during config parsing, so build the small config metadata
+	// imported HID drivers inspect from that stream.
+	usbhid_usb_device_count_interfaces(rhport, dev_addr, desc, max_len);
 	if (desc->bInterfaceClass == TUSB_CLASS_HID)
-		usbhid_raw_interface_store(dev_addr, desc);
+		usbhid_raw_interface_store(dev_addr, desc, max_len);
 
 	/*
 	 * Upstream Linux: no equivalent; Linux USB core passes the original
@@ -166,6 +477,325 @@ static void usbhid_remove_slot(struct hid_device *hid)
 	}
 }
 
+static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
+			uint8_t const *desc_report, uint16_t desc_len,
+			const tusb_desc_device_t *device_desc,
+			const char *product_name);
+static void usbhid_usb_device_descriptor_complete(const struct hid_async_request *req,
+						  int status);
+
+static int usbhid_usb_device_store_pending_probe(struct usbhid_usb_device *entry,
+						 uint8_t instance,
+						 uint8_t const *desc_report,
+						 uint16_t desc_len)
+{
+	struct usbhid_pending_hid_probe *slot = NULL;
+	uint8_t *rdesc;
+
+	if (!desc_report || !desc_len)
+		return -ENODEV;
+
+	rdesc = kmemdup(desc_report, desc_len, GFP_KERNEL);
+	if (!rdesc)
+		return -ENOMEM;
+
+	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
+		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
+
+		if (probe->valid && probe->instance == instance) {
+			slot = probe;
+			usbhid_pending_hid_probe_clear(slot);
+			break;
+		}
+		if (!probe->valid && !slot)
+			slot = probe;
+	}
+
+	if (!slot) {
+		kfree(rdesc);
+		return -ENOMEM;
+	}
+
+	slot->valid = true;
+	slot->instance = instance;
+	slot->desc_len = desc_len;
+	slot->desc_report = rdesc;
+	return 0;
+}
+
+static void usbhid_usb_device_run_pending_probes(struct usbhid_usb_device *entry)
+{
+	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
+		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
+
+		if (!probe->valid)
+			continue;
+
+		usbhid_probe(entry->dev.dev_addr, probe->instance,
+			     probe->desc_report, probe->desc_len,
+			     &entry->device_desc, NULL);
+		usbhid_pending_hid_probe_clear(probe);
+	}
+}
+
+static bool usbhid_usb_device_has_string_indexes(const struct usbhid_usb_device *entry)
+{
+	return entry->dev.descriptor.iProduct ||
+	       entry->dev.descriptor.iManufacturer ||
+	       entry->dev.descriptor.iSerialNumber;
+}
+
+// Upstream Linux keeps this decode inside drivers/usb/core/message.c::usb_string().
+// Local disabled USB-core shim has this extracted as usb_string_decode() in
+// usb_host/linux/include/linux/usb.h.
+// The blocking usb_string()/usb_control_msg() path stays disabled in this port;
+// pre-probe only needs the decode step after hid_async fetches the descriptor.
+static int usb_string_decode(const u8 *desc, uint16_t actual,
+			     char *buf, size_t size)
+{
+	size_t out = 0;
+	u8 len;
+
+	if (!size)
+		return -EINVAL;
+
+	buf[0] = '\0';
+
+	if (actual < 2 || desc[1] != USB_DT_STRING)
+		return -EINVAL;
+
+	len = desc[0];
+	if (len > actual)
+		len = (u8)actual;
+
+	for (size_t i = 2; i + 1u < len; i += 2u) {
+		u16 c = (u16)desc[i] | ((u16)desc[i + 1u] << 8);
+
+		if (c >= 0xd800u && c <= 0xdfffu)
+			c = '?';
+
+		if (c < 0x80u) {
+			if (out + 1u >= size)
+				break;
+			buf[out++] = (char)c;
+		} else if (c < 0x800u) {
+			if (out + 2u >= size)
+				break;
+			buf[out++] = (char)(0xc0u | (c >> 6));
+			buf[out++] = (char)(0x80u | (c & 0x3fu));
+		} else {
+			if (out + 3u >= size)
+				break;
+			buf[out++] = (char)(0xe0u | (c >> 12));
+			buf[out++] = (char)(0x80u | ((c >> 6) & 0x3fu));
+			buf[out++] = (char)(0x80u | (c & 0x3fu));
+		}
+	}
+
+	buf[out] = '\0';
+	return (int)out;
+}
+
+static int usbhid_usb_device_queue_string(struct usbhid_usb_device *entry,
+					  uint8_t index)
+{
+	return hid_async_queue_string_descriptor(entry->dev.dev_addr, index,
+						 entry->string_langid,
+						 usbhid_usb_device_descriptor_complete,
+						 entry);
+}
+
+static void usbhid_usb_device_finish_preprobe(struct usbhid_usb_device *entry)
+{
+	entry->preprobe_stage = USBHID_PREPROBE_DONE;
+	usbhid_usb_device_run_pending_probes(entry);
+}
+
+static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
+{
+	int ret;
+
+	while (entry->preprobe_stage != USBHID_PREPROBE_DONE) {
+		switch (entry->preprobe_stage) {
+		case USBHID_PREPROBE_LANGID:
+			if (!usbhid_usb_device_has_string_indexes(entry)) {
+				usbhid_usb_device_finish_preprobe(entry);
+				return;
+			}
+			ret = hid_async_queue_string_descriptor(entry->dev.dev_addr,
+							       0, 0,
+							       usbhid_usb_device_descriptor_complete,
+							       entry);
+			break;
+		case USBHID_PREPROBE_PRODUCT:
+			if (!entry->dev.descriptor.iProduct) {
+				entry->preprobe_stage = USBHID_PREPROBE_MANUFACTURER;
+				continue;
+			}
+			ret = usbhid_usb_device_queue_string(entry,
+							     entry->dev.descriptor.iProduct);
+			break;
+		case USBHID_PREPROBE_MANUFACTURER:
+			if (!entry->dev.descriptor.iManufacturer) {
+				entry->preprobe_stage = USBHID_PREPROBE_SERIAL;
+				continue;
+			}
+			ret = usbhid_usb_device_queue_string(entry,
+							     entry->dev.descriptor.iManufacturer);
+			break;
+		case USBHID_PREPROBE_SERIAL:
+			if (!entry->dev.descriptor.iSerialNumber) {
+				usbhid_usb_device_finish_preprobe(entry);
+				return;
+			}
+			ret = usbhid_usb_device_queue_string(entry,
+							     entry->dev.descriptor.iSerialNumber);
+			break;
+		default:
+			usbhid_usb_device_finish_preprobe(entry);
+			return;
+		}
+
+		if (ret) {
+			async_msg("WARN: HID_STRING_Q_FAIL");
+			usbhid_usb_device_finish_preprobe(entry);
+		}
+		return;
+	}
+}
+
+static void usbhid_usb_device_store_string(struct usbhid_usb_device *entry,
+					   const struct hid_async_request *req,
+					   int status)
+{
+	if (entry->preprobe_stage == USBHID_PREPROBE_LANGID) {
+		entry->string_langid = USBHID_STRING_LANGID;
+		if (status >= 0 && req->actual_len >= 4 &&
+		    req->data[1] == USB_DT_STRING)
+			entry->string_langid = (uint16_t)req->data[2] |
+					       ((uint16_t)req->data[3] << 8);
+		entry->dev.string_langid = entry->string_langid;
+		entry->dev.have_langid = 1;
+		entry->preprobe_stage = USBHID_PREPROBE_PRODUCT;
+		return;
+	}
+
+	if (status < 0 || req->actual_len < 2 ||
+	    req->data[1] != USB_DT_STRING)
+		goto next;
+
+	switch (entry->preprobe_stage) {
+	case USBHID_PREPROBE_PRODUCT:
+		if (usb_string_decode(req->data, req->actual_len,
+				      entry->dev.product_buf,
+				      sizeof(entry->dev.product_buf)) >= 0)
+			entry->dev.product = entry->dev.product_buf;
+		break;
+	case USBHID_PREPROBE_MANUFACTURER:
+		if (usb_string_decode(req->data, req->actual_len,
+				      entry->dev.manufacturer_buf,
+				      sizeof(entry->dev.manufacturer_buf)) >= 0)
+			entry->dev.manufacturer = entry->dev.manufacturer_buf;
+		break;
+	case USBHID_PREPROBE_SERIAL:
+		if (usb_string_decode(req->data, req->actual_len,
+				      entry->dev.serial_buf,
+				      sizeof(entry->dev.serial_buf)) >= 0)
+			entry->dev.serial = entry->dev.serial_buf;
+		break;
+	default:
+		break;
+	}
+
+next:
+	if (entry->preprobe_stage == USBHID_PREPROBE_PRODUCT)
+		entry->preprobe_stage = USBHID_PREPROBE_MANUFACTURER;
+	else if (entry->preprobe_stage == USBHID_PREPROBE_MANUFACTURER)
+		entry->preprobe_stage = USBHID_PREPROBE_SERIAL;
+	else
+		entry->preprobe_stage = USBHID_PREPROBE_DONE;
+}
+
+static void usbhid_log_device_desc_error(const char *reason,
+					 const struct hid_async_request *req)
+{
+	char msg[ASYNC_MSG_BUFSIZE];
+
+	snprintf(msg, sizeof(msg), "ERR: HID_DEV_DESC_%s r%u l%u",
+		 reason, req->xfer_result, req->actual_len);
+	_async_msg(msg);
+}
+
+static void usbhid_usb_device_descriptor_complete(const struct hid_async_request *req,
+						  int status)
+{
+	struct usbhid_usb_device *entry = req->context;
+
+	if (!entry || !entry->valid || req->dev_addr != entry->dev.dev_addr)
+		return;
+
+	if (req->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR) {
+		usbhid_usb_device_store_string(entry, req, status);
+		if (entry->preprobe_stage == USBHID_PREPROBE_DONE) {
+			usbhid_usb_device_finish_preprobe(entry);
+			return;
+		}
+		usbhid_usb_device_queue_next_string(entry);
+		return;
+	}
+
+	entry->device_desc_requested = false;
+	if (status < 0) {
+		if (req->xfer_result == XFER_RESULT_INVALID)
+			usbhid_log_device_desc_error("SUB", req);
+		else
+			usbhid_log_device_desc_error("XFER", req);
+		usbhid_usb_device_drop_pending_hid(entry);
+		return;
+	}
+
+	if (req->actual_len < sizeof(entry->device_desc)) {
+		usbhid_log_device_desc_error("SHORT", req);
+		usbhid_usb_device_drop_pending_hid(entry);
+		return;
+	}
+
+	memcpy(&entry->device_desc, req->data, sizeof(entry->device_desc));
+	entry->dev.descriptor.idVendor = entry->device_desc.idVendor;
+	entry->dev.descriptor.idProduct = entry->device_desc.idProduct;
+	entry->dev.descriptor.bcdDevice = entry->device_desc.bcdDevice;
+	entry->dev.descriptor.bMaxPacketSize0 = entry->device_desc.bMaxPacketSize0;
+	entry->dev.descriptor.iManufacturer = entry->device_desc.iManufacturer;
+	entry->dev.descriptor.iProduct = entry->device_desc.iProduct;
+	entry->dev.descriptor.iSerialNumber = entry->device_desc.iSerialNumber;
+	entry->have_device_desc = true;
+	entry->string_langid = USBHID_STRING_LANGID;
+	entry->preprobe_stage = USBHID_PREPROBE_LANGID;
+	usbhid_usb_device_queue_next_string(entry);
+}
+
+static void usbhid_usb_device_queue_descriptor(struct usbhid_usb_device *entry)
+{
+	int ret;
+
+	if (entry->have_device_desc || entry->device_desc_requested)
+		return;
+
+	entry->pending_desc_dev_addr = entry->dev.dev_addr;
+	entry->preprobe_stage = USBHID_PREPROBE_DEVICE_DESC;
+	ret = hid_async_queue_device_descriptor(entry->dev.dev_addr,
+						usbhid_usb_device_descriptor_complete,
+						entry);
+	if (ret) {
+		entry->device_desc_requested = false;
+		async_msg("ERR: HID_DEV_DESC_Q_FAIL");
+		return;
+	}
+
+	async_msg("DBG: HID_DEV_DESC_Q");
+	entry->device_desc_requested = true;
+}
+
 struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int ifnum)
 {
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
@@ -180,18 +810,44 @@ struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int
 	return NULL;
 }
 
+int usbhid_disconnect_init(void)
+{
+	usbhid_disconnect_queue = xQueueCreate(USBHID_DISCONNECT_QUEUE_LEN,
+					       sizeof(struct hid_device *));
+	if (!usbhid_disconnect_queue)
+		return -ENOMEM;
+
+	return 0;
+}
+
+void usbhid_disconnect_task(void *pvParameters)
+{
+	(void)pvParameters;
+
+	for (;;) {
+		struct hid_device *hid;
+
+		xQueueReceive(usbhid_disconnect_queue, &hid, portMAX_DELAY);
+		hid_destroy_device(hid);
+	}
+}
+
 // static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *id)
 // TinyUSB mount callback provides dev_addr/instance/report descriptor instead
 // of Linux usb_interface; build the local usb_interface shim before hid_add_device().
 static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
-			uint8_t const *desc_report, uint16_t desc_len)
+			uint8_t const *desc_report, uint16_t desc_len,
+			const tusb_desc_device_t *device_desc,
+			const char *product_name)
 {
 	struct hid_device *hid;
 	uint8_t *rdesc;
 	const struct usbhid_raw_interface *raw;
+	struct usbhid_usb_device *usb_entry;
 	uint16_t vid = 0;
 	uint16_t pid = 0;
 	tuh_itf_info_t itf_info;
+	const char *name;
 	int ret;
 
 	if (!desc_report || !desc_len) {
@@ -216,30 +872,95 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	}
 
 	memset(&itf_info, 0, sizeof(itf_info));
-	tuh_vid_pid_get(dev_addr, &vid, &pid);
-	tuh_hid_itf_get_info(dev_addr, instance, &itf_info);
+	if (!tuh_vid_pid_get(dev_addr, &vid, &pid) ||
+	    !tuh_hid_itf_get_info(dev_addr, instance, &itf_info)) {
+		kfree(rdesc);
+		hid_destroy_device(hid);
+		async_msg("ERR: HID_ENUM_GONE");
+		return -ENODEV;
+	}
 
 	device_initialize(&hid->usb_dev.dev);
 	device_initialize(&hid->usb_intf.dev);
+	// Upstream USB core sets device types before usbhid sees usb_interface.
+	// TinyUSB port owns the local usb_device/usb_interface shims.
+	hid->usb_dev.dev.type = &usb_device_type;
+	hid->usb_intf.dev.type = &usb_if_device_type;
+	usbhid_usb_device_init_config(&hid->usb_dev);
 
 	// hid->dev.parent = &intf->dev;
 	// TinyUSB mount callback builds a local usb_interface shim for this HID instance.
 	hid->dev_addr = dev_addr;
 	hid->instance = instance;
 	hid->usb_dev.dev_addr = dev_addr;
-	hid->usb_dev.descriptor.idVendor = vid;
-	hid->usb_dev.descriptor.idProduct = pid;
+	usbhid_usb_device_apply_topology(&hid->usb_dev);
+	usb_entry = usbhid_usb_device_find(dev_addr);
+	if (usb_entry && usb_entry->dev.actconfig)
+		hid->usb_dev.config_storage.desc = usb_entry->dev.actconfig->desc;
+	if (device_desc) {
+		// dev = interface_to_usbdev(intf);
+		// TinyUSB mount callback has no Linux usb_device yet; use the
+		// async device-descriptor snapshot captured before this probe.
+		hid->usb_dev.descriptor.idVendor = device_desc->idVendor;
+		hid->usb_dev.descriptor.idProduct = device_desc->idProduct;
+		hid->usb_dev.descriptor.bcdDevice = device_desc->bcdDevice;
+		hid->usb_dev.descriptor.bMaxPacketSize0 = device_desc->bMaxPacketSize0;
+		hid->usb_dev.descriptor.iManufacturer = device_desc->iManufacturer;
+		hid->usb_dev.descriptor.iProduct = device_desc->iProduct;
+		hid->usb_dev.descriptor.iSerialNumber = device_desc->iSerialNumber;
+	} else {
+		hid->usb_dev.descriptor.idVendor = vid;
+		hid->usb_dev.descriptor.idProduct = pid;
+	}
+	snprintf(hid->usb_dev.product_buf, sizeof(hid->usb_dev.product_buf),
+		 "HID %04x:%04x", vid, pid);
+	name = product_name;
+	if (!name && usb_entry && usb_entry->dev.product)
+		name = usb_entry->dev.product;
+	if (name && name[0])
+		strscpy(hid->usb_dev.product_buf, name,
+			sizeof(hid->usb_dev.product_buf));
+	hid->usb_dev.product = hid->usb_dev.product_buf;
+	if (usb_entry && usb_entry->dev.manufacturer) {
+		strscpy(hid->usb_dev.manufacturer_buf,
+			usb_entry->dev.manufacturer,
+			sizeof(hid->usb_dev.manufacturer_buf));
+		hid->usb_dev.manufacturer = hid->usb_dev.manufacturer_buf;
+	}
+	if (usb_entry && usb_entry->dev.serial) {
+		strscpy(hid->usb_dev.serial_buf, usb_entry->dev.serial,
+			sizeof(hid->usb_dev.serial_buf));
+		hid->usb_dev.serial = hid->usb_dev.serial_buf;
+		strscpy(hid->uniq, usb_entry->dev.serial, sizeof(hid->uniq));
+	}
+	hid->usb_dev.maxchild = USBHID_USB_MAXCHILD;
+	hid->usb_dev.parent = usbhid_usb_device_parent(&hid->usb_dev);
+	usbhid_usb_device_upsert(&hid->usb_dev, device_desc != NULL);
 
 	hid->usb_altsetting.desc.bInterfaceNumber = itf_info.desc.bInterfaceNumber;
 	raw = usbhid_raw_interface_lookup(dev_addr, itf_info.desc.bInterfaceNumber);
 	if (raw) {
 		hid->usb_altsetting.desc.bInterfaceSubClass = raw->subclass;
 		hid->usb_altsetting.desc.bInterfaceProtocol = raw->protocol;
+		hid->usb_altsetting.desc.bNumEndpoints = raw->endpoint_count;
+		memcpy(hid->usb_altsetting.endpoint, raw->endpoint,
+		       sizeof(hid->usb_altsetting.endpoint));
+		for (u8 i = 0; i < raw->endpoint_count; i++) {
+			const struct usb_endpoint_descriptor *ep =
+				&hid->usb_altsetting.endpoint[i].desc;
+
+			if ((ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_OUT &&
+			    usb_endpoint_xfer_int(ep)) {
+				hid->usb_altsetting.has_interrupt_out = true;
+				hid->usb_altsetting.interrupt_out_endpoint =
+					ep->bEndpointAddress;
+			}
+		}
 	} else {
 		hid->usb_altsetting.desc.bInterfaceSubClass = itf_info.desc.bInterfaceSubClass;
 		hid->usb_altsetting.desc.bInterfaceProtocol = itf_info.desc.bInterfaceProtocol;
+		hid->usb_altsetting.desc.bNumEndpoints = itf_info.desc.bNumEndpoints;
 	}
-	hid->usb_altsetting.desc.bNumEndpoints = itf_info.desc.bNumEndpoints;
 	hid->usb_intf.altsetting = &hid->usb_altsetting;
 	hid->usb_intf.cur_altsetting = &hid->usb_altsetting;
 	hid->usb_intf.dev.parent = &hid->usb_dev.dev;
@@ -247,6 +968,20 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	usb_set_intfdata(&hid->usb_intf, hid);
 
 	hid->ll_driver = &usb_hid_driver;
+// #ifdef CONFIG_USB_HIDDEV
+// 	hid->hiddev_connect = hiddev_connect;
+// 	hid->hiddev_disconnect = hiddev_disconnect;
+// 	hid->hiddev_hid_event = hiddev_hid_event;
+// 	hid->hiddev_report_event = hiddev_report_event;
+// #endif
+// Firmware provides the CONFIG_USB_HIDDEV callbacks through a bounded hiddev
+// proxy ring instead of Linux usb_register_dev()/file operations.
+#ifdef CONFIG_USB_HIDDEV
+	hid->hiddev_connect = hiddev_connect;
+	hid->hiddev_disconnect = hiddev_disconnect;
+	hid->hiddev_hid_event = hiddev_hid_event;
+	hid->hiddev_report_event = hiddev_report_event;
+#endif
 	hid->ll_rdesc = rdesc;
 	hid->ll_rsize = desc_len;
 	init_waitqueue_head(&hid->ll_wait);
@@ -254,7 +989,7 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	hid->bus = BUS_USB;
 	hid->vendor = vid;
 	hid->product = pid;
-	hid->version = 0;
+	hid->version = le16_to_cpu(hid->usb_dev.descriptor.bcdDevice);
 	// if (intf->cur_altsetting->desc.bInterfaceProtocol ==
 	//		USB_INTERFACE_PROTOCOL_MOUSE)
 	//	hid->type = HID_TYPE_USBMOUSE;
@@ -267,7 +1002,9 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	else if (hid->usb_altsetting.desc.bInterfaceProtocol == 0)
 		hid->type = HID_TYPE_USBNONE;
 
-	snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x", hid->vendor, hid->product);
+	// snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x", hid->vendor, hid->product);
+	// Mirror upstream usbhid name construction once product string metadata is available.
+	snprintf(hid->name, sizeof(hid->name), "%s", hid->usb_dev.product);
 	usb_make_path(&hid->usb_dev, hid->phys, sizeof(hid->phys));
 	strlcat(hid->phys, "/input", sizeof(hid->phys));
 
@@ -310,19 +1047,74 @@ static void usbhid_disconnect(uint8_t dev_addr, uint8_t instance)
 		if (ret)
 			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 		usbhid_remove_slot(hid);
-		hid_destroy_device(hid);
+		/*
+		 * Upstream Linux runs usbhid_disconnect() from USB core process
+		 * context and can call hid_destroy_device() directly. TinyUSB calls
+		 * this hook from unmount callback context, so driver remove is handed
+		 * to a firmware task before any Linux-style flush/cancel waits run.
+		 */
+		if (!usbhid_disconnect_queue ||
+		    xQueueSendToBack(usbhid_disconnect_queue, &hid, 0) != pdPASS)
+			async_msg("ERR: HID_DISCONNECT_Q_FAIL");
 	}
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
 		      uint8_t const *desc_report, uint16_t desc_len)
 {
-	usbhid_probe(dev_addr, instance, desc_report, desc_len);
+	struct usbhid_usb_device *entry = usbhid_usb_device_prepare(dev_addr);
+	int ret;
+
+	async_msg("DBG: HID_MOUNT_CB");
+	if (!entry) {
+		async_msg("ERR: HID_USB_DEV_ALLOC_FAIL");
+		return;
+	}
+
+	if (entry->have_device_desc &&
+	    entry->preprobe_stage == USBHID_PREPROBE_DONE) {
+		usbhid_probe(dev_addr, instance, desc_report, desc_len,
+			     &entry->device_desc, NULL);
+		return;
+	}
+
+	ret = usbhid_usb_device_store_pending_probe(entry, instance, desc_report,
+						    desc_len);
+	if (ret) {
+		async_msg("ERR: HID_PROBE_DEFER_FAIL");
+		return;
+	}
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
+	struct usbhid_usb_device *entry = usbhid_usb_device_find(dev_addr);
+
+	if (entry)
+		usbhid_usb_device_drop_pending_hid_instance(entry, instance);
 	usbhid_disconnect(dev_addr, instance);
+}
+
+void tuh_mount_cb(uint8_t dev_addr)
+{
+	struct usbhid_usb_device *entry = usbhid_usb_device_prepare(dev_addr);
+
+	async_msg("DBG: USB_MOUNT_CB");
+	if (!entry) {
+		async_msg("ERR: HID_USB_DEV_ALLOC_FAIL");
+		return;
+	}
+
+	usbhid_usb_device_queue_descriptor(entry);
+}
+
+void tuh_umount_cb(uint8_t dev_addr)
+{
+	int ret = hid_async_cancel_dev_addr(dev_addr);
+
+	if (ret)
+		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
+	usbhid_usb_device_remove(dev_addr);
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
@@ -539,6 +1331,68 @@ int tuh_usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	(void)timeout;
 	return -ENOSYS;
 }
+
+#if 0
+/*
+ * Deferred: no current HID driver in the CMake allowlist uses Linux URB
+ * transport. Keep the upstream-shaped bridge disabled until such a driver is
+ * re-enabled with matching async request coverage.
+ */
+struct urb *usb_alloc_urb(int iso_packets, gfp_t mem_flags)
+{
+	// Upstream Linux USB core allocates URBs; firmware keeps only the
+	// Linux-shaped non-ISO URB storage needed by imported HID drivers.
+	(void)iso_packets;
+	return kzalloc(sizeof(struct urb), mem_flags);
+}
+
+void usb_free_urb(struct urb *urb)
+{
+	kfree(urb);
+}
+
+static void usbhid_urb_complete(const struct hid_async_request *req, int status)
+{
+	struct urb *urb = req->context;
+
+	if (status >= 0 && usb_pipein(urb->pipe) && urb->transfer_buffer)
+		memcpy(urb->transfer_buffer, req->data, req->actual_len);
+
+	urb->status = status;
+	urb->actual_length = req->actual_len;
+	if (urb->complete)
+		urb->complete(urb);
+}
+
+int usb_submit_urb(struct urb *urb, gfp_t mem_flags)
+{
+	struct usb_ctrlrequest *setup = (struct usb_ctrlrequest *)urb->setup_packet;
+	struct hid_device *hid = container_of(urb->dev, struct hid_device, usb_dev);
+
+	(void)mem_flags;
+
+	return hid_async_queue_usb_control_msg(hid, urb->dev, urb->pipe,
+					       setup->bRequest,
+					       setup->bRequestType,
+					       le16_to_cpu(setup->wValue),
+					       le16_to_cpu(setup->wIndex),
+					       urb->transfer_buffer,
+					       (u16)urb->transfer_buffer_length,
+					       USB_CTRL_SET_TIMEOUT,
+					       usbhid_urb_complete, urb);
+}
+
+void usb_kill_urb(struct urb *urb)
+{
+	/*
+	 * usb_kill_urb(urb);
+	 * TinyUSB transfers are canceled per HID device through
+	 * hid_async_cancel_device() before driver remove runs. The URB wrapper
+	 * itself has no separate host-controller queue to drain.
+	 */
+	(void)urb;
+}
+#endif
 
 static const struct hid_ll_driver usb_hid_driver = {
 	.parse = usbhid_parse,

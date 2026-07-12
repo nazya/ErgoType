@@ -1,5 +1,11 @@
 #include "../../include/linux/hid.h"
 
+/*
+ * Upstream Linux has no single hid-drivers.c registry file: HID drivers are
+ * registered by module/initcall machinery. This port has no loadable modules,
+ * so linked driver descriptors are collected through linker sections here.
+ */
+
 extern const struct hid_driver * const __start_hid_drivers[];
 extern const struct hid_driver * const __stop_hid_drivers[];
 extern linux_initcall_t const __start_linux_initcalls[];
@@ -42,10 +48,10 @@ int hid_builtin_drivers_init(void)
 #endif
 		/*
 		 * This source slice only links hid-generic plus vendor drivers whose
-		 * active hooks are report_fixup/usage_table/input_mapping/input_mapped/
-		 * input_configured/event/simple probe, async-converted Vivaldi
-		 * feature_mapping, and Kye's async SET_REPORT probe path. Drivers
-		 * needing raw_event/workqueue/wait/sync GET_REPORT remain out of CMake.
+		 * active hooks are covered by the current port layers selected in
+		 * CMake: input mapping/report fixups, callback-safe raw_event handlers,
+		 * report GET/SET async paths, hiddev proxy users, and timer/workqueue
+		 * users that do not need deferred Linux subsystem proxies.
 		 */
 		ret = hid_register_driver(*driver);
 		if (ret)

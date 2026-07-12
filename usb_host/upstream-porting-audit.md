@@ -11,7 +11,8 @@ as the previous porting worktree, not as Linux upstream.
 
 ## Scope Audited
 
-- current TinyUSB HID host glue: `usb_host/task.c`, `usb_host/tuh_ll_driver.c`
+- current TinyUSB HID host glue: `usb_host/task.c`, `usb_host/usbhid.c`,
+  `usb_host/hid_async.c`, `usb_host/hid_workqueue.c`, `usb_host/hid_timer.c`
 - current HID/input boundary glue: `usb_host/evdev.c`,
   `keyd/port/device.c`
 - active Linux HID/input core files in CMake
@@ -36,20 +37,21 @@ files needed for ordinary file-based comparison:
   context before the local compatibility include.
 - `hid.h`: marked the file as a reduced compatibility contract, not a
   line-preserving upstream header.
-- `hid_slice_stubs.c`: added explicit local-shim comments for unwired hidraw,
-  work cancellation, and timer boundaries.
+- `hid_slice_stubs.c`: removed. Deferred hidraw calls are documented inline in
+  `hid-core.c`; workqueue and timer boundaries are now owned by
+  `hid_workqueue.c` and `hid_timer.c`.
 - `evdev.c`: renamed the firmware input handler boundary to upstream-like
   `evdev_*` names. This is not a line-preserving upstream evdev port; it keeps
   the input_handler shape and replaces userspace fd delivery with KeyD queue
   delivery.
 - `keyd/port/device.c`: owns the firmware queue replacement for upstream
   keyd's evdev fd path while still using the existing `devmon_queue`.
-- `tuh_ll_driver.c`: added/expanded explicit upstream usbhid lifecycle anchors
-  around parse/request/wait/raw/output/idle no-op boundaries.
+- `usbhid.c`: added/expanded explicit upstream usbhid lifecycle anchors around
+  parse/request/wait/raw/output/idle boundaries and TinyUSB pre-probe glue.
 - `hid-drivers.c`: clarified that driver safety selection is the CMake
   allowlist, while the registration loop stays Linux-shaped.
-- `task.c`: added an `Upstream Linux: no equivalent` comment for the TinyUSB
-  host callback/lifetime glue.
+- `task.c`: documented the explicit firmware call to collected Linux-style
+  module/initcall registrations before HID drivers bind.
 - `hid_port.c`: removed after evdev became the always-open firmware event
   producer.
 - `input.c`: removed stale wording that still referenced the old HID driver
@@ -74,16 +76,11 @@ The intended diff for each included vendor driver is:
 `hid-lcpower.c` has one additional whitespace-only diff: upstream has trailing
 space in the copyright line, while the port keeps `git diff --check` clean.
 
-Included driver hooks are limited to:
-
-- `report_fixup`
-- `input_mapping`
-- simple `probe`
-
-Checked with grep: no included vendor driver contains active `raw_event`,
-`.event`, `.report`, `input_configured`, `remove`, FF init, workqueue,
-delayed work, wait, `hid_hw_request`, `hid_hw_raw_request`,
-`hid_hw_wait`, or USB control-message calls.
+The current CMake allowlist is the source of truth for linked vendor drivers.
+The allowlist now includes simple mapping/fixup/probe drivers plus a small set
+of audited nonblocking hooks such as `input_configured` users and queue-only
+SET_REPORT users. Drivers that need returned request data before probe can
+continue stay out of CMake until a larger worker/state-machine layer exists.
 
 ## Core HID Status
 
@@ -92,16 +89,17 @@ Conforms to the current callback-driven slice intent:
 - HID parser/report/input flow remains Linux-shaped.
 - `report_fixup`, `input_mapping`, and `input_mapped` are active for the
   included nonblocking vendor drivers.
-- `raw_event`, driver `report`, `input_configured`, FF, hiddev, and synchronous
-  hardware request paths remain disabled with upstream call sites visible next
-  to the no-op/disabled boundary.
-- TinyUSB report callback still enters Linux report parsing directly.
+- Some `raw_event`, FF, and hiddev paths are now enabled only through audited
+  nonblocking slices. Synchronous hardware request paths remain disabled or
+  converted to explicit async boundaries with upstream call sites visible next
+  to the port replacement.
+- TinyUSB report callbacks either enter the Linux report parser directly for
+  callback-safe paths or enqueue report delivery to the HID async task.
 - Unsupported final firmware events stop at the input/keyd boundary rather than
   being collapsed earlier in HID parsing.
-- `hid-input.c` still contains the upstream LED worker body, including the raw
-  SET_REPORT fallback. The active `schedule_work(&hid->led_work)` call is
-  commented out, and the current TinyUSB ll_driver has a no-op `.request`, so
-  the callback-driven report path does not enter synchronous LED/output I/O.
+- `hid-input.c` keeps upstream `EV_LED -> schedule_work(&hid->led_work)`.
+  The firmware workqueue bridge runs the worker outside TinyUSB callbacks, and
+  the TinyUSB ll_driver queues output through the HID async request path.
 - Compat mutex/semaphore/spinlock APIs are no-op/commented where they used to
   allocate or block. Short critical sections remain only in local compat
   atomic/bitop helpers, not as Linux driver locks or wait points.
@@ -168,12 +166,13 @@ in this branch:
 These are not enabled by the current slice and should not be silently enabled:
 
 - `hidraw` active buffering/proxy APIs.
-- `hid_hw_request()` / `hid_hw_raw_request()` / `hid_hw_wait()` semantics.
-- `raw_event` and driver `report` callbacks.
-- `input_configured` and `feature_mapping`; `hid-vivaldi` is excluded because
-  its feature mapping performs `hid_hw_raw_request(GET_REPORT)`.
-- FF/PIDFF and workqueue/delayed-work based drivers.
-- HIDDEV/userspace compatibility.
+- synchronous `hid_hw_request()` / `hid_hw_raw_request()` / `hid_hw_wait()`
+  semantics that do not have an explicit async continuation.
+- unaudited `raw_event` and driver `report` callbacks.
+- `input_configured` or `feature_mapping` paths that need returned request data
+  before continuing probe.
+- FF/PIDFF drivers that need PID state or synchronous waits.
+- Linux hiddev fd/ioctl/poll compatibility beyond the bounded firmware proxy.
 
 ## Checks Run
 

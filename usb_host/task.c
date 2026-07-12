@@ -12,6 +12,7 @@
 #include "task.h"
 
 int hid_core_init(void);
+int linux_module_initcalls_init(void);
 int hid_builtin_drivers_init(void);
 
 void tusb_host_task(void *pvParameters)
@@ -36,6 +37,17 @@ void tusb_host_task(void *pvParameters)
     ret = evdev_init();
     if (ret) {
         async_msg("ERR: HID_EVDEV_FAIL");
+        while (1)
+            vTaskDelay(portMAX_DELAY);
+    }
+
+    /*
+     * Upstream Linux runs module/initcall registration before HID devices bind.
+     * Firmware has no module loader, so run the collected initcalls explicitly.
+     */
+    ret = linux_module_initcalls_init();
+    if (ret) {
+        async_msg("ERR: HID_INITCALL_FAIL");
         while (1)
             vTaskDelay(portMAX_DELAY);
     }

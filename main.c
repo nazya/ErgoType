@@ -54,6 +54,12 @@ void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void tusb_host_task(void* pvParameters); // usb_host/task.c
 int hid_async_init(void); // usb_host/hid_async.c
 void hid_async_task(void *pvParameters); // usb_host/hid_async.c
+int hid_workqueue_init(void); // usb_host/hid_workqueue.c
+void hid_workqueue_task(void *pvParameters); // usb_host/hid_workqueue.c
+int hid_timer_init(void); // usb_host/hid_timer.c
+void hid_timer_task(void *pvParameters); // usb_host/hid_timer.c
+int usbhid_disconnect_init(void); // usb_host/usbhid.c
+void usbhid_disconnect_task(void *pvParameters); // usb_host/usbhid.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
@@ -220,6 +226,27 @@ static void app_task(void *pvParameters)
             async_msg("ERR: HID_ASYNC_INIT_FAIL");
         else
             xTaskCreateAffinitySet(hid_async_task, NULL, MIN_STACK_SIZE, NULL,
+                                   IDLE_PRIORITY + 3, CORE1, NULL);
+
+        int hid_workqueue_ret = hid_workqueue_init();
+        if (hid_workqueue_ret < 0)
+            async_msg("ERR: HID_WORKQUEUE_INIT_FAIL");
+        else
+            xTaskCreateAffinitySet(hid_workqueue_task, NULL, MIN_STACK_SIZE, NULL,
+                                   IDLE_PRIORITY + 3, CORE1, NULL);
+
+        int hid_timer_ret = hid_timer_init();
+        if (hid_timer_ret < 0)
+            async_msg("ERR: HID_TIMER_INIT_FAIL");
+        else
+            xTaskCreateAffinitySet(hid_timer_task, NULL, MIN_STACK_SIZE, NULL,
+                                   IDLE_PRIORITY + 3, CORE1, NULL);
+
+        int usbhid_disconnect_ret = usbhid_disconnect_init();
+        if (usbhid_disconnect_ret < 0)
+            async_msg("ERR: HID_DISCONNECT_INIT_FAIL");
+        else
+            xTaskCreateAffinitySet(usbhid_disconnect_task, NULL, MIN_STACK_SIZE, NULL,
                                    IDLE_PRIORITY + 3, CORE1, NULL);
 
         BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
