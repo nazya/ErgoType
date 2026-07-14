@@ -214,6 +214,9 @@ struct input_device_id {
 
 #define FF_MAX			0x7f
 #define FF_CNT			(FF_MAX+1)
+#define FF_STATUS_STOPPED	0x00
+#define FF_STATUS_PLAYING	0x01
+#define FF_STATUS_MAX		0x01
 #define FF_HAPTIC		0x4f
 #define FF_RUMBLE		0x50
 #define FF_PERIODIC		0x51

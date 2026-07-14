@@ -43,5 +43,6 @@ filter_init(struct filter_state *filter,
 void
 filter_process(struct filter_state *filter,
 	       const struct filter_params *params,
+	       uint32_t time_ms,
 	       int32_t *dx,
 	       int32_t *dy);

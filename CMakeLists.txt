@@ -84,7 +84,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_queue.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_client.c
         # Deferred hidraw calls are documented inline in hid-core.c.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-input.c
@@ -109,6 +109,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-evision.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ezkey.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gembird.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-google-stadiaff.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gyration.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-glorious.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-huawei.c
@@ -165,9 +166,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Deferred with hid-vivaldi*.c above.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/vivaldi-fmap.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-core.c
-        # Deferred: memless FF needs a linked FF driver and hardware/emulator
-        # coverage for effect upload/playback lifecycle.
-        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-memless.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-memless.c
         # Deferred: LED/backlight class proxies are not needed by the current HID
         # allowlist.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c

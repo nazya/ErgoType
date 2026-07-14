@@ -21,6 +21,7 @@
 
 struct device {
 	QueueHandle_t ev_queue;
+	struct evdev_writer writer;
 	uint8_t capabilities;
 	char id[16];
 	char name[32];
@@ -33,6 +34,7 @@ struct device {
 	int32_t _pending_abs_x;
 	int32_t _pending_abs_y;
 	uint8_t _pending_abs;
+	int16_t ff_rumble_effect_id;
 	void *data;
 };
 
@@ -62,5 +64,10 @@ extern size_t device_table_sz;
 
 int device_init(const struct port_input_dev *port_dev, struct device *dev);
 struct device_event *device_read_event(struct device *dev);
+void device_set_led(const struct device *dev, int led, int state);
+void device_set_ff(const struct device *dev, int effect_id, int value);
+int device_upload_ff(const struct device *dev, struct ff_effect *effect);
+int device_erase_ff(const struct device *dev, int effect_id);
+void device_rumble_on_layout_change(void);
 
 #endif

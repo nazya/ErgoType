@@ -54,16 +54,11 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	return was_pending;
 }
 
-int timer_delete_sync(struct timer_list *timer)
+static int hid_timer_delete_pending(struct timer_list *timer)
 {
 	struct timer_list **link;
 	int was_pending;
 
-	/*
-	 * Linux waits for a running timer callback here. HID disconnect/remove is
-	 * handed from TinyUSB callbacks to a firmware task before driver remove,
-	 * so remove-time callers can wait without blocking TinyUSB.
-	 */
 	taskENTER_CRITICAL();
 	was_pending = timer->pending;
 	timer->pending = 0;
@@ -78,6 +73,25 @@ int timer_delete_sync(struct timer_list *timer)
 		link = &(*link)->next;
 	}
 	taskEXIT_CRITICAL();
+
+	return was_pending;
+}
+
+int timer_delete(struct timer_list *timer)
+{
+	return hid_timer_delete_pending(timer);
+}
+
+int timer_delete_sync(struct timer_list *timer)
+{
+	int was_pending;
+
+	/*
+	 * Linux waits for a running timer callback here. HID disconnect/remove is
+	 * handed from TinyUSB callbacks to a firmware task before driver remove,
+	 * so remove-time callers can wait without blocking TinyUSB.
+	 */
+	was_pending = hid_timer_delete_pending(timer);
 
 	while (timer->running)
 		vTaskDelay(1);

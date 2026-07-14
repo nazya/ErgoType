@@ -7,6 +7,7 @@
 #include "device.h"
 #include "keys.h"
 #include "log.h"
+#include "usb_host/evdev.h"
 #include "uapi/linux/input-event-codes.h"
 
 struct device *device_table[MAX_DEVICES];
@@ -95,6 +96,7 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 	uint8_t capabilities;
 
 	memset(dev, 0, sizeof *dev);
+	dev->ff_rumble_effect_id = -1;
 
 	capabilities = resolve_device_capabilities(port_dev, &num_keys, &has_rel, &has_abs);
 
@@ -133,6 +135,7 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 	dev->capabilities = capabilities;
 	dev->data = NULL;
 	dev->ev_queue = port_dev->ev_queue;
+	dev->writer = port_dev->writer;
 	if (port_dev->name)
 		snprintf(dev->name, sizeof(dev->name), "%s", port_dev->name);
 
@@ -390,4 +393,66 @@ struct device_event *device_read_event(struct device *dev)
 	}
 
 	return &devev;
+}
+
+void device_set_led(const struct device *dev, int led, int state)
+{
+	struct input_event ev = {
+		.type = EV_LED,
+		.code = led,
+		.value = state
+	};
+
+	// xwrite(dev->fd, &ev, sizeof ev);
+	// Firmware has no input fd; route the output event through the producer
+	// callback, which mirrors evdev_write() -> input_inject_event().
+	if (dev->writer.write)
+		dev->writer.write(dev->writer.client, &ev, 1);
+}
+
+void device_set_ff(const struct device *dev, int effect_id, int value)
+{
+	struct input_event ev = {
+		.type = EV_FF,
+		.code = effect_id,
+		.value = value
+	};
+
+	// EV_FF play/stop is an input event, so use the same evdev writer path
+	// as EV_LED.
+	if (dev->writer.write)
+		dev->writer.write(dev->writer.client, &ev, 1);
+}
+
+int device_upload_ff(const struct device *dev, struct ff_effect *effect)
+{
+	// Firmware has no evdev ioctl; upload maps to the producer FF callback.
+	if (!dev->writer.upload_ff)
+		return -ENOSYS;
+
+	return dev->writer.upload_ff(dev->writer.client, effect);
+}
+
+int device_erase_ff(const struct device *dev, int effect_id)
+{
+	// Firmware has no evdev ioctl; erase maps to the producer FF callback.
+	if (!dev->writer.erase_ff)
+		return -ENOSYS;
+
+	return dev->writer.erase_ff(dev->writer.client, effect_id);
+}
+
+void device_rumble_on_layout_change(void)
+{
+	for (size_t i = 0; i < device_table_sz; i++) {
+		struct device *dev = device_table[i];
+
+		if (!dev)
+			continue;
+
+		if (!dev->writer.client)
+			continue;
+
+		evdev_client_rumble(dev->writer.client, &dev->ff_rumble_effect_id);
+	}
 }

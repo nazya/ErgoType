@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "FreeRTOS.h"
@@ -35,12 +36,23 @@ static inline void input_bitmap_set(unsigned int bit, unsigned long *bitmap)
 
 /*
  * Upstream keyd reads Linux struct input_event from an input fd. Firmware
- * queues keep only the fields keyd consumes; timestamping stays in evloop.c.
+ * queues keep only the fields keyd consumes.
  */
 struct input_event {
 	uint16_t type;
 	uint16_t code;
 	int32_t value;
+};
+
+struct evdev_client;
+struct ff_effect;
+
+struct evdev_writer {
+	struct evdev_client *client;
+	int (*write)(struct evdev_client *client,
+		     const struct input_event *events, size_t count);
+	int (*upload_ff)(struct evdev_client *client, struct ff_effect *effect);
+	int (*erase_ff)(struct evdev_client *client, int effect_id);
 };
 
 /*
@@ -51,6 +63,7 @@ struct input_event {
  */
 struct port_input_dev {
 	QueueHandle_t ev_queue;
+	struct evdev_writer writer;
 	uint16_t vendor;
 	uint16_t product;
 	const char *name;

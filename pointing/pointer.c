@@ -64,7 +64,10 @@ struct pointing_filter {
     const struct filter_params *params;
 };
 
-static void send_pointing_input_event(QueueHandle_t queue, uint16_t type, uint16_t code, int32_t value)
+static void send_pointing_input_event(QueueHandle_t queue,
+                                      uint16_t type,
+                                      uint16_t code,
+                                      int32_t value)
 {
     struct input_event ev = {
         .type = type,
@@ -81,7 +84,9 @@ static void send_pointing_event(QueueHandle_t queue,
                                 int32_t x,
                                 int32_t y)
 {
-    filter_process(filter->state, filter->params, &x, &y);
+    uint32_t time_ms = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    filter_process(filter->state, filter->params, time_ms, &x, &y);
 
     if (scroll) {
         send_pointing_input_event(queue, EV_REL, REL_HWHEEL, x);

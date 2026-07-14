@@ -912,15 +912,14 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		hid->usb_dev.descriptor.idVendor = vid;
 		hid->usb_dev.descriptor.idProduct = pid;
 	}
-	snprintf(hid->usb_dev.product_buf, sizeof(hid->usb_dev.product_buf),
-		 "HID %04x:%04x", vid, pid);
 	name = product_name;
 	if (!name && usb_entry && usb_entry->dev.product)
 		name = usb_entry->dev.product;
-	if (name && name[0])
+	if (name && name[0]) {
 		strscpy(hid->usb_dev.product_buf, name,
 			sizeof(hid->usb_dev.product_buf));
-	hid->usb_dev.product = hid->usb_dev.product_buf;
+		hid->usb_dev.product = hid->usb_dev.product_buf;
+	}
 	if (usb_entry && usb_entry->dev.manufacturer) {
 		strscpy(hid->usb_dev.manufacturer_buf,
 			usb_entry->dev.manufacturer,
@@ -1002,9 +1001,36 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	else if (hid->usb_altsetting.desc.bInterfaceProtocol == 0)
 		hid->type = HID_TYPE_USBNONE;
 
-	// snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x", hid->vendor, hid->product);
-	// Mirror upstream usbhid name construction once product string metadata is available.
-	snprintf(hid->name, sizeof(hid->name), "%s", hid->usb_dev.product);
+	// hid->name[0] = 0;
+	// if (dev->manufacturer)
+	// 	strscpy(hid->name, dev->manufacturer, sizeof(hid->name));
+	//
+	// if (dev->product) {
+	// 	if (dev->manufacturer)
+	// 		strlcat(hid->name, " ", sizeof(hid->name));
+	// 	strlcat(hid->name, dev->product, sizeof(hid->name));
+	// }
+	//
+	// if (!strlen(hid->name))
+	// 	snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x",
+	// 		 le16_to_cpu(dev->descriptor.idVendor),
+	// 		 le16_to_cpu(dev->descriptor.idProduct));
+	// Port mirrors upstream usbhid name construction using the TinyUSB-backed
+	// usb_device snapshot prepared above.
+	hid->name[0] = 0;
+	if (hid->usb_dev.manufacturer)
+		strscpy(hid->name, hid->usb_dev.manufacturer, sizeof(hid->name));
+
+	if (hid->usb_dev.product) {
+		if (hid->usb_dev.manufacturer)
+			strlcat(hid->name, " ", sizeof(hid->name));
+		strlcat(hid->name, hid->usb_dev.product, sizeof(hid->name));
+	}
+
+	if (!strlen(hid->name))
+		snprintf(hid->name, sizeof(hid->name), "HID %04x:%04x",
+			 le16_to_cpu(hid->usb_dev.descriptor.idVendor),
+			 le16_to_cpu(hid->usb_dev.descriptor.idProduct));
 	usb_make_path(&hid->usb_dev, hid->phys, sizeof(hid->phys));
 	strlcat(hid->phys, "/input", sizeof(hid->phys));
 
