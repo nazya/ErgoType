@@ -2194,8 +2194,11 @@ static inline void timer_setup(struct timer_list *timer, void (*function)(struct
 	timer->next = NULL;
 }
 int mod_timer(struct timer_list *timer, unsigned long expires);
+int timer_delete(struct timer_list *timer);
 int timer_delete_sync(struct timer_list *timer);
-#define timer_delete(timer) timer_delete_sync(timer)
+// #define timer_delete(timer) timer_delete_sync(timer)
+// Linux keeps timer_delete() non-waiting and timer_delete_sync() waiting.
+// ff-memless calls timer_delete() from its timer callback after expiry.
 
 #define jiffies ((unsigned long)xTaskGetTickCount())
 #define secs_to_jiffies(sec) ((unsigned long)(sec) * (unsigned long)configTICK_RATE_HZ)

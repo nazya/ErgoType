@@ -112,6 +112,8 @@ Compared against real Linux upstream files/blobs:
 - `~/linux-upstream-hid/drivers/input/evdev.c`
 - `HEAD:drivers/input/input-mt.c`
 - `HEAD:drivers/input/ff-core.c`
+- `~/linux-upstream-hid/drivers/input/ff-memless.c`
+- `~/linux-upstream-hid/drivers/hid/hid-google-stadiaff.c`
 
 Result:
 
@@ -120,6 +122,14 @@ Result:
 - `ff-core.c` is upstream-shaped. Active diffs replace Linux `guard()` /
   `scoped_guard()` helpers with direct statements, with upstream lines left
   visible.
+- `ff-memless.c` is upstream-shaped. Active diffs replace Linux `guard()`
+  event-lock helpers with direct statements, with upstream lines left visible;
+  the file itself does not submit HID requests and calls the driver
+  `play_effect()` callback.
+- `hid-google-stadiaff.c` is upstream-shaped. Active diff is the same imported
+  driver descriptor conversion used by the other linked vendor drivers:
+  upstream `static struct hid_driver` remains visible next to the port
+  `static const struct hid_driver`.
 - `input.c` is not line-preserving upstream. It is a reduced in-memory input
   core slice: Linux char device/procfs/sysfs/IDA/RCU/poller/userspace
   machinery is not present, while the HID input event batching/handler path

@@ -1,21 +1,27 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "devmon.h"
 
-struct evdev_stats {
-	uint32_t key_dropped;
-	uint32_t key_release_dropped;
-	uint32_t key_reset_queued;
-	uint32_t key_reset_dropped;
-	uint32_t rel_dropped;
-	uint32_t abs_dropped;
-	uint32_t other_dropped;
-};
+struct input_dev;
+struct evdev;
+struct evdev_client;
+struct ff_effect;
+struct file;
 
-void *evdev_register_device(const struct port_input_dev *port_dev);
-void evdev_unregister_device(void *dev);
-void evdev_input_event(void *dev, uint16_t type, uint16_t code, int32_t value);
-void evdev_get_stats(void *dev, struct evdev_stats *stats);
+struct evdev_client *evdev_register_input_device(struct input_dev *src,
+						 struct evdev *evdev);
+void evdev_unregister_device(struct evdev_client *dev);
+void __pass_event(struct evdev_client *dev,
+		  const struct input_event *ev);
+int evdev_client_write(struct evdev_client *client,
+		       const struct input_event *events, size_t count);
+int evdev_client_upload_ff(struct evdev_client *client, struct ff_effect *effect);
+int evdev_client_erase_ff(struct evdev_client *client, int effect_id);
+int evdev_client_rumble(struct evdev_client *client, int16_t *effect_id);
+int evdev_write(struct evdev *evdev, const struct input_event *events, size_t count);
+int evdev_upload_ff(struct evdev *evdev, struct ff_effect *effect, struct file *file);
+int evdev_erase_ff(struct evdev *evdev, int effect_id, struct file *file);
 int evdev_init(void);

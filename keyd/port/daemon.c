@@ -268,7 +268,7 @@ static int event_handler(struct event *ev)
 			}
 		// } else if (ev->dev->is_virtual && ev->devev->type == DEV_LED) {
 		} else if (ev->devev->type == DEV_LED) {
-			// size_t i;
+			size_t i;
 
 			// /* 
 			//  * Propagate LED events received by the virtual device from userspace
@@ -276,9 +276,14 @@ static int event_handler(struct event *ev)
 			//  *
 			//  * NOTE/TODO: Account for potential layer_indicator interference
 			//  */
-			// for (i = 0; i < device_table_sz; i++)
-			// 	if (device_table[i].data)
-			// 		device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
+			for (i = 0; i < device_table_sz; i++) {
+				// if (device_table[i].data)
+				// 	device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
+				// Port device_table stores pointers and device_set_led()
+				// routes through the producer output callback.
+				if (device_table[i]->data)
+					device_set_led(device_table[i], ev->devev->code, ev->devev->pressed);
+			}
 		}
 
 		break;
