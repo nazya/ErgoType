@@ -644,11 +644,15 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 			}
 		}
 
+		// for (n = parser->local.usage_minimum; n <= data; n++)
+		// 	if (hid_add_usage(parser, n, item->size)) {
+		// 		dbg_hid("hid_add_usage failed\n");
+		// 		return -1;
+		// 	}
+		// Dynamic local usage storage can fail with -ENOMEM; preserve it.
 		for (n = parser->local.usage_minimum; n <= data; n++) {
 			ret = hid_add_usage(parser, n, item->size);
 			if (ret) {
-				// if (hid_add_usage(parser, n, item->size)) { ... return -1; }
-				// Dynamic local usage storage can fail with -ENOMEM; preserve it.
 				dbg_hid("hid_add_usage failed\n");
 				return ret;
 			}
@@ -2827,14 +2831,10 @@ struct hid_dynid {
 };
 
 // Upstream stores dynid/driver-core state inside mutable struct hid_driver;
-// firmware keeps imported hid_driver descriptors const and stores that state here.
-struct hid_driver_runtime {
-	const struct hid_driver *hid_driver;
-	struct list_head dyn_list;
-	spinlock_t dyn_lock;
-	struct device_driver driver;
-};
-
+// firmware keeps imported hid_driver descriptors const and stores that state
+// in hid_driver_runtime.
+// The port declares hid_driver_runtime in hid.h so builtin module glue can
+// allocate one static instance next to each flash-resident driver descriptor.
 static struct hid_driver_runtime *hid_driver_runtime_from_driver(struct device_driver *drv)
 {
 	return container_of(drv, struct hid_driver_runtime, driver);
@@ -3213,7 +3213,9 @@ static int hid_uevent(const struct device *dev, struct kobj_uevent_env *env)
 struct bus_type hid_bus_type = {
 	.name		= "hid",
 	.dev_groups	= hid_dev_groups,
-	.drv_groups	= hid_drv_groups,
+	// .drv_groups	= hid_drv_groups,
+	// Firmware has no sysfs writer for new_id; skip its unreachable per-driver allocation.
+	.drv_groups	= NULL,
 	.match		= hid_bus_match,
 	.probe		= hid_device_probe,
 	.remove		= hid_device_remove,
@@ -3395,15 +3397,28 @@ static int __bus_removed_driver(struct device_driver *drv, void *data)
 	return bus_rescan_devices(&hid_bus_type);
 }
 
+// int __hid_register_driver(struct hid_driver *hdrv, struct module *owner,
+// 		const char *mod_name)
+// Imported descriptors are const; the firmware linker registry provides
+// static mutable runtime storage for builtin drivers.
 int __hid_register_driver(const struct hid_driver *hdrv, struct module *owner,
 		const char *mod_name)
 {
-	struct hid_driver_runtime *rt;
+	struct hid_driver_runtime *allocated_rt = NULL;
+	struct hid_driver_runtime *rt = hid_builtin_driver_runtime(hdrv);
 	int ret;
 
-	rt = kzalloc_obj(*rt);
-	if (!rt)
-		return -ENOMEM;
+	// rt = kzalloc_obj(*rt);
+	// if (!rt)
+	// 	return -ENOMEM;
+	// Builtin port drivers supply static runtime storage; non-builtin callers
+	// retain the separate allocation used before static registration.
+	if (!rt) {
+		allocated_rt = kzalloc_obj(*allocated_rt);
+		if (!allocated_rt)
+			return -ENOMEM;
+		rt = allocated_rt;
+	}
 
 	rt->hid_driver = hdrv;
 	// hdrv->driver.name = hdrv->name;
@@ -3425,7 +3440,9 @@ int __hid_register_driver(const struct hid_driver *hdrv, struct module *owner,
 	// ret = driver_register(&hdrv->driver);
 	ret = driver_register(&rt->driver);
 	if (ret) {
-		kfree(rt);
+		// kfree(rt);
+		// Builtin runtime storage is static; only the fallback allocation is owned here.
+		kfree(allocated_rt);
 		return ret;
 	}
 
@@ -3448,7 +3465,10 @@ void hid_unregister_driver(const struct hid_driver *hdrv)
 	hid_free_dynids(rt);
 
 	bus_for_each_drv(&hid_bus_type, NULL, (void *)hdrv, __bus_removed_driver);
-	kfree(rt);
+	// kfree(rt);
+	// Linker-section builtin runtime storage lives in .bss, not the FreeRTOS heap.
+	if (rt != hid_builtin_driver_runtime(hdrv))
+		kfree(rt);
 }
 EXPORT_SYMBOL_GPL(hid_unregister_driver);
 

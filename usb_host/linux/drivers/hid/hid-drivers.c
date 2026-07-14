@@ -6,8 +6,10 @@
  * so linked driver descriptors are collected through linker sections here.
  */
 
-extern const struct hid_driver * const __start_hid_drivers[];
-extern const struct hid_driver * const __stop_hid_drivers[];
+// Each linker entry pairs a flash-resident descriptor with mutable .bss runtime
+// storage, avoiding one FreeRTOS heap allocation per builtin HID driver.
+extern const struct hid_builtin_driver __start_hid_drivers[];
+extern const struct hid_builtin_driver __stop_hid_drivers[];
 extern linux_initcall_t const __start_linux_initcalls[];
 extern linux_initcall_t const __stop_linux_initcalls[];
 
@@ -32,7 +34,7 @@ int linux_module_initcalls_init(void)
 
 int hid_builtin_drivers_init(void)
 {
-	const struct hid_driver * const *driver;
+	const struct hid_builtin_driver *driver;
 	int ret;
 
 	for (driver = __start_hid_drivers; driver < __stop_hid_drivers; driver++) {
@@ -53,10 +55,25 @@ int hid_builtin_drivers_init(void)
 		 * report GET/SET async paths, hiddev proxy users, and timer/workqueue
 		 * users that do not need deferred Linux subsystem proxies.
 		 */
-		ret = hid_register_driver(*driver);
+		// ret = hid_register_driver(*driver);
+		// The linker entry now pairs the descriptor with runtime storage looked up by hid-core.
+		ret = hid_register_driver(driver->hid_driver);
 		if (ret)
 			return ret;
 	}
 
 	return 0;
+}
+
+// Upstream Linux: no equivalent; registration and unregister use this port
+// boundary to find linker-owned runtime storage without changing their API.
+struct hid_driver_runtime *hid_builtin_driver_runtime(const struct hid_driver *hid_driver)
+{
+	const struct hid_builtin_driver *driver;
+
+	for (driver = __start_hid_drivers; driver < __stop_hid_drivers; driver++)
+		if (driver->hid_driver == hid_driver)
+			return driver->runtime;
+
+	return NULL;
 }

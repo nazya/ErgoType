@@ -4,7 +4,7 @@ This note tracks what the external emulator repo covers:
 `~/ErgoType-hid-devices`.
 
 It is intentionally about hardware-test coverage, not about every active HID
-driver in CMake. The current host build links 57 HID `.c` files from
+driver in CMake. The current host build links the CMake HID allowlist from
 `usb_host/linux/drivers/hid`, while the emulator repo has one branch per
 targeted behavior or device family.
 
@@ -16,10 +16,10 @@ Last sequential build pass: 2026-07-13
 - emulator repo: all 19 `device/*` branches built one by one and passed
 - emulator branches built: 19
 
-The emulator repo is currently on `device/razer-blackwidow`. Its
+The emulator repo is currently on `device/holtek-kbd-a055`. Its
 `build/ErgoType.uf2` is always the last built branch artifact, not a stable
 per-branch artifact archive; after the last full pass it contains the final
-branch built manually, currently `device/razer-blackwidow`.
+branch built manually, currently `device/holtek-kbd-a055`.
 
 ## Hardware Verified
 
@@ -35,6 +35,7 @@ claims for unrelated drivers.
 | 2026-07-14 | `device/hires-wheel` | resolution-multiplier SET_REPORT is queued/completed; keyboard, pointer, scroll, and hi-res wheel/hwheel events reach the Pico host input boundary |
 | 2026-07-14 | `device/quirks-atmel-ma901` | after fixing upstream-style `hid->name` construction, the fixture matches laptop Linux behavior and generic pointer/scroll input is not falsely ignored |
 | 2026-07-14 | `device/razer-blackwidow` | rechecked after upstream-style `hid->name` construction fix; Razer macro-enable SET_REPORT and macro input path still work |
+| 2026-07-14 | `device/quirks-jabra-version` | old `bcdDevice` reaches `hid_lookup_quirk()` before probe; host ignores both HID interfaces and no KeyD input events appear |
 
 ## Current Emulator Branches
 
@@ -43,23 +44,22 @@ Current branch heads used for the build pass:
 | Branch | Commit |
 | --- | --- |
 | `device/a4tech-x5-005d` | `d11b859` |
-| `device/apple-ir` | `a2c1a6a` |
+| `device/apple-ir` | `547d781` |
 | `device/chicony-wireless-radio` | `c6d2769` |
 | `device/creative-sb0540` | `9a58ea2` |
 | `device/cypress-mouse` | `a40ce2f` |
-| `device/google-stadiaff` | `dedf36a` |
-| `device/hires-wheel` | `6fe382b` |
+| `device/google-stadiaff` | `f8f9a38` |
+| `device/hires-wheel` | `1e3114e` |
 | `device/holtek-kbd-a055` | `bd6753f` |
 | `device/ite8595-rfkill` | `4686eea` |
 | `device/kye-easypen-m406` | `cd1f262` |
 | `device/primax-keyboard` | `a187788` |
 | `device/pxrc-phoenixrc` | `8072356` |
-| `device/quirks-atmel-ma901` | `576acd3` |
-| `device/quirks-jabra-version` | `d06eb67` |
+| `device/quirks-atmel-ma901` | `f35de09` |
+| `device/quirks-jabra-version` | `2cfc0b9` |
 | `device/rapoo-2_4g-receiver` | `14ffb87` |
-| `device/razer-blackwidow` | `2fae9e3` |
+| `device/razer-blackwidow` | `127a06f` |
 | `device/saitek-rat7` | `1d3d945` |
-| `device/samsung-ir-remote` | `869d1f3` |
 | `device/zydacron-remote` | `40ee6a8` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
@@ -97,8 +97,6 @@ Current branch heads used for the build pass:
   key events.
 - `device/saitek-rat7`: report fixup, raw mode bits, and event-generated
   synthetic press/release.
-- `device/samsung-ir-remote`: Samsung IrDA 184-byte report descriptor fixup
-  plus the probe path that switches to `HID_CONNECT_HIDDEV_FORCE`.
 - `device/zydacron-remote`: report fixup, input mapping, raw event injection,
   and generic-path suppression.
 
@@ -122,7 +120,6 @@ Current branch heads used for the build pass:
 - product-string quirks before probe
 - `bcdDevice` version quirks before probe
 - normal keyboard LED output report path through HID SET_REPORT
-- Samsung IR remote `HID_CONNECT_HIDDEV_FORCE` selection
 
 ## Active Driver Hook Audit
 
@@ -132,8 +129,8 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | A4-style simple fixups plus `hid-holtek-*`, `hid-kye`, `hid-pxrc`, `hid-samsung`, `hid-zydacron`, and other lightweight fixup-only drivers | `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `samsung-ir-remote`, `zydacron-remote` |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-samsung`, `hid-zydacron`, simple key-remap drivers | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `samsung-ir-remote`, `zydacron-remote` |
+| `report_fixup` | A4-style simple fixups plus `hid-holtek-*`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other lightweight fixup-only drivers | `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote` |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-zydacron`, simple key-remap drivers | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `zydacron-remote` |
 | driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek`, `hid-speedlink`, `hid-xinmo` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
 | `raw_event` hooks | `hid-appleir`, `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-waltop`, `hid-zydacron` | `apple-ir`, `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-appleir`, `hid-creative-sb0540`, `hid-retrode` | `apple-ir`, `creative-sb0540`; `hid-retrode` only renames per-report input devices and reuses the same `HID_QUIRK_MULTI_INPUT` input-core path |
@@ -146,7 +143,7 @@ drivers are not counted here.
 | USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | `rapoo-2_4g-receiver`, `razer-blackwidow` |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
-| `HID_CONNECT_HIDDEV_FORCE` selection | `hid-appleir`, `hid-samsung` | `apple-ir`, `samsung-ir-remote` |
+| `HID_CONNECT_HIDDEV_FORCE` selection | `hid-appleir` | `apple-ir` |
 | Force feedback | `hid-google-stadiaff.c`, `ff-core.c`, and `ff-memless.c` | `google-stadiaff` |
 
 ## Active Drivers Without Dedicated Fixtures
@@ -162,11 +159,11 @@ hardware pass. They reuse hook classes already covered above.
   `hid-keytouch`, `hid-macally`, `hid-maltron`, `hid-nti`, `hid-ortek`,
   `hid-redragon`, `hid-semitek`, `hid-sigmamicro`, `hid-topre`,
   `hid-viewsonic`, `hid-vrc2`, `hid-xiaomi`. These are covered by the Holtek,
-  KYE, PXRC, Samsung, and Zydacron fixup/probe fixtures.
+  KYE, PXRC, and Zydacron fixup/probe fixtures.
 - Mapping-only or fixup-plus-mapping drivers: `hid-accutouch`, `hid-cherry`,
   `hid-evision`, `hid-kensington`, `hid-lcpower`, `hid-monterey`,
   `hid-penmount`, `hid-sunplus`, `hid-tivo`, `hid-topseed`, `hid-twinhan`.
-  These are covered by A4Tech, ITE, Samsung, and Zydacron mapping fixtures.
+  These are covered by A4Tech, ITE, and Zydacron mapping fixtures.
 - Mapping/event drivers without new transport behavior: `hid-ezkey`,
   `hid-gyration`, `hid-icade`, `hid-speedlink`, `hid-xinmo`. These are covered
   by A4Tech, Cypress, ITE, and Saitek event fixtures.
@@ -188,13 +185,14 @@ The current emulator set is enough for the next hardware pass.
 
 Reasoning:
 
-- the host CMake allowlist currently links 57 HID `.c` files
+- the host CMake allowlist links only the active HID `.c` files selected in
+  `CMakeLists.txt`
 - the 19 emulator branches cover the nontrivial behavior classes in that set
 - remaining active lightweight drivers mostly reuse already-covered classes:
   `report_fixup`, `input_mapping`, `input_mapped`, `.event`, simple `.probe`,
   or `.raw_event`
 - the known metadata-sensitive quirks are covered by dedicated negative tests:
-  product string, `bcdDevice`, and Samsung hiddev-force probe selection
+  product string and `bcdDevice`
 - output SET_REPORT paths are represented by keyboard LED/Holtek and Razer/KYE
   style request paths
 
@@ -232,10 +230,9 @@ Recommended smoke order:
    `hid_ignore()` before probe.
 4. `device/quirks-jabra-version`: proves `bcdDevice` metadata reaches
    `hid_lookup_quirk()` before probe.
-5. `device/samsung-ir-remote`: proves Samsung fixup plus hiddev-force selection.
-6. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
+5. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
-7. `device/google-stadiaff`: proves the simple FF memless upload/play path and
+6. `device/google-stadiaff`: proves the simple FF memless upload/play path and
    Stadia output SET_REPORT report ID 5.
 
 If these six pass, the current emulator coverage is enough for the host commit.
@@ -269,23 +266,14 @@ specific driver family needs confirmation.
     test: low `bcdDevice` should make the Jabra version quirk ignore it.
   - failure signal: generic events appear, which means the version metadata did
     not reach `hid_lookup_quirk()`.
-- `device/samsung-ir-remote`
-  - build command: `git checkout device/samsung-ir-remote && cmake --build build -j4`
-  - expected host signal: Samsung 184-byte fixup path runs and the probe selects
-    `HID_CONNECT_HIDDEV_FORCE`; the emulator's mouse-like input report should
-    not become KeyD mouse motion.
-  - failure signal: mouse movement appears from the emulator.
-
 ### Interpreting Negative Tests
 
-The quirk and Samsung tests are successful when the emulator is visible on USB
-but does not produce ordinary KeyD input events. That is intentional:
+The quirk tests are successful when the emulator is visible on USB but does not
+produce ordinary KeyD input events. That is intentional:
 
 - `quirks-atmel-ma901`: ignored because product string matches MA901.
 - `quirks-jabra-version`: ignored because `bcdDevice` is below the Jabra
   threshold.
-- `samsung-ir-remote`: parsed by the Samsung special driver, then moved to
-  hiddev-force instead of normal hidinput for the 184-byte IrDA shape.
 
 If any of these produces normal keyboard/mouse events, the metadata/probe
 boundary is wrong even though the board appears to be "working".
@@ -387,18 +375,17 @@ and emulator CDC lines under each item.
     reports after mount.
   - verdict: pass for HID async transport and input-boundary coverage; KeyD
     consumer support for hi-res scroll remains separate.
-- [ ] `device/quirks-atmel-ma901`
-  - host:
-  - emulator:
-  - verdict:
-- [ ] `device/quirks-jabra-version`
-  - host:
-  - emulator:
-  - verdict:
-- [ ] `device/samsung-ir-remote`
-  - host:
-  - emulator:
-  - verdict:
+- [x] `device/quirks-atmel-ma901`
+  - host: after upstream-style `hid->name` construction, no `HID_ADD_FAIL`;
+    pointer/scroll/key input reaches the ErgoType host like laptop Linux.
+  - emulator: emits generic keyboard, relative pointer, and wheel reports.
+  - verdict: pass, checked on Pico host with emulator.
+- [x] `device/quirks-jabra-version`
+  - host: pre-probe descriptor/string callbacks complete, then old Jabra
+    `bcdDevice` path ignores both HID interfaces; no KeyD input events appear.
+  - emulator: emits generic keyboard, relative pointer, and wheel reports that
+    would be visible if the quirk failed.
+  - verdict: pass, checked on Pico host with emulator.
 - [ ] `device/holtek-kbd-a055` LED output path
   - host:
   - emulator:

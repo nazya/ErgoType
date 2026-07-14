@@ -536,10 +536,11 @@ struct hid_global {
 };
 
 struct hid_local {
-	// unsigned int usage[HID_MAX_USAGES];
-	// u8 usage_size[HID_MAX_USAGES];
-	// unsigned int collection_index[HID_MAX_USAGES];
-	// Pico port keeps the upstream HID_MAX_USAGES limit but allocates local parser storage on demand.
+	// unsigned usage[HID_MAX_USAGES]; /* usage array */
+	// u8 usage_size[HID_MAX_USAGES]; /* usage size array */
+	// unsigned collection_index[HID_MAX_USAGES]; /* collection index array */
+	// Firmware allocates parser-local arrays on demand up to this port's
+	// HID_MAX_USAGES cap instead of embedding them in each parser.
 	unsigned int *usage;
 	u8 *usage_size;
 	unsigned int *collection_index;
@@ -816,6 +817,21 @@ struct hid_driver {
 	struct device_driver driver;
 };
 
+// Upstream Linux stores this mutable state inside struct hid_driver. Firmware
+// keeps imported descriptors const and gives each builtin driver separate
+// .bss storage.
+struct hid_driver_runtime {
+	const struct hid_driver *hid_driver;
+	struct list_head dyn_list;
+	spinlock_t dyn_lock;
+	struct device_driver driver;
+};
+
+struct hid_builtin_driver {
+	const struct hid_driver *hid_driver;
+	struct hid_driver_runtime *runtime;
+};
+
 // #define to_hid_driver(pdrv) \
 // 	container_of(pdrv, struct hid_driver, driver)
 // The port keeps mutable device_driver state in hid_driver_runtime so hid_driver can stay const.
@@ -862,8 +878,14 @@ struct hid_ll_driver {
 		|| (a == HID_GD_SYSTEM_CONTROL) || (a == HID_CP_CONSUMER_CONTROL) \
 		|| (a == HID_GD_WIRELESS_RADIO_CTLS))
 
+// extern int __must_check __hid_register_driver(struct hid_driver *,
+// 		struct module *, const char *mod_name);
+// Firmware keeps imported driver descriptors const.
 extern int __must_check __hid_register_driver(const struct hid_driver *,
 		struct module *, const char *mod_name);
+// Upstream Linux: no equivalent; fixed firmware linker entries own builtin
+// runtime storage.
+struct hid_driver_runtime *hid_builtin_driver_runtime(const struct hid_driver *hid_driver);
 
 #define hid_register_driver(driver) \
 	__hid_register_driver(driver, THIS_MODULE, KBUILD_MODNAME)
@@ -875,12 +897,21 @@ extern struct bus_type hid_bus_type;
 
 #define __HID_DRIVER_CONCAT(a, b) a##b
 #define __HID_DRIVER_CONCAT2(a, b) __HID_DRIVER_CONCAT(a, b)
-// Upstream module_hid_driver() expands to module_driver(...), which registers
-// via module_init/module_exit. Firmware has no module loader; hid-drivers.c
-// registers these linker-section entries instead.
+// #define module_hid_driver(__hid_driver) \
+// 	module_driver(__hid_driver, hid_register_driver, \
+// 		      hid_unregister_driver)
+// Firmware has no module loader; hid-drivers.c registers linker-section
+// entries instead.
+// Each entry owns mutable .bss runtime storage so registration does not allocate it.
+#define __MODULE_HID_DRIVER(__hid_driver, __id) \
+	static struct hid_driver_runtime __HID_DRIVER_CONCAT2(__hid_builtin_runtime_, __id); \
+	static const struct hid_builtin_driver __HID_DRIVER_CONCAT2(__hid_builtin_driver_, __id) \
+	__attribute__((used, section("hid_drivers"))) = { \
+		.hid_driver = &(__hid_driver), \
+		.runtime = &__HID_DRIVER_CONCAT2(__hid_builtin_runtime_, __id), \
+	}
 #define module_hid_driver(__hid_driver) \
-	static const struct hid_driver * const __HID_DRIVER_CONCAT2(__hid_builtin_driver_, __COUNTER__) \
-	__attribute__((used, section("hid_drivers"))) = &(__hid_driver)
+	__MODULE_HID_DRIVER(__hid_driver, __COUNTER__)
 
 #define hid_dump_input(a,b,c) do { } while (0)
 #define hid_dump_report(a,b,c,d) do { } while (0)

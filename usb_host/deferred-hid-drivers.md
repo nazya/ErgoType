@@ -66,6 +66,12 @@ synchronous waits:
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
+`hid-samsung.c` is deferred for this reason: the Samsung IrDA 184-byte path
+forces HIDDEV and disables normal hidinput. The current firmware has no useful
+hiddev consumer/proxy for ErgoType input routing, so the imported source stays
+in the tree but is not linked by the CMake HID allowlist. Its emulator fixture
+is not part of the current devices repo branch set.
+
 Normal HID keyboard LEDs are not part of the Linux LED class boundary above.
 CapsLock/NumLock/ScrollLock output remains in the generic HID input path:
 `EV_LED` updates schedule `hidinput_led_worker()`, which sends the keyboard
