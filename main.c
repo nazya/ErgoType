@@ -226,7 +226,7 @@ static void app_task(void *pvParameters)
         if (hid_async_ret < 0)
             async_msg("ERR: HID_ASYNC_INIT_FAIL");
         else
-            xTaskCreateAffinitySet(hid_async_task, NULL, MIN_STACK_SIZE, NULL,
+            xTaskCreateAffinitySet(hid_async_task, NULL, 512, NULL,
                                    IDLE_PRIORITY + 3, CORE1, NULL);
 
         int hid_workqueue_ret = hid_workqueue_init();
@@ -274,7 +274,7 @@ static void app_task(void *pvParameters)
                 pointing_motion_irq_init(pointing_task_handle, config.pmw3389[i].irq, (uint8_t)(MAX_PMW3360 + i));
         }
 
-        xTaskCreateAffinitySet(keyd_task, NULL, 8192, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
+        xTaskCreateAffinitySet(keyd_task, NULL, 7168, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
     }
 
     vTaskDelete(NULL);

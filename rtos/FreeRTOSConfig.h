@@ -47,7 +47,7 @@
 #define configUSE_TICK_HOOK                     0
 #define configTICK_RATE_HZ                      ( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES                    8
-#define configMINIMAL_STACK_SIZE                ( configSTACK_DEPTH_TYPE ) 512 
+#define configMINIMAL_STACK_SIZE                ( configSTACK_DEPTH_TYPE ) 384
 #define configUSE_16_BIT_TICKS                  0
 
 #define configIDLE_SHOULD_YIELD                 1
@@ -73,7 +73,7 @@
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   (configSUPPORT_DYNAMIC_ALLOCATION*216*1024) // keep room for .bss (e.g. CDC pending buffer)
+#define configTOTAL_HEAP_SIZE                   (configSUPPORT_DYNAMIC_ALLOCATION*217*1024) // keep room for .bss (e.g. CDC pending buffer)
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Hook function related definitions. */

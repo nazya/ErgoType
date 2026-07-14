@@ -47,6 +47,6 @@ typedef struct {
 #define PIO_USB_DEV_EP_CNT 16 // Endpoint-id table entries inside each pio_usb_device record. Low memory impact: one byte per entry per PIO_USB_DEVICE_CNT.
 #define PIO_USB_DEVICE_CNT 4 // PIO-USB device records. One direct host device needs 1; 4->1 saves roughly 250-300 B, but hub children/multiple devices stop fitting.
 #define PIO_USB_HUB_PORT_CNT 8 // Child-device slots inside each pio_usb_device record. Low direct cost, but only useful with hub support.
-#define PIO_USB_ROOT_PORT_CNT 2 // Physical PIO root ports. One D+/D- pair needs 1; 2->1 saves roughly one root_port_t, about 50 B.
+#define PIO_USB_ROOT_PORT_CNT 1 // Physical PIO root ports. One D+/D- pair needs 1; 2->1 saves roughly one root_port_t, about 50 B.
 
 #define PIO_USB_EP_SIZE 64 // Max USB endpoint packet payload used to size endpoint_t encoded buffers. Lowering saves per endpoint but breaks normal full-speed 64-byte packets; do not reduce for HID host.
