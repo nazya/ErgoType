@@ -113,7 +113,7 @@ reduced to `8`:
 ~1.5 KiB   pio_usb_ep_pool[8]
 ~0.3 KiB   pio_usb_device[4]
 ~0.2 KiB   pio_port[1]
-~0.1 KiB   pio_usb_root_port[2]
+~0.1 KiB   pio_usb_root_port[1]
 ~2.0 KiB   TinyUSB host/HID/hub static state
 ~0.3 KiB   usb_host/task debug event ring
 ```
@@ -261,7 +261,7 @@ Current host-oriented config:
 #define PIO_USB_DEV_EP_CNT       16
 #define PIO_USB_DEVICE_CNT       4
 #define PIO_USB_HUB_PORT_CNT     8
-#define PIO_USB_ROOT_PORT_CNT    2
+#define PIO_USB_ROOT_PORT_CNT    1
 #define PIO_USB_EP_SIZE          64
 ```
 
