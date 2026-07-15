@@ -55,41 +55,64 @@ typedef unsigned int umode_t;
  * parsing, but do not enable subsystems that need hardware control requests,
  * blocking workqueue waits, or userspace/class proxy surfaces yet.
  */
+/*
+ * Upstream gets HID driver-selection symbols from generated autoconf.h.
+ * This port mirrors the HID drivers currently linked from CMake.
+ */
+#define CONFIG_HID_GENERIC 1
+#define CONFIG_HID_A4TECH 1
+#define CONFIG_HID_APPLEIR 1
+#define CONFIG_HID_CHICONY 1
+#define CONFIG_HID_CREATIVE_SB0540 1
+#define CONFIG_HID_CYPRESS 1
+#define CONFIG_HID_GOOGLE_STADIA_FF 1
+#define CONFIG_HID_HOLTEK 1
+#define CONFIG_HID_ITE 1
+#define CONFIG_HID_KYE 1
+#define CONFIG_HID_PRIMAX 1
+#define CONFIG_HID_PXRC 1
+#define CONFIG_HID_RAPOO 1
+#define CONFIG_HID_RAZER 1
+#define CONFIG_HID_SAITEK 1
+#define CONFIG_HID_ZYDACRON 1
+
+// #define CONFIG_USB_HIDDEV 1
+// Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
 // #define CONFIG_HID_BATTERY_STRENGTH 1
 // Firmware power_supply proxy is deferred; current linked HID drivers do not
 // require battery class registration.
-#undef CONFIG_HID_BATTERY_STRENGTH
-// Firmware has a bounded hiddev proxy boundary instead of Linux hiddev fds.
-#define CONFIG_USB_HIDDEV 1
+// #define CONFIG_HOLTEK_FF 1
+// Holtek force-feedback support is not linked/tested; only the keyboard fixup
+// driver is enabled for this family.
+// #define CONFIG_LEDS_CLASS 1
+// Linux LED class proxy is deferred.
+// #define CONFIG_BACKLIGHT_CLASS_DEVICE 1
+// Linux backlight class proxy is deferred.
+// #define CONFIG_HID_PID 1
+// PID force-feedback transport is deferred.
+// #define CONFIG_HID_HAPTIC 1
+// Generic haptic subsystem proxy is deferred.
+
 /*
- * These driver/subsystem configs are kept disabled because the current CMake
- * HID allowlist does not link the corresponding upstream drivers or required
- * Linux subsystem proxy. Re-enable one at a time with the driver and hardware
- * or emulator check that proves the async boundary is complete.
+ * These optional drivers and driver features stay disabled until their source
+ * and required subsystem proxy are both selected and tested.
  */
-#undef CONFIG_DRAGONRISE_FF
-#undef CONFIG_GREENASIA_FF
-#undef CONFIG_HID_GOOGLE_STADIA_FF
-#undef CONFIG_HID_HAPTIC
-#undef CONFIG_HID_NTRIG
-#undef CONFIG_HID_ACRUX_FF
-#undef CONFIG_HID_CORSAIR_VOID
-#undef CONFIG_HID_PID
-#undef CONFIG_HID_STEELSERIES
-#undef CONFIG_BACKLIGHT_CLASS_DEVICE
-#undef CONFIG_HOLTEK_FF
-#undef CONFIG_LEDS_CLASS
-#undef CONFIG_LOGIG940_FF
-#undef CONFIG_LOGIRUMBLEPAD2_FF
-#undef CONFIG_LOGITECH_FF
-#undef CONFIG_NVIDIA_SHIELD_FF
-#undef CONFIG_LOGIWHEELS_FF
-#undef CONFIG_HID_MEGAWORLD_FF
-#undef CONFIG_PANTHERLORD_FF
-#undef CONFIG_SMARTJOYPLUS_FF
-#undef CONFIG_HID_THRUSTMASTER
-#undef CONFIG_THRUSTMASTER_FF
-#undef CONFIG_ZEROPLUS_FF
+// #define CONFIG_DRAGONRISE_FF 1
+// #define CONFIG_GREENASIA_FF 1
+// #define CONFIG_HID_NTRIG 1
+// #define CONFIG_HID_ACRUX_FF 1
+// #define CONFIG_HID_STEELSERIES 1
+// #define CONFIG_LOGIG940_FF 1
+// #define CONFIG_LOGIRUMBLEPAD2_FF 1
+// #define CONFIG_LOGITECH_FF 1
+// #define CONFIG_NVIDIA_SHIELD_FF 1
+// #define CONFIG_LOGIWHEELS_FF 1
+// #define CONFIG_HID_MEGAWORLD_FF 1
+// #define CONFIG_PANTHERLORD_FF 1
+// #define CONFIG_SMARTJOYPLUS_FF 1
+// #define CONFIG_HID_THRUSTMASTER 1
+// #define CONFIG_THRUSTMASTER_FF 1
+// #define CONFIG_ZEROPLUS_FF 1
 #define __user
 
 struct dentry {
@@ -826,9 +849,14 @@ static inline int device_add(struct device *dev)
 	// later driver_register()/bus_rescan_devices() can probe it again.
 	kobject_uevent(&dev->kobj, KOBJ_ADD);
 	// bus_probe_device(dev);
-	// Reduced local driver core probes synchronously after the upstream
-	// KOBJ_ADD event point.
-	device_probe(dev);
+	// Firmware registers all linked HID drivers before TinyUSB enumeration,
+	// so a synchronous probe failure has no later module bind path to recover.
+	ret = device_probe(dev);
+	if (ret < 0) {
+		device_sysfs_remove_groups(dev, bus->dev_groups);
+		list_del(&dev->bus_node);
+		return ret;
+	}
 
 	return 0;
 }

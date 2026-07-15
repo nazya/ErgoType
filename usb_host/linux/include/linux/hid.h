@@ -30,7 +30,12 @@
 #define HID_MAX_IDS 256
 #define HID_MAX_DESCRIPTOR_SIZE 4096
 #define HID_MAX_FIELDS 256
-#define HID_MAX_USAGES 12288
+// #define HID_MAX_USAGES 12288
+// KeyD discards generic Consumer events above usage 0x02A2. Limit parser
+// usage arrays to 675 entries instead of allocating mappings that cannot
+// reach the current KeyD input boundary. HID_MAX_USAGES also bounds Report
+// Count, so descriptors declaring a larger count are rejected while parsing.
+#define HID_MAX_USAGES 675
 #define HID_DEFAULT_NUM_COLLECTIONS 16
 // #define HID_COLLECTION_STACK_SIZE 4
 // Port grows the parser collection stack in larger chunks; open_collection() still grows on demand.
