@@ -139,11 +139,36 @@ bool cancel_work_sync(struct work_struct *work)
 	taskENTER_CRITICAL();
 	was_active = work->pending || work->running;
 	work->canceling = 1;
-	work->pending = 0;
+	if (work->pending) {
+		struct workqueue_struct *wq = work->wq;
+		struct work_struct *queued = wq->head;
+		struct work_struct *previous = NULL;
+
+		while (queued != work) {
+			previous = queued;
+			queued = queued->next;
+		}
+		if (previous)
+			previous->next = work->next;
+		else
+			wq->head = work->next;
+		if (wq->tail == work)
+			wq->tail = previous;
+		work->next = NULL;
+		work->pending = 0;
+	}
 	taskEXIT_CRITICAL();
 
-	while (work->running)
+	for (;;) {
+		bool running;
+
+		taskENTER_CRITICAL();
+		running = work->running;
+		taskEXIT_CRITICAL();
+		if (!running)
+			break;
 		vTaskDelay(1);
+	}
 
 	taskENTER_CRITICAL();
 	work->canceling = 0;
@@ -235,7 +260,8 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 	return was_pending;
 }
 
-static struct work_struct *hid_workqueue_take_next(void)
+static struct work_struct *
+hid_workqueue_take_next(struct workqueue_struct **running_wq)
 {
 	struct workqueue_struct *wq;
 
@@ -250,8 +276,11 @@ static struct work_struct *hid_workqueue_take_next(void)
 		wq->head = work->next;
 		if (!wq->head)
 			wq->tail = NULL;
-		wq->running = 1;
 		work->next = NULL;
+		work->pending = 0;
+		work->running = 1;
+		wq->running = 1;
+		*running_wq = wq;
 		taskEXIT_CRITICAL();
 
 		return work;
@@ -267,8 +296,9 @@ void hid_workqueue_task(void *pvParameters)
 
 	for (;;) {
 		struct work_struct *work;
+		struct workqueue_struct *running_wq;
 
-		work = hid_workqueue_take_next();
+		work = hid_workqueue_take_next(&running_wq);
 
 		if (!work) {
 			uint8_t wake;
@@ -278,24 +308,11 @@ void hid_workqueue_task(void *pvParameters)
 			continue;
 		}
 
-		taskENTER_CRITICAL();
-		if (!work->pending || work->canceling) {
-			work->pending = 0;
-			if (!work->running)
-				work->canceling = 0;
-			taskEXIT_CRITICAL();
-			continue;
-		}
-		work->pending = 0;
-		work->running = 1;
-		taskEXIT_CRITICAL();
-
 		work->func(work);
 
 		taskENTER_CRITICAL();
+		running_wq->running = 0;
 		work->running = 0;
-		work->wq->running = 0;
-		work->canceling = 0;
 		taskEXIT_CRITICAL();
 	}
 }
