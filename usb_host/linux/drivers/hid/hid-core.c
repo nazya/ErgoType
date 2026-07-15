@@ -42,6 +42,8 @@
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
 #include "usb_host/hid_async.h"
+// Firmware reports runtime usage-table cap drops through the async CDC logger.
+#include "stdio_tusb_cdc.h"
 #include "hid-ids.h"
 
 /*
@@ -274,6 +276,51 @@ static void complete_usage(struct hid_parser *parser, unsigned int index)
 }
 
 /*
+ * Upstream embeds HID_MAX_USAGES parser-local slots in struct hid_parser.
+ * Firmware keeps those arrays on the heap; reserve a known capacity in one
+ * step so Usage Minimum..Usage Maximum does not repeatedly grow and copy them.
+ */
+static int hid_local_reserve(struct hid_parser *parser, unsigned int new_size)
+{
+	unsigned int *new_usage;
+	u8 *new_usage_size;
+	unsigned int *new_collection_index;
+
+	if (new_size <= parser->local.usage_alloc)
+		return 0;
+
+	new_usage = kmalloc(new_size * sizeof(*new_usage), GFP_KERNEL);
+	new_usage_size = kmalloc(new_size * sizeof(*new_usage_size), GFP_KERNEL);
+	new_collection_index = kmalloc(new_size * sizeof(*new_collection_index),
+				       GFP_KERNEL);
+	if (!new_usage || !new_usage_size || !new_collection_index) {
+		kfree(new_usage);
+		kfree(new_usage_size);
+		kfree(new_collection_index);
+		return -ENOMEM;
+	}
+
+	if (parser->local.usage_index) {
+		memcpy(new_usage, parser->local.usage,
+		       parser->local.usage_index * sizeof(*new_usage));
+		memcpy(new_usage_size, parser->local.usage_size,
+		       parser->local.usage_index * sizeof(*new_usage_size));
+		memcpy(new_collection_index, parser->local.collection_index,
+		       parser->local.usage_index * sizeof(*new_collection_index));
+	}
+
+	kfree(parser->local.usage);
+	kfree(parser->local.usage_size);
+	kfree(parser->local.collection_index);
+	parser->local.usage = new_usage;
+	parser->local.usage_size = new_usage_size;
+	parser->local.collection_index = new_collection_index;
+	parser->local.usage_alloc = new_size;
+
+	return 0;
+}
+
+/*
  * Add a usage to the temporary parser table.
  */
 
@@ -285,43 +332,18 @@ static int hid_add_usage(struct hid_parser *parser, unsigned usage, u8 size)
 	}
 
 	if (parser->local.usage_index >= parser->local.usage_alloc) {
-		unsigned int old_size = parser->local.usage_alloc;
-		unsigned int new_size = old_size ? old_size * 2 : 64;
-		unsigned int *new_usage;
-		u8 *new_usage_size;
-		unsigned int *new_collection_index;
+		unsigned int new_size = parser->local.usage_alloc ?
+			parser->local.usage_alloc * 2 : 64;
+		int ret;
 
 		if (new_size > HID_MAX_USAGES)
 			new_size = HID_MAX_USAGES;
 
-		// usage arrays are fixed members in upstream Linux.
-		// Pico port keeps the same parser flow but grows this temporary local storage on demand.
-		new_usage = kmalloc(new_size * sizeof(*new_usage), GFP_KERNEL);
-		new_usage_size = kmalloc(new_size * sizeof(*new_usage_size), GFP_KERNEL);
-		new_collection_index = kmalloc(new_size * sizeof(*new_collection_index), GFP_KERNEL);
-		if (!new_usage || !new_usage_size || !new_collection_index) {
-			kfree(new_usage);
-			kfree(new_usage_size);
-			kfree(new_collection_index);
-			return -ENOMEM;
-		}
-
-		if (old_size) {
-			memcpy(new_usage, parser->local.usage,
-			       old_size * sizeof(*new_usage));
-			memcpy(new_usage_size, parser->local.usage_size,
-			       old_size * sizeof(*new_usage_size));
-			memcpy(new_collection_index, parser->local.collection_index,
-			       old_size * sizeof(*new_collection_index));
-		}
-
-		kfree(parser->local.usage);
-		kfree(parser->local.usage_size);
-		kfree(parser->local.collection_index);
-		parser->local.usage = new_usage;
-		parser->local.usage_size = new_usage_size;
-		parser->local.collection_index = new_collection_index;
-		parser->local.usage_alloc = new_size;
+		// Individual Usage items do not declare a final count. Explicit Usage
+		// Minimum..Maximum ranges reserve their exact capacity before this path.
+		ret = hid_local_reserve(parser, new_size);
+		if (ret)
+			return ret;
 	}
 
 	parser->local.usage[parser->local.usage_index] = usage;
@@ -643,6 +665,16 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 				return -1;
 			}
 		}
+
+		/*
+		 * Upstream's embedded arrays already have HID_MAX_USAGES capacity.
+		 * Firmware reserves this explicit range once before filling it.
+		 */
+		ret = hid_local_reserve(parser,
+			parser->local.usage_index +
+			data - parser->local.usage_minimum + 1);
+		if (ret)
+			return ret;
 
 		// for (n = parser->local.usage_minimum; n <= data; n++)
 		// 	if (hid_add_usage(parser, n, item->size)) {
@@ -1783,6 +1815,15 @@ static void hid_input_array_field(struct hid_device *hid,
 					  &field->usage[field->value[n] - min],
 					  0,
 					  interrupt);
+
+		// Upstream silently ignores array selectors without a usage entry.
+		// Firmware caps that lookup for RAM, so report a newly dropped selector.
+		if (field->maxusage == HID_MAX_USAGES &&
+		    value[n] >= min &&
+		    value[n] <= field->logical_maximum &&
+		    value[n] - min >= HID_MAX_USAGES &&
+		    search(field->value, value[n], count))
+			async_msg("WARN: HID_USAGE_CAP_DROP");
 
 		if (hid_array_value_is_valid(field, value[n]) &&
 		    search(field->value, value[n], count))

@@ -83,7 +83,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_async.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
+        # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_client.c
         # Deferred hidraw calls are documented inline in hid-core.c.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c

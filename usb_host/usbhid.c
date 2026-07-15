@@ -1047,9 +1047,10 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		goto fail;
 	}
 
-	bool receive_ok = tuh_hid_receive_report(dev_addr, instance);
-	if (!receive_ok)
-		async_msg("ERR: HID_RX_START_FAIL");
+	// tuh_hid_receive_report(dev_addr, instance);
+	// Start interrupt IN from usbhid_open()/usbhid_start() after the Linux HID
+	// device binds, matching upstream hid_start_in() lifecycle instead of
+	// probe-time report delivery.
 	hid->ll_rdesc = NULL;
 	hid->ll_rsize = 0;
 	kfree(rdesc);
@@ -1181,10 +1182,16 @@ static int usbhid_start(struct hid_device *hid)
 {
 	/*
 	 * Upstream usbhid start may arm polling, reset LEDs, and enable wakeup.
-	 * Current callback slice arms interrupt IN from TinyUSB mount/report
-	 * callbacks and leaves control/output side effects disabled.
+	 * Current callback slice has no URB allocation here; TinyUSB interrupt IN
+	 * starts here only for ALWAYS_POLL, matching upstream hid_start_in().
 	 */
-	(void)hid;
+	if (hid->quirks & HID_QUIRK_ALWAYS_POLL) {
+		if (!tuh_hid_receive_report(hid->dev_addr, hid->instance)) {
+			async_msg("ERR: HID_RX_START_FAIL");
+			return -EIO;
+		}
+	}
+
 	return 0;
 }
 
@@ -1200,10 +1207,18 @@ static void usbhid_stop(struct hid_device *hid)
 static int usbhid_open(struct hid_device *hid)
 {
 	/*
-	 * Temporary callback-driven slice: TinyUSB interrupt IN is already armed
-	 * from mount/report callbacks. Do not start a second transport path here.
+	 * Upstream usbhid_open() calls hid_start_in() after hidinput opens the
+	 * device. Do the TinyUSB receive submit here, not from probe, so unbound
+	 * or ignored devices do not feed reports into hid_input_report().
 	 */
-	(void)hid;
+	if (hid->quirks & HID_QUIRK_ALWAYS_POLL)
+		return 0;
+
+	if (!tuh_hid_receive_report(hid->dev_addr, hid->instance)) {
+		async_msg("ERR: HID_RX_START_FAIL");
+		return -EIO;
+	}
+
 	return 0;
 }
 
