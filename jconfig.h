@@ -16,6 +16,7 @@
 #define MAX_ENCODERS 2
 #define MAX_PMW3360 2
 #define MAX_PMW3389 2
+#define PMW_CPI_MIN 100u
 #define MAX_LED 2
 #define MAX_SPI 2
 #define MAX_UART 2
@@ -26,6 +27,15 @@ enum {
     SENSOR_ROLE_MOUSEMOVE = 0, // x/y
     SENSOR_ROLE_SCROLL = 1,    // wheel/pan
 };
+
+enum {
+    ACCEL_PROFILE_NONE = 0,
+    ACCEL_PROFILE_FLAT = (1 << 0),
+    ACCEL_PROFILE_ADAPTIVE = (1 << 1),
+    ACCEL_PROFILE_CUSTOM = (1 << 2),
+};
+
+#define FILTER_ACCEL_NPOINTS_MAX 64
 
 #if (MAX_GPIOS <= 8)
 typedef uint8_t matrix_row_t;
@@ -107,6 +117,21 @@ typedef struct {
     #undef FIELD
 } spi_cfg_t;
 
+#define ACCEL_PROFILE_FIELDS \
+    FIELD(profile, uint8_t, ACCEL_PROFILE_NONE) \
+    FIELD(scale, int32_t, 1) \
+    FIELD(speed, int32_t, 0) \
+    FIELD(adaptive_velocity_averaging, bool, true) \
+    FIELD(custom_step, int32_t, 0) \
+    FIELD(custom_points, int32_t *, 0)
+
+typedef struct {
+    #define FIELD(name, type, default_value) type name;
+    ACCEL_PROFILE_FIELDS
+    #undef FIELD
+    uint8_t nr_points;
+} accel_profile_cfg_t;
+
 // I2C buses (pins + baud).
 #define I2C_PIN_FIELDS \
     FIELD(sda, int8_t, -1) \
@@ -169,6 +194,8 @@ typedef struct {
     pmw33xx_cfg_t pmw3360[MAX_PMW3360];
     uint8_t nr_pmw3389;
     pmw33xx_cfg_t pmw3389[MAX_PMW3389];
+    accel_profile_cfg_t move_accel;
+    accel_profile_cfg_t scroll_accel;
 } config_t;
 
 int parse(config_t *config, const char *filename);

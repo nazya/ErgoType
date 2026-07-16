@@ -21,48 +21,6 @@ static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
 static uint32_t mot_pin_bits[30];
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
-enum {
-    FILTER_CURVE_SCALE = 20,
-};
-static const int32_t move_filter_points_q10[] = {
-    FILTER_Q10(0, FILTER_CURVE_SCALE),
-    FILTER_Q10(1, FILTER_CURVE_SCALE),
-    FILTER_Q10(4, FILTER_CURVE_SCALE),
-    FILTER_Q10(10, FILTER_CURVE_SCALE),
-    FILTER_Q10(20, FILTER_CURVE_SCALE),
-    FILTER_Q10(50, FILTER_CURVE_SCALE),
-    FILTER_Q10(90, FILTER_CURVE_SCALE),
-};
-static const int32_t scroll_filter_points_q10[] = {
-    FILTER_Q10(0, FILTER_CURVE_SCALE),
-    FILTER_Q10(1, FILTER_CURVE_SCALE),
-    FILTER_Q10(4, FILTER_CURVE_SCALE),
-    FILTER_Q10(10, FILTER_CURVE_SCALE),
-    FILTER_Q10(20, FILTER_CURVE_SCALE),
-    FILTER_Q10(50, FILTER_CURVE_SCALE),
-    FILTER_Q10(90, FILTER_CURVE_SCALE),
-};
-static const struct filter_params move_filter_params = {
-    .profile = FILTER_PROFILE_CUSTOM,
-    .speed_q10 = FILTER_Q10(0, 1),
-    .custom_step_q10 = FILTER_Q10(30, FILTER_CURVE_SCALE),
-    .custom_points_q10 = move_filter_points_q10,
-    .custom_npoints = sizeof(move_filter_points_q10) / sizeof(move_filter_points_q10[0]),
-    .adaptive_velocity_averaging = true,
-};
-static const struct filter_params scroll_filter_params = {
-    .profile = FILTER_PROFILE_CUSTOM,
-    .speed_q10 = FILTER_Q10(0, 1),
-    .custom_step_q10 = FILTER_Q10(30, FILTER_CURVE_SCALE),
-    .custom_points_q10 = scroll_filter_points_q10,
-    .custom_npoints = sizeof(scroll_filter_points_q10) / sizeof(scroll_filter_points_q10[0]),
-    .adaptive_velocity_averaging = true,
-};
-
-struct pointing_filter {
-    struct filter_state *state;
-    const struct filter_params *params;
-};
 
 static void send_pointing_input_event(QueueHandle_t queue,
                                       uint16_t type,
@@ -80,13 +38,11 @@ static void send_pointing_input_event(QueueHandle_t queue,
 
 static void send_pointing_event(QueueHandle_t queue,
                                 bool scroll,
-                                struct pointing_filter *filter,
+                                struct filter_state *filter,
                                 int32_t x,
                                 int32_t y)
 {
-    uint32_t time_ms = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
-
-    filter_process(filter->state, filter->params, time_ms, &x, &y);
+    filter_process(filter, &x, &y);
 
     if (scroll) {
         send_pointing_input_event(queue, EV_REL, REL_HWHEEL, x);
@@ -96,6 +52,43 @@ static void send_pointing_event(QueueHandle_t queue,
         send_pointing_input_event(queue, EV_REL, REL_Y, y);
     }
     send_pointing_input_event(queue, EV_SYN, SYN_REPORT, 0);
+}
+
+static int32_t x125pct(int32_t value)
+{
+    int32_t magnitude = value < 0 ? -value : value;
+    // Add 25%: shifting the magnitude right by 2 divides it by 4.
+    magnitude += magnitude >> 2;
+
+    return value < 0 ? -magnitude : magnitude;
+}
+
+static int32_t scaled_to_q10(int32_t value, int32_t scale)
+{
+    int32_t whole = value / scale;
+    int32_t rem = value % scale;
+    int32_t q10 = whole * Q10_ONE;
+
+    if (rem < 0)
+        q10 -= ((-rem * Q10_ONE) + scale / 2) / scale;
+    else
+        q10 += (rem * Q10_ONE + scale / 2) / scale;
+
+    return q10;
+}
+
+static void accel_prepare(accel_profile_cfg_t *accel)
+{
+    switch (accel->profile) {
+    case ACCEL_PROFILE_NONE:
+        return;
+    case ACCEL_PROFILE_FLAT:
+    case ACCEL_PROFILE_ADAPTIVE:
+        accel->speed = scaled_to_q10(accel->speed, accel->scale);
+        return;
+    case ACCEL_PROFILE_CUSTOM:
+        return;
+    }
 }
 
 static void mot_irq_handler(uint gpio, uint32_t events)
@@ -152,20 +145,25 @@ static void spi_bus_init_once(uint8_t bus, const config_t *config)
 
 void pointing_device_task(void *pvParameters)
 {
-    const config_t *config = (const config_t *)pvParameters;
+    config_t *config = pvParameters;
     struct port_input_dev pmw3360_devices[MAX_PMW3360];
     struct port_input_dev pmw3389_devices[MAX_PMW3389];
     QueueHandle_t pmw3360_queues[MAX_PMW3360];
     QueueHandle_t pmw3389_queues[MAX_PMW3389];
-    struct pointing_filter move_filter = { .params = &move_filter_params };
-    struct pointing_filter scroll_filter = { .params = &scroll_filter_params };
+    struct filter_state *pmw3360_filters = NULL;
+    struct filter_state *pmw3389_filters = NULL;
+    accel_prepare(&config->move_accel);
+    accel_prepare(&config->scroll_accel);
 
-    move_filter.state = pvPortMalloc(sizeof *move_filter.state);
-    scroll_filter.state = pvPortMalloc(sizeof *scroll_filter.state);
-    configASSERT(move_filter.state);
-    configASSERT(scroll_filter.state);
-    filter_init(move_filter.state, move_filter.params, DEFAULT_MOUSE_DPI);
-    filter_init(scroll_filter.state, scroll_filter.params, DEFAULT_MOUSE_DPI);
+    if (config->nr_pmw3360) {
+        pmw3360_filters = pvPortMalloc(sizeof(*pmw3360_filters) * config->nr_pmw3360);
+        configASSERT(pmw3360_filters);
+    }
+
+    if (config->nr_pmw3389) {
+        pmw3389_filters = pvPortMalloc(sizeof(*pmw3389_filters) * config->nr_pmw3389);
+        configASSERT(pmw3389_filters);
+    }
 
     for (uint8_t bus = 0; bus < MAX_SPI; ++bus) {
         if (config->spi_mask & (uint8_t)(1u << bus)) {
@@ -191,6 +189,10 @@ void pointing_device_task(void *pvParameters)
 
         pmw3360_init(&config->pmw3360[i]);
         pmw3360_set_cpi(&config->pmw3360[i]);
+        uint8_t role = config->pmw3360[i].role;
+        filter_init(&pmw3360_filters[i],
+                    role == SENSOR_ROLE_SCROLL ? &config->scroll_accel : &config->move_accel,
+                    config->pmw3360[i].cpi);
     }
 
     for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
@@ -211,6 +213,10 @@ void pointing_device_task(void *pvParameters)
 
         pmw3389_init(&config->pmw3389[i]);
         pmw3389_set_cpi(&config->pmw3389[i]);
+        uint8_t role = config->pmw3389[i].role;
+        filter_init(&pmw3389_filters[i],
+                    role == SENSOR_ROLE_SCROLL ? &config->scroll_accel : &config->move_accel,
+                    config->pmw3389[i].cpi);
     }
 
     while (1) {
@@ -224,13 +230,16 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3360_get_deltas(&config->pmw3360[i], &dx, &dy);
+            // Temporary transform for the current trackball prototype, whose sensor is mounted at 30 degrees.
+            // This may move to config if per-device coordinate transforms are needed.
+            int32_t x = x125pct(dx);
+            int32_t y = -dy;
             bool scroll = config->pmw3360[i].role == SENSOR_ROLE_SCROLL;
-            struct pointing_filter *filter = scroll ? &scroll_filter : &move_filter;
             send_pointing_event(pmw3360_queues[i],
                                 scroll,
-                                filter,
-                                dx,
-                                dy);
+                                &pmw3360_filters[i],
+                                x,
+                                y);
         }
 
         for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
@@ -239,13 +248,16 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy);
+            // Temporary transform for the current trackball prototype, whose sensor is mounted at 30 degrees.
+            // This may move to config if per-device coordinate transforms are needed.
+            int32_t x = x125pct(dx);
+            int32_t y = -dy;
             bool scroll = config->pmw3389[i].role == SENSOR_ROLE_SCROLL;
-            struct pointing_filter *filter = scroll ? &scroll_filter : &move_filter;
             send_pointing_event(pmw3389_queues[i],
                                 scroll,
-                                filter,
-                                dx,
-                                dy);
+                                &pmw3389_filters[i],
+                                x,
+                                y);
         }
     }
 }
