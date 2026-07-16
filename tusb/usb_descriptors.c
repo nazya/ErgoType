@@ -47,9 +47,55 @@ static uint8_t const desc_hid_report_boot_keyboard[] =
     TUD_HID_REPORT_DESC_KEYBOARD(),
 };
 
-static uint8_t const desc_hid_report_mouse[] =
+static uint8_t const desc_hid_report_boot_mouse[] =
 {
     TUD_HID_REPORT_DESC_MOUSE(),
+};
+
+static uint8_t const desc_hid_report_mouse_16[] =
+{
+    HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+    HID_USAGE(HID_USAGE_DESKTOP_MOUSE),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_USAGE(HID_USAGE_DESKTOP_POINTER),
+        HID_COLLECTION(HID_COLLECTION_PHYSICAL),
+            HID_USAGE_PAGE(HID_USAGE_PAGE_BUTTON),
+            HID_USAGE_MIN(1),
+            HID_USAGE_MAX(5),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX(1),
+            HID_REPORT_COUNT(5),
+            HID_REPORT_SIZE(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+            HID_REPORT_COUNT(1),
+            HID_REPORT_SIZE(3),
+            HID_INPUT(HID_CONSTANT),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_X),
+            HID_USAGE(HID_USAGE_DESKTOP_Y),
+            HID_LOGICAL_MIN_N(0x8000, 2),
+            HID_LOGICAL_MAX_N(0x7fff, 2),
+            HID_REPORT_COUNT(2),
+            HID_REPORT_SIZE(16),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_RELATIVE),
+
+            HID_USAGE(HID_USAGE_DESKTOP_WHEEL),
+            HID_LOGICAL_MIN_N(0x8000, 2),
+            HID_LOGICAL_MAX_N(0x7fff, 2),
+            HID_REPORT_COUNT(1),
+            HID_REPORT_SIZE(16),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_RELATIVE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_CONSUMER),
+            HID_USAGE_N(HID_USAGE_CONSUMER_AC_PAN, 2),
+            HID_LOGICAL_MIN_N(0x8000, 2),
+            HID_LOGICAL_MAX_N(0x7fff, 2),
+            HID_REPORT_COUNT(1),
+            HID_REPORT_SIZE(16),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_RELATIVE),
+        HID_COLLECTION_END,
+    HID_COLLECTION_END,
 };
 
 static uint8_t const desc_hid_report_nkro[] =
@@ -184,7 +230,7 @@ static uint8_t const desc_configuration_hid_cdc_boot_kb_mouse[] =
     TUD_CONFIG_DESCRIPTOR(USB_CONFIG_NUMBER, ITF_BOOT_TOTAL, USB_CONFIG_STRIDX, CONFIG_TOTAL_LEN_HID_CDC_BOOT_KB_MOUSE, USB_CONFIG_ATTR, USB_CONFIG_POWER_MA),
     TUD_CDC_DESCRIPTOR(ITF_BOOT_CDC, STRID_CDC_IF, EP_CDC_NOTIF, USB_CDC_NOTIF_EP_SIZE, EP_CDC_OUT, EP_CDC_IN, USB_CDC_BULK_MPS_FS),
     TUD_HID_DESCRIPTOR(ITF_BOOT_KEYBOARD, STRID_HID_IF, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_report_boot_keyboard), EP_HID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
-    TUD_HID_DESCRIPTOR(ITF_BOOT_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_MOUSE, sizeof(desc_hid_report_mouse), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
+    TUD_HID_DESCRIPTOR(ITF_BOOT_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_MOUSE, sizeof(desc_hid_report_boot_mouse), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
 };
 
 static uint8_t const desc_configuration_hid_cdc_nkro[] =
@@ -192,7 +238,7 @@ static uint8_t const desc_configuration_hid_cdc_nkro[] =
     TUD_CONFIG_DESCRIPTOR(USB_CONFIG_NUMBER, ITF_NKRO_TOTAL, USB_CONFIG_STRIDX, CONFIG_TOTAL_LEN_HID_CDC_NKRO, USB_CONFIG_ATTR, USB_CONFIG_POWER_MA),
     TUD_CDC_DESCRIPTOR(ITF_NKRO_CDC, STRID_CDC_IF, EP_CDC_NOTIF, USB_CDC_NOTIF_EP_SIZE, EP_CDC_OUT, EP_CDC_IN, USB_CDC_BULK_MPS_FS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_KEYBOARD, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_nkro), EP_HID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
-    TUD_HID_DESCRIPTOR(ITF_NKRO_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_MOUSE, sizeof(desc_hid_report_mouse), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
+    TUD_HID_DESCRIPTOR(ITF_NKRO_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_mouse_16), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_WEBHID, STRID_WEBHID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_webhid), EP_HID_WEBHID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
 };
 
@@ -267,7 +313,7 @@ uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance)
         return desc_hid_report_webhid;
 
     if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE)
-        return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_nkro : desc_hid_report_mouse;
+        return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_nkro : desc_hid_report_mouse_16;
 
-    return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_boot_keyboard : desc_hid_report_mouse;
+    return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_boot_keyboard : desc_hid_report_boot_mouse;
 }
