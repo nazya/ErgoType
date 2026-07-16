@@ -158,7 +158,7 @@ void pointing_device_task(void *pvParameters)
     while (1) {
         uint32_t bits = 0;
         xTaskNotifyWait(0, UINT32_MAX, &bits, portMAX_DELAY);
-        vTaskDelay(2);
+        vTaskDelay(1);
 
         int mouse_dx_sum = 0;
         int mouse_dy_sum = 0;
