@@ -191,8 +191,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg) {
 }
 
 void pmw3360_set_cpi(const pmw33xx_cfg_t *cfg) {
-    uint16_t cpi = cfg->cpi;
-    uint8_t cpival = (uint8_t)((cpi / 100u) - 1u);
+    uint8_t cpival = (uint8_t)((cfg->cpi / 100u) - 1u);
     write_register(cfg, Config1, cpival);
 }
 

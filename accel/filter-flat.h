@@ -1,7 +1,6 @@
 #ifndef FILTER_FLAT_H
 #define FILTER_FLAT_H
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "filter-adaptive.h"
@@ -22,11 +21,5 @@ struct coords_q10
 accelerator_filter_flat(const struct pointer_accelerator_flat *accel_filter,
 			int32_t dx,
 			int32_t dy);
-
-struct coords_q10
-accelerator_filter_scroll_flat(const struct pointer_accelerator_flat *accel_filter,
-			       int32_t dx,
-			       int32_t dy,
-			       bool is_wheel);
 
 #endif

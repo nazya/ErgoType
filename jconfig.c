@@ -756,6 +756,7 @@ static void parse_pmw33xx_drivers(const char *json,
                                  size_t json_len,
                                  const char *query,
                                  const char *name,
+                                 uint16_t cpi_step,
                                  config_t *config,
                                  pmw33xx_cfg_t *out,
                                  uint8_t *out_count,
@@ -802,9 +803,10 @@ static void parse_pmw33xx_drivers(const char *json,
                                           #name, strlen(#name),                                \
                                           &value, &value_length, &value_type);                \
                 if (result != JSONSuccess) {                                                  \
-                } else if (strcmp(#name, "role") == 0 && value_type == JSONString) {         \
-                    dev.role = parse_sensor_role_name(value, value_length, dev.role);         \
-                } else if (strcmp(#name, "role") != 0 && value_type == JSONNumber) {         \
+                } else if (strcmp(#name, "role") == 0) {                                    \
+                    if (value_type == JSONString)                                             \
+                        dev.role = parse_sensor_role_name(value, value_length, dev.role);     \
+                } else if (value_type == JSONNumber) {                                       \
                     char save = value[value_length];                                          \
                     ((char *)value)[value_length] = '\0';                                     \
                     dev.name = (type)atoi(value);                                             \
@@ -813,6 +815,11 @@ static void parse_pmw33xx_drivers(const char *json,
             }
         PMW33XX_FIELDS(SENSOR_ROLE_MOUSEMOVE)
         #undef FIELD
+
+        if (dev.cpi < PMW_CPI_MIN)
+            dev.cpi = PMW_CPI_MIN;
+        else
+            dev.cpi -= dev.cpi % cpi_step;
 
         if ((uint8_t)dev.spi_idx >= MAX_SPI) {
             err("drivers.%s[%u].spi_idx: invalid %d", name, idx, (int)dev.spi_idx);
@@ -835,6 +842,7 @@ static void parse_pmw3360_drivers(const char *json, size_t json_len, config_t *c
                           json_len,
                           "drivers.pmw3360",
                           "pmw3360",
+                          100u,
                           config,
                           config->pmw3360,
                           &config->nr_pmw3360,
@@ -847,10 +855,178 @@ static void parse_pmw3389_drivers(const char *json, size_t json_len, config_t *c
                           json_len,
                           "drivers.pmw3389",
                           "pmw3389",
+                          50u,
                           config,
                           config->pmw3389,
                           &config->nr_pmw3389,
                           MAX_PMW3389);
+}
+
+static uint8_t parse_accel_profile_name(const char *s, size_t len, uint8_t default_profile)
+{
+    if (len == 4 && memcmp(s, "none", 4) == 0)
+        return ACCEL_PROFILE_NONE;
+    if (len == 4 && memcmp(s, "flat", 4) == 0)
+        return ACCEL_PROFILE_FLAT;
+    if (len == 8 && memcmp(s, "adaptive", 8) == 0)
+        return ACCEL_PROFILE_ADAPTIVE;
+    if (len == 6 && memcmp(s, "custom", 6) == 0)
+        return ACCEL_PROFILE_CUSTOM;
+    return default_profile;
+}
+
+static bool parse_accel_points(const char *profile_name,
+                               const char *array_start,
+                               size_t array_length,
+                               int32_t *points,
+                               uint8_t *nr_points,
+                               int scale)
+{
+    size_t start = 0, next = 0;
+    JSONPair_t pair = {0};
+    uint8_t npoints = 0;
+    int point_max = 10000 * scale;
+
+    while (JSON_Iterate(array_start, array_length, &start, &next, &pair) == JSONSuccess) {
+        if (npoints >= FILTER_ACCEL_NPOINTS_MAX) {
+            err("%s.custom_points: too many points, max=%u",
+                profile_name, (unsigned)FILTER_ACCEL_NPOINTS_MAX);
+            return false;
+        }
+
+        if (pair.jsonType != JSONNumber) {
+            err("%s.custom_points[%u]: expected number", profile_name, (unsigned)npoints);
+            return false;
+        }
+
+        char save = pair.value[pair.valueLength];
+        ((char *)pair.value)[pair.valueLength] = '\0';
+        int point = atoi(pair.value);
+        ((char *)pair.value)[pair.valueLength] = save;
+
+        if (point < 0 || point > point_max) {
+            err("%s.custom_points[%u]=%d invalid, allowed range is [0,%d]",
+                profile_name, (unsigned)npoints, point, point_max);
+            return false;
+        }
+
+        points[npoints++] = point;
+    }
+
+    *nr_points = npoints;
+    return true;
+}
+
+static void parse_accel_profile(const char *json,
+                                size_t json_len,
+                                const char *profile_name,
+                                accel_profile_cfg_t *profile)
+{
+    JSONStatus_t result;
+    const char *object_start = NULL;
+    size_t object_length = 0;
+    JSONTypes_t object_type = JSONInvalid;
+    int32_t custom_points[FILTER_ACCEL_NPOINTS_MAX];
+    uint8_t nr_points = 0;
+
+    #define FIELD(name, type, default_value) profile->name = (type)(default_value);
+    ACCEL_PROFILE_FIELDS
+    #undef FIELD
+    profile->nr_points = 0;
+
+    result = JSON_SearchConst(json,
+                              json_len,
+                              profile_name,
+                              strlen(profile_name),
+                              &object_start,
+                              &object_length,
+                              &object_type);
+    if (result != JSONSuccess)
+        return;
+
+    if (object_type != JSONObject) {
+        err("%s: expected object", profile_name);
+        return;
+    }
+
+    #define FIELD(name, type, default_value)                                   \
+        {                                                                      \
+            const char *value = NULL;                                          \
+            size_t value_length = 0;                                           \
+            JSONTypes_t value_type = JSONInvalid;                              \
+            result = JSON_SearchConst(object_start, object_length,             \
+                                      #name, strlen(#name),                    \
+                                      &value, &value_length, &value_type);     \
+            if (result != JSONSuccess) {                                       \
+            } else if (strcmp(#name, "profile") == 0) {                        \
+                if (value_type == JSONString)                                  \
+                    profile->profile = parse_accel_profile_name(value, value_length, profile->profile); \
+            } else if (strcmp(#name, "custom_points") == 0) {                  \
+                if (value_type == JSONArray &&                                  \
+                    profile->profile == ACCEL_PROFILE_CUSTOM &&                 \
+                    !parse_accel_points(profile_name, value, value_length, custom_points, &nr_points, profile->scale)) { \
+                    profile->profile = ACCEL_PROFILE_NONE;                      \
+                }                                                               \
+            } else if (value_type == JSONNumber) {                             \
+                char save = value[value_length];                               \
+                ((char *)value)[value_length] = '\0';                          \
+                profile->name = (type)(intptr_t)atoi(value);                   \
+                ((char *)value)[value_length] = save;                          \
+            }                                                                  \
+        }
+    ACCEL_PROFILE_FIELDS
+    #undef FIELD
+
+    switch (profile->profile) {
+    case ACCEL_PROFILE_NONE:
+        return;
+    case ACCEL_PROFILE_FLAT:
+    case ACCEL_PROFILE_ADAPTIVE:
+        if (profile->scale < 1 || profile->scale > 10000) {
+            err("%s.scale=%d invalid, allowed range is [1,10000]",
+                profile_name, (int)profile->scale);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->speed < -profile->scale || profile->speed > profile->scale) {
+            err("%s.speed=%d invalid, allowed range is [%d,%d]",
+                profile_name, (int)profile->speed, (int)-profile->scale, (int)profile->scale);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        break;
+    case ACCEL_PROFILE_CUSTOM:
+        if (profile->scale < 1 || profile->scale > 10000) {
+            err("%s.scale=%d invalid, allowed range is [1,10000]",
+                profile_name, (int)profile->scale);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->custom_step < 1 || profile->custom_step > 10000 * profile->scale) {
+            err("%s.custom_step=%d invalid, allowed range is [1,%d]",
+                profile_name, (int)profile->custom_step, (int)(10000 * profile->scale));
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (nr_points < 2) {
+            err("%s: custom profile requires at least 2 custom_points", profile_name);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        profile->custom_points = pvPortMalloc(sizeof(*profile->custom_points) * nr_points);
+        if (!profile->custom_points) {
+            err("%s: failed to allocate custom_points", profile_name);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        memcpy(profile->custom_points, custom_points, sizeof(*profile->custom_points) * nr_points);
+        profile->nr_points = nr_points;
+        break;
+    default:
+        err("%s.profile=%u invalid", profile_name, (unsigned)profile->profile);
+        profile->profile = ACCEL_PROFILE_NONE;
+        return;
+    }
 }
 
 int parse(config_t *config, const char *filename)
@@ -886,10 +1062,12 @@ int parse(config_t *config, const char *filename)
                                         &value, &value_length,              \
                                         &value_type);                       \
             if (result != JSONSuccess) {                                  \
-            } else if (value_type == JSONString) {                        \
-                static char s[MAX_FILE_NAME];                             \
-                snprintf(s, sizeof(s), "%.*s", (int)value_length, value); \
-                config->overlay_conf = s;                                 \
+            } else if (strcmp(#name, "overlay_conf") == 0) {             \
+                if (value_type == JSONString) {                            \
+                    static char s[MAX_FILE_NAME];                         \
+                    snprintf(s, sizeof(s), "%.*s", (int)value_length, value); \
+                    config->overlay_conf = s;                             \
+                }                                                         \
             } else if (value_type == JSONNumber) {                        \
                 char save = value[value_length];                          \
                 ((char *)value)[value_length] = '\0';                     \
@@ -923,6 +1101,8 @@ int parse(config_t *config, const char *filename)
     parse_spi_buses(json, json_len, config);
     parse_pmw3360_drivers(json, json_len, config);
     parse_pmw3389_drivers(json, json_len, config);
+    parse_accel_profile(json, json_len, "move_accel", &config->move_accel);
+    parse_accel_profile(json, json_len, "scroll_accel", &config->scroll_accel);
 
     pull_pins(json);
 

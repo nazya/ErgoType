@@ -187,14 +187,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
         ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
+        ${CMAKE_CURRENT_LIST_DIR}/accel/filter.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-adaptive.c
-        ${CMAKE_CURRENT_LIST_DIR}/accel/filter-direction-lut.c
-        ${CMAKE_CURRENT_LIST_DIR}/accel/filter-direction-cordic.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-adaptive-high-dpi.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-adaptive-low-dpi.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-custom.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-flat.c
-        ${CMAKE_CURRENT_LIST_DIR}/accel/filter.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
