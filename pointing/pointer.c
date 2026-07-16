@@ -10,6 +10,7 @@
 #include "task.h"
 
 #include "device.h"
+#include "accel/filter.h"
 #include "jconfig.h"
 #include "log.h"
 #include "pmw3360.h"
@@ -22,6 +23,43 @@ static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
 static uint32_t mot_pin_bits[30];
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
+
+static int32_t x125pct(int32_t value)
+{
+    int32_t magnitude = value < 0 ? -value : value;
+    // Add 25%: shifting the magnitude right by 2 divides it by 4.
+    magnitude += magnitude >> 2;
+
+    return value < 0 ? -magnitude : magnitude;
+}
+
+static int32_t scaled_to_q10(int32_t value, int32_t scale)
+{
+    int32_t whole = value / scale;
+    int32_t rem = value % scale;
+    int32_t q10 = whole * Q10_ONE;
+
+    if (rem < 0)
+        q10 -= ((-rem * Q10_ONE) + scale / 2) / scale;
+    else
+        q10 += (rem * Q10_ONE + scale / 2) / scale;
+
+    return q10;
+}
+
+static void accel_prepare(accel_profile_cfg_t *accel)
+{
+    switch (accel->profile) {
+    case ACCEL_PROFILE_NONE:
+        return;
+    case ACCEL_PROFILE_FLAT:
+    case ACCEL_PROFILE_ADAPTIVE:
+        accel->speed = scaled_to_q10(accel->speed, accel->scale);
+        return;
+    case ACCEL_PROFILE_CUSTOM:
+        return;
+    }
+}
 
 static void mot_irq_handler(uint gpio, uint32_t events)
 {
@@ -77,7 +115,21 @@ static void spi_bus_init_once(uint8_t bus, const config_t *config)
 
 void pointing_device_task(void *pvParameters)
 {
-    const config_t *config = (const config_t *)pvParameters;
+    config_t *config = pvParameters;
+    struct filter_state *pmw3360_filters = NULL;
+    struct filter_state *pmw3389_filters = NULL;
+    accel_prepare(&config->move_accel);
+    accel_prepare(&config->scroll_accel);
+
+    if (config->nr_pmw3360) {
+        pmw3360_filters = pvPortMalloc(sizeof(*pmw3360_filters) * config->nr_pmw3360);
+        configASSERT(pmw3360_filters);
+    }
+
+    if (config->nr_pmw3389) {
+        pmw3389_filters = pvPortMalloc(sizeof(*pmw3389_filters) * config->nr_pmw3389);
+        configASSERT(pmw3389_filters);
+    }
 
     for (uint8_t bus = 0; bus < MAX_SPI; ++bus) {
         if (config->spi_mask & (uint8_t)(1u << bus)) {
@@ -88,11 +140,19 @@ void pointing_device_task(void *pvParameters)
     for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
         pmw3360_init(&config->pmw3360[i]);
         pmw3360_set_cpi(&config->pmw3360[i]);
+        uint8_t role = config->pmw3360[i].role;
+        filter_init(&pmw3360_filters[i],
+                    role == SENSOR_ROLE_SCROLL ? &config->scroll_accel : &config->move_accel,
+                    config->pmw3360[i].cpi);
     }
 
     for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
         pmw3389_init(&config->pmw3389[i]);
         pmw3389_set_cpi(&config->pmw3389[i]);
+        uint8_t role = config->pmw3389[i].role;
+        filter_init(&pmw3389_filters[i],
+                    role == SENSOR_ROLE_SCROLL ? &config->scroll_accel : &config->move_accel,
+                    config->pmw3389[i].cpi);
     }
 
     while (1) {
@@ -111,12 +171,18 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3360_get_deltas(&config->pmw3360[i], &dx, &dy);
-            if (config->pmw3360[i].role == SENSOR_ROLE_SCROLL) {
-                scroll_dx_sum += dx;
-                scroll_dy_sum += dy;
+            // Temporary transform for the current trackball prototype, whose sensor is mounted at 30 degrees.
+            // This may move to config if per-device coordinate transforms are needed.
+            int32_t x = x125pct(dx);
+            int32_t y = -dy;
+            uint8_t role = config->pmw3360[i].role;
+            filter_process(&pmw3360_filters[i], &x, &y);
+            if (role == SENSOR_ROLE_SCROLL) {
+                scroll_dx_sum += x;
+                scroll_dy_sum += y;
             } else {
-                mouse_dx_sum += dx;
-                mouse_dy_sum += dy;
+                mouse_dx_sum += x;
+                mouse_dy_sum += y;
             }
         }
 
@@ -126,12 +192,18 @@ void pointing_device_task(void *pvParameters)
             int16_t dx = 0;
             int16_t dy = 0;
             pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy);
-            if (config->pmw3389[i].role == SENSOR_ROLE_SCROLL) {
-                scroll_dx_sum += dx;
-                scroll_dy_sum += dy;
+            // Temporary transform for the current trackball prototype, whose sensor is mounted at 30 degrees.
+            // This may move to config if per-device coordinate transforms are needed.
+            int32_t x = x125pct(dx);
+            int32_t y = -dy;
+            uint8_t role = config->pmw3389[i].role;
+            filter_process(&pmw3389_filters[i], &x, &y);
+            if (role == SENSOR_ROLE_SCROLL) {
+                scroll_dx_sum += x;
+                scroll_dy_sum += y;
             } else {
-                mouse_dx_sum += dx;
-                mouse_dy_sum += dy;
+                mouse_dx_sum += x;
+                mouse_dy_sum += y;
             }
         }
 

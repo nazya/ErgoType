@@ -190,6 +190,8 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg)
     // Write 0x00 to Config2 register for wired mouse or 0x20 for wireless mouse design.
     write_register(cfg, Config2, 0x00);
 
+    write_register(cfg, Angle_Tune, 90);
+
     cs_deselect(cfg);
 }
 
@@ -213,13 +215,7 @@ static void perform_startup(const pmw33xx_cfg_t *cfg)
 
 void pmw3389_set_cpi(const pmw33xx_cfg_t *cfg)
 {
-    uint16_t cpi = cfg->cpi;
-    if (cpi < 50)
-        cpi = 50;
-    uint16_t cpival = (uint16_t)(cpi / 50u);
-    if (cpival == 0)
-        cpival = 1;
-    cpival -= 1u;
+    uint16_t cpival = (uint16_t)(cfg->cpi / 50u) - 1u;
 
     // Sets upper byte first for more consistent setting of cpi
     write_register(cfg, Resolution_H, (uint8_t)((cpival >> 8) & 0xFFu));
