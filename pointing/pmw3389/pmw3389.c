@@ -63,6 +63,9 @@
 #define Angle_Snap  0x42
 #define LiftCutoff_Cal1  0x4A
 #define Motion_Burst  0x50
+#define Motion_Burst_Size 6
+#define Motion_Burst_Delta_X 2
+#define Motion_Burst_Delta_Y 4
 #define LiftCutoff_Cal_Timeout 0x71
 #define LiftCutoff_Cal_Min_Length  0x72
 #define PWM_Period_Cnt  0x73
@@ -90,6 +93,7 @@
 //
 // We match the Teensy delays here.
 #define PMW3389_TSRAD_US 100u
+#define PMW3389_TSRAD_MOTBR_US 35u
 #define PMW3389_TSRW_US 20u
 #define PMW3389_TSCLK_NCS_WRITE_US 20u
 #define PMW3389_TSWW_TSWR_US 100u
@@ -220,20 +224,30 @@ void pmw3389_set_cpi(const pmw33xx_cfg_t *cfg)
     // Sets upper byte first for more consistent setting of cpi
     write_register(cfg, Resolution_H, (uint8_t)((cpival >> 8) & 0xFFu));
     write_register(cfg, Resolution_L, (uint8_t)(cpival & 0xFFu));
+    write_register(cfg, Motion_Burst, 0x00);
 }
 
 void pmw3389_get_deltas(const pmw33xx_cfg_t *cfg, int16_t *dx, int16_t *dy)
 {
-    write_register(cfg, Motion, 0x01);
-    read_register(cfg, Motion);
+    spi_inst_t *spi = pmw3389_spi(cfg);
+    pmw3389_spi_prepare(cfg);
+    cs_select(cfg);
 
-    uint8_t dx_l = read_register(cfg, Delta_X_L);
-    uint8_t dx_h = read_register(cfg, Delta_X_H);
-    uint8_t dy_l = read_register(cfg, Delta_Y_L);
-    uint8_t dy_h = read_register(cfg, Delta_Y_H);
+    uint8_t address = Motion_Burst;
+    spi_write_blocking(spi, &address, 1);
+    busy_wait_us_32(PMW3389_TSRAD_MOTBR_US);
 
-    *dx = (int16_t)((dx_h << 8) | dx_l);
-    *dy = (int16_t)((dy_h << 8) | dy_l);
+    uint8_t data[Motion_Burst_Size];
+    spi_read_blocking(spi, 0, data, sizeof(data));
+
+    busy_wait_us_32(1);
+    cs_deselect(cfg);
+    busy_wait_us_32(1);
+
+    *dx = (int16_t)(((uint16_t)data[Motion_Burst_Delta_X + 1] << 8) |
+                    data[Motion_Burst_Delta_X]);
+    *dy = (int16_t)(((uint16_t)data[Motion_Burst_Delta_Y + 1] << 8) |
+                    data[Motion_Burst_Delta_Y]);
 }
 
 bool pmw3389_init(const pmw33xx_cfg_t *cfg)
