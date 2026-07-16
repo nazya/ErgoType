@@ -222,7 +222,7 @@ void pointing_device_task(void *pvParameters)
     while (1) {
         uint32_t bits = 0;
         xTaskNotifyWait(0, UINT32_MAX, &bits, portMAX_DELAY);
-        vTaskDelay(2);
+        vTaskDelay(1);
 
         for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
             if (bits && !(bits & (1u << i)))
