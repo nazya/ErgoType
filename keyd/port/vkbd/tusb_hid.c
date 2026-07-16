@@ -18,7 +18,7 @@
 #include "keyd.h"
 #include "vkbd_event.h"
 
-#define HID_READY_WAIT_TICKS 2
+#define HID_READY_WAIT_TICKS 1
 
 #define HID_CTRL 0x1
 #define HID_RIGHTCTRL 0x10
@@ -51,6 +51,14 @@ typedef struct {
 	uint8_t page;
 	uint16_t usage;
 } hid_usage_t;
+
+typedef struct TU_ATTR_PACKED {
+	uint8_t buttons;
+	int16_t x;
+	int16_t y;
+	int16_t wheel;
+	int16_t pan;
+} hid_mouse_report_16_t;
 
 static const hid_usage_t keyd_hid_table[256] = {
 	[KEYD_ESC]                   = HID_USAGE_KEYBOARD(0x29),
@@ -458,16 +466,69 @@ static void send_consumer_report(void)
 	tud_hid_n_report(HID_KEYBOARD_INSTANCE, REPORT_ID_CONSUMER, usages, sizeof(usages));
 }
 
-static void mouse_scroll(int x, int y)
+static void mouse_scroll(int16_t x, int16_t y)
 {
+	hid_mouse_report_16_t report = {
+		.buttons = mouse_buttons,
+		.wheel = y,
+		.pan = x,
+	};
+
 	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
 		vTaskDelay(HID_READY_WAIT_TICKS);
 
 	/* TinyUSB: wheel=vertical, pan=horizontal. */
-	tud_hid_n_mouse_report(HID_MOUSE_INSTANCE, 0, mouse_buttons, 0, 0, (int8_t)y, (int8_t)x);
+	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_move(int16_t x, int16_t y)
+{
+	hid_mouse_report_16_t report = {
+		.buttons = mouse_buttons,
+		.x = x,
+		.y = y,
+	};
+
+	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
+		vTaskDelay(HID_READY_WAIT_TICKS);
+
+	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+}
+
+static void mouse_button(uint8_t buttons, int state)
+{
+	if (state)
+		mouse_buttons |= buttons;
+	else
+		mouse_buttons &= (uint8_t)~buttons;
+
+	hid_mouse_report_16_t report = {
+		.buttons = mouse_buttons,
+	};
+
+	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
+		vTaskDelay(HID_READY_WAIT_TICKS);
+
+	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+}
+
+static void mouse_scroll_boot(int16_t x, int16_t y)
+{
+	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
+		vTaskDelay(HID_READY_WAIT_TICKS);
+
+	tud_hid_n_mouse_report(
+		HID_MOUSE_INSTANCE,
+		0,
+		mouse_buttons,
+		0,
+		0,
+		clamp_i16_to_i8(y),
+		clamp_i16_to_i8(x)
+	);
+}
+
+static void mouse_move_boot(int16_t x, int16_t y)
 {
 	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
 		vTaskDelay(HID_READY_WAIT_TICKS);
@@ -483,7 +544,7 @@ static void mouse_move(int16_t x, int16_t y)
 	);
 }
 
-static void mouse_button(uint8_t buttons, int state)
+static void mouse_button_boot(uint8_t buttons, int state)
 {
 	if (state)
 		mouse_buttons |= buttons;
@@ -511,7 +572,7 @@ void vkbd_hid_nkro_task(void *pvParameters)
 			mouse_button(event.buttons, event.state);
 			continue;
 		case KEY_EVENT_MOUSE_SCROLL:
-			mouse_scroll(clamp_i16_to_i8(event.x), clamp_i16_to_i8(event.y));
+			mouse_scroll(event.x, event.y);
 			continue;
 		case KEY_EVENT_MOUSE_MOVE_ABS:
 			/*
@@ -550,10 +611,10 @@ void vkbd_hid_boot_task(void *pvParameters)
 
 		switch (event.type) {
 		case KEY_EVENT_MOUSE_BUTTON:
-			mouse_button(event.buttons, event.state);
+			mouse_button_boot(event.buttons, event.state);
 			continue;
 		case KEY_EVENT_MOUSE_SCROLL:
-			mouse_scroll(clamp_i16_to_i8(event.x), clamp_i16_to_i8(event.y));
+			mouse_scroll_boot(event.x, event.y);
 			continue;
 		case KEY_EVENT_MOUSE_MOVE_ABS:
 			/*
@@ -562,7 +623,7 @@ void vkbd_hid_boot_task(void *pvParameters)
 			 */
 			/* fallthrough */
 		case KEY_EVENT_MOUSE_MOVE:
-			mouse_move(event.x, event.y);
+			mouse_move_boot(event.x, event.y);
 			continue;
 		case KEY_EVENT_KEY: {
 			if (update_modifier_state(event.code, event.state) == 0) {
