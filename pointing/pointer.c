@@ -234,9 +234,8 @@ void pointing_device_task(void *pvParameters)
             // This may move to config if per-device coordinate transforms are needed.
             int32_t x = x125pct(dx);
             int32_t y = -dy;
-            bool scroll = config->pmw3360[i].role == SENSOR_ROLE_SCROLL;
             send_pointing_event(pmw3360_queues[i],
-                                scroll,
+                                config->pmw3360[i].role,
                                 &pmw3360_filters[i],
                                 x,
                                 y);
@@ -252,9 +251,8 @@ void pointing_device_task(void *pvParameters)
             // This may move to config if per-device coordinate transforms are needed.
             int32_t x = x125pct(dx);
             int32_t y = -dy;
-            bool scroll = config->pmw3389[i].role == SENSOR_ROLE_SCROLL;
             send_pointing_event(pmw3389_queues[i],
-                                scroll,
+                                config->pmw3389[i].role,
                                 &pmw3389_filters[i],
                                 x,
                                 y);
