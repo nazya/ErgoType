@@ -20,7 +20,6 @@ int evdev_client_write(struct evdev_client *client,
 		       const struct input_event *events, size_t count);
 int evdev_client_upload_ff(struct evdev_client *client, struct ff_effect *effect);
 int evdev_client_erase_ff(struct evdev_client *client, int effect_id);
-int evdev_client_rumble(struct evdev_client *client, int16_t *effect_id);
 int evdev_write(struct evdev *evdev, const struct input_event *events, size_t count);
 int evdev_upload_ff(struct evdev *evdev, struct ff_effect *effect, struct file *file);
 int evdev_erase_ff(struct evdev *evdev, int effect_id, struct file *file);

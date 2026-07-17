@@ -73,7 +73,6 @@ static void app_task(void *pvParameters);
 void on_layout_change(const char *name)
 {
     ui_notify_layout(name);
-    device_rumble_on_layout_change();
 }
 
 int8_t init_and_read_pin(int pin) {

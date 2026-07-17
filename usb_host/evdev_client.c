@@ -9,7 +9,7 @@
 #include "evdev.h"
 #include "linux/include/linux/hid.h"
 #include "stdio_tusb_cdc.h"
-#include "uapi/linux/input-event-codes.h"
+#include <linux/input-event-codes.h>
 
 #define EVDEV_QUEUE_REMOVE_RESERVE 1u
 #define EVDEV_QUEUE_RELEASE_RESERVE 1u
@@ -141,6 +141,7 @@ struct evdev_client *evdev_register_input_device(struct input_dev *src,
 		input_set_drvdata(src, hid);
 	}
 
+	clear_bit(EV_REP, src->evbit);
 	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
 	return evdev_register_device(&port_dev, evdev);
 }
@@ -189,34 +190,6 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 	xSemaphoreGive(evdev_writer_mutex);
 
 	return ret;
-}
-
-int evdev_client_rumble(struct evdev_client *client, int16_t *effect_id)
-{
-	struct ff_effect effect = {
-		.type = FF_RUMBLE,
-		.id = *effect_id,
-		.replay = {
-			.length = 80,
-		},
-		.u.rumble = {
-			.strong_magnitude = 0x6000,
-			.weak_magnitude = 0xffff,
-		},
-	};
-	struct input_event ev = {
-		.type = EV_FF,
-		.value = 1,
-	};
-	int ret;
-
-	ret = evdev_client_upload_ff(client, &effect);
-	if (ret < 0)
-		return ret;
-
-	*effect_id = effect.id;
-	ev.code = effect.id;
-	return evdev_client_write(client, &ev, 1);
 }
 
 void evdev_unregister_device(struct evdev_client *client)

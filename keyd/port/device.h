@@ -34,7 +34,6 @@ struct device {
 	int32_t _pending_abs_x;
 	int32_t _pending_abs_y;
 	uint8_t _pending_abs;
-	int16_t ff_rumble_effect_id;
 	void *data;
 };
 
@@ -68,6 +67,5 @@ void device_set_led(const struct device *dev, int led, int state);
 void device_set_ff(const struct device *dev, int effect_id, int value);
 int device_upload_ff(const struct device *dev, struct ff_effect *effect);
 int device_erase_ff(const struct device *dev, int effect_id);
-void device_rumble_on_layout_change(void);
 
 #endif

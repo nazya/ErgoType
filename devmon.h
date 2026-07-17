@@ -5,7 +5,7 @@
 
 #include "FreeRTOS.h"
 #include "queue.h"
-#include "uapi/linux/input-event-codes.h"
+#include <linux/input-event-codes.h>
 
 #define MAX_DEVICES 8
 #define DEVICE_EVENT_QUEUE_LEN 16

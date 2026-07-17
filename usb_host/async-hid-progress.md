@@ -22,8 +22,8 @@
 - `hid_hw_request()`, raw SET_REPORT, raw GET_REPORT building blocks,
   output-report submits, deferred input-report delivery, firmware workqueue,
   and firmware timer bridges are present for the currently linked driver set.
-- FF and hiddev support are intentionally left in their current bounded
-  firmware-proxy form for now. They are not cleaned out in this pass.
+- The generic ff-core/evdev boundary remains for future haptic support, but no
+  FF driver is active. Hiddev remains in its bounded firmware-proxy form.
 
 ## Manual Test Notes
 
