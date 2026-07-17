@@ -3,6 +3,7 @@
 #include "FreeRTOS.h"
 #include "portable.h"
 #include "queue.h"
+#include "semphr.h"
 
 #include "devmon.h"
 #include "evdev.h"
@@ -38,6 +39,13 @@ struct evdev_client {
 	// buffer with a FreeRTOS queue instead of a ring array.
 	QueueHandle_t buffer;
 };
+
+/*
+ * Upstream Linux: no equivalent. Linux file lifetime keeps evdev_client valid
+ * during evdev_write(). Firmware calls the same writer from KeyD on CORE0
+ * while disconnect runs on CORE1, so serialize writer calls with detachment.
+ */
+static SemaphoreHandle_t evdev_writer_mutex;
 
 static void evdev_copy_absinfo(struct input_absinfo_snapshot *dst,
 			       const struct input_absinfo *src)
@@ -80,10 +88,17 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 static struct evdev_client *evdev_register_device(const struct port_input_dev *src,
 						  struct evdev *evdev)
 {
-	struct evdev_client *client = pvPortMalloc(sizeof *client);
+	struct evdev_client *client;
 	struct port_input_dev port_dev;
 	int ret;
 
+	if (!evdev_writer_mutex) {
+		evdev_writer_mutex = xSemaphoreCreateMutex();
+		if (!evdev_writer_mutex)
+			return NULL;
+	}
+
+	client = pvPortMalloc(sizeof *client);
 	if (!client)
 		return NULL;
 	memset(client, 0, sizeof *client);
@@ -133,25 +148,47 @@ struct evdev_client *evdev_register_input_device(struct input_dev *src,
 int evdev_client_write(struct evdev_client *client,
 		       const struct input_event *events, size_t count)
 {
+	int ret;
+
 	// struct evdev_client *client = file->private_data;
 	// struct evdev *evdev = client->evdev;
-	// Firmware has no struct file, so device_set_led() reaches this path
-	// through evdev_writer.client instead of file->private_data.
-	return evdev_write(client->evdev, events, count);
+	// Firmware has no struct file, so KeyD reaches the same synchronous writer
+	// through evdev_writer.client. Disconnect clears evdev under this mutex.
+	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
+	ret = client->evdev ? evdev_write(client->evdev, events, count) : -ENODEV;
+	xSemaphoreGive(evdev_writer_mutex);
+
+	return ret;
 }
 
 int evdev_client_upload_ff(struct evdev_client *client, struct ff_effect *effect)
 {
+	int ret;
+
 	// error = input_ff_upload(dev, &effect, file);
-	// Firmware uses client->file as the ff-core owner token.
-	return evdev_upload_ff(client->evdev, effect, &client->file);
+	// Firmware uses client->file as the ff-core owner token and the same mutex
+	// as direct writes so disconnect cannot free evdev during the upload.
+	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
+	ret = client->evdev ?
+		evdev_upload_ff(client->evdev, effect, &client->file) : -ENODEV;
+	xSemaphoreGive(evdev_writer_mutex);
+
+	return ret;
 }
 
 int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 {
+	int ret;
+
 	// return input_ff_erase(dev, (int)(unsigned long) p, file);
-	// Firmware uses client->file as the ff-core owner token.
-	return evdev_erase_ff(client->evdev, effect_id, &client->file);
+	// Firmware uses client->file as the ff-core owner token and serializes the
+	// direct KeyD call with disconnect.
+	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
+	ret = client->evdev ?
+		evdev_erase_ff(client->evdev, effect_id, &client->file) : -ENODEV;
+	xSemaphoreGive(evdev_writer_mutex);
+
+	return ret;
 }
 
 int evdev_client_rumble(struct evdev_client *client, int16_t *effect_id)
@@ -193,6 +230,11 @@ void evdev_unregister_device(struct evdev_client *client)
 	// Firmware has no close(fd) lifecycle here; unregister is physical
 	// disconnect, so sending FF cleanup reports to the HID device is too late.
 	// Add that flush only if a real close-like evdev client lifecycle appears.
+	// Keep the client allocation as a disconnected writer tombstone until KeyD
+	// consumes DEVICE_INPUT_REMOVED; only the evdev target is detached here.
+	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
+	client->evdev = NULL;
+	xSemaphoreGive(evdev_writer_mutex);
 	ev.type = DEVICE_INPUT_REMOVED;
 	// ret = evdev_send_input_reserved(device, &ev, 0);
 	// configASSERT(ret == pdPASS);
@@ -201,7 +243,9 @@ void evdev_unregister_device(struct evdev_client *client)
 	if (uxQueueMessagesWaiting(client->buffer) >= DEVICE_EVENT_QUEUE_LEN)
 		(void)xQueueReceive(client->buffer, &dropped, 0);
 	(void)xQueueSendToBack(client->buffer, &ev, 0);
-	vPortFree(client);
+	// vPortFree(client);
+	// KeyD owns the client after this removal event and frees it together with
+	// its device; keeping it alive makes the synchronous writer pointer safe.
 }
 
 void __pass_event(struct evdev_client *client,
