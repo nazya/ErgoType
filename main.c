@@ -230,6 +230,13 @@ static void app_task(void *pvParameters)
 
     fatfs_mutex = xSemaphoreCreateMutex();
 
+    if (mode == HID) {
+        // The HID SET_REPORT callback may run as soon as the TinyUSB task starts.
+        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct devmon_event));
+        configASSERT(devmon_queue);
+        devmon_init();
+    }
+
     // if (mode == HID) {
     if (mode == HID && hid_output_profile != HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
         xTaskCreateAffinitySet(tusb_device_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
@@ -263,10 +270,6 @@ static void app_task(void *pvParameters)
     if (mode == HID) {
         vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
-
-        devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct port_input_dev));
-        configASSERT(devmon_queue);
-        devmon_init();
 
         int hid_async_ret = hid_async_init();
         if (hid_async_ret < 0)

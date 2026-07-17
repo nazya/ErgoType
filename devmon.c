@@ -19,6 +19,9 @@ void devmon_init(void)
 
 int devmon_add_device(const struct port_input_dev *port_dev)
 {
+	struct devmon_event event = {
+		.dev = *port_dev,
+	};
 	BaseType_t add_rc;
 	BaseType_t send_rc;
 
@@ -26,7 +29,7 @@ int devmon_add_device(const struct port_input_dev *port_dev)
 	if (add_rc != pdPASS)
 		return -ENOSPC;
 
-	send_rc = xQueueSendToBack(devmon_queue, port_dev, 0);
+	send_rc = xQueueSendToBack(devmon_queue, &event, portMAX_DELAY);
 	if (send_rc != pdPASS) {
 		xQueueRemoveFromSet(port_dev->ev_queue, devmon_event_set);
 		return -EAGAIN;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -73,6 +74,16 @@ struct port_input_dev {
 	unsigned long propbit[INPUT_BITS_TO_LONGS(INPUT_PROP_CNT)];
 	struct input_absinfo_snapshot abs_x;
 	struct input_absinfo_snapshot abs_y;
+};
+
+/*
+ * TinyUSB host LED reports have no source input device. is_virtual carries
+ * their event through the existing devmon queue into the KeyD task.
+ */
+struct devmon_event {
+	struct port_input_dev dev;
+	struct port_input_event event;
+	bool is_virtual;
 };
 
 extern QueueHandle_t devmon_queue;

@@ -118,16 +118,29 @@ int evloop(int (*event_handler)(struct event *ev))
 		if (ready != devmon_queue && handled_device)
 			continue;
 
-		struct port_input_dev port_dev;
-		struct device *dev;
-		int ret;
+		struct devmon_event devmon_ev;
 
-		if (xQueueReceive(devmon_queue, &port_dev, 0) != pdPASS)
+		if (xQueueReceive(devmon_queue, &devmon_ev, 0) != pdPASS)
 			continue;
 
-		dev = pvPortMalloc(sizeof *dev);
+		// TinyUSB host LED reports enter KeyD without a source input device.
+		if (devmon_ev.is_virtual) {
+			struct device_event devev = {
+				.type = DEV_LED,
+				.code = devmon_ev.event.code,
+				.pressed = devmon_ev.event.value,
+			};
+
+			ev.type = EV_DEV_EVENT;
+			ev.dev = NULL; // Virtual LED event has no physical source device.
+			ev.devev = &devev;
+			timeout = event_handler(&ev);
+			continue;
+		}
+
+		struct device *dev = pvPortMalloc(sizeof *dev);
 		configASSERT(dev);
-		ret = device_init(&port_dev, dev);
+		int ret = device_init(&devmon_ev.dev, dev);
 		configASSERT(ret == 0);
 		configASSERT(device_table_sz < MAX_DEVICES);
 		device_table[device_table_sz++] = dev;
