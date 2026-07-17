@@ -206,7 +206,9 @@ static int event_handler(struct event *ev)
 		break;
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
-		if (active_kbd) { // active_kbd = ev->dev->data; # now it is the only active kbd
+		// if (active_kbd) { // active_kbd = ev->dev->data; # now it is the only active kbd
+		// TinyUSB host LED events have no source device and use the virtual LED path below.
+		if (ev->dev && active_kbd) {
 			// struct keyboard *kbd = ev->dev->data;
 			struct keyboard *kbd = active_kbd;
 			switch (ev->devev->type) {
