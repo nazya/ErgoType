@@ -369,7 +369,9 @@ void input_ff_destroy(struct input_dev *dev)
 	if (ff) {
 		if (ff->destroy)
 			ff->destroy(ff);
-		kfree(ff->private);
+		// kfree(ff->private);
+		// Haptic private state is owned by the HID device devres group.
+		mutex_destroy(&ff->mutex);
 		kfree(ff->effects);
 		kfree(ff);
 		dev->ff = NULL;

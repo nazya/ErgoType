@@ -868,8 +868,7 @@ void hiddev_free(struct kref *ref)
 	hid_close_report(hid);
 	hid_free_bpf_rdesc(hid);
 	kfree(hid->dev_rdesc);
-	// sema_destroy(&hid->driver_input_lock);
-	// Callback-driven slice does not allocate driver_input_lock.
+	sema_destroy(&hid->driver_input_lock);
 	kfree(hid);
 }
 
@@ -2278,16 +2277,13 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	if (!hid)
 		return -ENODEV;
 
-	// ret = down_trylock(&hid->driver_input_lock);
-	// if (lock_already_taken && !ret) {
-	// 	up(&hid->driver_input_lock);
-	// 	return -EINVAL;
-	// } else if (!lock_already_taken && ret) {
-	// 	return -EBUSY;
-	// }
-	// Callback-driven slice has no driver thread wait; report callbacks
-	// must enter Linux parsing without FreeRTOS blocking traffic.
-	(void)lock_already_taken;
+	ret = down_trylock(&hid->driver_input_lock);
+	if (lock_already_taken && !ret) {
+		up(&hid->driver_input_lock);
+		return -EINVAL;
+	} else if (!lock_already_taken && ret) {
+		return -EBUSY;
+	}
 
 	if (!hid->driver) {
 		ret = -ENODEV;
@@ -2352,9 +2348,8 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 	ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
 
 unlock:
-	// if (!lock_already_taken)
-	// 	up(&hid->driver_input_lock);
-	// See callback-driven no-blocking note above.
+	if (!lock_already_taken)
+		up(&hid->driver_input_lock);
 	return ret;
 }
 
@@ -3148,9 +3143,8 @@ static int hid_device_probe(struct device *dev)
 	const struct hid_driver *hdrv = to_hid_driver(dev->driver);
 	int ret = 0;
 
-	// if (down_interruptible(&hdev->driver_input_lock))
-	// 	return -EINTR;
-	// Probe runs in the TinyUSB mount callback slice; no driver thread may block it.
+	if (down_interruptible(&hdev->driver_input_lock))
+		return -EINTR;
 
 	hdev->io_started = false;
 	clear_bit(ffs(HID_STAT_REPROBED), &hdev->status);
@@ -3158,9 +3152,8 @@ static int hid_device_probe(struct device *dev)
 	if (!hdev->driver)
 		ret = __hid_device_probe(hdev, hdrv);
 
-	// if (!hdev->io_started)
-	// 	up(&hdev->driver_input_lock);
-	// See nonblocking callback-driven probe note above.
+	if (!hdev->io_started)
+		up(&hdev->driver_input_lock);
 
 	return ret;
 }
@@ -3172,9 +3165,7 @@ static void hid_device_remove(struct device *dev)
 	// struct hid_device keeps the matched driver pointer const in this port.
 	const struct hid_driver *hdrv;
 
-	// down(&hdev->driver_input_lock);
-	// Firmware remove runs from usbhid_disconnect_task, but the Linux
-	// driver_input_lock semaphore is not wired in this port.
+	down(&hdev->driver_input_lock);
 	hdev->io_started = false;
 
 	hdrv = hdev->driver;
@@ -3191,9 +3182,8 @@ static void hid_device_remove(struct device *dev)
 		hdev->driver = NULL;
 	}
 
-	// if (!hdev->io_started)
-	// 	up(&hdev->driver_input_lock);
-	// See the unwired driver_input_lock note above.
+	if (!hdev->io_started)
+		up(&hdev->driver_input_lock);
 }
 
 static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
@@ -3353,9 +3343,9 @@ struct hid_device *hid_allocate_device(void)
 	// No waitqueue implementation in this port.
 	INIT_LIST_HEAD(&hdev->debug_list);
 	spin_lock_init(&hdev->debug_list_lock);
-	// sema_init(&hdev->driver_input_lock, 1);
+	sema_init(&hdev->driver_input_lock, 1);
 	// mutex_init(&hdev->ll_open_lock);
-	// Callback-driven slice has no driver/open worker; do not allocate blocking locks.
+	// The port does not use the Linux ll_open_lock path.
 	kref_init(&hdev->ref);
 
 	// #ifdef CONFIG_HID_BATTERY_STRENGTH

@@ -11,31 +11,16 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include <linux/types.h>
+
 #include "FreeRTOS.h"
 #include "portable.h"
+#include "semphr.h"
 #include "task.h"
 #include "tusb.h"
 #include "log.h"
 #include "pico/rand.h"
 
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int8_t s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef int64_t s64;
-
-typedef uint8_t __u8;
-typedef uint16_t __u16;
-typedef uint32_t __u32;
-typedef uint64_t __u64;
-typedef int8_t __s8;
-typedef int16_t __s16;
-typedef int32_t __s32;
-typedef int64_t __s64;
-typedef uint16_t __le16;
 typedef int gfp_t;
 typedef int pm_message_t;
 typedef struct {
@@ -47,8 +32,6 @@ typedef struct {
 } wait_queue_head_t;
 typedef int ktime_t;
 typedef long loff_t;
-typedef unsigned long kernel_ulong_t;
-typedef unsigned int umode_t;
 
 /*
  * Temporary callback-driven host slice: keep Linux descriptor/report/input
@@ -73,6 +56,8 @@ typedef unsigned int umode_t;
 #define CONFIG_HID_RAZER 1
 #define CONFIG_HID_SAITEK 1
 #define CONFIG_HID_ZYDACRON 1
+#define CONFIG_HID_HAPTIC 1
+#define CONFIG_HID_MULTITOUCH 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
@@ -111,8 +96,6 @@ typedef unsigned int umode_t;
 // #define CONFIG_HID_THRUSTMASTER 1
 // #define CONFIG_THRUSTMASTER_FF 1
 // #define CONFIG_ZEROPLUS_FF 1
-#define __user
-
 struct dentry {
 	int unused;
 };
@@ -156,13 +139,13 @@ struct kref {
 };
 
 struct mutex {
-        uint8_t locked;
+	SemaphoreHandle_t handle;
 };
 
 #define DEFINE_MUTEX(name) struct mutex name = { 0 }
 
 struct semaphore {
-	uint8_t count;
+	SemaphoreHandle_t handle;
 };
 
 struct workqueue_struct {
@@ -656,6 +639,7 @@ struct device {
 	const char *last_sysfs_notify_dir;
 	const char *last_sysfs_notify_attr;
 	bool wakeup_enabled;
+	unsigned int refcount;
 	char name[32];
 };
 
@@ -1003,6 +987,7 @@ static inline void device_initialize(struct device *dev)
 	dev->last_sysfs_notify_dir = NULL;
 	dev->last_sysfs_notify_attr = NULL;
 	dev->wakeup_enabled = false;
+	dev->refcount = 1;
 }
 
 static inline void *dev_get_drvdata(const struct device *dev)
@@ -1017,12 +1002,20 @@ static inline void dev_set_drvdata(struct device *dev, void *data)
 
 static inline void put_device(struct device *dev)
 {
-	if (dev->release)
+	bool release;
+
+	taskENTER_CRITICAL();
+	release = --dev->refcount == 0;
+	taskEXIT_CRITICAL();
+	if (release && dev->release)
 		dev->release(dev);
 }
 
 static inline struct device *get_device(struct device *dev)
 {
+	taskENTER_CRITICAL();
+	dev->refcount++;
+	taskEXIT_CRITICAL();
 	return dev;
 }
 
@@ -1775,74 +1768,66 @@ static inline void kfreep(void *ptr)
 
 static inline void mutex_init(struct mutex *mutex)
 {
-	mutex->locked = 0;
+	mutex->handle = xSemaphoreCreateMutex();
 }
 
 static inline int mutex_lock_killable(struct mutex *mutex)
 {
-	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
-	mutex->locked = 1;
+	xSemaphoreTake(mutex->handle, portMAX_DELAY);
 	return 0;
 }
 
 static inline void mutex_lock(struct mutex *mutex)
 {
-	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
-	mutex->locked = 1;
+	xSemaphoreTake(mutex->handle, portMAX_DELAY);
 }
 
 static inline void mutex_unlock(struct mutex *mutex)
 {
-	// Callback-driven HID slice treats Linux mutexes as nonblocking no-ops.
-	mutex->locked = 0;
+	xSemaphoreGive(mutex->handle);
 }
 
 static inline void mutex_destroy(struct mutex *mutex)
 {
-	mutex->locked = 0;
+	vSemaphoreDelete(mutex->handle);
+	mutex->handle = NULL;
 }
 
 static inline bool mutex_is_locked(struct mutex *mutex)
 {
-	return mutex->locked;
+	return uxSemaphoreGetCount(mutex->handle) == 0;
 }
 
 static inline int down_interruptible(struct semaphore *sem)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	(void)sem;
+	xSemaphoreTake(sem->handle, portMAX_DELAY);
 	return 0;
 }
 
 static inline void down(struct semaphore *sem)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	(void)sem;
+	xSemaphoreTake(sem->handle, portMAX_DELAY);
 }
 
 static inline int down_trylock(struct semaphore *sem)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	(void)sem;
-	return 0;
+	return xSemaphoreTake(sem->handle, 0) == pdPASS ? 0 : 1;
 }
 
 static inline void up(struct semaphore *sem)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	(void)sem;
+	xSemaphoreGive(sem->handle);
 }
 
 static inline void sema_init(struct semaphore *sem, int val)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	sem->count = (uint8_t)val;
+	sem->handle = xSemaphoreCreateCounting((UBaseType_t)val, (UBaseType_t)val);
 }
 
 static inline void sema_destroy(struct semaphore *sem)
 {
-	// Callback-driven HID slice does not allocate or block here.
-	sem->count = 0;
+	vSemaphoreDelete(sem->handle);
+	sem->handle = NULL;
 }
 
 static inline void hid_compat_spin_lock_init(spinlock_t *lock)

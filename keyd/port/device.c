@@ -142,7 +142,9 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 
 struct device_event *device_read_event(struct device *dev)
 {
-	struct input_event ev;
+	// struct input_event ev;
+	// Firmware queues store timestamp-free port events instead of Linux events.
+	struct port_input_event ev;
 	static struct device_event devev;
 
 	// assert(dev->fd != -1);
@@ -157,7 +159,7 @@ struct device_event *device_read_event(struct device *dev)
 	// 	}
 	// }
 	// Port: dev->ev_queue replaces the upstream input fd. The queued
-	// struct input_event is the firmware subset documented in device.h;
+	// struct port_input_event is the firmware subset documented in devmon.h;
 	// removal/reset are explicit sentinel events because there is no read()
 	// error path.
 	// if (xQueueReceive(dev->ev_queue, &devev, 0) != pdPASS)
@@ -395,7 +397,9 @@ struct device_event *device_read_event(struct device *dev)
 
 void device_set_led(const struct device *dev, int led, int state)
 {
-	struct input_event ev = {
+	// struct input_event ev = {
+	// Firmware writers accept the timestamp-free port event used by devmon.
+	struct port_input_event ev = {
 		.type = EV_LED,
 		.code = led,
 		.value = state
@@ -410,7 +414,9 @@ void device_set_led(const struct device *dev, int led, int state)
 
 void device_set_ff(const struct device *dev, int effect_id, int value)
 {
-	struct input_event ev = {
+	// struct input_event ev = {
+	// Firmware writers accept the timestamp-free port event used by devmon.
+	struct port_input_event ev = {
 		.type = EV_FF,
 		.code = effect_id,
 		.value = value

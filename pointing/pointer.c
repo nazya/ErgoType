@@ -27,7 +27,7 @@ static void send_pointing_input_event(QueueHandle_t queue,
                                       uint16_t code,
                                       int32_t value)
 {
-    struct input_event ev = {
+    struct port_input_event ev = {
         .type = type,
         .code = code,
         .value = value,
@@ -181,7 +181,7 @@ void pointing_device_task(void *pvParameters)
         input_bitmap_set(REL_Y, pmw3360_devices[i].relbit);
         input_bitmap_set(REL_WHEEL, pmw3360_devices[i].relbit);
         input_bitmap_set(REL_HWHEEL, pmw3360_devices[i].relbit);
-        pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
+        pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
         configASSERT(pmw3360_devices[i].ev_queue);
         int add_rc = devmon_add_device(&pmw3360_devices[i]);
         configASSERT(add_rc == 0);
@@ -205,7 +205,7 @@ void pointing_device_task(void *pvParameters)
         input_bitmap_set(REL_Y, pmw3389_devices[i].relbit);
         input_bitmap_set(REL_WHEEL, pmw3389_devices[i].relbit);
         input_bitmap_set(REL_HWHEEL, pmw3389_devices[i].relbit);
-        pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
+        pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
         configASSERT(pmw3389_devices[i].ev_queue);
         int add_rc = devmon_add_device(&pmw3389_devices[i]);
         configASSERT(add_rc == 0);

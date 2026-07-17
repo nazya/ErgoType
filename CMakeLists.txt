@@ -92,6 +92,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-generic.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-drivers.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-quirks.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-haptic.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-multitouch.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
@@ -254,6 +256,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 pico_add_extra_outputs(${PROJECT_NAME})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
+        __KERNEL__ # use kernel UAPI layouts; firmware has no userspace ioctl headers
         PICO_STDIO_STACK_BUFFER_SIZE=256 # use a small printf on stack buffer
         PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000000 # avoid discarding long CDC bursts under load
         PICO_DEFAULT_PIO_USB_DP_PIN=21

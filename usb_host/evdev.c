@@ -87,8 +87,8 @@ static unsigned int evdev_events(struct input_handle *handle,
 
 // static ssize_t evdev_write(struct file *file, const char __user *buffer,
 // 			   size_t count, loff_t *ppos)
-// Firmware has no userspace file; callers pass already-local input_event data.
-int evdev_write(struct evdev *evdev, const struct input_event *events, size_t count)
+// Firmware has no userspace file; callers pass already-local port event data.
+int evdev_write(struct evdev *evdev, const struct port_input_event *events, size_t count)
 {
 	for (size_t i = 0; i < count; i++) {
 		// input_event_from_user(buffer + retval, &event);
