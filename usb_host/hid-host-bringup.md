@@ -152,14 +152,14 @@ The working configuration intentionally keeps these changes:
 
 Before static builtin runtime storage, registering 23 drivers and their
 per-driver state/attribute data consumed 4,952 B of FreeRTOS heap in the tested
-build. The current 16 runtime records occupy 896 B of static `.bss`. Static
+build. The current 14 runtime records occupy 784 B of static `.bss`. Static
 `.bss` still consumes physical RAM, but it no longer depletes or fragments the
 runtime heap. Excluding a driver from CMake also excludes its runtime record
 while leaving its source in the repository.
 
-The current allowlist is `hid-generic` plus A4Tech, Apple IR, Chicony, Creative
-SB0540, Cypress, Google Stadia FF, Holtek keyboard, ITE, Kye, Primax, PXRC,
-Rapoo, Razer, Saitek, and Zydacron.
+The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
+Cypress, Holtek keyboard, ITE, Kye, Primax, PXRC, Rapoo, Razer, Saitek, and
+Zydacron.
 
 Current memory-related settings are:
 
@@ -216,29 +216,16 @@ the driver. Keep both sides synchronized.
 
 ## Force Feedback and Remaining Risks
 
-The Google Stadia FF driver is linked; generic PID, haptic, Holtek FF, and the
-other optional FF families remain disabled. The workqueue cancellation UAF is
-fixed, but the Linux synchronization and object-lifetime model is not complete:
+No gaming FF driver is active. The tested Stadia/`ff-memless` implementation is
+preserved in checkpoint `hid: stabilize stadia ff teardown`, but both sources are excluded from CMake.
 
-- the current Linux mutex/spinlock compatibility operations do not provide the
-  full Linux locking semantics;
-- putting all HID tasks on one core would not remove task-preemption races;
-- Stadia play can observe `removed == false`, race past remove-time
-  `cancel_work_sync()`, and enqueue new work before the device is freed because
-  the imported spinlock does not currently serialize those paths;
-- `evdev_client` ownership across `DEVICE_INPUT_REMOVED` is still unresolved:
-  KeyD can retain the pointer used for FF while disconnect teardown frees it.
+The generic `ff-core`, evdev upload/play/stop/erase boundary, workqueue bridge,
+and async output transport remain for a future standard haptic touchpad port.
+That port still needs `hid-haptic`/`hid-multitouch`, async feature GET_REPORT
+initialization, and real synchronization/lifetime review before enablement.
 
-Do not describe FF detach as safe or enable more FF drivers until
-`evdev_client` removal ownership and the required targeted synchronization are
-implemented. The intended ownership direction discussed during the audit is
-for disconnect to enqueue removal and for the KeyD side to release the client
-after it has processed that event; no such change is implemented yet.
-
-For the current Stadia path, the minimum stress test is repeated rumble followed
-by immediate unplug/replug, checking for stale work, hard faults, hangs, and
-reports sent through a removed device. The cancellation patch passes the build;
-this exact post-fix hardware stress test is still pending.
+The evdev writer lifetime fix remains active because keyboard LED writes share
+the same KeyD-versus-disconnect ownership boundary even without an FF driver.
 
 ## Related Notes
 

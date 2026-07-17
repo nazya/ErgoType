@@ -7,8 +7,7 @@
 #include "device.h"
 #include "keys.h"
 #include "log.h"
-#include "usb_host/evdev.h"
-#include "uapi/linux/input-event-codes.h"
+#include <linux/input-event-codes.h>
 
 struct device *device_table[MAX_DEVICES];
 size_t device_table_sz;
@@ -96,7 +95,6 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 	uint8_t capabilities;
 
 	memset(dev, 0, sizeof *dev);
-	dev->ff_rumble_effect_id = -1;
 
 	capabilities = resolve_device_capabilities(port_dev, &num_keys, &has_rel, &has_abs);
 
@@ -440,19 +438,4 @@ int device_erase_ff(const struct device *dev, int effect_id)
 		return -ENOSYS;
 
 	return dev->writer.erase_ff(dev->writer.client, effect_id);
-}
-
-void device_rumble_on_layout_change(void)
-{
-	for (size_t i = 0; i < device_table_sz; i++) {
-		struct device *dev = device_table[i];
-
-		if (!dev)
-			continue;
-
-		if (!dev->writer.client)
-			continue;
-
-		evdev_client_rumble(dev->writer.client, &dev->ff_rumble_effect_id);
-	}
 }

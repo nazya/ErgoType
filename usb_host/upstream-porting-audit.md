@@ -14,9 +14,9 @@ active core still has unanchored changes, several stale port substitutions, and
 deliberate non-line-preserving areas. This is a porting audit, not a runtime
 safety certification.
 
-This pass fixes the evdev/KeyD output lifetime boundary and the Stadia work
-teardown race. The Stadia change is local and keeps each replaced upstream
-lock line beside the FreeRTOS replacement.
+Checkpoint `hid: stabilize stadia ff teardown` preserves the tested Stadia/`ff-memless` implementation and
+its teardown fixes. The active build now excludes that gaming-only path while
+retaining the generic FF interfaces needed by a future haptic touchpad port.
 
 ## Scope
 
@@ -33,18 +33,22 @@ itself is byte-for-byte upstream.
 
 ## Conforming Areas
 
-- CMake links 15 vendor drivers: a4tech, appleir, chicony, creative-sb0540,
-  cypress, google-stadiaff, holtek-kbd, ite, kye, primax, pxrc, razer, rapoo,
-  saitek, and zydacron. The `CONFIG_HID_*` mirror in `hid_compat.h` matches.
+- CMake links 13 vendor drivers: a4tech, chicony, creative-sb0540, cypress,
+  holtek-kbd, ite, kye, primax, pxrc, razer, rapoo, saitek, and zydacron. The
+  `CONFIG_HID_*` mirror in `hid_compat.h` matches.
 - Every active vendor `static const struct hid_driver` conversion keeps the
   upstream declaration and reason. Extra diffs are seven documented
   `raw_event_callback_safe` markers, the documented Holtek include removal,
-  the Stadia mutex adaptation described below, and whitespace-only cleanup in
-  chicony/rapoo. No unrelated vendor flow rewrite found.
+  and whitespace-only cleanup in chicony/rapoo. No unrelated vendor flow
+  rewrite found.
 - `hid-generic.c` and `hid-quirks.c` keep changed upstream lines beside their
   explained replacements.
-- `ff-memless.c` differs only at two documented `guard()` sites, subject to the
-  serialization issue below.
+- `ff-core.c` remains linked for the generic FF ABI. `ff-memless.c` and the
+  Stadia driver remain in tree but are not linked.
+- The evdev bridge clears `EV_REP` before opening each input device because
+  KeyD owns held-key state and discards Linux `EV_KEY value=2` repeats.
+- AppleIR remains in tree but is not linked. The timer bridge remains for a
+  future `hid-multitouch` port; the current path does not schedule it.
 - `hid-drivers.c` is clearly marked as port-only linker/initcall glue, although
   its location under `linux/drivers/hid` remains an explicit exception.
 
@@ -102,21 +106,24 @@ itself is byte-for-byte upstream.
   KeyD consumes the sentinel, deletes the input queue, and performs the final
   client free. There is no second output queue, worker task, ID lookup, or
   removal handshake.
-- Stadia keeps the upstream `removed`/schedule/cancel protocol, but replaces
-  the port's nonblocking compat spinlock with a real FreeRTOS mutex. Play,
-  work, and remove use task context; remove releases the mutex before
-  `cancel_work_sync()` and deletes it only after `hid_hw_stop()` detaches evdev.
+
+## Haptic Direction
+
+- Retained: `ff-core.c`, generic evdev upload/play/stop/erase calls, the HID
+  workqueue bridge, and async OUTPUT/SET_REPORT transport.
+- Removed from the active build: Stadia, `ff-memless`, its automatic effect
+  timer, and the KeyD layout-rumble trigger.
+- A future standard haptic touchpad port needs `hid-haptic.c` plus
+  `hid-multitouch.c`; it uses `input_ff_create()` directly and device-managed
+  waveform timing, not `ff-memless`.
+- Haptic probe still needs an async continuation for feature GET_REPORT data;
+  current `hid_hw_wait()` does not provide synchronous completion.
 
 ## Open Semantic Boundaries
 
-- The writer mutex protects client/evdev lifetime only. The synchronous writer
-  still enters input/FF code from CORE0 while timer/workqueue callbacks run on
-  CORE1; `ff-memless.c` can therefore touch effect state without the upstream
-  `event_lock`. This is a separate FF serialization change.
-- `hid_hw_start()` publishes Stadia's input device to KeyD before
-  `stadiaff_init()` finishes installing FF state and callbacks. A concurrent
-  layout rumble can therefore enter `input_ff_upload()` during partial setup;
-  the teardown mutex does not cover this probe-time publication window.
+- No active driver currently creates an FF device. The retained generic
+  evdev/`ff-core` seam must be reviewed with the real cross-core locking and
+  publication order when haptic support is enabled.
 - The removal sentinel does not quiesce an already-running
   `evdev_events()`/`__pass_event()` input producer. The port has no upstream
   RCU wait, and active async input-report execution is not waited by cancel;
@@ -135,9 +142,10 @@ itself is byte-for-byte upstream.
   not claimed.
 - hiddev declarations/implementation remain in tree, but `CONFIG_USB_HIDDEV`
   and `hiddev.c` are disabled; active code uses stubs.
-- Audited callback-safe `raw_event` and FF paths are active. Synchronous
-  request/wait semantics, returned-data probe continuations, unaudited hooks,
-  hidraw/hiddev runtime, and PIDFF remain deferred.
+- Audited callback-safe `raw_event` paths are active. The generic FF seam is
+  retained without an active FF driver; synchronous request/wait semantics,
+  returned-data probe continuations, haptic, unaudited hooks, hidraw/hiddev
+  runtime, and PIDFF remain deferred.
 - The KeyD queue adapter is treated as firmware boundary glue; this audit does
   not claim a pinned upstream-KeyD comparison.
 

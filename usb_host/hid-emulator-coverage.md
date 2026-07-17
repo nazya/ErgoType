@@ -8,6 +8,9 @@ driver in CMake. The current host build links the CMake HID allowlist from
 `usb_host/linux/drivers/hid`, while the emulator repo has one branch per
 targeted behavior or device family.
 
+The Stadia and AppleIR entries below are retained as historical coverage for
+checkpoint `hid: stabilize stadia ff teardown`. Neither path is in the active CMake allowlist.
+
 ## Build Status
 
 Last sequential build pass: 2026-07-13
@@ -73,9 +76,9 @@ Current branch heads used for the build pass:
 - `device/cypress-mouse`: Cypress mapped/event path; Button 5 + wheel rewrite
   coverage.
 - `device/google-stadiaff`: Google Stadia VID/PID and a report descriptor with
-  gamepad input report ID 1 plus rumble output report ID 5. This branch now
-  exercises host `hid-google-stadiaff.c` plus `ff-memless.c`; firmware layout
-  changes trigger one short rumble upload/play on the host.
+  gamepad input report ID 1 plus rumble output report ID 5. This branch
+  historically exercised `hid-google-stadiaff.c` plus `ff-memless.c` and the
+  short layout-rumble trigger preserved in checkpoint `hid: stabilize stadia ff teardown`.
 - `device/hires-wheel`: generic HID resolution multiplier path:
   async `GET_REPORT` followed by async `SET_REPORT`, plus hi-res wheel and AC
   Pan input.
@@ -132,10 +135,9 @@ drivers are not counted here.
 | `report_fixup` | A4-style simple fixups plus `hid-holtek-*`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other lightweight fixup-only drivers | `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote` |
 | `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-zydacron`, simple key-remap drivers | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `zydacron-remote` |
 | driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek`, `hid-speedlink`, `hid-xinmo` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
-| `raw_event` hooks | `hid-appleir`, `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-waltop`, `hid-zydacron` | `apple-ir`, `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
-| `input_configured` / extra input device naming | `hid-appleir`, `hid-creative-sb0540`, `hid-retrode` | `apple-ir`, `creative-sb0540`; `hid-retrode` only renames per-report input devices and reuses the same `HID_QUIRK_MULTI_INPUT` input-core path |
+| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-waltop`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
+| `input_configured` / extra input device naming | `hid-creative-sb0540`, `hid-retrode` | `creative-sb0540`; `hid-retrode` only renames per-report input devices and reuses the same `HID_QUIRK_MULTI_INPUT` input-core path |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | `hid-retrode`, KYE entries from `hid-quirks.c`, `hid-chicony`, `hid-glorious` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| timer callback | `hid-appleir` | `apple-ir` |
 | workqueue callback | `hid-input` LED work, future FF workers | LED path via `holtek-kbd-a055`; FF worker still gated below |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
@@ -143,8 +145,8 @@ drivers are not counted here.
 | USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | `rapoo-2_4g-receiver`, `razer-blackwidow` |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
-| `HID_CONNECT_HIDDEV_FORCE` selection | `hid-appleir` | `apple-ir` |
-| Force feedback | `hid-google-stadiaff.c`, `ff-core.c`, and `ff-memless.c` | `google-stadiaff` |
+| Historical force feedback, inactive | `hid-google-stadiaff.c`, `ff-core.c`, and `ff-memless.c` at `hid: stabilize stadia ff teardown` | `google-stadiaff` |
+| Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Active Drivers Without Dedicated Fixtures
 
@@ -173,7 +175,7 @@ hardware pass. They reuse hook classes already covered above.
 - Metadata/input-device naming only: `hid-retrode`. This uses
   `HID_QUIRK_MULTI_INPUT` and `input_configured()` to name per-report input
   devices; KYE/Chicony cover the multi-input/input-per-application core path,
-  and AppleIR/Creative cover `input_configured()`.
+  and Creative covers `input_configured()`.
 
 Add a dedicated fixture for one of these only if the hardware smoke pass points
 at that driver family or at a hook class not represented by the current
@@ -201,9 +203,9 @@ specific active driver fails or a specific hook class looks suspicious in
 hardware. The one reasonable optional emulator target is another
 `HID_QUIRK_MULTI_INPUT` device if KYE/Chicony coverage turns out too narrow.
 
-The previous force-feedback gap is now covered by the Stadia fixture. This is
-still only the simple memless rumble class, not the heavier PID/controller
-families listed below.
+The Stadia fixture preserves historical coverage of simple memless rumble at
+`hid: stabilize stadia ff teardown`. The active build has no FF driver; standard haptic touchpad coverage
+is the relevant future gap.
 
 ## Hardware Test Matrix
 
@@ -232,10 +234,8 @@ Recommended smoke order:
    `hid_lookup_quirk()` before probe.
 5. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
-6. `device/google-stadiaff`: proves the simple FF memless upload/play path and
-   Stadia output SET_REPORT report ID 5.
 
-If these six pass, the current emulator coverage is enough for the host commit.
+If these five pass, the current emulator coverage is enough for the host commit.
 Run the useful second-pass branches only if one of these gates fails or if a
 specific driver family needs confirmation.
 
@@ -302,36 +302,24 @@ boundary is wrong even though the board appears to be "working".
   - expected device-side signal: if the host sends keyboard LEDs, the emulator
     CDC log reports `HID_SET_REPORT`.
   - expected host-side signal: no assert/block in the LED output path.
-- `device/google-stadiaff`
+- `device/google-stadiaff` (historical, checkpoint `hid: stabilize stadia ff teardown`)
   - expected device-side signal: emulator CDC log reports SET_REPORT for
     report ID 5 after a host layout change triggers rumble.
 
 ## Still Not Covered
 
-Heavy force-feedback families are still not host-covered.
-
-`usb_host/linux/drivers/input/ff-core.c` and
-`usb_host/linux/drivers/input/ff-memless.c` are linked, `hid-google-stadiaff.c`
-creates a simple rumble device, and the evdev/input output plumbing exists:
+No active driver currently creates an FF device. `ff-core.c` and the generic
+evdev/input output plumbing remain for future standard haptic support:
 
 - `device_upload_ff()` reaches `input_ff_upload()`
 - `device_erase_ff()` reaches `input_ff_erase()`
 - `device_set_ff()` sends `EV_FF` through `evdev_write()` /
   `input_inject_event()`
 
-The current FF test candidate from Linux upstream:
-
-- `drivers/hid/hid-google-stadiaff.c`
-- small rumble-only driver
-- uses `input_ff_create_memless()`
-- `play_effect` schedules work
-- the worker sends `hid_hw_request(... HID_REQ_SET_REPORT)`
-- this matches the current firmware architecture: workqueue plus async
-  SET_REPORT
-
-The current firmware test trigger is intentionally hardcoded: `on_layout_change()`
-calls a short rumble helper after `ui_notify_layout()`. Keep it until the FF
-path has been checked in hardware, then replace it with a real caller.
+The next relevant FF fixture is a standard HID Haptics Page touchpad. That
+requires `hid-haptic.c`, `hid-multitouch.c`, async feature GET_REPORT probe
+continuations, and haptic-specific lifetime/locking coverage. It does not use
+`ff-memless` or the historical Stadia layout-rumble trigger.
 
 Heavier FF drivers should stay deferred for now:
 
@@ -390,11 +378,11 @@ and emulator CDC lines under each item.
   - host:
   - emulator:
   - verdict:
-- [x] `device/google-stadiaff` FF output path, after host driver import
+- [x] `device/google-stadiaff` historical FF output path at `hid: stabilize stadia ff teardown`
   - host: layout change triggers FF upload/play, then ff-memless timer stop.
   - emulator: pointer moves up on rumble start and down on rumble stop.
   - verdict: pass, checked on Pico host with emulator.
-- [x] `device/apple-ir`
+- [x] `device/apple-ir` historical AppleIR path at `hid: stabilize stadia ff teardown`
   - host: `enter down` arrives from the two-packet AppleIR middle command;
     `enter up` arrives from the host timer path.
   - emulator: sends no explicit key-up report.
