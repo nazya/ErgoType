@@ -1,199 +1,150 @@
 # Upstream Porting Audit
 
-Porting rules source:
-`~/ErgoType-hid-host/usb_host/upstream-porting-rules.md`.
+Updated: 2026-07-17
 
-Linux upstream source used for this audit:
-`~/linux-upstream-hid` at `83f14548`.
+Rules: `usb_host/upstream-porting-rules.md`.
 
-Important correction: `~/ErgoType-hid-host` is treated only
-as the previous porting worktree, not as Linux upstream.
+Linux baseline: `~/linux-upstream-hid` at
+`83f1454877cc292b88baf13c829c16ce6937d120`.
 
-## Scope Audited
+## Result
 
-- current TinyUSB HID host glue: `usb_host/task.c`, `usb_host/usbhid.c`,
-  `usb_host/hid_async.c`, `usb_host/hid_workqueue.c`, `usb_host/hid_timer.c`
-- current HID/input boundary glue: `usb_host/evdev.c`,
+Partial conformance. Active vendor drivers are close, traceable ports, but the
+active core still has unanchored changes, several stale port substitutions, and
+deliberate non-line-preserving areas. This is a porting audit, not a runtime
+safety certification.
+
+This pass fixes the evdev/KeyD output lifetime boundary and the Stadia work
+teardown race. The Stadia change is local and keeps each replaced upstream
+lock line beside the FreeRTOS replacement.
+
+## Scope
+
+- active TinyUSB/FreeRTOS glue: `task.c`, `usbhid.c`, `hid_async.c`,
+  `hid_workqueue.c`, `hid_timer.c`
+- active HID/input boundary: `evdev.c`, `evdev_client.c`, `devmon.c`, and
   `keyd/port/device.c`
-- active Linux HID/input core files in CMake
-- active lightweight vendor HID drivers in CMake
-- active Linux compatibility headers used by the HID slice
+- Linux-derived HID/input C files enabled by the root CMake allowlist
+- compatibility headers used by that slice
 
-The local Linux upstream working tree is sparse but now materializes the input
-files needed for ordinary file-based comparison:
+Inactive drivers were checked for build status, not certified for enablement.
+In particular, hiddev, CMedia, and Vivaldi remain disabled; `vivaldi-fmap.c`
+itself is byte-for-byte upstream.
 
-- `~/linux-upstream-hid/drivers/input/input.c`
-- `~/linux-upstream-hid/drivers/input/evdev.c`
+## Conforming Areas
 
-## Fixed During Audit
+- CMake links 15 vendor drivers: a4tech, appleir, chicony, creative-sb0540,
+  cypress, google-stadiaff, holtek-kbd, ite, kye, primax, pxrc, razer, rapoo,
+  saitek, and zydacron. The `CONFIG_HID_*` mirror in `hid_compat.h` matches.
+- Every active vendor `static const struct hid_driver` conversion keeps the
+  upstream declaration and reason. Extra diffs are seven documented
+  `raw_event_callback_safe` markers, the documented Holtek include removal,
+  the Stadia mutex adaptation described below, and whitespace-only cleanup in
+  chicony/rapoo. No unrelated vendor flow rewrite found.
+- `hid-generic.c` and `hid-quirks.c` keep changed upstream lines beside their
+  explained replacements.
+- `ff-memless.c` differs only at two documented `guard()` sites, subject to the
+  serialization issue below.
+- `hid-drivers.c` is clearly marked as port-only linker/initcall glue, although
+  its location under `linux/drivers/hid` remains an explicit exception.
 
-- `hid-core.c`: documented the port-only `hid_match_one_id()` export.
-- `hid-input.c`: removed non-port diffs against Linux upstream: duplicate
-  comments around active `input_mapping`/`input_mapped`, an extra context
-  comment, an indentation-only comment change, and unnecessary braces.
-- `hid-generic.c`: documented the const driver pointer conversion and unused
-  `id` in generic probe.
-- `hid-quirks.c`: restored the full upstream include block as commented
-  context before the local compatibility include.
-- `hid.h`: marked the file as a reduced compatibility contract, not a
-  line-preserving upstream header.
-- `hid_slice_stubs.c`: removed. Deferred hidraw calls are documented inline in
-  `hid-core.c`; workqueue and timer boundaries are now owned by
-  `hid_workqueue.c` and `hid_timer.c`.
-- `evdev.c`: renamed the firmware input handler boundary to upstream-like
-  `evdev_*` names. This is not a line-preserving upstream evdev port; it keeps
-  the input_handler shape and replaces userspace fd delivery with KeyD queue
-  delivery.
-- `keyd/port/device.c`: owns the firmware queue replacement for upstream
-  keyd's evdev fd path while still using the existing `devmon_queue`.
-- `usbhid.c`: added/expanded explicit upstream usbhid lifecycle anchors around
-  parse/request/wait/raw/output/idle boundaries and TinyUSB pre-probe glue.
-- `hid-drivers.c`: clarified that driver safety selection is the CMake
-  allowlist, while the registration loop stays Linux-shaped.
-- `task.c`: documented the explicit firmware call to collected Linux-style
-  module/initcall registrations before HID drivers bind.
-- `hid_port.c`: removed after evdev became the always-open firmware event
-  producer.
-- `input.c`: removed stale wording that still referenced the old HID driver
-  task/workqueue pump, documented the removed Work3 executor wrappers, and
-  added a top-level note that this is a reduced input core slice.
-- `input.h`: documented that the Work3 proxy ABI declarations are deferred and
-  are not upstream Linux input definitions.
-- `workqueue.h`: documented that Work3 workqueue entry points are not exposed
-  in this callback-driven slice.
+## Open Porting-Rule Findings
 
-## Vendor Drivers
+1. `hid-core.c:2906-3006,3044-3078,3413-3513` rewrites mutable
+   `struct hid_driver` state around `hid_driver_runtime`. Several signatures,
+   const conversions, lock lines, and register/unregister branches do not keep
+   the exact upstream line beside the replacement. This is a major structural
+   exception, not a completed line-preserving port.
 
-All included lightweight vendor drivers were compared against real Linux
-upstream under `~/linux-upstream-hid/drivers/hid`.
+2. Several `hid-core.c` deviations can now return to upstream because the
+   compatibility layer already supports them: `__free(kfree)` at 1492-1507,
+   no-op logging at 2133-2136, and `hid_close_report()` at 3347-3350. The
+   disabled `DRIVER_DESC`/module metadata at 53-57 and KUnit block in
+   `hid-input.c:2520-2523` are also unnecessary diffs under the current macros.
 
-The intended diff for each included vendor driver is:
+3. Some comments are not valid upstream anchors: the invented
+   `sema_destroy()` at `hid-core.c:871`, the false port-only export rationale at
+   2436-2438, and the duplicate `#ifdef` at 3361. Historical WIP in
+   `hid-drivers.c:41-50` is not upstream context.
 
-- upstream `static struct hid_driver ...` kept as a commented line
-- port-specific `static const struct hid_driver ...`
-- short reason: imported HID driver descriptors live in flash/rodata
+4. `hid_is_usb()` was moved from upstream usbhid transport code into generic
+   `hid-core.c:2418-2426` and changed from an ll-driver identity check to a bus
+   check. Placement can be restored mechanically; restoring the upstream
+   predicate needs behavior review.
 
-`hid-lcpower.c` has one additional whitespace-only diff: upstream has trailing
-space in the copyright line, while the port keeps `git diff --check` clean.
+5. `usbhid.c` correctly declares itself non-line-preserving glue, but its local
+   anchors still need to be accurate: line 967 lacks the adjacent upstream
+   `usb_set_intfdata(intf, hid)` example required by the rules, line 1280 does
+   not preserve upstream's GET/SET switch, and line 1291 does not preserve the
+   upstream `wait_event_timeout()` body.
 
-The current CMake allowlist is the source of truth for linked vendor drivers.
-The allowlist now includes simple mapping/fixup/probe drivers plus a small set
-of audited nonblocking hooks such as `input_configured` users and queue-only
-SET_REPORT users. Drivers that need returned request data before probe can
-continue stay out of CMake until a larger worker/state-machine layer exists.
+6. `hid-input.c:1932-2083` turns resolution-multiplier setup into continuation
+   functions inside an upstream file. The synchronous block is mostly visible,
+   but the original call sites/final setup and overall flow are not preserved.
+   Treat this as an async state-machine exception, not ordinary thin glue.
 
-## Core HID Status
+7. `input-mt.c:13` replaces three upstream includes without leaving them or a
+   reason. In `ff-core.c:122-229`, the `guard()` anchors remain, but manual
+   unlocks change early-return and scoped-block shape without preserving every
+   changed upstream line.
 
-Conforms to the current callback-driven slice intent:
+8. `input.c` is a reduced in-memory input core and `evdev.c` replaces Linux
+   eventX clients with the firmware queue boundary. Both are explicit,
+   non-line-preserving exceptions. `task.c` is port-only glue but lacks the
+   corresponding top-level provenance note.
 
-- HID parser/report/input flow remains Linux-shaped.
-- `report_fixup`, `input_mapping`, and `input_mapped` are active for the
-  included nonblocking vendor drivers.
-- Some `raw_event`, FF, and hiddev paths are now enabled only through audited
-  nonblocking slices. Synchronous hardware request paths remain disabled or
-  converted to explicit async boundaries with upstream call sites visible next
-  to the port replacement.
-- TinyUSB report callbacks either enter the Linux report parser directly for
-  callback-safe paths or enqueue report delivery to the HID async task.
-- Unsupported final firmware events stop at the input/keyd boundary rather than
-  being collapsed earlier in HID parsing.
-- `hid-input.c` keeps upstream `EV_LED -> schedule_work(&hid->led_work)`.
-  The firmware workqueue bridge runs the worker outside TinyUSB callbacks, and
-  the TinyUSB ll_driver queues output through the HID async request path.
-- Compat mutex/semaphore/spinlock APIs are no-op/commented where they used to
-  allocate or block. Short critical sections remain only in local compat
-  atomic/bitop helpers, not as Linux driver locks or wait points.
+## Fixed Runtime Boundary
 
-## Input Core Status
+- KeyD keeps the existing synchronous `evdev_writer`. One mutex serializes its
+  write/upload/erase calls with `evdev_unregister_device()` across CORE0/CORE1.
+- Unregister clears `client->evdev` under that mutex, sends the existing
+  `DEVICE_INPUT_REMOVED` sentinel, and leaves the detached client allocated.
+  KeyD consumes the sentinel, deletes the input queue, and performs the final
+  client free. There is no second output queue, worker task, ID lookup, or
+  removal handshake.
+- Stadia keeps the upstream `removed`/schedule/cancel protocol, but replaces
+  the port's nonblocking compat spinlock with a real FreeRTOS mutex. Play,
+  work, and remove use task context; remove releases the mutex before
+  `cancel_work_sync()` and deletes it only after `hid_hw_stop()` detaches evdev.
 
-Compared against real Linux upstream files/blobs:
+## Open Semantic Boundaries
 
-- `~/linux-upstream-hid/drivers/input/input.c`
-- `~/linux-upstream-hid/drivers/input/evdev.c`
-- `HEAD:drivers/input/input-mt.c`
-- `HEAD:drivers/input/ff-core.c`
-- `~/linux-upstream-hid/drivers/input/ff-memless.c`
-- `~/linux-upstream-hid/drivers/hid/hid-google-stadiaff.c`
+- The writer mutex protects client/evdev lifetime only. The synchronous writer
+  still enters input/FF code from CORE0 while timer/workqueue callbacks run on
+  CORE1; `ff-memless.c` can therefore touch effect state without the upstream
+  `event_lock`. This is a separate FF serialization change.
+- `hid_hw_start()` publishes Stadia's input device to KeyD before
+  `stadiaff_init()` finishes installing FF state and callbacks. A concurrent
+  layout rumble can therefore enter `input_ff_upload()` during partial setup;
+  the teardown mutex does not cover this probe-time publication window.
+- The removal sentinel does not quiesce an already-running
+  `evdev_events()`/`__pass_event()` input producer. The port has no upstream
+  RCU wait, and active async input-report execution is not waited by cancel;
+  full client lifetime therefore still needs a separate input-side boundary.
+- `port_input_dev.name` is still a pointer, although the rest of the devmon
+  record is queued by value. A fast add/remove can free `hidinput->name` before
+  KeyD copies the pending devmon record.
 
-Result:
+## Headers and Deferred Runtime
 
-- `input-mt.c` is upstream-shaped. Active diffs are local include paths and
-  commented lockdep/guard replacements at FreeRTOS event-lock boundary points.
-- `ff-core.c` is upstream-shaped. Active diffs replace Linux `guard()` /
-  `scoped_guard()` helpers with direct statements, with upstream lines left
-  visible.
-- `ff-memless.c` is upstream-shaped. Active diffs replace Linux `guard()`
-  event-lock helpers with direct statements, with upstream lines left visible;
-  the file itself does not submit HID requests and calls the driver
-  `play_effect()` callback.
-- `hid-google-stadiaff.c` is upstream-shaped. Active diff is the same imported
-  driver descriptor conversion used by the other linked vendor drivers:
-  upstream `static struct hid_driver` remains visible next to the port
-  `static const struct hid_driver`.
-- `input.c` is not line-preserving upstream. It is a reduced in-memory input
-  core slice: Linux char device/procfs/sysfs/IDA/RCU/poller/userspace
-  machinery is not present, while the HID input event batching/handler path
-  needed for KeyD is active. Its function order was moved closer to upstream so
-  future review noise is lower, but the file remains a porting-rule exception:
-  the omitted Linux subsystem blocks are not preserved as full commented
-  upstream bodies.
-- `evdev.c` is not line-preserving upstream. It preserves upstream names for
-  `evdev_handler`, `evdev_connect`, `evdev_events`, `evdev_disconnect`, and
-  `evdev_init`, but the userspace fd/client code is replaced by the firmware
-  KeyD queue boundary.
+- `hid.h`, `input.h`, `usb.h`, `workqueue.h`, and `timer.h` are reduced
+  compatibility contracts, not line-preserving upstream headers. The actual
+  timer/workqueue ABI lives in port-only `hid_compat.h`.
+- `hidraw.h` is instead an extended proxy contract. Its proxy declarations are
+  present in this branch, but no hidraw implementation is linked and hidraw is
+  not claimed.
+- hiddev declarations/implementation remain in tree, but `CONFIG_USB_HIDDEV`
+  and `hiddev.c` are disabled; active code uses stubs.
+- Audited callback-safe `raw_event` and FF paths are active. Synchronous
+  request/wait semantics, returned-data probe continuations, unaudited hooks,
+  hidraw/hiddev runtime, and PIDFF remain deferred.
+- The KeyD queue adapter is treated as firmware boundary glue; this audit does
+  not claim a pinned upstream-KeyD comparison.
 
-## Header Status
+## Checks
 
-`usb_host/linux/include/linux/hid.h`, `input.h`, `workqueue.h`, `usb.h`,
-`hidraw.h`, and `timer.h` were compared against real Linux upstream headers.
-
-These headers are reduced compatibility contracts, not line-preserving upstream
-ports. That is now explicit in `hid.h`, `input.h`, and `workqueue.h`. The active
-C files remain the main upstream-preservation target.
-
-## Worktree-Only Deferred Areas
-
-These existed in Work3 but are not real Linux upstream paths and are not active
-in this branch:
-
-- `input_port_proxy_hid_usage_event()` and related proxy/debug taps before the
-  final input boundary
-- Work3 `hid_compat_exec_*` executor
-- Work3 firmware workqueue bridge
-- Work3 raw/proxy device-report ABI
-
-## KeyD Port Boundary Notes
-
-- `pointing/pointer.c:send_pointing_event()` currently emits Linux-shaped
-  `EV_REL` events plus `EV_SYN` directly for local PMW devices. This works as a
-  temporary bridge into the new KeyD device queue format, but it needs
-  architectural cleanup later. This is already the KeyD firmware port boundary,
-  not Linux HID upstream code, so the future fix should be guided by the KeyD
-  port architecture rather than by preserving Linux HID diffs.
-
-## Explicit Deferred Linux Areas
-
-These are not enabled by the current slice and should not be silently enabled:
-
-- `hidraw` active buffering/proxy APIs.
-- synchronous `hid_hw_request()` / `hid_hw_raw_request()` / `hid_hw_wait()`
-  semantics that do not have an explicit async continuation.
-- unaudited `raw_event` and driver `report` callbacks.
-- `input_configured` or `feature_mapping` paths that need returned request data
-  before continuing probe.
-- FF/PIDFF drivers that need PID state or synchronous waits.
-- Linux hiddev fd/ioctl/poll compatibility beyond the bounded firmware proxy.
-
-## Checks Run
-
+- compared the active HID/input files with Linux `83f14548`
+- matched the active vendor allowlist against `CONFIG_HID_*`
+- checked disabled source/link status and current proxy declarations
 - `cmake --build build -j4`
 - `git diff --check`
-- comparison of active HID core/vendor files against
-  `~/linux-upstream-hid/drivers/hid`
-- comparison of active input files against real upstream files under
-  `~/linux-upstream-hid/drivers/input`
-- comparison of active Linux headers against
-  `~/linux-upstream-hid/include`
-- comparison of current `usb_host/linux` against previous worktree
-  `~/ErgoType-hid-host/usb_host/linux`
-- grep over included vendor drivers for blocked async/request/work hooks

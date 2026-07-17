@@ -84,6 +84,12 @@ int evloop(int (*event_handler)(struct event *ev))
 				xQueueRemoveFromSet(dev->ev_queue, devmon_event_set);
 				vQueueDelete(dev->ev_queue);
 				dev->ev_queue = NULL;
+				// Firmware boundary: evdev leaves the detached client allocated;
+				// KeyD owns its final free after consuming the removal event.
+				if (dev->writer.client) {
+					vPortFree(dev->writer.client);
+					dev->writer.client = NULL;
+				}
 				vPortFree(dev);
 				device_table[i] = NULL;
 				handled_device = 1;
