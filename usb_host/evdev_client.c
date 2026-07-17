@@ -102,7 +102,7 @@ static struct evdev_client *evdev_register_device(const struct port_input_dev *s
 	if (!client)
 		return NULL;
 	memset(client, 0, sizeof *client);
-	client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
+	client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
 	if (!client->buffer) {
 		vPortFree(client);
 		return NULL;
@@ -147,7 +147,7 @@ struct evdev_client *evdev_register_input_device(struct input_dev *src,
 }
 
 int evdev_client_write(struct evdev_client *client,
-		       const struct input_event *events, size_t count)
+		       const struct port_input_event *events, size_t count)
 {
 	int ret;
 
@@ -194,8 +194,8 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 
 void evdev_unregister_device(struct evdev_client *client)
 {
-	struct input_event ev = {0};
-	struct input_event dropped;
+	struct port_input_event ev = {0};
+	struct port_input_event dropped;
 
 	// if (evdev->exist && !client->revoked)
 	// 	input_flush_device(&evdev->handle, file);
@@ -251,18 +251,23 @@ void __pass_event(struct evdev_client *client,
 	// }
 	//
 	// Linux __pass_event() stores into the per-client ring buffer and handles
-	// overflow with EV_SYN/SYN_DROPPED. Firmware passes compact input_event
+	// overflow with EV_SYN/SYN_DROPPED. Firmware passes compact port_input_event
 	// records toward devmon instead.
+	struct port_input_event port_event = {
+		.type = event->type,
+		.code = event->code,
+		.value = event->value,
+	};
 	UBaseType_t reserve = EVDEV_QUEUE_NORMAL_RESERVE;
-	if (event->type == EV_KEY && !event->value)
+	if (port_event.type == EV_KEY && !port_event.value)
 		reserve = EVDEV_QUEUE_REMOVE_RESERVE;
 
 	if (uxQueueMessagesWaiting(client->buffer) < DEVICE_EVENT_QUEUE_LEN - reserve &&
-	    xQueueSendToBack(client->buffer, event, 0) == pdPASS)
+	    xQueueSendToBack(client->buffer, &port_event, 0) == pdPASS)
 		return;
 
-	struct input_event dropped;
-	struct input_event syn_dropped = {0};
+	struct port_input_event dropped;
+	struct port_input_event syn_dropped = {0};
 
 	async_msg("ERR: EVDEV_INPUT_DROP");
 	syn_dropped.type = EV_SYN;

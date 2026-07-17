@@ -547,8 +547,11 @@ static void hid_async_drop_queued_device(u8 dev_addr, u8 instance)
 
 	while (keep_count < HID_ASYNC_QUEUE_LEN &&
 	       xQueueReceive(hid_async_request_queue, &req, 0) == pdPASS) {
-		if (req.dev_addr == dev_addr && req.instance == instance)
+		if (req.dev_addr == dev_addr && req.instance == instance) {
+			if (req.complete)
+				req.complete(&req, -ENODEV);
 			continue;
+		}
 
 		keep[keep_count++] = req;
 	}
@@ -565,8 +568,11 @@ static void hid_async_drop_queued_dev_addr(u8 dev_addr)
 
 	while (keep_count < HID_ASYNC_QUEUE_LEN &&
 	       xQueueReceive(hid_async_request_queue, &req, 0) == pdPASS) {
-		if (req.dev_addr == dev_addr)
+		if (req.dev_addr == dev_addr) {
+			if (req.complete)
+				req.complete(&req, -ENODEV);
 			continue;
+		}
 
 		keep[keep_count++] = req;
 	}
@@ -621,6 +627,22 @@ int hid_async_cancel_device(u8 dev_addr, u8 instance)
 	return 0;
 }
 
+int hid_async_cancel_device_sync(u8 dev_addr, u8 instance)
+{
+	int ret = hid_async_cancel_device(dev_addr, instance);
+
+	if (ret)
+		return ret;
+
+	/* Driver teardown must not pass the last completion/parser HID access. */
+	while (hid_async_active &&
+	       hid_async_active_dev_addr == dev_addr &&
+	       hid_async_active_instance == instance)
+		vTaskDelay(1);
+
+	return 0;
+}
+
 int hid_async_cancel_dev_addr(u8 dev_addr)
 {
 	if (!hid_async_request_queue || !hid_async_completion_queue)
@@ -661,10 +683,18 @@ void hid_async_task(void *pvParameters)
 			continue;
 
 		if (active.kind == HID_ASYNC_REQUEST_INPUT_REPORT) {
+			/* Cancel must also see an input report already removed from the queue. */
+			hid_async_active_kind = HID_ASYNC_COMPLETE_CANCEL;
+			hid_async_active_dev_addr = active.dev_addr;
+			hid_async_active_instance = active.instance;
+			hid_async_active_report_id = 0;
+			hid_async_active_report_type = 0;
+			hid_async_active = true;
 			hid_deferred_input_report(active.hid,
 						  (enum hid_report_type)active.report_type,
 						  active.data, active.bufsize,
 						  active.len, active.interrupt);
+			hid_async_active = false;
 			continue;
 		}
 
@@ -694,11 +724,11 @@ void hid_async_task(void *pvParameters)
 		else
 			status = hid_async_submit(&active);
 		if (status < 0) {
-			hid_async_active = false;
 			if (!active.report && active.reqtype == HID_REQ_SET_REPORT)
 				async_msg("ERR: HID_RAW_SET_SUB");
 			if (active.complete)
 				active.complete(&active, status);
+			hid_async_active = false;
 			continue;
 		}
 
@@ -722,7 +752,7 @@ void hid_async_task(void *pvParameters)
 					canceled = true;
 				} else if (completion.kind == HID_ASYNC_COMPLETE_OUTPUT) {
 					active.actual_len = completion.len + active.data_offset;
-					status = 0;
+					status = completion.len ? 0 : -EIO;
 				} else {
 					active.actual_len = completion.len + active.data_offset;
 					if (active.kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR ||
@@ -736,9 +766,12 @@ void hid_async_task(void *pvParameters)
 			}
 		}
 
-		hid_async_active = false;
-		if (canceled)
+		if (canceled) {
+			if (active.complete)
+				active.complete(&active, -ENODEV);
+			hid_async_active = false;
 			continue;
+		}
 
 		if (!active.report && active.reqtype == HID_REQ_SET_REPORT) {
 			if (status < 0)
@@ -756,8 +789,10 @@ void hid_async_task(void *pvParameters)
 			active.complete(&active, status);
 		else if (status >= 0 && active.reqtype == HID_REQ_GET_REPORT &&
 			 active.report)
-			hid_input_report(active.hid, active.report->type,
-					 active.data, active.actual_len, 0);
+			hid_deferred_input_report(active.hid, active.report->type,
+						  active.data, active.actual_len,
+						  active.actual_len, 0);
+		hid_async_active = false;
 	}
 }
 

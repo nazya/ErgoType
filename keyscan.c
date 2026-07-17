@@ -80,7 +80,7 @@ static inline bool matrix_pressed(const matrix_row_t *matrix, uint8_t row, uint8
 
 static void send_key_tap(QueueHandle_t queue, uint8_t code)
 {
-    struct input_event ev = {0};
+    struct port_input_event ev = {0};
     ev.type = EV_KEY;
     ev.code = code;
 
@@ -375,7 +375,7 @@ void keyscan_task(void* pvParameters) {
     static encoder_state_t encoder_states[MAX_ENCODERS];
 
     // struct event ev;
-    struct input_event devev;
+    struct port_input_event devev;
     devev.type = EV_KEY;
 
     struct port_input_dev port_dev = {
@@ -391,14 +391,14 @@ void keyscan_task(void* pvParameters) {
         uint8_t code = keyboard_keys[i];
         input_bitmap_set(code, port_dev.keybit);
     }
-    port_dev.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct input_event));
+    port_dev.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
     configASSERT(port_dev.ev_queue);
     int add_rc = devmon_add_device(&port_dev);
     configASSERT(add_rc == 0);
     keyscan_event_queue = port_dev.ev_queue;
 
     if (0) {
-        struct input_event ev = {0};
+        struct port_input_event ev = {0};
         ev.type = DEVICE_INPUT_REMOVED;
         xQueueSendToBack(keyscan_event_queue, &ev, portMAX_DELAY);
         vTaskDelete(NULL);

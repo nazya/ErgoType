@@ -25,8 +25,6 @@
 #include "../../include/linux/hid-input.h"
 #include "../../include/uapi/linux/input-event-codes.h"
 #include "hid-ids.h"
-// Port async HID control glue replaces synchronous hid_hw_wait() call sites.
-#include "usb_host/hid_async.h"
 
 #define unk	KEY_UNKNOWN
 
@@ -1929,23 +1927,12 @@ static void hidinput_close(struct input_dev *dev)
 	hid_hw_close(hid);
 }
 
-// static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
-// 		struct hid_report *report, bool use_logical_max)
-// Async GET_REPORT completion resumes after this function returns, so this port
-// passes the upstream same-stack get_report_completed flag explicitly.
-static void hidinput_resolution_multiplier_get_complete(const struct hid_async_request *req,
-							int status);
-static void hidinput_resolution_multiplier_set_complete(const struct hid_async_request *req,
-							int status);
-
 static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
-		struct hid_report *report, bool use_logical_max,
-		bool get_report_completed, bool *async_pending)
+		struct hid_report *report, bool use_logical_max)
 {
 	struct hid_usage *usage;
 	bool update_needed = false;
-	// bool get_report_completed = false;
-	// Port passes this in because async GET_REPORT completion resumes later.
+	bool get_report_completed = false;
 	int i, j;
 
 	if (report->maxfield == 0)
@@ -1983,17 +1970,9 @@ static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
 				if (hid->quirks & HID_QUIRK_NO_INIT_REPORTS)
 					return update_needed;
 
-				// hid_hw_request(hid, report, HID_REQ_GET_REPORT);
-				// hid_hw_wait(hid);
-				// get_report_completed = true;
-				// This upstream path needs synchronous GET_REPORT +
-				// hid_hw_wait(); restore it as async request continuation.
-				if (!hid_async_queue_report(hid, report, HID_REQ_GET_REPORT,
-							    hidinput_resolution_multiplier_get_complete,
-							    NULL) &&
-				    async_pending)
-					*async_pending = true;
-				return update_needed;
+				hid_hw_request(hid, report, HID_REQ_GET_REPORT);
+				hid_hw_wait(hid);
+				get_report_completed = true;
 			}
 
 			report->field[i]->value[j] = value;
@@ -2004,83 +1983,29 @@ static bool __hidinput_change_resolution_multipliers(struct hid_device *hid,
 	return update_needed;
 }
 
-static void hidinput_resolution_multiplier_set_complete(const struct hid_async_request *req,
-							int status)
-{
-	if (status < 0)
-		__hidinput_change_resolution_multipliers(req->hid, req->report,
-							 false, true, NULL);
-	else
-		hid_setup_resolution_multiplier(req->hid);
-}
-
-static void hidinput_resolution_multiplier_get_complete(const struct hid_async_request *req,
-							int status)
-{
-	bool update_needed;
-	int ret;
-
-	if (status < 0)
-		return;
-
-	hid_input_report(req->hid, req->report->type, (u8 *)req->data,
-			 req->actual_len, 0);
-	update_needed = __hidinput_change_resolution_multipliers(req->hid,
-								 req->report,
-								 true, true,
-								 NULL);
-	if (!update_needed) {
-		hid_setup_resolution_multiplier(req->hid);
-		return;
-	}
-
-	ret = hid_async_queue_report(req->hid, req->report, HID_REQ_SET_REPORT,
-				     hidinput_resolution_multiplier_set_complete,
-				     NULL);
-	if (ret < 0)
-		__hidinput_change_resolution_multipliers(req->hid, req->report,
-							 false, true, NULL);
-}
-
 static void hidinput_change_resolution_multipliers(struct hid_device *hid)
 {
 	struct hid_report_enum *rep_enum;
 	struct hid_report *rep;
 	int ret;
-	bool async_pending = false;
 
 	rep_enum = &hid->report_enum[HID_FEATURE_REPORT];
 	list_for_each_entry(rep, &rep_enum->report_list, list) {
 		bool update_needed = __hidinput_change_resolution_multipliers(hid,
-								     rep, true,
-								     false,
-								     &async_pending);
+								     rep, true);
 
 		if (update_needed) {
-			// ret = __hid_request(hid, rep, HID_REQ_SET_REPORT);
-			// if (ret) {
-			// 	__hidinput_change_resolution_multipliers(hid,
-			// 					    rep, false);
-			// 	return;
-			// }
-			// This is the SET_REPORT half of the same hardware request
-			// lifecycle as GET_REPORT + hid_hw_wait() above.
-			ret = hid_async_queue_report(hid, rep, HID_REQ_SET_REPORT,
-					 hidinput_resolution_multiplier_set_complete,
-					 NULL);
+			ret = __hid_request(hid, rep, HID_REQ_SET_REPORT);
 			if (ret) {
 				__hidinput_change_resolution_multipliers(hid,
-								    rep, false,
-								    false, NULL);
+								    rep, false);
 				return;
 			}
-			async_pending = true;
 		}
 	}
 
 	/* refresh our structs */
-	if (!async_pending)
-		hid_setup_resolution_multiplier(hid);
+	hid_setup_resolution_multiplier(hid);
 }
 
 static void report_features(struct hid_device *hid)

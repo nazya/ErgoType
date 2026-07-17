@@ -9,8 +9,8 @@
  * blocking USB request machinery those call sites would normally use.
  */
 
-#define HID_ASYNC_REPORT_MAX 96u
-#define HID_ASYNC_DATA_MAX 256u
+#define HID_ASYNC_REPORT_MAX 257u
+#define HID_ASYNC_DATA_MAX 257u
 
 struct hid_async_request;
 
@@ -137,6 +137,7 @@ int hid_async_queue_input_report(struct hid_device *hid,
 				 enum hid_report_type type, const u8 *data,
 				 size_t bufsize, u32 size, int interrupt);
 int hid_async_cancel_device(u8 dev_addr, u8 instance);
+int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);
 
 #endif

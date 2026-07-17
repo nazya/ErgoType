@@ -1013,8 +1013,7 @@ static inline void hid_device_io_start(struct hid_device *hid) {
 		return;
 	}
 	hid->io_started = true;
-	// up(&hid->driver_input_lock);
-	// Callback-driven slice does not allocate driver_input_lock.
+	up(&hid->driver_input_lock);
 }
 
 /**
@@ -1034,8 +1033,7 @@ static inline void hid_device_io_stop(struct hid_device *hid) {
 		return;
 	}
 	hid->io_started = false;
-	// down(&hid->driver_input_lock);
-	// Callback-driven slice does not allocate driver_input_lock.
+	down(&hid->driver_input_lock);
 }
 
 /**
