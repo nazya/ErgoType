@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "FreeRTOS.h"
+#include "task.h"
 
 #include "keyboard.h"
 #include "vkbd.h"
@@ -26,6 +27,18 @@ static struct keyboard *active_kbd;
 
 static struct vkbd *vkbd;
 static uint8_t keystate[256];
+
+static void log_memory_watermarks(void)
+{
+	TaskHandle_t tuh_task = xTaskGetHandle("tuh");
+	UBaseType_t tuh_stack_words = tuh_task ?
+		uxTaskGetStackHighWaterMark(tuh_task) : 0;
+
+	dbg2("heap free=%u min=%u; tuh stack min free=%u words",
+	     (unsigned int)xPortGetFreeHeapSize(),
+	     (unsigned int)xPortGetMinimumEverFreeHeapSize(),
+	     (unsigned int)tuh_stack_words);
+}
 
 static void free_config(struct config *config)
 {
@@ -291,9 +304,11 @@ static int event_handler(struct event *ev)
 		break;
 	case EV_DEV_ADD:
 		ev->dev->data = active_kbd;
+		log_memory_watermarks();
 		break;
 	case EV_DEV_REMOVE:
 		msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
+		log_memory_watermarks();
 		break;
 	// case EV_FD_ACTIVITY:
 	// 	if (ev->fd == ipcfd) {
@@ -354,7 +369,7 @@ static void reload(void)
 	free_configs();
 	load_configs();
 
-	dbg2("free heap size: %u bytes", xPortGetFreeHeapSize());
+	log_memory_watermarks();
 
 	// for (i = 0; i < device_table_sz; i++)
 	//	manage_device(&device_table[i]);

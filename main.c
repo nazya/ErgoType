@@ -34,7 +34,11 @@
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
-#define TUH_STACK_SIZE 4096
+/*
+ * Parser/probe work runs in dedicated tasks; this owner keeps TinyUSB core and
+ * callback forwarding. FreeRTOS depth is in 32-bit words: 1024 is 4 KiB.
+ */
+#define TUH_STACK_SIZE 1024
 #define USBHID_LIFECYCLE_STACK_SIZE 512
 #define USBHID_REPORT_STACK_SIZE 1536
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
@@ -323,7 +327,7 @@ static void app_task(void *pvParameters)
 
         if (hid_async_ready && usbhid_lifecycle_ready &&
             usbhid_report_ready) {
-            BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
+            BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, "tuh", TUH_STACK_SIZE,
                                                               NULL, TUSB_PRIORITY, CORE1, NULL);
             if (host_task_ret != pdPASS)
                 err("tusb host task create failed ret=%ld", (long)host_task_ret);
