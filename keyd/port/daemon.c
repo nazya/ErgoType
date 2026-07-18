@@ -207,8 +207,11 @@ static int event_handler(struct event *ev)
 	case EV_DEV_EVENT:
 		// if (ev->dev->data) {
 		// if (active_kbd) { // active_kbd = ev->dev->data; # now it is the only active kbd
-		// TinyUSB host LED events have no source device and use the virtual LED path below.
-		if (ev->dev && active_kbd) {
+		// Virtual output events have no source device and use the paths below.
+		// FF readiness shares the device input queue, so ev->dev is already known.
+		if (ev->devev->type == DEV_HAPTIC_READY) {
+			haptic_init(ev->dev);
+		} else if (ev->dev && active_kbd) {
 			// struct keyboard *kbd = ev->dev->data;
 			struct keyboard *kbd = active_kbd;
 			switch (ev->devev->type) {
@@ -286,6 +289,13 @@ static int event_handler(struct event *ev)
 				if (device_table[i]->data)
 					device_set_led(device_table[i], ev->devev->code, ev->devev->pressed);
 			}
+		} else if (ev->devev->type == DEV_HAPTIC) {
+			size_t i;
+
+			for (i = 0; i < device_table_sz; i++)
+				if (device_table[i]->data)
+					device_haptic_play(device_table[i], ev->devev->code,
+							   ev->devev->pressed);
 		}
 
 		break;
@@ -293,6 +303,7 @@ static int event_handler(struct event *ev)
 		ev->dev->data = active_kbd;
 		break;
 	case EV_DEV_REMOVE:
+		haptic_cleanup(ev->dev);
 		msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
 		break;
 	// case EV_FD_ACTIVITY:

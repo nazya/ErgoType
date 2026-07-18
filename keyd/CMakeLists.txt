@@ -27,6 +27,10 @@ add_library(keyd
   ${KEYD_PORT_DIR}/vkbd/tusb_hid.c
 )
 
+set_source_files_properties(${KEYD_PORT_DIR}/device.c PROPERTIES
+  COMPILE_DEFINITIONS __KERNEL__
+)
+
 target_include_directories(keyd PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/..
   ${CMAKE_CURRENT_LIST_DIR}/../rtos

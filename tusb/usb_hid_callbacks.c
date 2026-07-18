@@ -44,7 +44,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     struct devmon_event ev = {
         .is_virtual = true,
         .event = {
-            .type = EV_LED,
+            .type = DEV_LED,
             .code = LED_CAPSL,
             .value = !!(leds & 0x02u),
         },

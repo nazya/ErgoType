@@ -195,7 +195,6 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 void evdev_unregister_device(struct evdev_client *client)
 {
 	struct port_input_event ev = {0};
-	struct port_input_event dropped;
 
 	// if (evdev->exist && !client->revoked)
 	// 	input_flush_device(&evdev->handle, file);
@@ -213,9 +212,9 @@ void evdev_unregister_device(struct evdev_client *client)
 	// configASSERT(ret == pdPASS);
 	// TinyUSB unmount path must not assert/block; drop one stale event if
 	// needed so removal reaches keyd.
-	if (uxQueueMessagesWaiting(client->buffer) >= DEVICE_EVENT_QUEUE_LEN)
-		(void)xQueueReceive(client->buffer, &dropped, 0);
-	(void)xQueueSendToBack(client->buffer, &ev, 0);
+	// Unregister now runs in the lifecycle task, so it may wait for KeyD;
+	// only the QueueSet consumer may dequeue from this member queue.
+	(void)xQueueSendToBack(client->buffer, &ev, portMAX_DELAY);
 	// vPortFree(client);
 	// KeyD owns the client after this removal event and frees it together with
 	// its device; keeping it alive makes the synchronous writer pointer safe.
@@ -258,6 +257,14 @@ void __pass_event(struct evdev_client *client,
 		.code = event->code,
 		.value = event->value,
 	};
+
+	if (port_event.type == DEVICE_INPUT_HAPTIC_READY) {
+		// READY is emitted from the lifecycle probe task, never a TinyUSB
+		// callback, so it may wait for KeyD to drain this device queue.
+		(void)xQueueSendToBack(client->buffer, &port_event, portMAX_DELAY);
+		return;
+	}
+
 	UBaseType_t reserve = EVDEV_QUEUE_NORMAL_RESERVE;
 	if (port_event.type == EV_KEY && !port_event.value)
 		reserve = EVDEV_QUEUE_REMOVE_RESERVE;
@@ -266,14 +273,21 @@ void __pass_event(struct evdev_client *client,
 	    xQueueSendToBack(client->buffer, &port_event, 0) == pdPASS)
 		return;
 
-	struct port_input_event dropped;
-	struct port_input_event syn_dropped = {0};
-
+	// The QueueSet consumer owns dequeue. Dropping the incoming record keeps
+	// queued releases and lifecycle markers stable and notifications paired.
+	// Historical firmware SYN_DROPPED attempt, kept as the future recovery site:
+	// struct port_input_event dropped;
+	// struct port_input_event syn_dropped = {0};
+	//
+	// async_msg("ERR: EVDEV_INPUT_DROP");
+	// syn_dropped.type = EV_SYN;
+	// syn_dropped.code = SYN_DROPPED;
+	//
+	// (void)xQueueReceive(client->buffer, &dropped, 0);
+	// if (xQueueSendToBack(client->buffer, &syn_dropped, 0) != pdPASS)
+	// 	async_msg("ERR: EVDEV_SYN_DROPPED");
+	// This cannot run in the producer: the direct receive leaves its QueueSet
+	// notification behind. Future recovery must dequeue from KeyD only after
+	// xQueueSelectFromSet() and perform real input-state resynchronization there.
 	async_msg("ERR: EVDEV_INPUT_DROP");
-	syn_dropped.type = EV_SYN;
-	syn_dropped.code = SYN_DROPPED;
-
-	(void)xQueueReceive(client->buffer, &dropped, 0);
-	if (xQueueSendToBack(client->buffer, &syn_dropped, 0) != pdPASS)
-		async_msg("ERR: EVDEV_SYN_DROPPED");
 }

@@ -11,6 +11,7 @@
 #include "host/usbh_pvt.h"
 
 #include "hid_async.h"
+#include "evdev.h"
 #include "stdio_tusb_cdc.h"
 #include "linux/include/linux/hid.h"
 #include "linux/include/linux/hiddev.h"
@@ -891,6 +892,7 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 			const char *product_name)
 {
 	struct hid_device *hid;
+	struct hid_input *hidinput;
 	uint8_t *rdesc;
 	const struct usbhid_raw_interface *raw;
 	struct usbhid_usb_device *usb_entry;
@@ -1095,6 +1097,20 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		usbhid_remove_slot(hid);
 		async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
 		goto fail;
+	}
+
+	/*
+	 * hid_add_device() returns after the bound driver's synchronous probe.
+	 * hid-haptic initializes FF after hid_hw_start() has registered evdev, so
+	 * this is the first port-only point with the final input list and FF state.
+	 */
+	list_for_each_entry(hidinput, &hid->inputs, list) {
+		if (hidinput->input->ff &&
+		    test_bit(FF_HAPTIC, hidinput->input->ffbit)) {
+			// Linux userspace discovers FF after probe through ioctl. Firmware
+			// notifies KeyD through evdev so it can preload haptic effects.
+			evdev_pass_haptic_ready(hidinput->input);
+		}
 	}
 
 	// tuh_hid_receive_report(dev_addr, instance);

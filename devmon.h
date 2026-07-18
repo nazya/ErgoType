@@ -14,8 +14,24 @@
 
 #define DEVICE_INPUT_REMOVED	0xffffu
 #define DEVICE_INPUT_RESET	0xfffeu
+#define DEVICE_INPUT_HAPTIC_READY 0xfffdu
 #define INPUT_BITS_PER_LONG	(sizeof(unsigned long) * 8u)
 #define INPUT_BITS_TO_LONGS(nr)	(((nr) + INPUT_BITS_PER_LONG - 1u) / INPUT_BITS_PER_LONG)
+
+enum device_event_type {
+	DEV_KEY,
+	DEV_LED,
+	DEV_HAPTIC,
+
+	DEV_MOUSE_MOVE,
+	/* All absolute values are relative to a resolution of 1024x1024. */
+	DEV_MOUSE_MOVE_ABS,
+	DEV_MOUSE_SCROLL,
+	DEV_RESET,
+	DEV_HAPTIC_READY,
+
+	DEV_REMOVED,
+};
 
 /*
  * Same fields as Linux struct input_absinfo. Keep the snapshot type local so
@@ -77,8 +93,9 @@ struct port_input_dev {
 };
 
 /*
- * TinyUSB host LED reports have no source input device. is_virtual carries
- * their event through the existing devmon queue into the KeyD task.
+ * Virtual output requests have no source input device. is_virtual carries
+ * them through the existing devmon queue into the KeyD task; event.type uses
+ * enum device_event_type directly.
  */
 struct devmon_event {
 	struct port_input_dev dev;

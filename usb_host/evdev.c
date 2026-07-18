@@ -239,6 +239,24 @@ static struct input_handler evdev_handler = {
 	.id_table	= evdev_ids,
 };
 
+void evdev_pass_haptic_ready(struct input_dev *dev)
+{
+	struct input_handle *handle;
+	struct input_event event = {
+		.type = DEVICE_INPUT_HAPTIC_READY,
+	};
+
+	// Firmware has no EVIOCGBIT userspace discovery after driver probe; publish
+	// readiness through this input device's existing evdev queue.
+	list_for_each_entry(handle, &dev->h_list, d_node)
+		if (handle->handler == &evdev_handler) {
+			struct evdev *evdev = handle->private;
+
+			__pass_event(evdev->client, &event);
+			return;
+		}
+}
+
 // static int __init evdev_init(void)
 // Firmware calls evdev_init() from the host startup path.
 int evdev_init(void)

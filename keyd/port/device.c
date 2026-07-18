@@ -7,10 +7,25 @@
 #include "device.h"
 #include "keys.h"
 #include "log.h"
-#include <linux/input-event-codes.h>
+#include <linux/types.h>
+#include <uapi/linux/input.h>
 
 struct device *device_table[MAX_DEVICES];
 size_t device_table_sz;
+
+// Standard HID Haptics Page waveform usages; this const table stays in flash.
+static const uint16_t haptic_waveforms[HAPTIC_EFFECT_COUNT] = {
+	[HAPTIC_EFFECT_CLICK] = 0x1003,
+	[HAPTIC_EFFECT_BUZZ] = 0x1004,
+	[HAPTIC_EFFECT_RUMBLE] = 0x1005,
+	[HAPTIC_EFFECT_PRESS] = 0x1006,
+	[HAPTIC_EFFECT_RELEASE] = 0x1007,
+};
+
+struct haptic_state {
+	// Linux FF effect IDs are allocated independently for each input device.
+	int16_t effect_ids[HAPTIC_EFFECT_COUNT];
+};
 
 static uint8_t resolve_device_capabilities(const struct port_input_dev *port_dev,
 					   uint32_t *num_keys,
@@ -173,6 +188,9 @@ struct device_event *device_read_event(struct device *dev)
 		return &devev;
 	case DEVICE_INPUT_RESET:
 		devev.type = DEV_RESET;
+		return &devev;
+	case DEVICE_INPUT_HAPTIC_READY:
+		devev.type = DEV_HAPTIC_READY;
 		return &devev;
 	case EV_REL:
 		switch (ev.code) {
@@ -444,4 +462,48 @@ int device_erase_ff(const struct device *dev, int effect_id)
 		return -ENOSYS;
 
 	return dev->writer.erase_ff(dev->writer.client, effect_id);
+}
+
+void haptic_init(struct device *dev)
+{
+	struct haptic_state *state = pvPortMalloc(sizeof *state);
+
+	if (!state) {
+		err("haptic state allocation failed");
+		return;
+	}
+
+	dev->haptic = state;
+	for (size_t i = 0; i < HAPTIC_EFFECT_COUNT; i++) {
+		struct ff_effect effect = {
+			.type = FF_HAPTIC,
+			.id = -1,
+			.u.haptic = {
+				.hid_usage = haptic_waveforms[i],
+				.intensity = 100,
+			},
+		};
+
+		state->effect_ids[i] = -1;
+		if (device_upload_ff(dev, &effect) == 0)
+			state->effect_ids[i] = effect.id;
+	}
+}
+
+void haptic_cleanup(struct device *dev)
+{
+	vPortFree(dev->haptic);
+	dev->haptic = NULL;
+}
+
+int device_haptic_play(const struct device *dev,
+		       enum haptic_effect_index effect, int value)
+{
+	const struct haptic_state *state = dev->haptic;
+
+	if (!state || state->effect_ids[effect] < 0)
+		return 0;
+
+	device_set_ff(dev, state->effect_ids[effect], value);
+	return 1;
 }

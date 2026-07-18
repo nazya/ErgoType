@@ -14,6 +14,7 @@ struct file;
 
 struct evdev_client *evdev_register_input_device(struct input_dev *src,
 						 struct evdev *evdev);
+void evdev_pass_haptic_ready(struct input_dev *dev);
 void evdev_unregister_device(struct evdev_client *dev);
 void __pass_event(struct evdev_client *dev,
 		  const struct input_event *ev);
