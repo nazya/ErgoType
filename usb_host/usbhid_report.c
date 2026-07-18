@@ -24,7 +24,13 @@
  * hid pointer. close() only clears WANTED: an already armed transfer may stay
  * parked until one report completes, but it cannot create a second RX chain.
  */
-#define USBHID_REPORT_QUEUE_LEN CFG_TUH_HID
+/* One interrupt report per HID can be queued, plus the single active ctrl GET. */
+#define USBHID_REPORT_QUEUE_LEN (CFG_TUH_HID + 1)
+
+enum usbhid_report_event_kind {
+	USBHID_REPORT_EVENT_INTERRUPT,
+	USBHID_REPORT_EVENT_CONTROL,
+};
 
 enum usbhid_report_owner {
 	USBHID_REPORT_STOPPED,
@@ -40,14 +46,25 @@ enum usbhid_report_host_action {
 };
 
 struct usbhid_report_event {
+	enum usbhid_report_event_kind kind;
 	struct hid_device *hid;
 	u32 generation;
 	u16 len;
 	bool parse;
-	u8 data[CFG_TUH_HID_EPIN_BUFSIZE];
+	union {
+		u8 interrupt[CFG_TUH_HID_EPIN_BUFSIZE];
+		struct {
+			u8 *data;
+			void *context;
+			usbhid_control_report_done_t done;
+			u16 bufsize;
+			u8 report_type;
+		} control;
+	} payload;
 };
 
 static QueueHandle_t usbhid_report_queue;
+static bool usbhid_control_report_queued;
 
 static void usbhid_report_reconcile_on_host(void *data);
 
@@ -98,6 +115,7 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 			 uint16_t len, bool parse)
 {
 	struct usbhid_report_event event = {
+		.kind = USBHID_REPORT_EVENT_INTERRUPT,
 		.hid = hid,
 		.len = len,
 		.parse = parse,
@@ -109,14 +127,14 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 	if (!hid)
 		return -ENODEV;
 	/* A completed transfer must advance ownership even if its payload is bad. */
-	if (!report || len > sizeof(event.data)) {
+	if (!report || len > CFG_TUH_HID_EPIN_BUFSIZE) {
 		event.len = 0;
 		event.parse = false;
 		status = -EMSGSIZE;
 	}
 
 	if (event.len)
-		memcpy(event.data, report, event.len);
+		memcpy(event.payload.interrupt, report, event.len);
 	taskENTER_CRITICAL();
 	if (hid->ll_report_owner != USBHID_REPORT_ARMED) {
 		taskEXIT_CRITICAL();
@@ -140,6 +158,62 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 	}
 
 	return status;
+}
+
+int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
+				 uint8_t *report, uint16_t bufsize,
+				 uint16_t len,
+				 usbhid_control_report_done_t done,
+				 void *context)
+{
+	struct usbhid_report_event event = {
+		.kind = USBHID_REPORT_EVENT_CONTROL,
+		.hid = hid,
+		.len = len,
+		.parse = true,
+		.payload.control = {
+			.data = report,
+			.context = context,
+			.done = done,
+			.bufsize = bufsize,
+			.report_type = report_type,
+		},
+	};
+
+	if (!usbhid_report_queue || !hid || !report || !done)
+		return -ENODEV;
+	if (len > bufsize)
+		return -EMSGSIZE;
+
+	taskENTER_CRITICAL();
+	if (hid->ll_transport_stopping) {
+		taskEXIT_CRITICAL();
+		return -ENODEV;
+	}
+	event.generation = hid->ll_generation;
+	taskEXIT_CRITICAL();
+
+	/*
+	 * Keep one explicit control slot beyond the one interrupt slot per HID.
+	 * A second completed GET is dropped instead of consuming interrupt capacity
+	 * or blocking the transport owner behind parser-side synchronous I/O.
+	 */
+	taskENTER_CRITICAL();
+	if (usbhid_control_report_queued) {
+		taskEXIT_CRITICAL();
+		return -EBUSY;
+	}
+	usbhid_control_report_queued = true;
+	taskEXIT_CRITICAL();
+
+	if (xQueueSendToBack(usbhid_report_queue, &event, 0) != pdPASS) {
+		taskENTER_CRITICAL();
+		usbhid_control_report_queued = false;
+		taskEXIT_CRITICAL();
+		return -EBUSY;
+	}
+
+	return 0;
 }
 
 void usbhid_report_stop(struct hid_device *hid)
@@ -289,6 +363,30 @@ void usbhid_report_task(void *pvParameters)
 				  portMAX_DELAY) != pdPASS)
 			continue;
 
+		if (event.kind == USBHID_REPORT_EVENT_CONTROL) {
+			int status = -ENODEV;
+
+			taskENTER_CRITICAL();
+			usbhid_control_report_queued = false;
+			process = event.generation == event.hid->ll_generation &&
+				  !event.hid->ll_transport_stopping;
+			taskEXIT_CRITICAL();
+
+			if (process && event.parse)
+				status = hid_safe_input_report(event.hid,
+						(enum hid_report_type)
+							event.payload.control.report_type,
+						event.payload.control.data,
+						event.payload.control.bufsize,
+						event.len, 0);
+
+			/* Parsing is part of upstream control-I/O completion. */
+			event.payload.control.done(event.hid,
+						   event.payload.control.context,
+						   status);
+			continue;
+		}
+
 		taskENTER_CRITICAL();
 		process = event.hid->ll_report_owner == USBHID_REPORT_QUEUED &&
 			  event.generation == event.hid->ll_generation &&
@@ -300,8 +398,10 @@ void usbhid_report_task(void *pvParameters)
 
 		if (process && event.parse)
 			(void)hid_safe_input_report(event.hid,
-						HID_INPUT_REPORT, event.data,
-						sizeof(event.data), event.len, 1);
+						HID_INPUT_REPORT,
+						event.payload.interrupt,
+						sizeof(event.payload.interrupt),
+						event.len, 1);
 
 		taskENTER_CRITICAL();
 		if (event.hid->ll_report_owner == USBHID_REPORT_ACTIVE)

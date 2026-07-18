@@ -71,6 +71,12 @@ struct usbhid_sync_request {
 	volatile bool done;
 };
 
+/* Padded GET buffer owned from .request enqueue through parser completion. */
+struct usbhid_control_input {
+	u16 bufsize;
+	u8 data[];
+};
+
 struct usbhid_pending_hid_probe {
 	bool valid;
 	uint8_t instance;
@@ -1478,66 +1484,115 @@ static void usbhid_io_put(struct hid_device *hid)
 	taskEXIT_CRITICAL();
 }
 
-static void usbhid_io_wait_idle(struct hid_device *hid)
+static bool usbhid_io_idle(struct hid_device *hid)
 {
 	bool idle;
 
-	do {
-		taskENTER_CRITICAL();
-		idle = hid->ll_io_pending == 0;
-		taskEXIT_CRITICAL();
-		if (!idle)
-			vTaskDelay(1);
-	} while (!idle);
+	taskENTER_CRITICAL();
+	idle = hid->ll_io_pending == 0;
+	taskEXIT_CRITICAL();
+	return idle;
+}
+
+static void usbhid_io_wait_idle(struct hid_device *hid)
+{
+	while (!usbhid_io_idle(hid))
+		vTaskDelay(1);
+}
+
+static void usbhid_control_report_done(struct hid_device *hid, void *context,
+				       int status)
+{
+	if (status < 0 && status != -ENODEV)
+		async_msg("ERR: HID_CTRL_PARSE_FAIL");
+	kfree(context);
+	usbhid_io_put(hid);
+}
+
+static void usbhid_request_complete(const struct hid_async_request *req,
+				    int status)
+{
+	struct usbhid_control_input *input = req->context;
+	u16 len;
+	int ret;
+
+	if (status < 0) {
+		if (status != -ENODEV)
+			async_msg("ERR: HID_ASYNC_REQ_FAIL");
+		kfree(input);
+		usbhid_io_put(req->hid);
+		return;
+	}
+
+	if (req->reqtype != HID_REQ_GET_REPORT) {
+		configASSERT(!input);
+		usbhid_io_put(req->hid);
+		return;
+	}
+
+	configASSERT(input);
+	len = min_t(u16, req->actual_len, input->bufsize);
+	memcpy(input->data, req->data, len);
+	ret = usbhid_control_report_submit(req->hid, req->report->type,
+					   input->data, input->bufsize, len,
+					   usbhid_control_report_done,
+					   input);
+	if (ret) {
+		if (ret != -ENODEV)
+			async_msg("ERR: HID_CTRL_PARSE_Q_FAIL");
+		kfree(input);
+		usbhid_io_put(req->hid);
+	}
 }
 
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype)
 {
-	struct usbhid_sync_request sync = {
-		.task = xTaskGetCurrentTaskHandle(),
-	};
-	u8 *report_data = NULL;
+	struct usbhid_control_input *input = NULL;
+	u32 bufsize;
 	int ret;
 
+	if (reqtype == HID_REQ_GET_REPORT && (hid->quirks & HID_QUIRK_NOGET))
+		return;
 	if (!usbhid_io_get(hid))
 		return;
 	if (reqtype == HID_REQ_GET_REPORT) {
-		report_data = hid_alloc_report_buf(report, GFP_KERNEL);
-		if (!report_data) {
-			async_msg("ERR: HID_REPORT_NOMEM");
-			goto out;
+		bufsize = hid_report_len(report);
+		if (bufsize > HID_ASYNC_REPORT_MAX) {
+			async_msg("ERR: HID_REPORT_TOO_LONG");
+			usbhid_io_put(hid);
+			return;
 		}
-		sync.buf = report_data;
-		sync.bufsize = hid_report_len(report) + 7 + (report->id == 0);
+		bufsize += 7 + (report->id == 0);
+		input = kzalloc(sizeof(*input) + bufsize, GFP_KERNEL);
+		if (!input) {
+			async_msg("ERR: HID_REPORT_NOMEM");
+			usbhid_io_put(hid);
+			return;
+		}
+		input->bufsize = (u16)bufsize;
 	}
 
 	// usbhid_submit_report(hid, report, reqtype);
-	// Queue transport work and wait only in the Linux-facing caller task. The
-	// transfer owner copies the result and wakes us; it never enters hid-core.
+	/*
+	 * Match upstream usbhid_submit_report(): queue best-effort control work and
+	 * return. GET_REPORT completion is parsed by usbhid_report_task before it
+	 * releases ll_io_pending, so a following hid_hw_wait() cannot observe a
+	 * false-idle handoff between transport completion and hid-core parsing.
+	 */
 	ret = hid_async_queue_report(hid, report, reqtype,
-				     usbhid_sync_complete, &sync);
-	ret = usbhid_sync_wait(&sync, ret);
+				     usbhid_request_complete, input);
 	if (ret) {
 		async_msg("ERR: HID_ASYNC_REQ_FAIL");
-	} else if (reqtype == HID_REQ_GET_REPORT &&
-		   !usbhid_report_is_stopping(hid)) {
-		(void)hid_safe_input_report(hid, report->type, report_data,
-					    sync.bufsize, sync.actual_len, 0);
+		kfree(input);
+		usbhid_io_put(hid);
 	}
-
-out:
-	kfree(report_data);
-	usbhid_io_put(hid);
 }
 
 static int usbhid_wait_io(struct hid_device *hid)
 {
-	/*
-	 * usbhid_wait_io(hid);
-	 * The firmware request/raw_request/output callbacks already wait for their
-	 * async TinyUSB completion, so no separate transport wait remains here.
-	 */
+	/* Each owner request has its own watchdog; drain every accepted request. */
+	usbhid_io_wait_idle(hid);
 	return usbhid_report_is_stopping(hid) ? -ENODEV : 0;
 }
 

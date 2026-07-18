@@ -19,9 +19,14 @@
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
-- `hid_hw_request()`, raw SET_REPORT, raw GET_REPORT building blocks,
-  output-report submits, deferred input-report delivery, firmware workqueue,
-  and firmware timer bridges are present for the currently linked driver set.
+- `hid_hw_request()` now matches the upstream queue-and-return contract.
+  Successful GET_REPORT completion is handed to `usbhid_report_task`, and
+  `hid_hw_wait()` drains through the end of parsing, so callers cannot observe
+  a transport-complete/parser-pending false idle. Raw GET/SET and interrupt
+  output keep their upstream synchronous return contract while using the same
+  asynchronous TinyUSB owner underneath.
+- Deferred input-report delivery, firmware workqueue, and firmware timer
+  bridges are present for the currently linked driver set.
 - The generic ff-core/evdev boundary remains for future haptic support, but no
   FF driver is active. Hiddev remains in its bounded firmware-proxy form.
 
@@ -45,13 +50,12 @@
 
 ## Current Driver Boundary
 
-- The linked driver set is restricted to drivers that fit the current
-  architecture: descriptor fixups, input mapping, simple probe/start paths,
-  queue-only SET_REPORT paths, and small callbacks that do not need returned
-  request data before probe can continue.
-- Drivers that need returned GET_REPORT/control data, broad Linux subsystem
-  state, or larger sync-over-async probe state machines stay out of
-  `CMakeLists.txt`.
+- The linked driver set can use upstream `hid_hw_request()` followed by
+  `hid_hw_wait()`, including returned feature data during probe. The bounded
+  firmware queue still rejects overload instead of attempting Linux's much
+  larger control/output FIFOs.
+- Drivers that need generic USB URBs/control helpers, broad Linux subsystem
+  state, or unaudited callback behavior stay out of `CMakeLists.txt`.
 - `usb_host/deferred-hid-drivers.md` records the current deferred boundary and
   examples.
 
