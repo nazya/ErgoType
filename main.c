@@ -29,10 +29,14 @@
 #include "ui/ui.h"
 #include "pointing/pointer.h"
 #include "log.h"
+#include "usb_host/usbhid.h"
+#include "usb_host/usbhid_report.h"
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
 #define TUH_STACK_SIZE 4096
+#define USBHID_LIFECYCLE_STACK_SIZE 512
+#define USBHID_REPORT_STACK_SIZE 1536
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -61,8 +65,6 @@ int hid_workqueue_init(void); // usb_host/hid_workqueue.c
 void hid_workqueue_task(void *pvParameters); // usb_host/hid_workqueue.c
 int hid_timer_init(void); // usb_host/hid_timer.c
 void hid_timer_task(void *pvParameters); // usb_host/hid_timer.c
-int usbhid_disconnect_init(void); // usb_host/usbhid.c
-void usbhid_disconnect_task(void *pvParameters); // usb_host/usbhid.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
@@ -271,12 +273,16 @@ static void app_task(void *pvParameters)
         vkbd_event_queue = xQueueCreate(256, sizeof(vkbd_event_t));
         configASSERT(vkbd_event_queue);
 
+        bool hid_async_ready = false;
         int hid_async_ret = hid_async_init();
         if (hid_async_ret < 0)
             async_msg("ERR: HID_ASYNC_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(hid_async_task, NULL, 512, NULL,
+                                        IDLE_PRIORITY + 3, CORE1,
+                                        NULL) != pdPASS)
+            async_msg("ERR: HID_ASYNC_TASK_FAIL");
         else
-            xTaskCreateAffinitySet(hid_async_task, NULL, 512, NULL,
-                                   IDLE_PRIORITY + 3, CORE1, NULL);
+            hid_async_ready = true;
 
         int hid_workqueue_ret = hid_workqueue_init();
         if (hid_workqueue_ret < 0)
@@ -292,17 +298,38 @@ static void app_task(void *pvParameters)
             xTaskCreateAffinitySet(hid_timer_task, NULL, MIN_STACK_SIZE, NULL,
                                    IDLE_PRIORITY + 3, CORE1, NULL);
 
+        bool usbhid_lifecycle_ready = false;
         int usbhid_disconnect_ret = usbhid_disconnect_init();
         if (usbhid_disconnect_ret < 0)
             async_msg("ERR: HID_DISCONNECT_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(usbhid_disconnect_task, NULL,
+                                        USBHID_LIFECYCLE_STACK_SIZE, NULL,
+                                        IDLE_PRIORITY + 3, CORE1,
+                                        NULL) != pdPASS)
+            async_msg("ERR: HID_DISCONNECT_TASK_FAIL");
         else
-            xTaskCreateAffinitySet(usbhid_disconnect_task, NULL, MIN_STACK_SIZE, NULL,
-                                   IDLE_PRIORITY + 3, CORE1, NULL);
+            usbhid_lifecycle_ready = true;
 
-        BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
-                                                          NULL, TUSB_PRIORITY, CORE1, NULL);
-        if (host_task_ret != pdPASS)
-            err("tusb host task create failed ret=%ld", (long)host_task_ret);
+        bool usbhid_report_ready = false;
+        int usbhid_report_ret = usbhid_report_init();
+        if (usbhid_report_ret < 0)
+            async_msg("ERR: HID_REPORT_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(usbhid_report_task, "hid-report",
+                                        USBHID_REPORT_STACK_SIZE, NULL,
+                                        IDLE_PRIORITY + 4, CORE1, NULL) != pdPASS)
+            async_msg("ERR: HID_REPORT_TASK_FAIL");
+        else
+            usbhid_report_ready = true;
+
+        if (hid_async_ready && usbhid_lifecycle_ready &&
+            usbhid_report_ready) {
+            BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
+                                                              NULL, TUSB_PRIORITY, CORE1, NULL);
+            if (host_task_ret != pdPASS)
+                err("tusb host task create failed ret=%ld", (long)host_task_ret);
+        } else {
+            async_msg("ERR: TUH_RUNTIME_OWNER_MISSING");
+        }
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 

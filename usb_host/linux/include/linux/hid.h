@@ -668,8 +668,12 @@ struct hid_device {
 	u8 instance;
 	u32 ll_generation;
 	wait_queue_head_t ll_wait;
-	unsigned int ll_report_pending;
-	unsigned int ll_report_active;
+	u32 ll_report_revision;
+	u8 ll_report_owner;
+	bool ll_report_wanted;
+	bool ll_report_host_pending;
+	bool ll_transport_stopping;
+	bool ll_disconnect_queued;
 	bool ll_always_poll;
 	bool ll_resume_running;
 	unsigned long ll_resume_deadline;

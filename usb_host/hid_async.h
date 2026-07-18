@@ -31,6 +31,7 @@ enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_USB_INTERRUPT,
 #endif
 	HID_ASYNC_REQUEST_INPUT_REPORT,
+	HID_ASYNC_REQUEST_BARRIER,
 };
 
 struct hid_async_request {
@@ -54,6 +55,7 @@ struct hid_async_request {
 	u16 actual_len;
 	u16 bufsize;
 	u16 string_langid;
+	u32 generation;
 	u8 xfer_result;
 #if 0
 	/* Deferred with HID_ASYNC_REQUEST_USB_CONTROL. */
