@@ -30,10 +30,41 @@
 #include "task.h"
 #include "common/tusb_common.h"
 
+#include "rtos/freertos_hook.h"
+
+static volatile uint32_t malloc_failure_count;
+
 void vApplicationMallocFailedHook(void)
 {
-  taskDISABLE_INTERRUPTS();
-  TU_ASSERT(false, );
+  /*
+   * heap_4 reports failure after leaving its allocator lock and then returns
+   * NULL to the caller. Keep that contract intact: disabling interrupts here
+   * prevents normal -ENOMEM unwinding and leaves this core wedged.
+   */
+  if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+    /* Before SMP scheduling starts, only the boot core can allocate. */
+    if (malloc_failure_count != UINT32_MAX)
+      malloc_failure_count++;
+  } else {
+    taskENTER_CRITICAL();
+    if (malloc_failure_count != UINT32_MAX)
+      malloc_failure_count++;
+    taskEXIT_CRITICAL();
+  }
+}
+
+uint32_t freertos_malloc_failure_count(void)
+{
+  uint32_t count;
+
+  if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+    count = malloc_failure_count;
+  } else {
+    taskENTER_CRITICAL();
+    count = malloc_failure_count;
+    taskEXIT_CRITICAL();
+  }
+  return count;
 }
 
 void vApplicationStackOverflowHook(xTaskHandle pxTask, char *pcTaskName)

@@ -19,6 +19,7 @@
 #include "task.h"
 
 #include "keyboard.h"
+#include "rtos/freertos_hook.h"
 #include "vkbd.h"
 #include "log.h"
 #include "keyd.h"
@@ -30,13 +31,18 @@ static uint8_t keystate[256];
 
 static void log_memory_watermarks(void)
 {
+	HeapStats_t heap_stats;
 	TaskHandle_t tuh_task = xTaskGetHandle("tuh");
 	UBaseType_t tuh_stack_words = tuh_task ?
 		uxTaskGetStackHighWaterMark(tuh_task) : 0;
 
-	dbg2("heap free=%u min=%u; tuh stack min free=%u words",
-	     (unsigned int)xPortGetFreeHeapSize(),
-	     (unsigned int)xPortGetMinimumEverFreeHeapSize(),
+	vPortGetHeapStats(&heap_stats);
+	dbg2("heap free=%u min=%u largest=%u blocks=%u oom=%u; tuh stack min free=%u words",
+	     (unsigned int)heap_stats.xAvailableHeapSpaceInBytes,
+	     (unsigned int)heap_stats.xMinimumEverFreeBytesRemaining,
+	     (unsigned int)heap_stats.xSizeOfLargestFreeBlockInBytes,
+	     (unsigned int)heap_stats.xNumberOfFreeBlocks,
+	     (unsigned int)freertos_malloc_failure_count(),
 	     (unsigned int)tuh_stack_words);
 }
 

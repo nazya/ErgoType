@@ -11,6 +11,7 @@
 #include "host/usbh_pvt.h"
 
 #include "hid_async.h"
+#include "rtos/freertos_hook.h"
 #include "usbhid_backend.h"
 #include "usbhid_report.h"
 #include "stdio_tusb_cdc.h"
@@ -964,6 +965,7 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	uint16_t pid = 0;
 	tuh_itf_info_t itf_info;
 	const char *name;
+	u32 malloc_failures_before;
 	int ret;
 
 	if (!desc_report || !desc_len) {
@@ -1163,7 +1165,15 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		goto fail;
 	}
 
+	malloc_failures_before = freertos_malloc_failure_count();
 	ret = hid_add_device(hid);
+	/*
+	 * Linux normally reports deep probe allocation failures through errno.
+	 * Some HID parser paths intentionally omit a field on allocation failure;
+	 * surface that firmware constraint here without logging from the heap hook.
+	 */
+	if (freertos_malloc_failure_count() != malloc_failures_before)
+		async_msg("ERR: HID_PROBE_NOMEM");
 	if (ret < 0) {
 		usbhid_report_stop(hid);
 		if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
