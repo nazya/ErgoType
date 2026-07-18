@@ -24,6 +24,8 @@
 #define HID_ASYNC_COMPLETION_QUEUE_LEN 4
 #define HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
 #define HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
+/* Match upstream usbhid's five-second watchdog for active ctrl/out I/O. */
+#define HID_ASYNC_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(USB_CTRL_SET_TIMEOUT)
 /* PIO-USB can publish an aborted completion at the end of the next SOF. */
 #define HID_ASYNC_ABORT_DRAIN_TICKS ((TickType_t)2)
 #define HID_ASYNC_DEVICE_ADDR_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
@@ -1059,7 +1061,8 @@ void hid_async_task(void *pvParameters)
 		bool preprobe;
 		bool canceled = false;
 		bool retired = false;
-		TickType_t preprobe_wait_start = 0;
+		TickType_t xfer_wait_start;
+		TickType_t xfer_timeout_ticks;
 		int status;
 
 		if (xQueueReceive(hid_async_request_queue, &active, portMAX_DELAY) != pdPASS)
@@ -1115,19 +1118,17 @@ void hid_async_task(void *pvParameters)
 			hid_async_clear_active();
 			continue;
 		}
-		if (preprobe)
-			preprobe_wait_start = xTaskGetTickCount();
+		xfer_wait_start = xTaskGetTickCount();
+		xfer_timeout_ticks = preprobe ?
+			HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS :
+			HID_ASYNC_XFER_TIMEOUT_TICKS;
 
 		while (1) {
-			TickType_t wait_ticks = portMAX_DELAY;
+			TickType_t elapsed = xTaskGetTickCount() - xfer_wait_start;
+			TickType_t wait_ticks = elapsed < xfer_timeout_ticks ?
+				xfer_timeout_ticks - elapsed : 0;
+			bool completed;
 
-			if (preprobe) {
-				TickType_t elapsed = xTaskGetTickCount() -
-						     preprobe_wait_start;
-
-				wait_ticks = elapsed < HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS ?
-					     HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS - elapsed : 0;
-			}
 			if (xQueueReceive(hid_async_completion_queue, &completion,
 					  wait_ticks) == pdPASS) {
 				if (hid_async_apply_completion(&active, &completion,
@@ -1136,17 +1137,17 @@ void hid_async_task(void *pvParameters)
 				continue;
 			}
 
-			if (preprobe) {
-				bool completed = hid_async_retire_active(&active, &status,
-								 &canceled);
-
-				retired = true;
-				if (!completed && !canceled) {
+			completed = hid_async_retire_active(&active, &status,
+							    &canceled);
+			retired = true;
+			if (!completed && !canceled) {
+				if (preprobe)
 					async_msg("ERR: HID_PRE_XFER_TO");
-					status = -ETIMEDOUT;
-				}
-				break;
+				else
+					async_msg("ERR: HID_XFER_TO");
+				status = -ETIMEDOUT;
 			}
+			break;
 		}
 
 		if (canceled && !retired) {
