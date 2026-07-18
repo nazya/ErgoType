@@ -188,6 +188,29 @@ static int hid_async_queue_preprobe_request(struct hid_async_request *req)
 	return ret;
 }
 
+static int hid_async_queue_preprobe_continuation(
+		struct hid_async_request *req)
+{
+	int ret = 0;
+
+	if (!hid_async_request_queue ||
+	    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
+		return -ENODEV;
+
+	/*
+	 * A descriptor continuation belongs to the epoch of the request which
+	 * produced it. Never restamp an old chain with the generation of a device
+	 * which has already reused the same USB address.
+	 */
+	taskENTER_CRITICAL();
+	if (req->generation != hid_async_device_generation[req->dev_addr])
+		ret = -ENODEV;
+	else if (xQueueSendToBack(hid_async_request_queue, req, 0) != pdPASS)
+		ret = -EBUSY;
+	taskEXIT_CRITICAL();
+	return ret;
+}
+
 static bool hid_async_request_generation_current(
 		const struct hid_async_request *req)
 {
@@ -283,8 +306,9 @@ static void hid_async_complete_preprobe_current(
 	/*
 	 * The callback can allocate, log, and queue its descriptor continuation, so
 	 * do not run it in a critical section. The mutex instead serializes the whole
-	 * state transition with device epoch retirement. An unmount callback may
-	 * wait here, but the unlock path never depends on TinyUSB host progress.
+	 * state transition with task-context device retirement. The TinyUSB
+	 * unmount callback only advances the generation; the lifecycle task waits
+	 * for this grace period before reusing the old descriptor cache object.
 	 */
 	xSemaphoreTake(hid_async_epoch_mutex, portMAX_DELAY);
 	taskENTER_CRITICAL();
@@ -474,6 +498,7 @@ int hid_async_queue_device_descriptor(u8 dev_addr,
 }
 
 int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
+				      u32 generation,
 				      hid_async_complete_t complete,
 				      void *context)
 {
@@ -487,11 +512,12 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 	req.dev_addr = dev_addr;
 	req.string_index = index;
 	req.string_langid = langid;
+	req.generation = generation;
 	req.len = HID_ASYNC_DATA_MAX;
 	req.complete = complete;
 	req.context = context;
 
-	return hid_async_queue_preprobe_request(&req);
+	return hid_async_queue_preprobe_continuation(&req);
 }
 
 #if 0
@@ -963,23 +989,12 @@ int hid_async_cancel_dev_addr(u8 dev_addr)
 
 	if (!hid_async_request_queue || !hid_async_completion_queue)
 		return -ENODEV;
-	if (!hid_async_epoch_mutex)
-		return -ENODEV;
 	if (dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
 		return -ENODEV;
 
-	xSemaphoreTake(hid_async_epoch_mutex, portMAX_DELAY);
 	taskENTER_CRITICAL();
 	generation = hid_async_device_generation[dev_addr];
 	hid_async_device_generation[dev_addr]++;
-	taskEXIT_CRITICAL();
-
-	/*
-	 * Do not rotate the request FIFO from the TinyUSB device-unmount callback.
-	 * The generation check makes every queued request stale; hid_async_task
-	 * retires it in task context. It also rejects the dequeue/publication gap.
-	 */
-	taskENTER_CRITICAL();
 	if (hid_async_active && hid_async_accepting_completion &&
 	    hid_async_active_dev_addr == dev_addr &&
 	    hid_async_active_generation == generation) {
@@ -995,8 +1010,18 @@ int hid_async_cancel_dev_addr(u8 dev_addr)
 	taskEXIT_CRITICAL();
 
 	ret = cancel_active ? hid_async_queue_cancel(&completion) : 0;
-	xSemaphoreGive(hid_async_epoch_mutex);
 	return ret;
+}
+
+int hid_async_synchronize_preprobe(void)
+{
+	if (!hid_async_epoch_mutex)
+		return -ENODEV;
+
+	/* Task-context grace period for a pre-probe continuation already running. */
+	xSemaphoreTake(hid_async_epoch_mutex, portMAX_DELAY);
+	xSemaphoreGive(hid_async_epoch_mutex);
+	return 0;
 }
 
 void hid_async_task(void *pvParameters)

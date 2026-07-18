@@ -19,6 +19,10 @@
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
+- Physical detach now closes the async generation and publishes a bounded
+  cache tombstone without waiting in the TinyUSB callback. The lifecycle task
+  crosses the pre-probe grace period before reusing that cache slot; disconnect
+  flags and pending probes remain authoritative if its bounded queue is full.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -35,6 +39,9 @@
 
 ## Manual Test Notes
 
+- 2026-07-19: host checkpoint `hid: retire queued cancels outside callbacks` passed the strict hi-res wheel
+  emulator again after queued cancel retirement moved out of TinyUSB unmount
+  callbacks. Pointer events resumed normally after reconnect.
 - 2026-07-18: the strict hi-res wheel fixture verified a probe-time FEATURE
   `GET_REPORT` returning `0xA0`, locked parser state preservation, and the
   resulting raw `SET_REPORT` payload `0xA5` on hardware. Pointer events remain

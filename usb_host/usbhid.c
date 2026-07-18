@@ -34,6 +34,8 @@
 #define USBHID_LIFECYCLE_QUEUE_LEN (HID_HOST_MAX_DEVICES * 2)
 #define USBHID_STRING_LANGID 0x0409u
 #define USBHID_USB_DEVICE_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
+/* One bounded spare lets a fast replug coexist with one retiring cache entry. */
+#define USBHID_USB_DEVICE_SLOTS (USBHID_USB_DEVICE_MAX + 1)
 #define USBHID_USB_MAXCHILD 31
 #define USBHID_PENDING_HID_MAX HID_HOST_MAX_DEVICES
 
@@ -48,6 +50,7 @@ static struct hid_device *usbhid_devices[HID_HOST_MAX_DEVICES];
 static QueueHandle_t usbhid_lifecycle_queue;
 
 enum usbhid_lifecycle_kind {
+	USBHID_LIFECYCLE_WAKE,
 	USBHID_LIFECYCLE_PROBE,
 	USBHID_LIFECYCLE_DISCONNECT,
 };
@@ -96,6 +99,7 @@ enum usbhid_preprobe_stage {
 
 struct usbhid_usb_device {
 	bool valid;
+	bool retiring;
 	bool have_device_desc;
 	bool device_desc_requested;
 	uint8_t pending_desc_dev_addr;
@@ -105,6 +109,7 @@ struct usbhid_usb_device {
 	struct usb_device dev;
 	tusb_desc_device_t device_desc;
 	struct usbhid_pending_hid_probe pending_hid[USBHID_PENDING_HID_MAX];
+	struct usbhid_usb_device *retired_next;
 };
 
 struct usbhid_raw_interface {
@@ -119,9 +124,11 @@ struct usbhid_raw_interface {
 
 static struct usb_device usbhid_root_hub;
 static bool usbhid_root_hub_valid;
-static struct usbhid_usb_device *usbhid_usb_devices[USBHID_USB_DEVICE_MAX];
+static struct usbhid_usb_device *usbhid_usb_devices[USBHID_USB_DEVICE_SLOTS];
+static struct usbhid_usb_device *usbhid_retired_devices;
 static struct usbhid_raw_interface usbhid_raw_interfaces[HID_HOST_RAW_INTERFACE_MAX];
 static u32 usbhid_generation;
+static bool usbhid_lifecycle_wake_pending;
 static void usbhid_io_wait_idle(struct hid_device *hid);
 
 static u32 usbhid_next_generation(void)
@@ -177,7 +184,7 @@ static struct usb_device *usbhid_usb_root_hub(uint8_t rhport)
 
 static struct usbhid_usb_device *usbhid_usb_device_find(uint8_t dev_addr)
 {
-	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
 		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
 
 		if (entry && entry->valid && entry->dev.dev_addr == dev_addr)
@@ -191,12 +198,12 @@ static struct usbhid_usb_device *usbhid_usb_device_slot(uint8_t dev_addr)
 {
 	struct usbhid_usb_device *free_slot = NULL;
 
-	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
 		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
 
 		if (entry && entry->valid && entry->dev.dev_addr == dev_addr)
 			return entry;
-		if (entry && !entry->valid && !free_slot)
+		if (entry && !entry->valid && !entry->retiring && !free_slot)
 			free_slot = entry;
 		if (!entry && !free_slot) {
 			entry = kzalloc(sizeof(*entry), GFP_KERNEL);
@@ -308,8 +315,13 @@ static struct usbhid_usb_device *usbhid_usb_device_prepare(uint8_t dev_addr)
 
 static void usbhid_pending_hid_probe_clear(struct usbhid_pending_hid_probe *probe)
 {
-	kfree(probe->desc_report);
+	u8 *desc_report;
+
+	taskENTER_CRITICAL();
+	desc_report = probe->desc_report;
 	memset(probe, 0, sizeof(*probe));
+	taskEXIT_CRITICAL();
+	kfree(desc_report);
 }
 
 static void usbhid_usb_device_drop_pending_hid(struct usbhid_usb_device *entry)
@@ -321,29 +333,104 @@ static void usbhid_usb_device_drop_pending_hid(struct usbhid_usb_device *entry)
 static void usbhid_usb_device_drop_pending_hid_instance(struct usbhid_usb_device *entry,
 							uint8_t instance)
 {
+	u8 *desc_report = NULL;
+
+	taskENTER_CRITICAL();
 	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
 		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
 
 		if (probe->valid && probe->instance == instance) {
-			usbhid_pending_hid_probe_clear(probe);
-			return;
+			desc_report = probe->desc_report;
+			memset(probe, 0, sizeof(*probe));
+			break;
 		}
 	}
+	taskEXIT_CRITICAL();
+	kfree(desc_report);
 }
 
-static void usbhid_usb_device_remove(uint8_t dev_addr)
+static struct usbhid_usb_device *
+usbhid_usb_device_mark_retiring(uint8_t dev_addr)
 {
-	struct usbhid_usb_device *entry = usbhid_usb_device_find(dev_addr);
+	struct usbhid_usb_device *entry = NULL;
 
-	if (entry) {
-		usbhid_usb_device_drop_pending_hid(entry);
-		entry->valid = false;
+	/*
+	 * Make the old cache epoch invisible and non-reusable before transport
+	 * cancellation. It is not published to the lifecycle task yet, so its state
+	 * remains alive across the split cutover even if another core is running.
+	 */
+	taskENTER_CRITICAL();
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		struct usbhid_usb_device *candidate = usbhid_usb_devices[i];
+
+		if (candidate && candidate->valid &&
+		    candidate->dev.dev_addr == dev_addr) {
+			entry = candidate;
+			break;
+		}
 	}
+	if (entry) {
+		entry->valid = false;
+		entry->retiring = true;
+	}
+	taskEXIT_CRITICAL();
+
+	return entry;
+}
+
+static void
+usbhid_usb_device_publish_retired(struct usbhid_usb_device *entry)
+{
+	if (!entry)
+		return;
+
+	taskENTER_CRITICAL();
+	entry->retired_next = usbhid_retired_devices;
+	usbhid_retired_devices = entry;
+	taskEXIT_CRITICAL();
+}
+
+static struct usbhid_usb_device *usbhid_usb_device_take_retired(void)
+{
+	struct usbhid_usb_device *entry;
+
+	taskENTER_CRITICAL();
+	entry = usbhid_retired_devices;
+	if (entry) {
+		usbhid_retired_devices = entry->retired_next;
+		entry->retired_next = NULL;
+	}
+	taskEXIT_CRITICAL();
+	return entry;
+}
+
+static int usbhid_usb_device_release_retired(void)
+{
+	struct usbhid_usb_device *entry;
+	int ret;
+
+	while ((entry = usbhid_usb_device_take_retired())) {
+		ret = hid_async_synchronize_preprobe();
+		if (ret) {
+			taskENTER_CRITICAL();
+			entry->retired_next = usbhid_retired_devices;
+			usbhid_retired_devices = entry;
+			taskEXIT_CRITICAL();
+			return ret;
+		}
+
+		usbhid_usb_device_drop_pending_hid(entry);
+		taskENTER_CRITICAL();
+		entry->retiring = false;
+		taskEXIT_CRITICAL();
+	}
+
+	return 0;
 }
 
 struct usb_device *usb_hub_find_child(struct usb_device *hdev, int port1)
 {
-	for (size_t i = 0; i < USBHID_USB_DEVICE_MAX; i++) {
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
 		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
 
 		if (entry && entry->valid && entry->dev.parent == hdev &&
@@ -572,6 +659,7 @@ static int usbhid_usb_device_store_pending_probe(struct usbhid_usb_device *entry
 						 uint16_t desc_len)
 {
 	struct usbhid_pending_hid_probe *slot = NULL;
+	uint8_t *old_rdesc = NULL;
 	uint8_t *rdesc;
 
 	if (!desc_report || !desc_len)
@@ -581,27 +669,32 @@ static int usbhid_usb_device_store_pending_probe(struct usbhid_usb_device *entry
 	if (!rdesc)
 		return -ENOMEM;
 
+	taskENTER_CRITICAL();
 	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
 		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
 
 		if (probe->valid && probe->instance == instance) {
 			slot = probe;
-			usbhid_pending_hid_probe_clear(slot);
 			break;
 		}
 		if (!probe->valid && !slot)
 			slot = probe;
 	}
 
+	if (slot) {
+		old_rdesc = slot->desc_report;
+		slot->valid = true;
+		slot->instance = instance;
+		slot->desc_len = desc_len;
+		slot->desc_report = rdesc;
+	}
+	taskEXIT_CRITICAL();
+
 	if (!slot) {
 		kfree(rdesc);
 		return -ENOMEM;
 	}
-
-	slot->valid = true;
-	slot->instance = instance;
-	slot->desc_len = desc_len;
-	slot->desc_report = rdesc;
+	kfree(old_rdesc);
 	return 0;
 }
 
@@ -610,26 +703,43 @@ static void usbhid_usb_device_run_pending_probes(struct usbhid_usb_device *entry
 	for (size_t i = 0; i < USBHID_PENDING_HID_MAX; i++) {
 		struct usbhid_pending_hid_probe *probe = &entry->pending_hid[i];
 		struct usbhid_lifecycle_event event;
-
-		if (!probe->valid)
-			continue;
+		bool pending = false;
+		bool queued = false;
 
 		memset(&event, 0, sizeof(event));
-		event.kind = USBHID_LIFECYCLE_PROBE;
-		event.dev_addr = entry->dev.dev_addr;
-		event.instance = probe->instance;
-		event.generation = entry->generation;
-		event.desc_len = probe->desc_len;
-		event.desc_report = probe->desc_report;
-		event.device_desc = entry->device_desc;
-		if (!usbhid_lifecycle_queue ||
-		    xQueueSendToBack(usbhid_lifecycle_queue, &event, 0) != pdPASS) {
+		taskENTER_CRITICAL();
+		if (probe->valid) {
+			pending = true;
+			event.kind = USBHID_LIFECYCLE_PROBE;
+			event.dev_addr = entry->dev.dev_addr;
+			event.instance = probe->instance;
+			event.generation = entry->generation;
+			event.desc_len = probe->desc_len;
+			event.desc_report = probe->desc_report;
+			event.device_desc = entry->device_desc;
+			queued = usbhid_lifecycle_queue &&
+				xQueueSendToBack(usbhid_lifecycle_queue,
+						 &event, 0) == pdPASS;
+			if (queued)
+				memset(probe, 0, sizeof(*probe));
+		}
+		taskEXIT_CRITICAL();
+
+		if (pending && !queued) {
 			async_msg("ERR: HID_PROBE_Q_FAIL");
 			continue;
 		}
+	}
+}
 
-		probe->desc_report = NULL;
-		usbhid_pending_hid_probe_clear(probe);
+static void usbhid_usb_device_retry_pending_probes(void)
+{
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		struct usbhid_usb_device *entry = usbhid_usb_devices[i];
+
+		if (entry && entry->valid && entry->have_device_desc &&
+		    entry->preprobe_stage == USBHID_PREPROBE_DONE)
+			usbhid_usb_device_run_pending_probes(entry);
 	}
 }
 
@@ -692,10 +802,10 @@ static int usb_string_decode(const u8 *desc, uint16_t actual,
 }
 
 static int usbhid_usb_device_queue_string(struct usbhid_usb_device *entry,
-					  uint8_t index)
+					  uint8_t index, u32 generation)
 {
 	return hid_async_queue_string_descriptor(entry->dev.dev_addr, index,
-						 entry->string_langid,
+						 entry->string_langid, generation,
 						 usbhid_usb_device_descriptor_complete,
 						 entry);
 }
@@ -706,7 +816,8 @@ static void usbhid_usb_device_finish_preprobe(struct usbhid_usb_device *entry)
 	usbhid_usb_device_run_pending_probes(entry);
 }
 
-static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
+static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
+						u32 generation)
 {
 	int ret;
 
@@ -718,7 +829,7 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
 				return;
 			}
 			ret = hid_async_queue_string_descriptor(entry->dev.dev_addr,
-							       0, 0,
+							       0, 0, generation,
 							       usbhid_usb_device_descriptor_complete,
 							       entry);
 			break;
@@ -728,7 +839,8 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
 				continue;
 			}
 			ret = usbhid_usb_device_queue_string(entry,
-							     entry->dev.descriptor.iProduct);
+							     entry->dev.descriptor.iProduct,
+							     generation);
 			break;
 		case USBHID_PREPROBE_MANUFACTURER:
 			if (!entry->dev.descriptor.iManufacturer) {
@@ -736,7 +848,8 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
 				continue;
 			}
 			ret = usbhid_usb_device_queue_string(entry,
-							     entry->dev.descriptor.iManufacturer);
+							     entry->dev.descriptor.iManufacturer,
+							     generation);
 			break;
 		case USBHID_PREPROBE_SERIAL:
 			if (!entry->dev.descriptor.iSerialNumber) {
@@ -744,13 +857,16 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry)
 				return;
 			}
 			ret = usbhid_usb_device_queue_string(entry,
-							     entry->dev.descriptor.iSerialNumber);
+							     entry->dev.descriptor.iSerialNumber,
+							     generation);
 			break;
 		default:
 			usbhid_usb_device_finish_preprobe(entry);
 			return;
 		}
 
+		if (ret == -ENODEV)
+			return;
 		if (ret) {
 			async_msg("WARN: HID_STRING_Q_FAIL");
 			usbhid_usb_device_finish_preprobe(entry);
@@ -835,7 +951,7 @@ static void usbhid_usb_device_descriptor_complete(const struct hid_async_request
 			usbhid_usb_device_finish_preprobe(entry);
 			return;
 		}
-		usbhid_usb_device_queue_next_string(entry);
+		usbhid_usb_device_queue_next_string(entry, req->generation);
 		return;
 	}
 
@@ -866,7 +982,7 @@ static void usbhid_usb_device_descriptor_complete(const struct hid_async_request
 	entry->have_device_desc = true;
 	entry->string_langid = USBHID_STRING_LANGID;
 	entry->preprobe_stage = USBHID_PREPROBE_LANGID;
-	usbhid_usb_device_queue_next_string(entry);
+	usbhid_usb_device_queue_next_string(entry, req->generation);
 }
 
 static void usbhid_usb_device_queue_descriptor(struct usbhid_usb_device *entry)
@@ -915,6 +1031,67 @@ int usbhid_disconnect_init(void)
 	return 0;
 }
 
+static void usbhid_lifecycle_kick(void)
+{
+	struct usbhid_lifecycle_event event = {
+		.kind = USBHID_LIFECYCLE_WAKE,
+	};
+	bool send = false;
+
+	/*
+	 * Lifecycle flags/cache state are authoritative. If the queue is full, an
+	 * existing event already guarantees that the task will rescan that state.
+	 */
+	taskENTER_CRITICAL();
+	if (!usbhid_lifecycle_wake_pending) {
+		usbhid_lifecycle_wake_pending = true;
+		send = true;
+	}
+	taskEXIT_CRITICAL();
+
+	if (send && (!usbhid_lifecycle_queue ||
+	    xQueueSendToBack(usbhid_lifecycle_queue, &event, 0) != pdPASS)) {
+		/* A full queue already wakes the task; allow a later kick to retry. */
+		taskENTER_CRITICAL();
+		usbhid_lifecycle_wake_pending = false;
+		taskEXIT_CRITICAL();
+	}
+}
+
+static void usbhid_lifecycle_disconnect_hid(struct hid_device *hid,
+					    u32 generation)
+{
+	if (!hid || (generation && hid->ll_generation != generation))
+		return;
+
+	usbhid_report_unplug(hid);
+	if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
+		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
+	usbhid_report_wait_idle(hid);
+	usbhid_io_wait_idle(hid);
+	usbhid_remove_slot(hid);
+	hid_destroy_device(hid);
+}
+
+static void usbhid_lifecycle_drain_disconnects(void)
+{
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid;
+		u32 generation = 0;
+
+		taskENTER_CRITICAL();
+		hid = usbhid_devices[i];
+		if (hid && hid->ll_disconnect_queued)
+			generation = hid->ll_generation;
+		else
+			hid = NULL;
+		taskEXIT_CRITICAL();
+
+		if (hid)
+			usbhid_lifecycle_disconnect_hid(hid, generation);
+	}
+}
+
 void usbhid_disconnect_task(void *pvParameters)
 {
 	(void)pvParameters;
@@ -924,7 +1101,24 @@ void usbhid_disconnect_task(void *pvParameters)
 		struct hid_device *hid;
 		struct usbhid_usb_device *usb_entry;
 
+		/* Flags/cache slots own work; queue entries are only bounded wakeups. */
+		usbhid_lifecycle_drain_disconnects();
+		if (usbhid_usb_device_release_retired()) {
+			async_msg("ERR: HID_RETIRE_SYNC_FAIL");
+			vTaskDelay(1);
+			continue;
+		}
+		usbhid_usb_device_retry_pending_probes();
+
 		xQueueReceive(usbhid_lifecycle_queue, &event, portMAX_DELAY);
+		if (event.kind == USBHID_LIFECYCLE_WAKE) {
+			taskENTER_CRITICAL();
+			usbhid_lifecycle_wake_pending = false;
+			taskEXIT_CRITICAL();
+			continue;
+		}
+		/* A callback may have published removal while this receive unblocked. */
+		usbhid_lifecycle_drain_disconnects();
 		if (event.kind == USBHID_LIFECYCLE_PROBE) {
 			usb_entry = usbhid_usb_device_find(event.dev_addr);
 			if (usb_entry && usb_entry->generation == event.generation &&
@@ -938,21 +1132,7 @@ void usbhid_disconnect_task(void *pvParameters)
 		}
 
 		hid = usbhid_lookup(event.dev_addr, event.instance);
-		if (!hid || (event.generation &&
-			    hid->ll_generation != event.generation))
-			continue;
-
-		usbhid_report_unplug(hid);
-		if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
-			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
-		usbhid_report_wait_idle(hid);
-		usbhid_io_wait_idle(hid);
-		hid = usbhid_lookup(event.dev_addr, event.instance);
-		if (!hid || (event.generation &&
-			    hid->ll_generation != event.generation))
-			continue;
-		usbhid_remove_slot(hid);
-		hid_destroy_device(hid);
+		usbhid_lifecycle_disconnect_hid(hid, event.generation);
 	}
 }
 
@@ -1236,6 +1416,8 @@ static void usbhid_disconnect(uint8_t dev_addr, uint8_t instance)
 
 	if (ret)
 		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
+	if (!hid)
+		return;
 	/*
 	 * Upstream Linux runs usbhid_disconnect() from USB core process
 	 * context and can call hid_destroy_device() directly. TinyUSB calls
@@ -1295,8 +1477,10 @@ void usbhid_backend_device_mount(uint8_t dev_addr)
 
 void usbhid_backend_device_umount(uint8_t dev_addr)
 {
+	struct usbhid_usb_device *retired;
 	int ret;
 
+	retired = usbhid_usb_device_mark_retiring(dev_addr);
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
 		struct hid_device *hid = usbhid_devices[i];
 
@@ -1305,10 +1489,13 @@ void usbhid_backend_device_umount(uint8_t dev_addr)
 	}
 
 	ret = hid_async_cancel_dev_addr(dev_addr);
+	/* Publish only after the old transport epoch can no longer grow work. */
+	usbhid_usb_device_publish_retired(retired);
 
 	if (ret)
 		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
-	usbhid_usb_device_remove(dev_addr);
+	if (retired)
+		usbhid_lifecycle_kick();
 }
 
 void usbhid_backend_report_received(uint8_t dev_addr, uint8_t instance,

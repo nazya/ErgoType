@@ -94,6 +94,7 @@ int hid_async_queue_device_descriptor(u8 dev_addr,
 				      hid_async_complete_t complete,
 				      void *context);
 int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
+				      u32 generation,
 				      hid_async_complete_t complete,
 				      void *context);
 #if 0
@@ -133,6 +134,7 @@ int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
 int hid_async_cancel_device(u8 dev_addr, u8 instance);
 int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);
+int hid_async_synchronize_preprobe(void);
 
 /* Completion ingress called only by the TinyUSB callback facade. */
 void hid_async_backend_get_report_complete(u8 dev_addr, u8 instance,
