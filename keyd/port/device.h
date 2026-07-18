@@ -45,7 +45,7 @@ struct device {
 	int32_t _pending_abs_x;
 	int32_t _pending_abs_y;
 	uint8_t _pending_abs;
-	// Port: allocated only after this device reports HAPTIC_READY.
+	// Port: optional device-local FF effect IDs initialized from the add snapshot.
 	struct haptic_state *haptic;
 	void *data;
 };

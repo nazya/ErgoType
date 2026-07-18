@@ -14,7 +14,8 @@ runtime safety certification.
 Commit `00c751e` preserves Stadia/`ff-memless`, but that gaming path is
 unlinked; `hid-multitouch`/`hid-haptic` are active. The previous manual
 upload/play/erase path passed two-Pico cursor feedback. The current
-READY/preload/ID-reuse tree builds but needs hardware retest.
+delayed-activation/preload/ID-reuse path passed cold/hot two-Pico cursor
+feedback; extended stress remains.
 
 ## Scope
 
@@ -74,26 +75,30 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 
 ## Haptic Status
 
-- After successful `hid_add_device()`, glue publishes
-  `DEVICE_INPUT_HAPTIC_READY` only for a fully initialized `FF_HAPTIC` input.
-  READY uses that device's existing evdev queue and cannot be discarded by
-  ordinary input overflow. The send may wait only in the lifecycle probe task;
-  preload may wait in KeyD, never in TinyUSB callbacks. No queue/task/timer or
-  handshake was added.
-- On READY, `keyd/port/device.c` tries Click/Buzz/Rumble/Press/Release per
-  device and stores successful device-local IDs in a dynamically allocated
-  state owned by that KeyD device; removal frees the state before the device.
-  Each post-startup layout callback queues one virtual Press PLAY; `daemon.c`
-  fans it out like LED output to every grabbed device, so it never consumes
-  more FF slots.
+- `evdev_connect()` only registers the input handle. After synchronous
+  `hid_add_device()` finishes driver probe, `evdev_activate_hid()` activates
+  every evdev handle owned by that HID, including driver-created inputs such as
+  Rapoo's. It registers the sole empty client queue, publishes ADD with final
+  `has_haptic = src->ff && FF_HAPTIC`, then opens the input handle. There is no
+  READY/update event or second input buffer.
+- KeyD sees `has_haptic` during ordinary `device_init()`, tries
+  Click/Buzz/Rumble/Press/Release, and stores successful device-local IDs in
+  dynamically allocated state owned by that device; removal frees it. Each
+  post-startup layout callback queues one virtual Press PLAY; `daemon.c` fans
+  it out like LED output to every grabbed device without consuming more FF
+  slots.
 - The layout hook runs in the KeyD consumer task, so its virtual PLAY enqueue is
   nonblocking. A full `devmon` queue drops that optional pulse instead of making
   KeyD wait on itself.
+- Input before activation is intentionally not buffered: the HID is not
+  published to KeyD until probe has finalized its capabilities. After
+  activation, Linux input core writes directly to the single client queue;
+  `devmon_queue` carries only ADD and virtual output commands.
 - The `device/haptic-touchpad` fixture exposes Press/Release and cursor feedback.
   Its Press duration is 10 ms, so one PLAY requests one device-timed pulse.
-  Retest must confirm preload before the first post-READY layout callback,
-  over 96 cycles, unplug/replug, rapid unplug during preload/playback, ordering,
-  and watermark.
+  Cold/hot startup and repeated post-add layout feedback passed. Extended
+  retest must cover 96 cycles, unplug/replug, rapid unplug during
+  preload/playback, ordering, and watermark.
 
 ## Open Semantic Boundaries
 

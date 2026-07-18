@@ -67,6 +67,7 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 	port_dev.vendor = vendor;
 	port_dev.product = product;
 	port_dev.name = src->name ? src->name : "usb-hid";
+	port_dev.has_haptic = src->ff && test_bit(FF_HAPTIC, src->ffbit);
 	memcpy(port_dev.keybit, src->keybit, sizeof(port_dev.keybit));
 	memcpy(port_dev.relbit, src->relbit, sizeof(port_dev.relbit));
 	memcpy(port_dev.absbit, src->absbit, sizeof(port_dev.absbit));
@@ -86,7 +87,9 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 }
 
 static struct evdev_client *evdev_register_device(const struct port_input_dev *src,
-						  struct evdev *evdev)
+						  struct input_handle *handle,
+						  struct evdev *evdev,
+						  struct evdev_client **client_slot)
 {
 	struct evdev_client *client;
 	struct port_input_dev port_dev;
@@ -108,6 +111,7 @@ static struct evdev_client *evdev_register_device(const struct port_input_dev *s
 		return NULL;
 	}
 	client->evdev = evdev;
+	*client_slot = client;
 	port_dev = *src;
 	port_dev.ev_queue = client->buffer;
 	// file->private_data = client;
@@ -118,17 +122,32 @@ static struct evdev_client *evdev_register_device(const struct port_input_dev *s
 	port_dev.writer.upload_ff = evdev_client_upload_ff;
 	port_dev.writer.erase_ff = evdev_client_erase_ff;
 	ret = devmon_add_device(&port_dev);
-	if (ret < 0) {
-		vQueueDelete(client->buffer);
-		vPortFree(client);
+	if (ret < 0)
+		goto err_free;
+
+	// error = evdev_open_device(evdev);
+	// Firmware queues ADD before opening the input handle so reports cannot
+	// overtake device registration in the QueueSet.
+	ret = input_open_device(handle);
+	if (ret) {
+		evdev_unregister_device(client);
+		*client_slot = NULL;
 		return NULL;
 	}
 
 	return client;
+
+err_free:
+	*client_slot = NULL;
+	vQueueDelete(client->buffer);
+	vPortFree(client);
+	return NULL;
 }
 
 struct evdev_client *evdev_register_input_device(struct input_dev *src,
-						 struct evdev *evdev)
+						 struct input_handle *handle,
+						 struct evdev *evdev,
+						 struct evdev_client **client_slot)
 {
 	struct hid_device *hid = input_get_drvdata(src);
 	struct port_input_dev port_dev;
@@ -143,7 +162,7 @@ struct evdev_client *evdev_register_input_device(struct input_dev *src,
 
 	clear_bit(EV_REP, src->evbit);
 	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
-	return evdev_register_device(&port_dev, evdev);
+	return evdev_register_device(&port_dev, handle, evdev, client_slot);
 }
 
 int evdev_client_write(struct evdev_client *client,
@@ -257,13 +276,6 @@ void __pass_event(struct evdev_client *client,
 		.code = event->code,
 		.value = event->value,
 	};
-
-	if (port_event.type == DEVICE_INPUT_HAPTIC_READY) {
-		// READY is emitted from the lifecycle probe task, never a TinyUSB
-		// callback, so it may wait for KeyD to drain this device queue.
-		(void)xQueueSendToBack(client->buffer, &port_event, portMAX_DELAY);
-		return;
-	}
 
 	UBaseType_t reserve = EVDEV_QUEUE_NORMAL_RESERVE;
 	if (port_event.type == EV_KEY && !port_event.value)

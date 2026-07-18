@@ -208,10 +208,7 @@ static int event_handler(struct event *ev)
 		// if (ev->dev->data) {
 		// if (active_kbd) { // active_kbd = ev->dev->data; # now it is the only active kbd
 		// Virtual output events have no source device and use the paths below.
-		// FF readiness shares the device input queue, so ev->dev is already known.
-		if (ev->devev->type == DEV_HAPTIC_READY) {
-			haptic_init(ev->dev);
-		} else if (ev->dev && active_kbd) {
+		if (ev->dev && active_kbd) {
 			// struct keyboard *kbd = ev->dev->data;
 			struct keyboard *kbd = active_kbd;
 			switch (ev->devev->type) {

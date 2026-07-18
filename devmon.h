@@ -14,7 +14,6 @@
 
 #define DEVICE_INPUT_REMOVED	0xffffu
 #define DEVICE_INPUT_RESET	0xfffeu
-#define DEVICE_INPUT_HAPTIC_READY 0xfffdu
 #define INPUT_BITS_PER_LONG	(sizeof(unsigned long) * 8u)
 #define INPUT_BITS_TO_LONGS(nr)	(((nr) + INPUT_BITS_PER_LONG - 1u) / INPUT_BITS_PER_LONG)
 
@@ -28,7 +27,6 @@ enum device_event_type {
 	DEV_MOUSE_MOVE_ABS,
 	DEV_MOUSE_SCROLL,
 	DEV_RESET,
-	DEV_HAPTIC_READY,
 
 	DEV_REMOVED,
 };
@@ -74,9 +72,9 @@ struct evdev_writer {
 
 /*
  * devmon_queue carries this compact snapshot by value. Producers may build it
- * from a full Linux input_dev, but KeyD only needs the EVIOCGBIT-style bitmaps
- * and EVIOCGABS ranges below during device add; the full input_dev pointer
- * stays owned by the Linux input layer.
+ * from a full Linux input_dev, but KeyD only needs the final capability
+ * snapshot and EVIOCGABS ranges below during device add; the full input_dev
+ * pointer stays owned by the Linux input layer.
  */
 struct port_input_dev {
 	QueueHandle_t ev_queue;
@@ -84,6 +82,7 @@ struct port_input_dev {
 	uint16_t vendor;
 	uint16_t product;
 	const char *name;
+	bool has_haptic;
 	unsigned long keybit[INPUT_BITS_TO_LONGS(KEY_CNT)];
 	unsigned long relbit[INPUT_BITS_TO_LONGS(REL_CNT)];
 	unsigned long absbit[INPUT_BITS_TO_LONGS(ABS_CNT)];

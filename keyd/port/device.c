@@ -151,6 +151,8 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 	dev->writer = port_dev->writer;
 	if (port_dev->name)
 		snprintf(dev->name, sizeof(dev->name), "%s", port_dev->name);
+	if (port_dev->has_haptic)
+		haptic_init(dev);
 
 	return 0;
 }
@@ -188,9 +190,6 @@ struct device_event *device_read_event(struct device *dev)
 		return &devev;
 	case DEVICE_INPUT_RESET:
 		devev.type = DEV_RESET;
-		return &devev;
-	case DEVICE_INPUT_HAPTIC_READY:
-		devev.type = DEV_HAPTIC_READY;
 		return &devev;
 	case EV_REL:
 		switch (ev.code) {

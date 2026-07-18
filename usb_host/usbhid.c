@@ -892,7 +892,6 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 			const char *product_name)
 {
 	struct hid_device *hid;
-	struct hid_input *hidinput;
 	uint8_t *rdesc;
 	const struct usbhid_raw_interface *raw;
 	struct usbhid_usb_device *usb_entry;
@@ -1099,18 +1098,13 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		goto fail;
 	}
 
-	/*
-	 * hid_add_device() returns after the bound driver's synchronous probe.
-	 * hid-haptic initializes FF after hid_hw_start() has registered evdev, so
-	 * this is the first port-only point with the final input list and FF state.
-	 */
-	list_for_each_entry(hidinput, &hid->inputs, list) {
-		if (hidinput->input->ff &&
-		    test_bit(FF_HAPTIC, hidinput->input->ffbit)) {
-			// Linux userspace discovers FF after probe through ioctl. Firmware
-			// notifies KeyD through evdev so it can preload haptic effects.
-			evdev_pass_haptic_ready(hidinput->input);
-		}
+	// Linux userspace opens eventX only after probe. Firmware activates every
+	// evdev handle now so its devmon snapshot contains final capabilities.
+	ret = evdev_activate_hid(hid);
+	if (ret < 0) {
+		usbhid_remove_slot(hid);
+		async_msg("ERR: HID_EVDEV_ACTIVATE_FAIL");
+		goto fail;
 	}
 
 	// tuh_hid_receive_report(dev_addr, instance);
