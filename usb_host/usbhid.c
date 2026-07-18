@@ -67,6 +67,7 @@ struct usbhid_sync_request {
 	size_t bufsize;
 	size_t actual_len;
 	int status;
+	volatile bool done;
 };
 
 struct usbhid_pending_hid_probe {
@@ -113,6 +114,7 @@ static bool usbhid_root_hub_valid;
 static struct usbhid_usb_device *usbhid_usb_devices[USBHID_USB_DEVICE_MAX];
 static struct usbhid_raw_interface usbhid_raw_interfaces[HID_HOST_RAW_INTERFACE_MAX];
 static u32 usbhid_generation;
+static void usbhid_io_wait_idle(struct hid_device *hid);
 
 static u32 usbhid_next_generation(void)
 {
@@ -936,6 +938,7 @@ void usbhid_disconnect_task(void *pvParameters)
 		if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
 			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 		usbhid_report_wait_idle(hid);
+		usbhid_io_wait_idle(hid);
 		hid = usbhid_lookup(event.dev_addr, event.instance);
 		if (!hid || (event.generation &&
 			    hid->ll_generation != event.generation))
@@ -1166,6 +1169,7 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
 			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 		usbhid_report_wait_idle(hid);
+		usbhid_io_wait_idle(hid);
 		usbhid_remove_slot(hid);
 		async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
 		goto fail;
@@ -1336,6 +1340,7 @@ static void usbhid_stop(struct hid_device *hid)
 	if (hid_async_cancel_device_sync(hid->dev_addr, hid->instance))
 		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 	usbhid_report_wait_idle(hid);
+	usbhid_io_wait_idle(hid);
 }
 
 static int usbhid_open(struct hid_device *hid)
@@ -1409,6 +1414,7 @@ static int usbhid_parse(struct hid_device *hid)
 static void usbhid_sync_complete(const struct hid_async_request *req, int status)
 {
 	struct usbhid_sync_request *sync = req->context;
+	TaskHandle_t waiter = sync->task;
 
 	if (status >= 0 && sync->buf) {
 		sync->actual_len = min_t(size_t, req->actual_len, sync->bufsize);
@@ -1417,16 +1423,62 @@ static void usbhid_sync_complete(const struct hid_async_request *req, int status
 		sync->actual_len = req->actual_len;
 	}
 	sync->status = status;
-	xTaskNotifyGive(sync->task);
+	taskENTER_CRITICAL();
+	sync->done = true;
+	taskEXIT_CRITICAL();
+	/* Publishing done releases the stack-owned sync; do not touch it again. */
+	xTaskNotifyGive(waiter);
 }
 
 static int usbhid_sync_wait(struct usbhid_sync_request *sync, int ret)
 {
+	bool done;
+
 	if (ret)
 		return ret;
 
-	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	do {
+		taskENTER_CRITICAL();
+		done = sync->done;
+		taskEXIT_CRITICAL();
+		if (!done)
+			(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	} while (!done);
 	return sync->status;
+}
+
+static bool usbhid_io_get(struct hid_device *hid)
+{
+	bool acquired = false;
+
+	taskENTER_CRITICAL();
+	if (!hid->ll_transport_stopping) {
+		hid->ll_io_pending++;
+		acquired = true;
+	}
+	taskEXIT_CRITICAL();
+	return acquired;
+}
+
+static void usbhid_io_put(struct hid_device *hid)
+{
+	taskENTER_CRITICAL();
+	configASSERT(hid->ll_io_pending);
+	hid->ll_io_pending--;
+	taskEXIT_CRITICAL();
+}
+
+static void usbhid_io_wait_idle(struct hid_device *hid)
+{
+	bool idle;
+
+	do {
+		taskENTER_CRITICAL();
+		idle = hid->ll_io_pending == 0;
+		taskEXIT_CRITICAL();
+		if (!idle)
+			vTaskDelay(1);
+	} while (!idle);
 }
 
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
@@ -1438,13 +1490,13 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	u8 *report_data = NULL;
 	int ret;
 
-	if (usbhid_report_is_stopping(hid))
+	if (!usbhid_io_get(hid))
 		return;
 	if (reqtype == HID_REQ_GET_REPORT) {
 		report_data = hid_alloc_report_buf(report, GFP_KERNEL);
 		if (!report_data) {
 			async_msg("ERR: HID_REPORT_NOMEM");
-			return;
+			goto out;
 		}
 		sync.buf = report_data;
 		sync.bufsize = hid_report_len(report) + 7 + (report->id == 0);
@@ -1464,7 +1516,9 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 					    sync.bufsize, sync.actual_len, 0);
 	}
 
+out:
 	kfree(report_data);
+	usbhid_io_put(hid);
 }
 
 static int usbhid_wait_io(struct hid_device *hid)
@@ -1486,7 +1540,7 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 	};
 	int ret;
 
-	if (usbhid_report_is_stopping(hid))
+	if (!usbhid_io_get(hid))
 		return -ENODEV;
 
 	if (reqtype == HID_REQ_SET_REPORT) {
@@ -1496,9 +1550,9 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 		ret = hid_async_queue_raw_set_report(hid, reportnum, rtype, buf, len,
 						     usbhid_sync_complete, &sync);
 		ret = usbhid_sync_wait(&sync, ret);
-		if (ret)
-			return ret;
-		return (int)len;
+		if (!ret)
+			ret = (int)len;
+		goto out;
 	}
 
 	if (reqtype == HID_REQ_GET_REPORT) {
@@ -1507,12 +1561,15 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 		ret = hid_async_queue_raw_get_report_id(hid, reportnum, rtype, len,
 							 usbhid_sync_complete, &sync);
 		ret = usbhid_sync_wait(&sync, ret);
-		if (ret)
-			return ret;
-		return (int)sync.actual_len;
+		if (!ret)
+			ret = (int)sync.actual_len;
+		goto out;
 	}
 
-	return -ENOSYS;
+	ret = -ENOSYS;
+out:
+	usbhid_io_put(hid);
+	return ret;
 }
 
 static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
@@ -1521,7 +1578,7 @@ static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
 		.task = xTaskGetCurrentTaskHandle(),
 	};
 
-	if (usbhid_report_is_stopping(hid))
+	if (!usbhid_io_get(hid))
 		return -ENODEV;
 
 	// ret = usb_interrupt_msg(dev, usbhid->urbout->pipe, buf, count,
@@ -1531,10 +1588,10 @@ static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
 	int ret = hid_async_queue_output_report(hid, buf, len,
 						usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);
-	if (ret)
-		return ret;
-
-	return (int)len;
+	if (!ret)
+		ret = (int)len;
+	usbhid_io_put(hid);
+	return ret;
 }
 
 static int usbhid_idle(struct hid_device *hid, int report, int idle, int reqtype)

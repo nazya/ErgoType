@@ -669,6 +669,7 @@ struct hid_device {
 	u32 ll_generation;
 	wait_queue_head_t ll_wait;
 	u32 ll_report_revision;
+	u32 ll_io_pending;
 	u8 ll_report_owner;
 	bool ll_report_wanted;
 	bool ll_report_host_pending;

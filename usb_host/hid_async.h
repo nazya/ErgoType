@@ -43,6 +43,7 @@ struct hid_async_request {
 	u8 report_id;
 	u8 report_type;
 	u8 data_offset;
+	u8 ep_addr;
 	u8 string_index;
 #if 0
 	/* Deferred with HID_ASYNC_REQUEST_USB_CONTROL. */
@@ -53,6 +54,7 @@ struct hid_async_request {
 	u16 actual_len;
 	u16 string_langid;
 	u32 generation;
+	u32 serial;
 	u8 xfer_result;
 #if 0
 	/* Deferred with HID_ASYNC_REQUEST_USB_CONTROL. */
