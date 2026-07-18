@@ -146,6 +146,7 @@ struct mutex {
 
 struct semaphore {
 	SemaphoreHandle_t handle;
+	TaskHandle_t owner;
 };
 
 struct workqueue_struct {
@@ -1800,34 +1801,70 @@ static inline bool mutex_is_locked(struct mutex *mutex)
 
 static inline int down_interruptible(struct semaphore *sem)
 {
-	xSemaphoreTake(sem->handle, portMAX_DELAY);
+	if (xSemaphoreTake(sem->handle, portMAX_DELAY) != pdPASS)
+		return -EINTR;
+	taskENTER_CRITICAL();
+	sem->owner = xTaskGetCurrentTaskHandle();
+	taskEXIT_CRITICAL();
 	return 0;
 }
 
 static inline void down(struct semaphore *sem)
 {
 	xSemaphoreTake(sem->handle, portMAX_DELAY);
+	taskENTER_CRITICAL();
+	sem->owner = xTaskGetCurrentTaskHandle();
+	taskEXIT_CRITICAL();
 }
 
 static inline int down_trylock(struct semaphore *sem)
 {
-	return xSemaphoreTake(sem->handle, 0) == pdPASS ? 0 : 1;
+	if (xSemaphoreTake(sem->handle, 0) != pdPASS)
+		return 1;
+	taskENTER_CRITICAL();
+	sem->owner = xTaskGetCurrentTaskHandle();
+	taskEXIT_CRITICAL();
+	return 0;
 }
 
 static inline void up(struct semaphore *sem)
 {
+	taskENTER_CRITICAL();
+	sem->owner = NULL;
+	taskEXIT_CRITICAL();
 	xSemaphoreGive(sem->handle);
 }
 
 static inline void sema_init(struct semaphore *sem, int val)
 {
 	sem->handle = xSemaphoreCreateCounting((UBaseType_t)val, (UBaseType_t)val);
+	sem->owner = NULL;
 }
 
 static inline void sema_destroy(struct semaphore *sem)
 {
-	vSemaphoreDelete(sem->handle);
+	SemaphoreHandle_t handle = sem->handle;
+
 	sem->handle = NULL;
+	sem->owner = NULL;
+	if (handle)
+		vSemaphoreDelete(handle);
+}
+
+static inline bool sema_owned_by_task(struct semaphore *sem,
+				      TaskHandle_t task)
+{
+	TaskHandle_t owner;
+
+	taskENTER_CRITICAL();
+	owner = sem->owner;
+	taskEXIT_CRITICAL();
+	return task && owner == task;
+}
+
+static inline bool sema_owned_by_current(struct semaphore *sem)
+{
+	return sema_owned_by_task(sem, xTaskGetCurrentTaskHandle());
 }
 
 static inline void hid_compat_spin_lock_init(spinlock_t *lock)

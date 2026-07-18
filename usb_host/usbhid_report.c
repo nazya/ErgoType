@@ -57,6 +57,7 @@ struct usbhid_report_event {
 			u8 *data;
 			void *context;
 			usbhid_control_report_done_t done;
+			TaskHandle_t parser_owner;
 			u16 bufsize;
 			u8 report_type;
 		} control;
@@ -65,6 +66,8 @@ struct usbhid_report_event {
 
 static QueueHandle_t usbhid_report_queue;
 static bool usbhid_control_report_queued;
+static struct usbhid_report_event usbhid_control_report_handoff;
+static bool usbhid_control_report_handoff_ready;
 
 static void usbhid_report_reconcile_on_host(void *data);
 
@@ -162,7 +165,7 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 
 int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 				 uint8_t *report, uint16_t bufsize,
-				 uint16_t len,
+				 uint16_t len, TaskHandle_t parser_owner,
 				 usbhid_control_report_done_t done,
 				 void *context)
 {
@@ -175,6 +178,7 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 			.data = report,
 			.context = context,
 			.done = done,
+			.parser_owner = parser_owner,
 			.bufsize = bufsize,
 			.report_type = report_type,
 		},
@@ -350,6 +354,54 @@ static void usbhid_report_reconcile_on_host(void *data)
 	}
 }
 
+static void usbhid_control_report_finish(struct usbhid_report_event *event,
+					 int status)
+{
+	taskENTER_CRITICAL();
+	configASSERT(usbhid_control_report_queued);
+	usbhid_control_report_queued = false;
+	taskEXIT_CRITICAL();
+
+	/* Parsing is part of upstream control-I/O completion. */
+	event->payload.control.done(event->hid,
+				    event->payload.control.context, status);
+}
+
+bool usbhid_control_report_process_owned(struct hid_device *hid)
+{
+	struct usbhid_report_event event;
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	bool process;
+
+	if (!hid || !sema_owned_by_current(&hid->driver_input_lock))
+		return false;
+
+	taskENTER_CRITICAL();
+	if (!usbhid_control_report_handoff_ready ||
+	    usbhid_control_report_handoff.hid != hid ||
+	    usbhid_control_report_handoff.payload.control.parser_owner != task ||
+	    hid->ll_control_waiter != task) {
+		taskEXIT_CRITICAL();
+		return false;
+	}
+	event = usbhid_control_report_handoff;
+	usbhid_control_report_handoff_ready = false;
+	process = event.generation == hid->ll_generation &&
+		  !hid->ll_transport_stopping;
+	taskEXIT_CRITICAL();
+
+	usbhid_control_report_finish(&event,
+		process && event.parse ?
+			hid_safe_input_report_locked(
+				hid,
+				(enum hid_report_type)
+					event.payload.control.report_type,
+				event.payload.control.data,
+				event.payload.control.bufsize,
+				event.len, 0) : -ENODEV);
+	return true;
+}
+
 void usbhid_report_task(void *pvParameters)
 {
 	(void)pvParameters;
@@ -359,33 +411,88 @@ void usbhid_report_task(void *pvParameters)
 		bool defer = false;
 		bool process;
 
-		if (xQueueReceive(usbhid_report_queue, &event,
-				  portMAX_DELAY) != pdPASS)
+		if (xQueuePeek(usbhid_report_queue, &event,
+			       portMAX_DELAY) != pdPASS)
 			continue;
 
 		if (event.kind == USBHID_REPORT_EVENT_CONTROL) {
+			TaskHandle_t parser_owner =
+				event.payload.control.parser_owner;
+			bool acquired = false;
 			int status = -ENODEV;
 
 			taskENTER_CRITICAL();
-			usbhid_control_report_queued = false;
 			process = event.generation == event.hid->ll_generation &&
 				  !event.hid->ll_transport_stopping;
 			taskEXIT_CRITICAL();
 
-			if (process && event.parse)
-				status = hid_safe_input_report(event.hid,
-						(enum hid_report_type)
-							event.payload.control.report_type,
-						event.payload.control.data,
-						event.payload.control.bufsize,
-						event.len, 0);
+			/*
+			 * A probe-time GET belongs to the lifecycle task already holding
+			 * driver_input_lock. Keep the event at the queue head until that
+			 * task enters hid_hw_wait(), then hand off only this control report.
+			 */
+			if (process && event.parse && parser_owner &&
+			    sema_owned_by_task(&event.hid->driver_input_lock,
+					       parser_owner)) {
+				bool waiter_ready;
 
-			/* Parsing is part of upstream control-I/O completion. */
-			event.payload.control.done(event.hid,
-						   event.payload.control.context,
-						   status);
+				taskENTER_CRITICAL();
+				waiter_ready =
+					event.hid->ll_control_waiter == parser_owner &&
+					!usbhid_control_report_handoff_ready;
+				taskEXIT_CRITICAL();
+				if (!waiter_ready) {
+					vTaskDelay(1);
+					continue;
+				}
+
+				if (xQueueReceive(usbhid_report_queue, &event, 0) !=
+				    pdPASS)
+					continue;
+				taskENTER_CRITICAL();
+				configASSERT(!usbhid_control_report_handoff_ready);
+				usbhid_control_report_handoff = event;
+				usbhid_control_report_handoff_ready = true;
+				taskEXIT_CRITICAL();
+				/* The owner runs one priority below this task. */
+				vTaskDelay(1);
+				continue;
+			}
+
+			/*
+			 * Acquire the parser lock explicitly. A driver's raw_event may also
+			 * return -EBUSY, so its return value must never be mistaken for lock
+			 * contention and replayed.
+			 */
+			if (process && event.parse) {
+				if (down_trylock(&event.hid->driver_input_lock)) {
+					vTaskDelay(1);
+					continue;
+				}
+				acquired = true;
+			}
+
+			if (xQueueReceive(usbhid_report_queue, &event, 0) != pdPASS) {
+				if (acquired)
+					up(&event.hid->driver_input_lock);
+				continue;
+			}
+			if (acquired)
+				status = hid_safe_input_report_locked(
+					event.hid,
+					(enum hid_report_type)
+						event.payload.control.report_type,
+					event.payload.control.data,
+					event.payload.control.bufsize,
+					event.len, 0);
+			if (acquired)
+				up(&event.hid->driver_input_lock);
+			usbhid_control_report_finish(&event, status);
 			continue;
 		}
+
+		if (xQueueReceive(usbhid_report_queue, &event, 0) != pdPASS)
+			continue;
 
 		taskENTER_CRITICAL();
 		process = event.hid->ll_report_owner == USBHID_REPORT_QUEUED &&

@@ -20,11 +20,14 @@
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
-  Successful GET_REPORT completion is handed to `usbhid_report_task`, and
-  `hid_hw_wait()` drains through the end of parsing, so callers cannot observe
-  a transport-complete/parser-pending false idle. Raw GET/SET and interrupt
-  output keep their upstream synchronous return contract while using the same
-  asynchronous TinyUSB owner underneath.
+  Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
+  drains through the end of parsing, so callers cannot observe
+  a transport-complete/parser-pending false idle. During probe, the waiting
+  lifecycle task consumes only its completed control GET under the lock it
+  already owns. Interrupt-IN therefore stays gated until probe finishes, while
+  returned feature fields are preserved instead of being lost to lock
+  contention. Raw GET/SET and interrupt output keep their upstream synchronous
+  return contract while using the same asynchronous TinyUSB owner underneath.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The generic ff-core/evdev boundary remains for future haptic support, but no

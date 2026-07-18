@@ -670,6 +670,7 @@ struct hid_device {
 	wait_queue_head_t ll_wait;
 	u32 ll_report_revision;
 	u32 ll_io_pending;
+	TaskHandle_t ll_control_waiter;
 	u8 ll_report_owner;
 	bool ll_report_wanted;
 	bool ll_report_host_pending;
@@ -1085,6 +1086,9 @@ static inline const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const 
 						 unsigned int *size) { return rdesc; }
 int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, u32 size, int interrupt);
 int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, size_t bufsize, u32 size, int interrupt);
+/* Port control completions may re-enter while their task already owns driver_input_lock. */
+int hid_safe_input_report_locked(struct hid_device *hid, enum hid_report_type type,
+				 u8 *data, size_t bufsize, u32 size, int interrupt);
 void hid_output_report(struct hid_report *report, __u8 *data);
 u8 *hid_alloc_report_buf(struct hid_report *report, gfp_t flags);
 struct hid_report *hid_validate_values(struct hid_device *hid,

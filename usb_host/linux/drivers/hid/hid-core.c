@@ -2368,6 +2368,23 @@ int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 
 }
 EXPORT_SYMBOL_GPL(hid_safe_input_report);
 
+/*
+ * Port-only control completion entry. Probe-time GET_REPORT is consumed by
+ * the lifecycle task which already owns driver_input_lock; interrupt reports
+ * must remain gated until that probe finishes.
+ */
+int hid_safe_input_report_locked(struct hid_device *hid,
+				 enum hid_report_type type, u8 *data,
+				 size_t bufsize, u32 size, int interrupt)
+{
+	if (!hid || !sema_owned_by_current(&hid->driver_input_lock))
+		return -EINVAL;
+
+	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
+				  false, /* from_bpf */
+				  true /* lock_already_taken */);
+}
+
 bool hid_is_usb(const struct hid_device *hdev)
 {
 	/*

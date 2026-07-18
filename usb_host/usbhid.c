@@ -73,6 +73,7 @@ struct usbhid_sync_request {
 
 /* Padded GET buffer owned from .request enqueue through parser completion. */
 struct usbhid_control_input {
+	TaskHandle_t parser_owner;
 	u16 bufsize;
 	u8 data[];
 };
@@ -1535,6 +1536,7 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	memcpy(input->data, req->data, len);
 	ret = usbhid_control_report_submit(req->hid, req->report->type,
 					   input->data, input->bufsize, len,
+					   input->parser_owner,
 					   usbhid_control_report_done,
 					   input);
 	if (ret) {
@@ -1570,13 +1572,15 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 			usbhid_io_put(hid);
 			return;
 		}
+		if (sema_owned_by_current(&hid->driver_input_lock))
+			input->parser_owner = xTaskGetCurrentTaskHandle();
 		input->bufsize = (u16)bufsize;
 	}
 
 	// usbhid_submit_report(hid, report, reqtype);
 	/*
 	 * Match upstream usbhid_submit_report(): queue best-effort control work and
-	 * return. GET_REPORT completion is parsed by usbhid_report_task before it
+	 * return. GET_REPORT completion is parsed from the report queue before it
 	 * releases ll_io_pending, so a following hid_hw_wait() cannot observe a
 	 * false-idle handoff between transport completion and hid-core parsing.
 	 */
@@ -1591,8 +1595,35 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 
 static int usbhid_wait_io(struct hid_device *hid)
 {
-	/* Each owner request has its own watchdog; drain every accepted request. */
-	usbhid_io_wait_idle(hid);
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	bool owns_input_lock = sema_owned_by_current(&hid->driver_input_lock);
+
+	if (owns_input_lock) {
+		taskENTER_CRITICAL();
+		configASSERT(!hid->ll_control_waiter ||
+			     hid->ll_control_waiter == task);
+		hid->ll_control_waiter = task;
+		taskEXIT_CRITICAL();
+	}
+
+	/*
+	 * Probe owns driver_input_lock while resolution multipliers are fetched.
+	 * Let that same task consume only its completed control GET; opening the
+	 * lock here would also admit interrupt-IN into a half-built input device.
+	 */
+	while (!usbhid_io_idle(hid)) {
+		if (owns_input_lock &&
+		    usbhid_control_report_process_owned(hid))
+			continue;
+		vTaskDelay(1);
+	}
+
+	if (owns_input_lock) {
+		taskENTER_CRITICAL();
+		if (hid->ll_control_waiter == task)
+			hid->ll_control_waiter = NULL;
+		taskEXIT_CRITICAL();
+	}
 	return usbhid_report_is_stopping(hid) ? -ENODEV : 0;
 }
 
