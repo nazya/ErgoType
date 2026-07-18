@@ -866,24 +866,26 @@ static void hid_async_string_descriptor_complete(tuh_xfer_t *xfer)
 			   0, 0, 0, xfer->actual_len, xfer->result);
 }
 
-void tuh_hid_get_report_complete_cb(uint8_t dev_addr, uint8_t instance,
-				    uint8_t report_id, uint8_t report_type,
-				    uint16_t len)
+void hid_async_backend_get_report_complete(uint8_t dev_addr, uint8_t instance,
+					   uint8_t report_id,
+					   uint8_t report_type,
+					   uint16_t len)
 {
 	hid_async_complete(HID_ASYNC_COMPLETE_GET, dev_addr, instance,
 			   report_id, report_type, len, XFER_RESULT_SUCCESS);
 }
 
-void tuh_hid_set_report_complete_cb(uint8_t dev_addr, uint8_t instance,
-				    uint8_t report_id, uint8_t report_type,
-				    uint16_t len)
+void hid_async_backend_set_report_complete(uint8_t dev_addr, uint8_t instance,
+					   uint8_t report_id,
+					   uint8_t report_type,
+					   uint16_t len)
 {
 	hid_async_complete(HID_ASYNC_COMPLETE_SET, dev_addr, instance,
 			   report_id, report_type, len, XFER_RESULT_SUCCESS);
 }
 
-void tuh_hid_report_sent_cb(uint8_t dev_addr, uint8_t instance,
-			    uint8_t const *report, uint16_t len)
+void hid_async_backend_report_sent(uint8_t dev_addr, uint8_t instance,
+				   uint8_t const *report, uint16_t len)
 {
 	(void)report;
 	hid_async_complete(HID_ASYNC_COMPLETE_OUTPUT, dev_addr, instance,

@@ -11,6 +11,7 @@
 #include "host/usbh_pvt.h"
 
 #include "hid_async.h"
+#include "usbhid_backend.h"
 #include "stdio_tusb_cdc.h"
 #include "linux/include/linux/hid.h"
 #include "linux/include/linux/hiddev.h"
@@ -460,7 +461,7 @@ static const usbh_class_driver_t usbhid_raw_interface_driver[] = {
 	},
 };
 
-usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *driver_count)
+usbh_class_driver_t const *usbhid_backend_app_driver_get(uint8_t *driver_count)
 {
 	*driver_count = TU_ARRAY_SIZE(usbhid_raw_interface_driver);
 	return usbhid_raw_interface_driver;
@@ -1140,8 +1141,8 @@ static void usbhid_disconnect(uint8_t dev_addr, uint8_t instance)
 		async_msg("ERR: HID_DISCONNECT_Q_FAIL");
 }
 
-void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
-		      uint8_t const *desc_report, uint16_t desc_len)
+void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
+			      uint8_t const *desc_report, uint16_t desc_len)
 {
 	struct usbhid_usb_device *entry = usbhid_usb_device_prepare(dev_addr);
 	int ret;
@@ -1164,7 +1165,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
 		usbhid_usb_device_run_pending_probes(entry);
 }
 
-void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
+void usbhid_backend_hid_umount(uint8_t dev_addr, uint8_t instance)
 {
 	struct usbhid_usb_device *entry = usbhid_usb_device_find(dev_addr);
 
@@ -1173,7 +1174,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 	usbhid_disconnect(dev_addr, instance);
 }
 
-void tuh_mount_cb(uint8_t dev_addr)
+void usbhid_backend_device_mount(uint8_t dev_addr)
 {
 	struct usbhid_usb_device *entry = usbhid_usb_device_prepare(dev_addr);
 
@@ -1186,7 +1187,7 @@ void tuh_mount_cb(uint8_t dev_addr)
 	usbhid_usb_device_queue_descriptor(entry);
 }
 
-void tuh_umount_cb(uint8_t dev_addr)
+void usbhid_backend_device_umount(uint8_t dev_addr)
 {
 	int ret = hid_async_cancel_dev_addr(dev_addr);
 
@@ -1195,8 +1196,8 @@ void tuh_umount_cb(uint8_t dev_addr)
 	usbhid_usb_device_remove(dev_addr);
 }
 
-void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
-				uint8_t const *report, uint16_t len)
+void usbhid_backend_report_received(uint8_t dev_addr, uint8_t instance,
+				    uint8_t const *report, uint16_t len)
 {
 	struct hid_device *hid = usbhid_lookup(dev_addr, instance);
 	uint8_t protocol_mode = tuh_hid_get_protocol(dev_addr, instance);

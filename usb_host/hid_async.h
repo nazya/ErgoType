@@ -140,4 +140,14 @@ int hid_async_cancel_device(u8 dev_addr, u8 instance);
 int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);
 
+/* Completion ingress called only by the TinyUSB callback facade. */
+void hid_async_backend_get_report_complete(u8 dev_addr, u8 instance,
+					   u8 report_id, u8 report_type,
+					   u16 len);
+void hid_async_backend_set_report_complete(u8 dev_addr, u8 instance,
+					   u8 report_id, u8 report_type,
+					   u16 len);
+void hid_async_backend_report_sent(u8 dev_addr, u8 instance,
+				   const u8 *report, u16 len);
+
 #endif

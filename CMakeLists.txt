@@ -79,6 +79,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/devmon.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/tinyusb_hid.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/usbhid.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_async.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
