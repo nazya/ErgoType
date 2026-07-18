@@ -68,9 +68,6 @@ static const struct hid_driver px_driver = {
 	.name = "primax",
 	.id_table = px_devices,
 	.raw_event = px_raw_event,
-	// Upstream has no marker here; this raw_event only rewrites the report
-	// buffer and re-enters hid_report_raw_event(), so it is callback-safe.
-	.raw_event_callback_safe = true,
 };
 module_hid_driver(px_driver);
 

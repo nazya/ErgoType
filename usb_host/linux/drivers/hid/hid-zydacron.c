@@ -203,9 +203,6 @@ static const struct hid_driver zc_driver = {
 	.report_fixup = zc_report_fixup,
 	.input_mapping = zc_input_mapping,
 	.raw_event = zc_raw_event,
-	// Upstream has no marker here; this raw_event only emits input-core key
-	// events from the received report and does not issue HID requests or wait.
-	.raw_event_callback_safe = true,
 	.probe = zc_probe,
 };
 module_hid_driver(zc_driver);

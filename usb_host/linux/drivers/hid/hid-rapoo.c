@@ -93,9 +93,6 @@ static const struct hid_driver rapoo_driver = {
 	.id_table = rapoo_devices,
 	.probe = rapoo_probe,
 	.raw_event = rapoo_raw_event,
-	// Upstream has no marker here; this raw_event only emits input-core mouse
-	// back/forward key events and does not issue HID requests or wait.
-	.raw_event_callback_safe = true,
 };
 
 module_hid_driver(rapoo_driver);

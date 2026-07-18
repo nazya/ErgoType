@@ -299,7 +299,7 @@ void usbhid_report_task(void *pvParameters)
 		taskEXIT_CRITICAL();
 
 		if (process && event.parse)
-			(void)hid_deferred_input_report(event.hid,
+			(void)hid_safe_input_report(event.hid,
 						HID_INPUT_REPORT, event.data,
 						sizeof(event.data), event.len, 1);
 

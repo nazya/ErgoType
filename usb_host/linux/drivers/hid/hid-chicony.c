@@ -151,9 +151,6 @@ static const struct hid_driver ch_driver = {
 	.input_mapping = ch_input_mapping,
 	.probe = ch_probe,
 	.raw_event = ch_raw_event,
-	// Upstream has no marker here; this raw_event only emits input-core
-	// RFKILL key events and does not issue HID requests or wait.
-	.raw_event_callback_safe = true,
 };
 module_hid_driver(ch_driver);
 

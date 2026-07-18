@@ -263,9 +263,6 @@ static const struct hid_driver creative_sb0540_driver = {
 	.name = "creative-sb0540",
 	.id_table = creative_sb0540_devices,
 	.raw_event = creative_sb0540_raw_event,
-	// Upstream has no marker here; this raw_event only decodes the received
-	// IR report and emits input-core key events, with no HID request or wait.
-	.raw_event_callback_safe = true,
 	.input_configured = creative_sb0540_input_configured,
 	.probe = creative_sb0540_probe,
 	.input_mapping = creative_sb0540_input_mapping,

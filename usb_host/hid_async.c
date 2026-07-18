@@ -307,8 +307,7 @@ int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
 	return hid_async_queue_hid_request(&req);
 }
 
-static int hid_async_queue_raw_get(struct hid_device *hid,
-				   struct hid_report *report, u8 report_id,
+static int hid_async_queue_raw_get(struct hid_device *hid, u8 report_id,
 				   enum hid_report_type report_type,
 				   size_t len, hid_async_complete_t complete,
 				   void *context)
@@ -324,7 +323,6 @@ static int hid_async_queue_raw_get(struct hid_device *hid,
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_REPORT;
 	req.hid = hid;
-	req.report = report;
 	req.reqtype = HID_REQ_GET_REPORT;
 	req.dev_addr = hid->dev_addr;
 	req.instance = hid->instance;
@@ -345,22 +343,13 @@ static int hid_async_queue_raw_get(struct hid_device *hid,
 	return hid_async_queue_hid_request(&req);
 }
 
-int hid_async_queue_raw_get_report(struct hid_device *hid,
-				   struct hid_report *report, size_t len,
-				   hid_async_complete_t complete,
-				   void *context)
-{
-	return hid_async_queue_raw_get(hid, report, report->id, report->type,
-				       len, complete, context);
-}
-
 int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 				      enum hid_report_type report_type,
 				      size_t len,
 				      hid_async_complete_t complete,
 				      void *context)
 {
-	return hid_async_queue_raw_get(hid, NULL, report_id, report_type, len,
+	return hid_async_queue_raw_get(hid, report_id, report_type, len,
 				       complete, context);
 }
 
@@ -535,32 +524,6 @@ int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
 	return 0;
 }
 #endif
-
-int hid_async_queue_input_report(struct hid_device *hid,
-				 enum hid_report_type type, const u8 *data,
-				 size_t bufsize, u32 size, int interrupt)
-{
-	struct hid_async_request req;
-
-	if (!hid_async_request_queue)
-		return -ENODEV;
-
-	if (bufsize > HID_ASYNC_REPORT_MAX)
-		return -EIO;
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_INPUT_REPORT;
-	req.hid = hid;
-	req.dev_addr = hid->dev_addr;
-	req.instance = hid->instance;
-	req.report_type = type;
-	req.len = (u16)size;
-	req.bufsize = (u16)bufsize;
-	req.interrupt = interrupt;
-	memcpy(req.data, data, bufsize);
-
-	return hid_async_queue_hid_request(&req);
-}
 
 static int hid_async_submit(struct hid_async_request *req)
 {
@@ -927,15 +890,6 @@ void hid_async_task(void *pvParameters)
 			continue;
 		}
 
-		if (active.kind == HID_ASYNC_REQUEST_INPUT_REPORT) {
-			hid_deferred_input_report(active.hid,
-						  (enum hid_report_type)active.report_type,
-						  active.data, active.bufsize,
-						  active.len, active.interrupt);
-			hid_async_active = false;
-			continue;
-		}
-
 		preprobe = hid_async_request_is_preprobe(&active);
 		if (preprobe)
 			status = hid_async_submit_preprobe(&active);
@@ -1036,11 +990,6 @@ void hid_async_task(void *pvParameters)
 			else
 				active.complete(&active, status);
 		}
-		else if (status >= 0 && active.reqtype == HID_REQ_GET_REPORT &&
-			 active.report)
-			hid_deferred_input_report(active.hid, active.report->type,
-						  active.data, active.actual_len,
-						  active.actual_len, 0);
 		hid_async_active = false;
 	}
 }

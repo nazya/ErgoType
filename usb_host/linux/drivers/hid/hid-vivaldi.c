@@ -17,9 +17,7 @@
 static int vivaldi_probe(struct hid_device *hdev,
 			 const struct hid_device_id *id)
 {
-	// struct vivaldi_data *drvdata;
-	// Port keeps upstream vivaldi_data first and adds async GET_REPORT state.
-	struct vivaldi_drvdata *drvdata;
+	struct vivaldi_data *drvdata;
 	int ret;
 
 	drvdata = devm_kzalloc(&hdev->dev, sizeof(*drvdata), GFP_KERNEL);

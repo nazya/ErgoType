@@ -202,9 +202,6 @@ static const struct hid_driver saitek_driver = {
 	.probe = saitek_probe,
 	.report_fixup = saitek_report_fixup,
 	.raw_event = saitek_raw_event,
-	// Upstream has no marker here; this raw_event only rewrites mode bits in
-	// the already received report buffer and is callback-safe.
-	.raw_event_callback_safe = true,
 	.event = saitek_event,
 };
 module_hid_driver(saitek_driver);

@@ -106,9 +106,6 @@ static const struct hid_driver pxrc_driver = {
 	.report_fixup = pxrc_report_fixup,
 	.probe = pxrc_probe,
 	.raw_event = pxrc_raw_event,
-	// Upstream has no marker here; this raw_event only shuffles already
-	// received axis bytes in the report buffer and is callback-safe.
-	.raw_event_callback_safe = true,
 };
 module_hid_driver(pxrc_driver);
 

@@ -41,7 +41,6 @@
 #include "../../include/linux/hid-input.h"
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
-#include "usb_host/hid_async.h"
 // Firmware reports runtime usage-table cap drops through the async CDC logger.
 #include "stdio_tusb_cdc.h"
 #include "hid-ids.h"
@@ -2257,15 +2256,9 @@ EXPORT_SYMBOL_GPL(hid_report_raw_event);
  * Upstream Linux full input-report entry with Linux driver lock/BPF/debugfs
  * hooks skipped where this port has no matching subsystem.
  */
-// static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
-//			      u8 *data, size_t bufsize, u32 size, int interrupt, u64 source,
-//			      bool from_bpf, bool lock_already_taken)
-// The TinyUSB port can defer raw_event reports out of the receive callback and
-// re-enter this upstream-shaped path from the HID async task.
 static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 			      u8 *data, size_t bufsize, u32 size, int interrupt, u64 source,
-			      bool from_bpf, bool lock_already_taken,
-			      bool from_hid_async)
+			      bool from_bpf, bool lock_already_taken)
 {
 	struct hid_report_enum *report_enum;
 	// struct hid_driver *hdrv;
@@ -2316,29 +2309,6 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 		goto unlock;
 	}
 
-	// if (hdrv && hdrv->raw_event && hid_match_report(hid, report)) {
-	// 	ret = hdrv->raw_event(hid, report, data, size);
-	// 	if (ret < 0)
-	// 		goto unlock;
-	// }
-	/*
-	 * TinyUSB delivers interrupt reports from a receive callback. raw_event
-	 * hooks that are not audited as callback-safe and all report hooks run
-	 * from the HID async task, then re-enter this same Linux-shaped
-	 * input-report path.
-	 */
-	if (hdrv && !from_hid_async) {
-		if ((hdrv->raw_event && hid_match_report(hid, report) &&
-		     !hdrv->raw_event_callback_safe) ||
-		    (hdrv->report && hid->claimed != HID_CLAIMED_HIDRAW &&
-		     report->maxfield)) {
-			ret = hid_async_queue_input_report(hid, type, data,
-							  bufsize, size,
-							  interrupt);
-			goto unlock;
-		}
-	}
-
 	if (hdrv && hdrv->raw_event && hid_match_report(hid, report)) {
 		ret = hdrv->raw_event(hid, report, data, size);
 		if (ret < 0)
@@ -2370,8 +2340,7 @@ int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data
 {
 	return __hid_input_report(hid, type, data, size, size, interrupt, 0,
 				  false, /* from_bpf */
-				  false, /* lock_already_taken */
-				  false /* from_hid_async */);
+				  false /* lock_already_taken */);
 }
 EXPORT_SYMBOL_GPL(hid_input_report);
 
@@ -2395,20 +2364,9 @@ int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 
 {
 	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
 				  false, /* from_bpf */
-				  false, /* lock_already_taken */
-				  false /* from_hid_async */);
+				  false /* lock_already_taken */);
 }
 EXPORT_SYMBOL_GPL(hid_safe_input_report);
-
-int hid_deferred_input_report(struct hid_device *hid, enum hid_report_type type,
-			      u8 *data, size_t bufsize, u32 size, int interrupt)
-{
-	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
-				  false, /* from_bpf */
-				  false, /* lock_already_taken */
-				  true /* from_hid_async */);
-}
-EXPORT_SYMBOL_GPL(hid_deferred_input_report);
 
 bool hid_is_usb(const struct hid_device *hdev)
 {
@@ -2530,9 +2488,6 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 
 	/* Drivers with the ->raw_event callback set are not required to connect
 	 * to any other listener. */
-	// if (!hdev->claimed && !hdev->driver->raw_event) {
-	// raw_event hooks can now run from the HID async task when they are not
-	// callback-safe, so listener-only raw_event drivers match upstream again.
 	if (!hdev->claimed && !hdev->driver->raw_event) {
 		hid_err(hdev, "device has no listeners, quitting\n");
 		return -ENODEV;

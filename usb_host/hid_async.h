@@ -30,7 +30,6 @@ enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_USB_CONTROL,
 	HID_ASYNC_REQUEST_USB_INTERRUPT,
 #endif
-	HID_ASYNC_REQUEST_INPUT_REPORT,
 	HID_ASYNC_REQUEST_BARRIER,
 };
 
@@ -50,10 +49,8 @@ struct hid_async_request {
 	u8 control_request;
 	u8 control_requesttype;
 #endif
-	u8 interrupt;
 	u16 len;
 	u16 actual_len;
-	u16 bufsize;
 	u16 string_langid;
 	u32 generation;
 	u8 xfer_result;
@@ -84,10 +81,6 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
 				   enum hid_report_type report_type,
 				   const __u8 *buf, size_t len,
-				   hid_async_complete_t complete,
-				   void *context);
-int hid_async_queue_raw_get_report(struct hid_device *hid,
-				   struct hid_report *report, size_t len,
 				   hid_async_complete_t complete,
 				   void *context);
 int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
@@ -135,9 +128,6 @@ int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
 				      hid_async_complete_t complete,
 				      void *context);
 #endif
-int hid_async_queue_input_report(struct hid_device *hid,
-				 enum hid_report_type type, const u8 *data,
-				 size_t bufsize, u32 size, int interrupt);
 int hid_async_cancel_device(u8 dev_addr, u8 instance);
 int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);

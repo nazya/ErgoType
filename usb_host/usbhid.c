@@ -67,7 +67,6 @@ struct usbhid_sync_request {
 	size_t bufsize;
 	size_t actual_len;
 	int status;
-	bool parse_report;
 };
 
 struct usbhid_pending_hid_probe {
@@ -1411,11 +1410,6 @@ static void usbhid_sync_complete(const struct hid_async_request *req, int status
 {
 	struct usbhid_sync_request *sync = req->context;
 
-	if (status >= 0 && sync->parse_report &&
-	    !usbhid_report_is_stopping(req->hid))
-		hid_deferred_input_report(req->hid, req->report->type,
-					  (u8 *)req->data, req->actual_len,
-					  req->actual_len, 0);
 	if (status >= 0 && sync->buf) {
 		sync->actual_len = min_t(size_t, req->actual_len, sync->bufsize);
 		memcpy(sync->buf, req->data, sync->actual_len);
@@ -1440,19 +1434,37 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 {
 	struct usbhid_sync_request sync = {
 		.task = xTaskGetCurrentTaskHandle(),
-		.parse_report = reqtype == HID_REQ_GET_REPORT,
 	};
+	u8 *report_data = NULL;
+	int ret;
 
 	if (usbhid_report_is_stopping(hid))
 		return;
+	if (reqtype == HID_REQ_GET_REPORT) {
+		report_data = hid_alloc_report_buf(report, GFP_KERNEL);
+		if (!report_data) {
+			async_msg("ERR: HID_REPORT_NOMEM");
+			return;
+		}
+		sync.buf = report_data;
+		sync.bufsize = hid_report_len(report) + 7 + (report->id == 0);
+	}
 
 	// usbhid_submit_report(hid, report, reqtype);
-	// Port queues the same best-effort hid_hw_request() path into the HID async
-	// control task; completion callbacks do not block TinyUSB callback context.
-	int ret = hid_async_queue_report(hid, report, reqtype,
-					 usbhid_sync_complete, &sync);
-	if (usbhid_sync_wait(&sync, ret))
+	// Queue transport work and wait only in the Linux-facing caller task. The
+	// transfer owner copies the result and wakes us; it never enters hid-core.
+	ret = hid_async_queue_report(hid, report, reqtype,
+				     usbhid_sync_complete, &sync);
+	ret = usbhid_sync_wait(&sync, ret);
+	if (ret) {
 		async_msg("ERR: HID_ASYNC_REQ_FAIL");
+	} else if (reqtype == HID_REQ_GET_REPORT &&
+		   !usbhid_report_is_stopping(hid)) {
+		(void)hid_safe_input_report(hid, report->type, report_data,
+					    sync.bufsize, sync.actual_len, 0);
+	}
+
+	kfree(report_data);
 }
 
 static int usbhid_wait_io(struct hid_device *hid)

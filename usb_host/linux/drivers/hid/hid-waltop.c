@@ -741,9 +741,6 @@ static const struct hid_driver waltop_driver = {
 	.id_table = waltop_devices,
 	.report_fixup = waltop_report_fixup,
 	.raw_event = waltop_raw_event,
-	// Upstream has no marker here; this raw_event only rewrites bytes in the
-	// already received input report, so it is safe in TinyUSB callback context.
-	.raw_event_callback_safe = true,
 };
 module_hid_driver(waltop_driver);
 
