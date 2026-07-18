@@ -773,65 +773,6 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 	return true;
 }
 
-static void hid_async_drop_queued_device(u8 dev_addr, u8 instance)
-{
-	struct hid_async_request req;
-	UBaseType_t count = uxQueueMessagesWaiting(hid_async_request_queue);
-
-	for (UBaseType_t i = 0; i < count; i++) {
-		BaseType_t queued;
-		bool drop;
-
-		/* Keep receive + rotate atomic against CORE0 FF/output producers. */
-		taskENTER_CRITICAL();
-		if (xQueueReceive(hid_async_request_queue, &req, 0) != pdPASS) {
-			taskEXIT_CRITICAL();
-			break;
-		}
-		drop = req.kind != HID_ASYNC_REQUEST_BARRIER && req.hid &&
-		       req.dev_addr == dev_addr && req.instance == instance;
-		if (!drop) {
-			queued = xQueueSendToBack(hid_async_request_queue, &req, 0);
-			(void)queued;
-			configASSERT(queued == pdPASS);
-		}
-		taskEXIT_CRITICAL();
-
-		if (drop && req.complete && req.hid)
-			req.complete(&req, -ENODEV);
-	}
-}
-
-static void hid_async_drop_queued_dev_addr(u8 dev_addr, u32 generation)
-{
-	struct hid_async_request req;
-	UBaseType_t count = uxQueueMessagesWaiting(hid_async_request_queue);
-
-	for (UBaseType_t i = 0; i < count; i++) {
-		BaseType_t queued;
-		bool drop;
-
-		/* Keep receive + rotate atomic against CORE0 FF/output producers. */
-		taskENTER_CRITICAL();
-		if (xQueueReceive(hid_async_request_queue, &req, 0) != pdPASS) {
-			taskEXIT_CRITICAL();
-			break;
-		}
-		drop = req.kind != HID_ASYNC_REQUEST_BARRIER &&
-		       req.dev_addr == dev_addr &&
-		       req.generation == generation;
-		if (!drop) {
-			queued = xQueueSendToBack(hid_async_request_queue, &req, 0);
-			(void)queued;
-			configASSERT(queued == pdPASS);
-		}
-		taskEXIT_CRITICAL();
-
-		if (drop && req.complete && req.hid)
-			req.complete(&req, -ENODEV);
-	}
-}
-
 static void hid_async_drop_completions(void)
 {
 	struct hid_async_completion completion;
@@ -942,9 +883,14 @@ int hid_async_cancel_device(u8 dev_addr, u8 instance)
 	if (!hid_async_request_queue || !hid_async_completion_queue)
 		return -ENODEV;
 
-	hid_async_drop_queued_device(dev_addr, instance);
-
-	/* A per-interface stop must never cancel preprobe or a sibling interface. */
+	/*
+	 * A per-interface stop must never cancel preprobe or a sibling interface.
+	 * Do not rotate the request FIFO or invoke queued continuations here: this
+	 * entry is also used by the TinyUSB unmount callback. report_unplug() has
+	 * already published ll_transport_stopping, so hid_async_task rejects and
+	 * completes each queued request in task context. The lifecycle barrier then
+	 * proves that no request retaining this HID remains before destruction.
+	 */
 	taskENTER_CRITICAL();
 	if (hid_async_active && hid_async_accepting_completion &&
 	    !hid_async_active_kind_is_preprobe() &&
@@ -1028,8 +974,11 @@ int hid_async_cancel_dev_addr(u8 dev_addr)
 	hid_async_device_generation[dev_addr]++;
 	taskEXIT_CRITICAL();
 
-	hid_async_drop_queued_dev_addr(dev_addr, generation);
-	/* A dequeue/publication gap is rejected by the generation check itself. */
+	/*
+	 * Do not rotate the request FIFO from the TinyUSB device-unmount callback.
+	 * The generation check makes every queued request stale; hid_async_task
+	 * retires it in task context. It also rejects the dequeue/publication gap.
+	 */
 	taskENTER_CRITICAL();
 	if (hid_async_active && hid_async_accepting_completion &&
 	    hid_async_active_dev_addr == dev_addr &&

@@ -35,6 +35,12 @@
 
 ## Manual Test Notes
 
+- 2026-07-18: the strict hi-res wheel fixture verified a probe-time FEATURE
+  `GET_REPORT` returning `0xA0`, locked parser state preservation, and the
+  resulting raw `SET_REPORT` payload `0xA5` on hardware. Pointer events remain
+  gated unless that complete round trip succeeds.
+- Fixture: `../ErgoType-hid-devices`, branch
+  `device/hires-wheel`, commit `184429e`; host checkpoint `hid: preserve probe GET report state`.
 - 2026-07-10: Razer BlackWidow async raw SET_REPORT path was exercised with
   the emulator and Pico host logs. This is an emulator/transport verification,
   not a matching Razer hardware claim.
