@@ -304,11 +304,11 @@ static void hid_async_complete_preprobe_current(
 		return;
 
 	/*
-	 * The callback can allocate, log, and queue its descriptor continuation, so
-	 * do not run it in a critical section. The mutex instead serializes the whole
-	 * state transition with task-context device retirement. The TinyUSB
-	 * unmount callback only advances the generation; the lifecycle task waits
-	 * for this grace period before reusing the old descriptor cache object.
+	 * The task-side continuation can allocate, log, and queue the next
+	 * descriptor request, so do not run it in a critical section. The mutex
+	 * serializes that continuation with task-context device retirement. TinyUSB
+	 * unmount only advances the generation; the lifecycle task waits for this
+	 * grace period before reusing the old descriptor cache object.
 	 */
 	xSemaphoreTake(hid_async_epoch_mutex, portMAX_DELAY);
 	taskENTER_CRITICAL();
@@ -1229,14 +1229,12 @@ static void hid_async_complete(enum hid_async_completion_kind kind,
 
 static void hid_async_device_descriptor_complete(tuh_xfer_t *xfer)
 {
-	async_msg("DBG: HID_DEV_DESC_CB");
 	hid_async_complete(HID_ASYNC_COMPLETE_DEVICE_DESCRIPTOR, xfer->daddr,
 			   0, 0, 0, xfer->actual_len, xfer->result);
 }
 
 static void hid_async_string_descriptor_complete(tuh_xfer_t *xfer)
 {
-	async_msg("DBG: HID_STR_DESC_CB");
 	hid_async_complete(HID_ASYNC_COMPLETE_STRING_DESCRIPTOR, xfer->daddr,
 			   0, 0, 0, xfer->actual_len, xfer->result);
 }

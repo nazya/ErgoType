@@ -7,7 +7,7 @@
 #include "host/usbh_pvt.h"
 
 #include "linux/include/linux/hid.h"
-#include "stdio_tusb_cdc.h"
+#include "usbhid_backend.h"
 #include "usbhid_report.h"
 
 /*
@@ -340,7 +340,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 			continue;
 		}
 
-		async_msg("ERR: HID_RX_REARM_FAIL");
+		usbhid_backend_rx_rearm_failed();
 		taskENTER_CRITICAL();
 		if (hid->ll_report_owner == USBHID_REPORT_ARMED)
 			hid->ll_report_owner = USBHID_REPORT_STOPPED;

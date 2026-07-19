@@ -2,12 +2,14 @@
 
 ## Current Scope
 
-- `usb_host/usbhid.c` now keeps a small USB-device cache by `dev_addr`.
-  `tuh_mount_cb()` records cheap topology and VID/PID metadata, then queues a
-  pre-probe control sequence through the HID async task.
+- `usb_host/usbhid.c` owns a bounded USB-device cache and report-descriptor
+  ingress pool allocated before the TinyUSB host starts. TinyUSB callbacks do
+  not allocate, wait, or log; they publish a snapshot and wake the lifecycle
+  task.
 - HID interface mount no longer has to guess whether USB strings or
-  `bcdDevice` are ready. It stores pending HID probes, and `usbhid_probe()`
-  runs only after the USB device pre-probe sequence has completed.
+  `bcdDevice` are ready. It copies TinyUSB's ephemeral report descriptor into
+  bounded ingress storage, and `usbhid_probe()` runs in the lifecycle task only
+  after the USB device pre-probe sequence has completed.
 - The pre-probe sequence currently fetches the device descriptor, LANGID,
   product string, manufacturer string, and serial string. That makes
   `hid->version`, `hid->name`, and `hid->uniq` available before
@@ -20,9 +22,12 @@
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
 - Physical detach now closes the async generation and publishes a bounded
-  cache tombstone without waiting in the TinyUSB callback. The lifecycle task
-  crosses the pre-probe grace period before reusing that cache slot; disconnect
-  flags and pending probes remain authoritative if its bounded queue is full.
+  cache tombstone without waiting in the TinyUSB callback. The app-driver close
+  path covers hubs, for which TinyUSB does not issue the common unmount callback.
+  Parent cache entries remain retired until their child subtree and HID objects
+  are gone; fast reuse of the same device address starts a distinct generation.
+  Lifecycle flags and descriptor slots remain authoritative if the one-entry
+  wake queue is already full.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -60,9 +65,9 @@
   receives the same macro usage as unsupported evdev code `0x290`.
 - The remaining `0x290` handling is consumer/keyd-side work, not an async HID
   transport failure.
-- Current debug strings such as `HID_MOUNT_CB`, `HID_PRE_SUB_OK`,
-  `HID_DEV_DESC_CB`, `HID_STR_DESC_CB`, and raw request status logs are
-  intentionally still present for the next hardware passes.
+- Callback-side mount and descriptor debug logs were removed. Sticky callback
+  fault bits are drained and logged by the lifecycle task; async submit and raw
+  request status logs remain task-side.
 
 ## Current Driver Boundary
 
@@ -79,8 +84,11 @@
 
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
-- Remove or lower the temporary async debug logs only after the next hardware
-  pass is stable.
-- If broader HID-proxy behavior becomes the target again, add a real worker
-  state-machine layer before importing drivers whose upstream probe depends on
-  blocking request/response semantics.
+- Verify the bounded ingress/hub-retirement checkpoint with normal enumeration,
+  haptic allocation, direct unplug/replug, and a hub subtree reconnect. Record
+  free heap and the TinyUSB stack watermark; inspect the lifecycle watermark
+  separately if the hardware pass exposes any stack symptom.
+- Add upstream-like OUTPUT routing as a separate checkpoint: prefer interrupt
+  OUT when the interface exposes it and fall back to EP0 SET_REPORT otherwise.
+- Extend the serialized transport explicitly before importing drivers that need
+  generic `usb_control_msg()`, URBs, or larger request/response protocols.

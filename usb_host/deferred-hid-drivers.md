@@ -1,9 +1,9 @@
 # Deferred HID Drivers
 
-This note is about the current callback-driven HID host architecture. It is not
-a list of every "large" driver. The important boundary is whether upstream code
-would need to wait for a TinyUSB host operation while still running from a
-TinyUSB callback path.
+This note is about the current task-owned HID host architecture. It is not a
+list of every "large" driver. The important boundary is whether the upstream
+driver's transport and subsystem dependencies are implemented by the firmware
+port.
 
 ## Current Safe Boundary
 
@@ -12,41 +12,40 @@ The current build may include drivers that only need one of these patterns:
 - report descriptor fixup
 - input mapping or input mapped hooks
 - simple probe that does `hid_parse()` and `hid_hw_start()`
-- queue-only SET_REPORT where the driver does not need returned data before
-  continuing probe
+- `hid_hw_request()` followed by `hid_hw_wait()`, including returned feature
+  data needed during probe
+- synchronous-looking HID raw GET/SET and interrupt-output calls, because the
+  wait happens in a firmware task while TinyUSB remains free to run
 
-These drivers can run from the current pre-probe plus HID probe path because
-USB descriptor/string metadata is available before `hid_ignore()` and driver
-probe, and the driver itself does not need returned HID request data before
-continuing.
+These drivers can run from the current pre-probe plus lifecycle-task probe path
+because USB descriptor/string metadata is available before `hid_ignore()` and
+driver probe. TinyUSB completions only publish bounded completion records; the
+serialized async task resumes the waiting task-side continuation.
 
-Razer is in this bucket for now: the macro enable command is a SET_REPORT, and
-the tested path only needs the request to be queued/sent. USB strings are now
-available before probe, but this path still does not need returned GET_REPORT
-data before `hid_hw_start()`.
+Razer is in this bucket: the tested macro-enable SET_REPORT uses the serialized
+HID request owner, and USB strings are available before probe.
 
-## Callback-Unsafe Boundary
+## Unimplemented Transport Boundary
 
-Do not link drivers whose probe/init path requires synchronous progress on a
-TinyUSB transfer while still inside the current callback-driven path.
+HID probe and remove no longer execute in TinyUSB callbacks, so waiting on an
+implemented HID request does not create the original callback deadlock. Do not
+link drivers whose probe/init path requires transport primitives or subsystem
+ownership that the port still does not provide.
 
-These upstream patterns are callback-unsafe here:
+Current unsupported patterns include:
 
-- `hid_hw_raw_request(... HID_REQ_GET_REPORT ...)` when the returned data is
-  needed before probe can continue
-- `hid_hw_request(... HID_REQ_GET_REPORT ...)` followed by `hid_hw_wait()` or
-  equivalent returned-data use
 - `usb_control_msg()` / `usb_submit_urb()` when the response is required before
   continuing
 - `usb_string()` or explicit string-descriptor reads when the string is required
-  before continuing
-- multi-interface USB state that must be complete before probe, such as sibling
-  interface lookups or `usb_get_intfdata()` dependencies
+  beyond the pre-probe product/manufacturer/serial snapshots
+- multi-interface protocols that require a complete USB-core ownership model,
+  sibling binding, or `usb_get_intfdata()` coordination
+- protocols that need more reliable/larger request FIFOs than the bounded
+  serialized HID queue currently provides
 
-The reason is specific: TinyUSB completions are delivered by the TinyUSB host
-task/callback machinery. If the current callback path waits for an operation
-whose completion needs that same machinery to run, the port can deadlock or
-leave the HID device stuck before `hid_add_device()`.
+The generic helpers remain disabled instead of pretending success. Each new
+primitive needs explicit submit, completion, cancellation, and device-generation
+semantics in the TinyUSB transport owner.
 
 ## Other Deferred Reasons
 
@@ -79,21 +78,21 @@ LED SET_REPORT through the HID ll_driver request path. The deferred LED class
 means `/sys/class/leds`-style brightness devices and vendor LED/RGB panels,
 which need a firmware proxy/API before they are useful in this embedded host.
 
-## Future Layer
+## Future Transport Work
 
-Drivers from the callback-unsafe bucket need a worker-based sync-over-async
-transport layer:
+Drivers beyond the current boundary need extensions to the existing
+sync-over-async transport:
 
-- TinyUSB callback saves mount/request state and returns
-- a firmware HID worker task runs Linux-shaped probe/request code
-- TinyUSB completions wake that worker
-- blocking-looking upstream calls run only in the worker, not in callbacks
-- unmount cancels pending contexts by `dev_addr`/`instance`
+- route HID OUTPUT to interrupt OUT when available and EP0 otherwise
+- expose honest transfer result and short-transfer length for control requests
+- add bounded per-request completion ownership instead of global special cases
+- implement generic control/URB operations only for audited linked users
+- retain generation-based cancellation on unmount and fast replug
 
-With that layer, some upstream blocking probe code can be kept much closer to
-Linux because it will no longer run inside the TinyUSB callback path.
+The Linux-shaped caller may block only in a task; TinyUSB callbacks must remain
+bounded publishers.
 
-## Examples To Keep Deferred Until Worker Exists
+## Examples To Keep Deferred Until Their Dependencies Exist
 
 These are examples from upstream classes that need callback-unsafe request or
 string/control-response handling before they can be trusted:

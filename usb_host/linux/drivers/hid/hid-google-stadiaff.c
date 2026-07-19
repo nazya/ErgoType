@@ -157,7 +157,7 @@ static void stadia_remove(struct hid_device *hid)
 	// The FreeRTOS mutex does not save IRQ state.
 
 	// spin_lock_irqsave(&stadiaff->lock, flags);
-	// Remove runs in usbhid_disconnect_task, not the TinyUSB callback.
+	// Remove runs in usbhid_lifecycle_task, not the TinyUSB callback.
 	xSemaphoreTake(stadiaff->lock, portMAX_DELAY);
 	stadiaff->removed = true;
 	// spin_unlock_irqrestore(&stadiaff->lock, flags);

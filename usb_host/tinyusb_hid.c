@@ -6,8 +6,9 @@
 #include "usbhid_backend.h"
 
 /*
- * TinyUSB application callback facade. Keep callbacks limited to forwarding;
- * transport execution still lives in the existing backend for this checkpoint.
+ * TinyUSB application callback facade. Callbacks only publish bounded
+ * transport state; Linux-shaped probe, remove, parsing, and request completion
+ * run in their task owners.
  */
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
 		      uint8_t const *desc_report, uint16_t desc_len)

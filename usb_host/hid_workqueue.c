@@ -246,7 +246,7 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 
 	/*
 	 * Linux waits for queued/running delayed work here. HID driver remove now
-	 * runs from the usbhid disconnect task, so work cancellation may block;
+	 * runs from the usbhid lifecycle task, so work cancellation may block;
 	 * timer deletion is still the firmware timer bridge boundary.
 	 */
 	was_pending = timer_delete_sync(&dwork->timer);

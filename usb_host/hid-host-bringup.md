@@ -173,29 +173,37 @@ PIO_USB_DEVICE_CNT          4
 PIO_USB_ROOT_PORT_CNT       1
 ```
 
-The workqueue, timer, and disconnect split still costs three tasks. Their
-384-word stacks plus task overhead consumed about 6.6 KiB in the measured
-build. Consolidating them is a later architecture change, not part of this
-bring-up fix.
+The workqueue, timer, and HID lifecycle split still costs three tasks. The
+first two use 384-word stacks and lifecycle uses 512 words; together with task
+overhead they consumed about 6.6 KiB in the measured build. Consolidating them
+is a later architecture change, not part of this bring-up fix.
+
+The callback-safe transport pool has a 4,584 B payload (plus allocator
+overhead) in the FreeRTOS heap at startup with the current
+`CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
+`CFG_TUH_HID=4`, 512-byte descriptor configuration. It replaces callback-time
+allocation with deterministic capacity; include this cost in post-enumeration
+and haptic heap checks.
 
 ## Log Reference
 
 | Message | Meaning |
 | --- | --- |
-| `DBG: USB_MOUNT_CB` | TinyUSB saw a physical USB device. |
-| `DBG: HID_MOUNT_CB` | TinyUSB exposed one HID interface. |
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
+| `ERR: HID_USB_DEV_ALLOC_FAIL` | The bounded physical-device cache has no reusable slot. |
+| `ERR: HID_PROBE_DEFER_FAIL` | A report descriptor was invalid or the bounded descriptor ingress pool was full. |
+| `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
-| `ERR: HID_RX_START_FAIL` | Initial interrupt-IN receive could not be armed after bind/open. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 
-No `USB_MOUNT_CB` or `HID_MOUNT_CB` after insertion points first to power,
-wiring, D+/D-, the breakout, or the connector. Parser and KeyD changes cannot
-fix a connection that never reaches TinyUSB.
+The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally
+gone: callback context no longer calls the logger. A connection that never
+reaches TinyUSB still has to be diagnosed from USB enumeration/TinyUSB tracing,
+power, wiring, D+/D-, the breakout, and the connector—not parser changes.
 
 ## Enabling Another HID Driver
 

@@ -303,14 +303,14 @@ static void app_task(void *pvParameters)
                                    IDLE_PRIORITY + 3, CORE1, NULL);
 
         bool usbhid_lifecycle_ready = false;
-        int usbhid_disconnect_ret = usbhid_disconnect_init();
-        if (usbhid_disconnect_ret < 0)
-            async_msg("ERR: HID_DISCONNECT_INIT_FAIL");
-        else if (xTaskCreateAffinitySet(usbhid_disconnect_task, NULL,
+        int usbhid_lifecycle_ret = usbhid_lifecycle_init();
+        if (usbhid_lifecycle_ret < 0)
+            async_msg("ERR: HID_LIFECYCLE_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(usbhid_lifecycle_task, "hid-lifecycle",
                                         USBHID_LIFECYCLE_STACK_SIZE, NULL,
                                         IDLE_PRIORITY + 3, CORE1,
                                         NULL) != pdPASS)
-            async_msg("ERR: HID_DISCONNECT_TASK_FAIL");
+            async_msg("ERR: HID_LIFECYCLE_TASK_FAIL");
         else
             usbhid_lifecycle_ready = true;
 
