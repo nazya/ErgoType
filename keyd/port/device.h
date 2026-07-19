@@ -66,12 +66,12 @@ extern size_t device_table_sz;
 int device_init(const struct port_input_dev *port_dev, struct device *dev);
 struct device_event *device_read_event(struct device *dev);
 void device_set_led(const struct device *dev, int led, int state);
-void device_set_ff(const struct device *dev, int effect_id, int value);
-int device_upload_ff(const struct device *dev, struct ff_effect *effect);
-int device_erase_ff(const struct device *dev, int effect_id);
 void haptic_init(struct device *dev);
 void haptic_cleanup(struct device *dev);
+int device_haptic_upload(struct device *dev, enum haptic_effect_index effect,
+			 const struct ff_effect *upload);
 int device_haptic_play(const struct device *dev,
 		       enum haptic_effect_index effect, int value);
+int device_haptic_erase(struct device *dev, enum haptic_effect_index effect);
 
 #endif

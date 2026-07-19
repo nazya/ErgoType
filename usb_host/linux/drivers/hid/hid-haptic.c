@@ -10,6 +10,8 @@
 
 #include "hid-haptic.h"
 
+#define HID_HAPTIC_EFFECT_SLOTS 5
+
 void hid_haptic_feature_mapping(struct hid_device *hdev,
 				struct hid_haptic_device *haptic,
 				struct hid_field *field, struct hid_usage *usage)
@@ -187,7 +189,11 @@ static void fill_effect_buf(struct hid_haptic_device *haptic,
 				value = waveform_ordinal;
 				break;
 			default:
-				break;
+				// break;
+				// Linux-generic fix: upstream writes value after the switch
+				// although an unhandled usage has not assigned it. Skip that
+				// usage instead of copying an uninitialized or previous value.
+				continue;
 			}
 
 			field->value[j] = value;
@@ -270,6 +276,29 @@ static int hid_haptic_upload_effect(struct input_dev *dev, struct ff_effect *eff
 	if (switch_modes && haptic->mode == HID_HAPTIC_MODE_DEVICE)
 		switch_mode(hdev, haptic, HID_HAPTIC_MODE_HOST);
 
+	/*
+	 * Linux-generic fix: upstream enters HOST mode for Press/Release, but does
+	 * not leave it when an in-place upload replaces the last such effect. ff-core
+	 * calls ->upload() under ff->mutex before publishing the replacement, so this
+	 * slot still contains and owns old; skip it while checking the remaining
+	 * effects.
+	 */
+	if (!switch_modes && old &&
+	    (old->u.haptic.hid_usage == (HID_HP_WAVEFORMPRESS & HID_USAGE) ||
+	     old->u.haptic.hid_usage == (HID_HP_WAVEFORMRELEASE & HID_USAGE))) {
+		for (i = 0; i < ff->max_effects; i++) {
+			if (i == effect->id || !ff->effect_owners[i])
+				continue;
+			if (ff->effects[i].u.haptic.hid_usage ==
+					(HID_HP_WAVEFORMPRESS & HID_USAGE) ||
+			    ff->effects[i].u.haptic.hid_usage ==
+					(HID_HP_WAVEFORMRELEASE & HID_USAGE))
+				break;
+		}
+		if (i == ff->max_effects && haptic->mode == HID_HAPTIC_MODE_HOST)
+			switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
+	}
+
 	return 0;
 }
 
@@ -334,37 +363,85 @@ static void effect_set_default(struct ff_effect *effect)
 
 static int hid_haptic_erase(struct input_dev *dev, int effect_id)
 {
+	/*
+	 * Linux-generic bug: upstream tests the WAVEFORM_NONE value produced by
+	 * effect_set_default(), so both Press/Release branches below are
+	 * unreachable. ff-core validates the ID and owner, clears this slot's owner,
+	 * and keeps its effect definition while ->erase() runs; use that retained
+	 * usage to select the cleanup path.
+	 */
+	struct ff_device *ff = dev->ff;
 	struct hid_haptic_device *haptic = dev->ff->private;
 	struct hid_device *hdev = input_get_drvdata(dev);
+	u16 erased_usage = ff->effects[effect_id].u.haptic.hid_usage;
 	struct ff_effect effect;
 	int ordinal;
+	int i;
+
+	/*
+	 * ff-core has already queued STOP, but an older PLAY for this ID can still
+	 * be queued or running. Cancel that PLAY before this per-ID buffer is
+	 * rewritten and the slot can be reused by a later upload.
+	 */
+	cancel_work_sync(&haptic->effect[effect_id].work);
 
 	effect_set_default(&effect);
 
-	if (effect.u.haptic.hid_usage == (HID_HP_WAVEFORMRELEASE & HID_USAGE)) {
+	// if (effect.u.haptic.hid_usage == (HID_HP_WAVEFORMRELEASE & HID_USAGE)) {
+	// The upstream comparison uses the freshly defaulted NONE value; use the
+	// retained erased usage described above.
+	if (erased_usage == (HID_HP_WAVEFORMRELEASE & HID_USAGE)) {
 		ordinal = haptic->release_ordinal;
 		if (!ordinal) {
 			ordinal = HID_HAPTIC_ORDINAL_WAVEFORMNONE;
-			if (haptic->mode == HID_HAPTIC_MODE_HOST)
-				switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
+			// if (haptic->mode == HID_HAPTIC_MODE_HOST)
+			// 	switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
+			// Successful Release upload required a nonzero ordinal, so the
+			// upstream mode switch is unreachable too. Resolve mode below.
 		} else
 			effect.u.haptic.hid_usage = HID_HP_WAVEFORMRELEASE & HID_USAGE;
 
 		fill_effect_buf(haptic, &effect.u.haptic, &haptic->effect[effect_id],
 				ordinal);
-	} else if (effect.u.haptic.hid_usage == (HID_HP_WAVEFORMPRESS & HID_USAGE)) {
+	// } else if (effect.u.haptic.hid_usage == (HID_HP_WAVEFORMPRESS & HID_USAGE)) {
+	// Same unreachable upstream NONE comparison as the Release branch.
+	} else if (erased_usage == (HID_HP_WAVEFORMPRESS & HID_USAGE)) {
 		ordinal = haptic->press_ordinal;
 		if (!ordinal) {
 			ordinal = HID_HAPTIC_ORDINAL_WAVEFORMNONE;
-			if (haptic->mode == HID_HAPTIC_MODE_HOST)
-				switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
+			// if (haptic->mode == HID_HAPTIC_MODE_HOST)
+			// 	switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
+			// Successful Press upload required a nonzero ordinal, so the
+			// upstream mode switch is unreachable too. Resolve mode below.
 		}
 		else
 			effect.u.haptic.hid_usage = HID_HP_WAVEFORMPRESS & HID_USAGE;
 
 		fill_effect_buf(haptic, &effect.u.haptic, &haptic->effect[effect_id],
 				ordinal);
+	} else {
+		/* A valid non-control waveform has no HOST-mode ownership to release. */
+		return 0;
 	}
+
+	/*
+	 * The upstream series requires erase to return control to the device.
+	 * ff-core cleared only this slot's owner before ->erase(), so keep HOST mode
+	 * while another uploaded Press/Release effect remains and restore the saved
+	 * device auto-trigger after the last one is gone.
+	 */
+	for (i = 0; i < ff->max_effects; i++) {
+		if (!ff->effect_owners[i])
+			continue;
+		if (ff->effects[i].u.haptic.hid_usage ==
+				(HID_HP_WAVEFORMPRESS & HID_USAGE) ||
+		    ff->effects[i].u.haptic.hid_usage ==
+				(HID_HP_WAVEFORMRELEASE & HID_USAGE))
+			return 0;
+	}
+
+	if (haptic->mode == HID_HAPTIC_MODE_HOST)
+		switch_mode(hdev, haptic, HID_HAPTIC_MODE_DEVICE);
 
 	return 0;
 }
@@ -375,17 +452,21 @@ static void hid_haptic_destroy(struct ff_device *ff)
 	struct hid_device *hdev = haptic->hdev;
 	int r;
 
-	if (hdev)
-		put_device(&hdev->dev);
-
 	/*
-	 * Linux workqueue teardown drains queued work. The firmware workqueue keeps
-	 * explicit work objects, so cancel them before their report buffers vanish.
+	 * Linux-generic bug: upstream frees the per-work report buffers before
+	 * destroy_workqueue(). A queued or running handler dereferences those
+	 * buffers and hdev, so cancel every work item while both are still alive.
 	 */
 	cancel_work_sync(&haptic->stop_effect.work);
-	if (haptic->effect)
-		for (r = 0; r < ff->max_effects; r++)
-			cancel_work_sync(&haptic->effect[r].work);
+	for (r = 0; r < ff->max_effects; r++)
+		cancel_work_sync(&haptic->effect[r].work);
+
+	// if (hdev)
+	// 	put_device(&hdev->dev);
+	// Queued work dereferences hdev, so move the upstream release after
+	// cancellation.
+	if (hdev)
+		put_device(&hdev->dev);
 
 	kfree(haptic->stop_effect.report_buf);
 	haptic->stop_effect.report_buf = NULL;
@@ -488,12 +569,17 @@ int hid_haptic_init(struct hid_device *hdev,
 		// The port's real manual-trigger mutex must be released on this path.
 		goto manual_mutex;
 	}
-	haptic->effect = kzalloc_objs(struct hid_haptic_effect, FF_MAX_EFFECTS);
+	// haptic->effect = kzalloc_objs(struct hid_haptic_effect, FF_MAX_EFFECTS);
+	// Firmware preloads five waveforms; 96 Linux userspace slots exhaust the
+	// shared heap before another interface of the composite device can probe.
+	haptic->effect = kzalloc_objs(struct hid_haptic_effect,
+				      HID_HAPTIC_EFFECT_SLOTS);
 	if (!haptic->effect) {
 		ret = -ENOMEM;
 		goto output_queue;
 	}
-	for (r = 0; r < FF_MAX_EFFECTS; r++) {
+	// for (r = 0; r < FF_MAX_EFFECTS; r++) {
+	for (r = 0; r < HID_HAPTIC_EFFECT_SLOTS; r++) {
 		haptic->effect[r].report_buf =
 			hid_alloc_report_buf(haptic->manual_trigger_report,
 					     GFP_KERNEL);
@@ -524,7 +610,8 @@ int hid_haptic_init(struct hid_device *hdev,
 
 	flush = dev->flush;
 	event = dev->event;
-	ret = input_ff_create(dev, FF_MAX_EFFECTS);
+	// ret = input_ff_create(dev, FF_MAX_EFFECTS);
+	ret = input_ff_create(dev, HID_HAPTIC_EFFECT_SLOTS);
 	if (ret) {
 		dev_err(&hdev->dev, "Failed to create ff device.\n");
 		goto stop_buffer_free;

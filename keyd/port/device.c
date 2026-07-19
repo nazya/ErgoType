@@ -429,38 +429,21 @@ void device_set_led(const struct device *dev, int led, int state)
 		dev->writer.write(dev->writer.client, &ev, 1);
 }
 
-void device_set_ff(const struct device *dev, int effect_id, int value)
-{
-	// struct input_event ev = {
-	// Firmware writers accept the timestamp-free port event used by devmon.
-	struct port_input_event ev = {
-		.type = EV_FF,
-		.code = effect_id,
-		.value = value
-	};
-
-	// EV_FF play/stop is an input event, so use the same evdev writer path
-	// as EV_LED.
-	if (dev->writer.write)
-		dev->writer.write(dev->writer.client, &ev, 1);
-}
-
-int device_upload_ff(const struct device *dev, struct ff_effect *effect)
+int device_haptic_upload(struct device *dev, enum haptic_effect_index effect,
+			 const struct ff_effect *upload)
 {
 	// Firmware has no evdev ioctl; upload maps to the producer FF callback.
 	if (!dev->writer.upload_ff)
 		return -ENOSYS;
 
-	return dev->writer.upload_ff(dev->writer.client, effect);
-}
+	struct haptic_state *state = dev->haptic;
+	struct ff_effect local = *upload;
+	local.id = state->effect_ids[effect];
+	int ret = dev->writer.upload_ff(dev->writer.client, &local);
+	if (ret == 0)
+		state->effect_ids[effect] = local.id;
 
-int device_erase_ff(const struct device *dev, int effect_id)
-{
-	// Firmware has no evdev ioctl; erase maps to the producer FF callback.
-	if (!dev->writer.erase_ff)
-		return -ENOSYS;
-
-	return dev->writer.erase_ff(dev->writer.client, effect_id);
+	return ret;
 }
 
 void haptic_init(struct device *dev)
@@ -474,7 +457,7 @@ void haptic_init(struct device *dev)
 
 	dev->haptic = state;
 	for (size_t i = 0; i < HAPTIC_EFFECT_COUNT; i++) {
-		struct ff_effect effect = {
+		struct ff_effect upload = {
 			.type = FF_HAPTIC,
 			.id = -1,
 			.u.haptic = {
@@ -484,8 +467,7 @@ void haptic_init(struct device *dev)
 		};
 
 		state->effect_ids[i] = -1;
-		if (device_upload_ff(dev, &effect) == 0)
-			state->effect_ids[i] = effect.id;
+		device_haptic_upload(dev, i, &upload);
 	}
 }
 
@@ -501,8 +483,40 @@ int device_haptic_play(const struct device *dev,
 	const struct haptic_state *state = dev->haptic;
 
 	if (!state || state->effect_ids[effect] < 0)
+		return -ENOENT;
+
+	// struct input_event ev = {
+	// Firmware writers accept the timestamp-free port event used by devmon.
+	struct port_input_event ev = {
+		.type = EV_FF,
+		.code = state->effect_ids[effect],
+		.value = value
+	};
+
+	// EV_FF play/stop is an input event, so use the same evdev writer path
+	// as EV_LED.
+	if (!dev->writer.write)
+		return -ENOSYS;
+
+	int ret = dev->writer.write(dev->writer.client, &ev, 1);
+	return ret < 0 ? ret : 0;
+}
+
+int device_haptic_erase(struct device *dev, enum haptic_effect_index effect)
+{
+	struct haptic_state *state = dev->haptic;
+	int ret;
+
+	if (!state || state->effect_ids[effect] < 0)
 		return 0;
 
-	device_set_ff(dev, state->effect_ids[effect], value);
-	return 1;
+	// Firmware has no evdev ioctl; erase maps to the producer FF callback.
+	if (!dev->writer.erase_ff)
+		return -ENOSYS;
+
+	ret = dev->writer.erase_ff(dev->writer.client, state->effect_ids[effect]);
+	if (ret == 0)
+		state->effect_ids[effect] = -1;
+
+	return ret;
 }

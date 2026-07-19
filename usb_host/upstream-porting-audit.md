@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-18
+Updated: 2026-07-20
 
 Rules: `usb_host/upstream-porting-rules.md`. Linux baseline:
 `~/linux-upstream-hid` at `83f1454877cc292b88baf13c829c16ce6937d120`.
@@ -15,7 +15,8 @@ Commit `00c751e` preserves Stadia/`ff-memless`, but that gaming path is
 unlinked; `hid-multitouch`/`hid-haptic` are active. The previous manual
 upload/play/erase path passed two-Pico cursor feedback. The current
 delayed-activation/preload/ID-reuse path passed cold/hot two-Pico cursor
-feedback; extended stress remains.
+feedback. Its 19-step upload/play/stop/erase/update harness also passed on a
+cold-started composite fixture; extended disconnect stress remains.
 
 ## Scope
 
@@ -28,8 +29,14 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 - CMake/`CONFIG_HID_*` agree on 13 vendor drivers plus `hid-multitouch` and
   `hid-haptic`; active driver diffs preserve adjacent upstream code/reasons.
 - `hid-haptic.h` matches baseline. `hid-multitouch.c` has only three explained
-  `jiffies` substitutions. `hid-haptic.c` retains upstream flow; port teardown
-  cancels work before freeing buffers and destroys mutex backing.
+  `jiffies` substitutions. `hid-haptic.c` retains upstream branch shape; its
+  FreeRTOS mutex cleanup is adjacent and explained. Linux-generic semantic
+  fixes in that file are tracked separately below rather than treated as port
+  glue.
+- `hid-haptic.c` deliberately caps the upstream 96 simultaneous effect slots
+  to the five waveforms preloaded by this firmware. The original expressions
+  remain adjacent; reserving 96 slots exhausted the shared heap before a
+  standard keyboard interface of the same composite device could probe.
 - Resolution-multiplier setup uses the upstream synchronous block. `ff-core`
   stays linked; Stadia/`ff-memless` do not. Evdev clears `EV_REP` because KeyD
   owns held state and discards repeat value `2`.
@@ -87,6 +94,10 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
   post-startup layout callback queues one virtual Press PLAY; `daemon.c` fans
   it out like LED output to every grabbed device without consuming more FF
   slots.
+- KeyD's public haptic API addresses those device-local slots: upload allocates
+  or updates an ID, PLAY/STOP resolves it, and successful erase invalidates it.
+  Physical disconnect only frees local state; HID/input teardown owns device
+  destruction.
 - The layout hook runs in the KeyD consumer task, so its virtual PLAY enqueue is
   nonblocking. A full `devmon` queue drops that optional pulse instead of making
   KeyD wait on itself.
@@ -96,9 +107,10 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
   `devmon_queue` carries only ADD and virtual output commands.
 - The `device/haptic-touchpad` fixture exposes Press/Release and cursor feedback.
   Its Press duration is 10 ms, so one PLAY requests one device-timed pulse.
-  Cold/hot startup and repeated post-add layout feedback passed. Extended
-  retest must cover 96 cycles, unplug/replug, rapid unplug during
-  preload/playback, ordering, and watermark.
+  Cold/hot startup, the standard boot-keyboard sibling, and all 19 synchronous
+  API test steps passed. Extended retest must cover repeated reuse of all five
+  slots, unplug/replug, rapid unplug during preload/playback, ordering, and
+  watermark.
 
 ## Open Semantic Boundaries
 
@@ -107,9 +119,23 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
   path exists, only layout-change feedback drives its haptics.
 - Virtual layout PLAY is broadcast to all grabbed devices; devices without a
   preloaded Press ID ignore it.
-- Upstream `hid_haptic_erase()` sets the temporary effect to NONE before testing
-  whether it was Press/Release, so its DEVICE-mode restoration branches are
-  unreachable. The retained layout path does not call erase.
+- Linux baseline `83f14548` and master at audit time (`c6859eed`) compare the
+  temporary WAVEFORM_NONE effect with Press/Release in `hid_haptic_erase()`, so
+  both branches are unreachable despite the upstream series requiring erase to
+  restore DEVICE mode. Its mode switch also sits under a missing-ordinal branch
+  that a successful Press/Release upload cannot reach. The local Linux-generic
+  fix reads ff-core's retained effect, keeps HOST mode while another owned
+  Press/Release remains, and handles in-place replacement of the last one.
+- Erase cancels stale per-ID PLAY before the slot can be rewritten/reused;
+  destroy cancels all work before releasing `hdev` or its report buffers.
+  These Linux-generic fixes build cleanly but are not yet exercised by the
+  retained layout PLAY fixture.
+- `fill_effect_buf()` skips HID usages it does not map. Upstream falls through
+  and writes an uninitialized or stale local value for such a usage; this is a
+  Linux-generic report-construction fix, not KeyD input sanitization.
+- `switch_mode()` inherits upstream's void `hid_hw_request()` contract. A failed
+  mode SET_REPORT is logged by the transport but cannot be returned to ff-core,
+  so `haptic->mode` remains optimistic until teardown.
 - `port_input_dev.name` is a pointer while the rest of its devmon record is by
   value; fast add/remove can free the name before KeyD copies the record.
 
