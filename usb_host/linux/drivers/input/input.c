@@ -1494,7 +1494,10 @@ void input_free_device(struct input_dev *dev)
 	}
 
 	// input_put_device(dev);
-	// Firmware has no Linux device refcount release path.
+	// Firmware has no Linux device refcount release path. Mirror
+	// device_release() by unwinding resources owned by this input device
+	// before its embedded struct device is destroyed.
+	devres_release_group(&dev->dev, NULL);
 	input_ff_destroy(dev);
 	input_mt_destroy_slots(dev);
 	kfree(dev->absinfo);
