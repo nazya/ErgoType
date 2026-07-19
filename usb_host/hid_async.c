@@ -20,8 +20,8 @@
  * through explicit completions.
  */
 
-#define HID_ASYNC_QUEUE_LEN 4
 #define HID_ASYNC_COMPLETION_QUEUE_LEN 4
+#define HID_ASYNC_SUBMIT_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
 #define HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
 #define HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
 /* Match upstream usbhid's five-second watchdog for active ctrl/out I/O. */
@@ -34,6 +34,7 @@ enum hid_async_completion_kind {
 	HID_ASYNC_COMPLETE_GET,
 	HID_ASYNC_COMPLETE_SET,
 	HID_ASYNC_COMPLETE_OUTPUT,
+	HID_ASYNC_COMPLETE_IDLE,
 	HID_ASYNC_COMPLETE_DEVICE_DESCRIPTOR,
 	HID_ASYNC_COMPLETE_STRING_DESCRIPTOR,
 	HID_ASYNC_COMPLETE_CANCEL_INSTANCE,
@@ -52,14 +53,22 @@ struct hid_async_completion {
 	u8 xfer_result;
 };
 
+enum hid_async_host_action {
+	HID_ASYNC_HOST_FENCE,
+	HID_ASYNC_HOST_SUBMIT,
+	HID_ASYNC_HOST_ABORT,
+};
+
 struct hid_async_host_call {
 	TaskHandle_t waiter;
+	struct hid_async_request *request;
 	u8 dev_addr;
 	u8 instance;
 	u8 ep_addr;
 	u32 generation;
 	u32 serial;
-	bool abort;
+	enum hid_async_host_action action;
+	int status;
 	volatile bool done;
 };
 
@@ -88,8 +97,9 @@ static volatile u8 hid_async_active_report_type;
 static u32 hid_async_serial;
 static u32 hid_async_device_generation[HID_ASYNC_DEVICE_ADDR_MAX + 1];
 
-static void hid_async_device_descriptor_complete(tuh_xfer_t *xfer);
-static void hid_async_string_descriptor_complete(tuh_xfer_t *xfer);
+static int hid_async_submit(struct hid_async_request *req);
+static void hid_async_xfer_complete(tuh_xfer_t *xfer);
+static void hid_async_host_call_sync(struct hid_async_host_call *call);
 
 static void hid_async_call_on_host(void *data)
 {
@@ -98,10 +108,10 @@ static void hid_async_call_on_host(void *data)
 	bool is_current = false;
 
 	/*
-	 * Generation-less TinyUSB abort must execute in its owner task and may only
-	 * target the request which asked for the fence. A physical unmount advances
-	 * the generation first; in that case class/HCD close already retires the old
-	 * transfer and aborting could hit a newly reused USB address.
+	 * TinyUSB submission and generation-less abort both run in the host owner.
+	 * They may only target the request which asked for this call. A physical
+	 * unmount advances the generation first; class/HCD close then owns the old
+	 * transfer and an abort must not hit a newly reused USB address.
 	 */
 	taskENTER_CRITICAL();
 	if (call->dev_addr <= HID_ASYNC_DEVICE_ADDR_MAX)
@@ -114,7 +124,10 @@ static void hid_async_call_on_host(void *data)
 				call->generation;
 	taskEXIT_CRITICAL();
 
-	if (call->abort && is_current)
+	if (call->action == HID_ASYNC_HOST_SUBMIT)
+		call->status = is_current ? hid_async_submit(call->request) :
+					    -ENODEV;
+	else if (call->action == HID_ASYNC_HOST_ABORT && is_current)
 		(void)tuh_edpt_abort_xfer(call->dev_addr, call->ep_addr);
 	taskENTER_CRITICAL();
 	call->done = true;
@@ -139,7 +152,7 @@ int hid_async_init(void)
 	if (!hid_async_epoch_mutex)
 		return -ENOMEM;
 
-	hid_async_request_queue = xQueueCreate(HID_ASYNC_QUEUE_LEN,
+	hid_async_request_queue = xQueueCreate(HID_ASYNC_REQUEST_QUEUE_LEN,
 					       sizeof(struct hid_async_request));
 	if (!hid_async_request_queue)
 		return -ENOMEM;
@@ -269,6 +282,8 @@ static void hid_async_publish_active(struct hid_async_request *req)
 		hid_async_active_kind = HID_ASYNC_COMPLETE_STRING_DESCRIPTOR;
 	else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT)
 		hid_async_active_kind = HID_ASYNC_COMPLETE_OUTPUT;
+	else if (req->kind == HID_ASYNC_REQUEST_IDLE)
+		hid_async_active_kind = HID_ASYNC_COMPLETE_IDLE;
 	else if (req->reqtype == HID_REQ_GET_REPORT)
 		hid_async_active_kind = HID_ASYNC_COMPLETE_GET;
 	else
@@ -331,6 +346,7 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 {
 	struct hid_async_request req;
 	bool interrupt_out;
+	u32 maxpacket;
 	u32 len;
 	int ret;
 
@@ -345,6 +361,15 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	len = hid_report_len(report);
 	if (len > HID_ASYNC_REPORT_MAX)
 		return -EIO;
+	if (reqtype == HID_REQ_GET_REPORT) {
+		/* Match upstream hid_submit_ctrl() EP0 receive sizing. */
+		maxpacket = hid->usb_dev.descriptor.bMaxPacketSize0;
+		if (!maxpacket)
+			maxpacket = 8;
+		len += !len;
+		len = DIV_ROUND_UP(len, maxpacket) * maxpacket;
+		len = min_t(u32, len, HID_ASYNC_REPORT_MAX);
+	}
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_REPORT;
@@ -512,6 +537,34 @@ int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 {
 	return hid_async_queue_raw_get(hid, report_id, report_type, len,
 				       complete, context);
+}
+
+int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
+			 hid_async_complete_t complete, void *context)
+{
+	struct hid_async_request req;
+	int ret;
+
+	if (!hid_async_request_queue)
+		return -ENODEV;
+	if (!hid)
+		return -EINVAL;
+
+	memset(&req, 0, sizeof(req));
+	req.kind = HID_ASYNC_REQUEST_IDLE;
+	req.hid = hid;
+	req.reqtype = HID_REQ_SET_IDLE;
+	req.dev_addr = hid->dev_addr;
+	req.instance = hid->instance;
+	req.report_id = report_id;
+	req.control_value = TU_U16(idle, report_id);
+	req.complete = complete;
+	req.context = context;
+
+	ret = hid_async_queue_hid_request(&req);
+	if (!ret)
+		async_msg("DBG: HID_IDLE_Q");
+	return ret;
 }
 
 int hid_async_queue_device_descriptor(u8 dev_addr,
@@ -688,6 +741,37 @@ int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
 }
 #endif
 
+static int hid_async_submit_control(struct hid_async_request *req)
+{
+	u8 *data = req->data + req->data_offset;
+	u16 len = req->len - req->data_offset;
+	u16 value = req->kind == HID_ASYNC_REQUEST_IDLE ?
+		    req->control_value : TU_U16(req->report_type, req->report_id);
+	tusb_control_request_t const request = {
+		.bmRequestType_bit = {
+			.recipient = TUSB_REQ_RCPT_INTERFACE,
+			.type = TUSB_REQ_TYPE_CLASS,
+			.direction = req->reqtype == HID_REQ_GET_REPORT ?
+				     TUSB_DIR_IN : TUSB_DIR_OUT,
+		},
+		.bRequest = (u8)req->reqtype,
+		.wValue = tu_htole16(value),
+		.wIndex = tu_htole16((u16)
+			req->hid->usb_altsetting.desc.bInterfaceNumber),
+		.wLength = tu_htole16(len),
+	};
+	tuh_xfer_t xfer = {
+		.daddr = req->dev_addr,
+		.ep_addr = 0,
+		.setup = &request,
+		.buffer = len ? data : NULL,
+		.complete_cb = hid_async_xfer_complete,
+		.user_data = (uintptr_t)req->serial,
+	};
+
+	return tuh_control_xfer(&xfer) ? 0 : -EAGAIN;
+}
+
 static int hid_async_submit(struct hid_async_request *req)
 {
 	u8 *data = req->data + req->data_offset;
@@ -696,44 +780,42 @@ static int hid_async_submit(struct hid_async_request *req)
 
 	if (req->kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR) {
 		ok = tuh_descriptor_get_device(req->dev_addr, data, len,
-					       hid_async_device_descriptor_complete,
-					       0);
+					       hid_async_xfer_complete,
+					       (uintptr_t)req->serial);
 	} else if (req->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR) {
 		ok = tuh_descriptor_get_string(req->dev_addr, req->string_index,
 					       req->string_langid, data, len,
-					       hid_async_string_descriptor_complete,
-					       0);
+					       hid_async_xfer_complete,
+					       (uintptr_t)req->serial);
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
 		ok = tuh_hid_send_report(req->dev_addr, req->instance,
 					 req->report_id, data, len);
-	} else if (req->reqtype == HID_REQ_GET_REPORT) {
-		ok = tuh_hid_get_report(req->dev_addr, req->instance,
-					req->report_id, req->report_type,
-					data, len);
 	} else {
-		ok = tuh_hid_set_report(req->dev_addr, req->instance,
-					req->report_id, req->report_type,
-					data, len);
+		return hid_async_submit_control(req);
 	}
 
-	return ok ? 0 : -EIO;
+	return ok ? 0 : -EAGAIN;
 }
 
 static int hid_async_submit_current(struct hid_async_request *req)
 {
-	int ret;
+	struct hid_async_host_call call = {
+		.waiter = xTaskGetCurrentTaskHandle(),
+		.request = req,
+		.dev_addr = req->dev_addr,
+		.instance = req->instance,
+		.generation = req->generation,
+		.serial = req->serial,
+		.action = HID_ASYNC_HOST_SUBMIT,
+		.status = -EIO,
+	};
 
 	if (req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
 		return -ENODEV;
 
-	/* Serialize generation retirement with the nonblocking TinyUSB submit. */
-	taskENTER_CRITICAL();
-	if (req->generation != hid_async_device_generation[req->dev_addr])
-		ret = -ENODEV;
-	else
-		ret = hid_async_submit(req);
-	taskEXIT_CRITICAL();
-	return ret;
+	/* TinyUSB owns its global EP0 and class endpoint state in the host task. */
+	hid_async_host_call_sync(&call);
+	return call.status;
 }
 
 static bool hid_async_request_is_preprobe(const struct hid_async_request *req)
@@ -742,30 +824,34 @@ static bool hid_async_request_is_preprobe(const struct hid_async_request *req)
 	       req->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR;
 }
 
-static int hid_async_submit_preprobe(struct hid_async_request *req)
+static int hid_async_submit_retry(struct hid_async_request *req, bool preprobe)
 {
 	TickType_t start = xTaskGetTickCount();
+	TickType_t timeout = preprobe ?
+		HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
+		HID_ASYNC_SUBMIT_TIMEOUT_TICKS;
 	int ret;
 
 	do {
 		if (!hid_async_request_generation_current(req))
 			return -ENODEV;
-		ret = tuh_mounted(req->dev_addr) ?
-		      hid_async_submit_current(req) : -EIO;
+		if (hid_async_request_hid_stopping(req))
+			return -ENODEV;
+		ret = hid_async_submit_current(req);
 		if (!ret) {
-			async_msg("DBG: HID_PRE_SUB_OK");
+			if (preprobe)
+				async_msg("DBG: HID_PRE_SUB_OK");
 			return 0;
 		}
-		if (ret == -ENODEV)
+		if (ret != -EAGAIN)
 			return ret;
 
 		vTaskDelay(1);
-	} while (xTaskGetTickCount() - start <
-		 HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS);
+	} while (xTaskGetTickCount() - start < timeout);
 
 	if (!hid_async_request_generation_current(req))
 		return -ENODEV;
-	async_msg("ERR: HID_PRE_SUB_TO");
+	async_msg(preprobe ? "ERR: HID_PRE_SUB_TO" : "ERR: HID_SUBMIT_TO");
 	return -ETIMEDOUT;
 }
 
@@ -799,6 +885,8 @@ static bool hid_async_completion_matches(const struct hid_async_request *req,
 
 	if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT)
 		return completion->kind == HID_ASYNC_COMPLETE_OUTPUT;
+	if (req->kind == HID_ASYNC_REQUEST_IDLE)
+		return completion->kind == HID_ASYNC_COMPLETE_IDLE;
 
 	kind = req->reqtype == HID_REQ_GET_REPORT ?
 	       HID_ASYNC_COMPLETE_GET : HID_ASYNC_COMPLETE_SET;
@@ -806,6 +894,20 @@ static bool hid_async_completion_matches(const struct hid_async_request *req,
 	return completion->kind == kind &&
 	       completion->report_id == req->report_id &&
 	       completion->report_type == req->report_type;
+}
+
+static int hid_async_xfer_status(u8 result)
+{
+	switch (result) {
+	case XFER_RESULT_SUCCESS:
+		return 0;
+	case XFER_RESULT_STALLED:
+		return -EPIPE;
+	case XFER_RESULT_TIMEOUT:
+		return -ETIMEDOUT;
+	default:
+		return -EIO;
+	}
 }
 
 static bool hid_async_apply_completion(struct hid_async_request *active,
@@ -828,13 +930,11 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 			       (active->report_id != 0);
 		*status = completion->len == expected_len ? 0 : -EIO;
 	} else {
-		active->actual_len = completion->len + active->data_offset;
-		if (active->kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR ||
-		    active->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR)
-			*status = completion->xfer_result == XFER_RESULT_SUCCESS ?
-				  0 : -EIO;
-		else
-			*status = completion->len ? 0 : -EIO;
+		active->actual_len = completion->len;
+		/* Raw report ID zero is transport-owned, as in upstream usbhid. */
+		if (completion->len && active->data_offset)
+			active->actual_len += active->data_offset;
+		*status = hid_async_xfer_status(completion->xfer_result);
 	}
 
 	return true;
@@ -919,7 +1019,7 @@ static bool hid_async_retire_active(struct hid_async_request *active,
 			   active->ep_addr : 0,
 		.generation = active->generation,
 		.serial = active->serial,
-		.abort = true,
+		.action = HID_ASYNC_HOST_ABORT,
 	};
 	struct hid_async_completion completion;
 	bool transfer_completed = false;
@@ -927,7 +1027,7 @@ static bool hid_async_retire_active(struct hid_async_request *active,
 	hid_async_stop_accepting_completion();
 	hid_async_host_call_sync(&call);
 	vTaskDelay(HID_ASYNC_ABORT_DRAIN_TICKS);
-	call.abort = false;
+	call.action = HID_ASYNC_HOST_FENCE;
 	hid_async_host_call_sync(&call);
 
 	while (xQueueReceive(hid_async_completion_queue, &completion, 0) == pdPASS) {
@@ -1115,13 +1215,13 @@ void hid_async_task(void *pvParameters)
 		}
 
 		preprobe = hid_async_request_is_preprobe(&active);
-		if (preprobe)
-			status = hid_async_submit_preprobe(&active);
-		else
-			status = hid_async_submit_current(&active);
+		status = hid_async_submit_retry(&active, preprobe);
 		if (status < 0) {
 			hid_async_stop_accepting_completion();
-			if (!active.report && active.reqtype == HID_REQ_SET_REPORT)
+			if (active.kind == HID_ASYNC_REQUEST_IDLE)
+				async_msg("ERR: HID_IDLE_SUB");
+			else if (!active.report &&
+				 active.reqtype == HID_REQ_SET_REPORT)
 				async_msg("ERR: HID_RAW_SET_SUB");
 			if (preprobe) {
 				if (status != -ENODEV)
@@ -1184,7 +1284,10 @@ void hid_async_task(void *pvParameters)
 			continue;
 		}
 
-		if (active.kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
+		if (active.kind == HID_ASYNC_REQUEST_IDLE) {
+			async_msg(status < 0 ? "ERR: HID_IDLE_FAIL" :
+					       "DBG: HID_IDLE_OK");
+		} else if (active.kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
 			if (status < 0)
 				async_msg(active.report ?
 					  "ERR: HID_REPORT_OUT_FAIL" :
@@ -1216,24 +1319,48 @@ void hid_async_task(void *pvParameters)
 	}
 }
 
-static bool hid_async_stamp_completion(struct hid_async_completion *completion)
+static bool hid_async_stamp_xfer_completion(
+		struct hid_async_completion *completion, u32 serial)
+{
+	bool is_current;
+
+	taskENTER_CRITICAL();
+	is_current = serial && hid_async_active &&
+		  hid_async_accepting_completion &&
+		  serial == hid_async_active_serial &&
+		  completion->dev_addr == hid_async_active_dev_addr &&
+		  completion->dev_addr <= HID_ASYNC_DEVICE_ADDR_MAX &&
+		  hid_async_active_generation ==
+			hid_async_device_generation[completion->dev_addr];
+	if (is_current) {
+		completion->kind = hid_async_active_kind;
+		completion->instance = hid_async_active_instance;
+		completion->report_id = hid_async_active_report_id;
+		completion->report_type = hid_async_active_report_type;
+		completion->generation = hid_async_active_generation;
+		completion->serial = serial;
+	}
+	taskEXIT_CRITICAL();
+
+	return is_current;
+}
+
+static bool hid_async_stamp_output_completion(
+		struct hid_async_completion *completion)
 {
 	bool is_current;
 
 	taskENTER_CRITICAL();
 	is_current = hid_async_active && hid_async_accepting_completion &&
+		  hid_async_active_kind == HID_ASYNC_COMPLETE_OUTPUT &&
 		  completion->dev_addr == hid_async_active_dev_addr &&
 		  completion->instance == hid_async_active_instance &&
-		  completion->kind == hid_async_active_kind &&
 		  completion->dev_addr <= HID_ASYNC_DEVICE_ADDR_MAX &&
 		  hid_async_active_generation ==
 			hid_async_device_generation[completion->dev_addr];
-	if (is_current && completion->kind != HID_ASYNC_COMPLETE_DEVICE_DESCRIPTOR &&
-	    completion->kind != HID_ASYNC_COMPLETE_STRING_DESCRIPTOR &&
-	    completion->kind != HID_ASYNC_COMPLETE_OUTPUT)
-		is_current = completion->report_id == hid_async_active_report_id &&
-			  completion->report_type == hid_async_active_report_type;
 	if (is_current) {
+		completion->report_id = hid_async_active_report_id;
+		completion->report_type = hid_async_active_report_type;
 		completion->generation = hid_async_active_generation;
 		completion->serial = hid_async_active_serial;
 	}
@@ -1242,28 +1369,13 @@ static bool hid_async_stamp_completion(struct hid_async_completion *completion)
 	return is_current;
 }
 
-static void hid_async_complete(enum hid_async_completion_kind kind,
-			       uint8_t dev_addr, uint8_t instance,
-			       uint8_t report_id, uint8_t report_type,
-			       uint16_t len, uint8_t xfer_result)
+static void hid_async_queue_completion(
+		const struct hid_async_completion *completion)
 {
-	struct hid_async_completion completion = {
-		.kind = kind,
-		.dev_addr = dev_addr,
-		.instance = instance,
-		.report_id = report_id,
-		.report_type = report_type,
-		.len = len,
-		.xfer_result = xfer_result,
-	};
-
 	if (!hid_async_completion_queue)
 		return;
 
-	if (!hid_async_stamp_completion(&completion))
-		return;
-
-	if (xQueueSendToBack(hid_async_completion_queue, &completion, 0) != pdPASS) {
+	if (xQueueSendToBack(hid_async_completion_queue, completion, 0) != pdPASS) {
 		BaseType_t queued;
 
 		/*
@@ -1272,46 +1384,42 @@ static void hid_async_complete(enum hid_async_completion_kind kind,
 		 */
 		hid_async_drop_completions();
 		queued = xQueueSendToBack(hid_async_completion_queue,
-					  &completion, 0);
+					  completion, 0);
 		(void)queued;
 		configASSERT(queued == pdPASS);
 	}
 }
 
-static void hid_async_device_descriptor_complete(tuh_xfer_t *xfer)
+static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 {
-	hid_async_complete(HID_ASYNC_COMPLETE_DEVICE_DESCRIPTOR, xfer->daddr,
-			   0, 0, 0, xfer->actual_len, xfer->result);
-}
+	u16 requested = tu_le16toh(xfer->setup->wLength);
+	u32 actual = requested ? xfer->actual_len : 0;
+	struct hid_async_completion completion = {
+		.dev_addr = xfer->daddr,
+		.len = (u16)min_t(u32, actual, UINT16_MAX),
+		.xfer_result = xfer->result,
+	};
+	u32 serial = (u32)xfer->user_data;
 
-static void hid_async_string_descriptor_complete(tuh_xfer_t *xfer)
-{
-	hid_async_complete(HID_ASYNC_COMPLETE_STRING_DESCRIPTOR, xfer->daddr,
-			   0, 0, 0, xfer->actual_len, xfer->result);
-}
-
-void hid_async_backend_get_report_complete(uint8_t dev_addr, uint8_t instance,
-					   uint8_t report_id,
-					   uint8_t report_type,
-					   uint16_t len)
-{
-	hid_async_complete(HID_ASYNC_COMPLETE_GET, dev_addr, instance,
-			   report_id, report_type, len, XFER_RESULT_SUCCESS);
-}
-
-void hid_async_backend_set_report_complete(uint8_t dev_addr, uint8_t instance,
-					   uint8_t report_id,
-					   uint8_t report_type,
-					   uint16_t len)
-{
-	hid_async_complete(HID_ASYNC_COMPLETE_SET, dev_addr, instance,
-			   report_id, report_type, len, XFER_RESULT_SUCCESS);
+	/* PIO-USB may report the eight-byte setup stage for a no-data request. */
+	if (!hid_async_stamp_xfer_completion(&completion, serial))
+		return;
+	hid_async_queue_completion(&completion);
 }
 
 void hid_async_backend_report_sent(uint8_t dev_addr, uint8_t instance,
 				   uint8_t const *report, uint16_t len)
 {
+	struct hid_async_completion completion = {
+		.kind = HID_ASYNC_COMPLETE_OUTPUT,
+		.dev_addr = dev_addr,
+		.instance = instance,
+		.len = len,
+		.xfer_result = XFER_RESULT_SUCCESS,
+	};
+
 	(void)report;
-	hid_async_complete(HID_ASYNC_COMPLETE_OUTPUT, dev_addr, instance,
-			   0, 0, len, XFER_RESULT_SUCCESS);
+	if (!hid_async_stamp_output_completion(&completion))
+		return;
+	hid_async_queue_completion(&completion);
 }

@@ -39,6 +39,7 @@ claims for unrelated drivers.
 | 2026-07-14 | `device/quirks-atmel-ma901` | after fixing upstream-style `hid->name` construction, the fixture matches laptop Linux behavior and generic pointer/scroll input is not falsely ignored |
 | 2026-07-14 | `device/razer-blackwidow` | rechecked after upstream-style `hid->name` construction fix; Razer macro-enable SET_REPORT and macro input path still work |
 | 2026-07-14 | `device/quirks-jabra-version` | old `bcdDevice` reaches `hid_lookup_quirk()` before probe; host ignores both HID interfaces and no KeyD input events appear |
+| 2026-07-19 | `device/haptic-touchpad` | active multitouch/haptic build enumerates, pointer events move the cursor, and haptic output produces the emulator cursor-feedback signal |
 
 ## Current Emulator Branches
 

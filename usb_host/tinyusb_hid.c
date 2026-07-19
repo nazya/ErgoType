@@ -37,22 +37,6 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 	usbhid_backend_report_received(dev_addr, instance, report, len);
 }
 
-void tuh_hid_get_report_complete_cb(uint8_t dev_addr, uint8_t instance,
-				    uint8_t report_id, uint8_t report_type,
-				    uint16_t len)
-{
-	hid_async_backend_get_report_complete(dev_addr, instance, report_id,
-					      report_type, len);
-}
-
-void tuh_hid_set_report_complete_cb(uint8_t dev_addr, uint8_t instance,
-				    uint8_t report_id, uint8_t report_type,
-				    uint16_t len)
-{
-	hid_async_backend_set_report_complete(dev_addr, instance, report_id,
-					      report_type, len);
-}
-
 void tuh_hid_report_sent_cb(uint8_t dev_addr, uint8_t instance,
 			    uint8_t const *report, uint16_t len)
 {

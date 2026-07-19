@@ -21,6 +21,17 @@
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
+- HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
+  `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
+  transfer carries the request serial in `user_data`, and completion preserves
+  TinyUSB's real result and actual data length. Successful short transfers are
+  no longer confused with failures; STALL and timeout remain distinguishable.
+  A zero-data SET_IDLE uses the same transport and keeps the upstream
+  synchronous ll-driver return contract by waiting only in the caller task.
+- Normal GET_REPORT receive lengths follow upstream `hid_submit_ctrl()`: they
+  are rounded to EP0 max-packet size and capped by the fixed transport buffer,
+  while raw GET_REPORT keeps its caller-supplied length. Only the actual bytes
+  reported by TinyUSB are handed to the Linux HID parser.
 - The ll-driver output paths now follow upstream USB HID routing.
   `.request(HID_REQ_SET_REPORT)` sends an `HID_OUTPUT_REPORT` over interrupt
   OUT when the interface exposes that endpoint and otherwise uses EP0
@@ -45,6 +56,11 @@
   returned feature fields are preserved instead of being lost to lock
   contention. Raw GET/SET and interrupt output keep their upstream synchronous
   return contract while using the same asynchronous TinyUSB owner underneath.
+- The report executor reserves space for all four queued async requests plus
+  the active request, so a second fast control GET is no longer discarded while
+  an earlier result waits for parser ownership. Interrupt-IN close is reconciled
+  in the TinyUSB owner: abort completion is drained for two SOFs before a raced
+  reopen may arm a new receive.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -61,6 +77,11 @@
   emulator, delivered keyboard/pointer events, and retained at least 43,672 B
   of FreeRTOS heap before the HID device was attached. This verifies the
   callback-ingress checkpoint, not the output-routing change below.
+- 2026-07-19: host checkpoint `hid: route output reports like upstream usbhid` booted with 43,712 B minimum free heap
+  before HID attachment and 938 words free at the TinyUSB task watermark.
+  Repeated `c` press/release reports reached the input boundary. This is a
+  no-regression observation for the output-routing checkpoint; it does not yet
+  verify the direct-control/SET_IDLE checkpoint described above.
 - 2026-07-18: the strict hi-res wheel fixture verified a probe-time FEATURE
   `GET_REPORT` returning `0xA0`, locked parser state preservation, and the
   resulting raw `SET_REPORT` payload `0xA5` on hardware. Pointer events remain
@@ -106,5 +127,13 @@
   without interrupt OUT must receive the enumeration-time NumLock reset over
   EP0, and an OUTPUT request on an interface with interrupt OUT must use that
   endpoint. Keep these as separate observations.
+- Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
+  fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
+  must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or parser-queue
+  errors. Record post-attachment heap; the enlarged report queue costs 400 B of
+  startup heap and its reconcile table adds 32 B of static RAM.
+- Exercise SET_IDLE on a path that actually calls the ll-driver `.idle` hook;
+  enumeration-time TinyUSB SET_IDLE happens before this transport is mounted and
+  is not proof of the new request path.
 - Extend the serialized transport explicitly before importing drivers that need
   generic `usb_control_msg()`, URBs, or larger request/response protocols.

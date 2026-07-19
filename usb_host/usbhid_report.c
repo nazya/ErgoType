@@ -7,6 +7,7 @@
 #include "host/usbh_pvt.h"
 
 #include "linux/include/linux/hid.h"
+#include "hid_async.h"
 #include "usbhid_backend.h"
 #include "usbhid_report.h"
 
@@ -21,15 +22,23 @@
  *   STOPPED -> ARMED -> QUEUED -> ACTIVE -> STOPPED
  *
  * A host-defer reservation is tracked separately because it also retains the
- * hid pointer. close() only clears WANTED: an already armed transfer may stay
- * parked until one report completes, but it cannot create a second RX chain.
+ * hid pointer. close() reconciles an already armed transfer on the TinyUSB
+ * host task; a concurrent reopen either keeps that transfer or rearms it after
+ * the abort completes.
  */
-/* One interrupt report per HID can be queued, plus the single active ctrl GET. */
-#define USBHID_REPORT_QUEUE_LEN (CFG_TUH_HID + 1)
+/* One interrupt per HID, active + queued controls, and one fence wakeup. */
+#define USBHID_CONTROL_REPORT_SLOTS (HID_ASYNC_REQUEST_QUEUE_LEN + 1)
+#define USBHID_RECONCILE_EVENT_SLOTS 1
+#define USBHID_REPORT_QUEUE_LEN \
+	(CFG_TUH_HID + USBHID_CONTROL_REPORT_SLOTS + \
+	 USBHID_RECONCILE_EVENT_SLOTS)
+/* PIO-USB may publish a raced completion at the end of a later SOF. */
+#define USBHID_REPORT_ABORT_DRAIN_TICKS ((TickType_t)2)
 
 enum usbhid_report_event_kind {
 	USBHID_REPORT_EVENT_INTERRUPT,
 	USBHID_REPORT_EVENT_CONTROL,
+	USBHID_REPORT_EVENT_RECONCILE,
 };
 
 enum usbhid_report_owner {
@@ -64,12 +73,64 @@ struct usbhid_report_event {
 	} payload;
 };
 
+struct usbhid_report_reconcile {
+	struct hid_device *hid;
+	u32 generation;
+};
+
 static QueueHandle_t usbhid_report_queue;
-static bool usbhid_control_report_queued;
 static struct usbhid_report_event usbhid_control_report_handoff;
 static bool usbhid_control_report_handoff_ready;
+/* ll_report_host_pending retains each hid until the fenced host pass. */
+static struct usbhid_report_reconcile
+	usbhid_report_reconcile_pending[CFG_TUH_HID];
+static bool usbhid_report_reconcile_wake_queued;
 
 static void usbhid_report_reconcile_on_host(void *data);
+
+static bool usbhid_report_queue_reconcile(struct hid_device *hid,
+					   u32 generation)
+{
+	struct usbhid_report_event event = {
+		.kind = USBHID_REPORT_EVENT_RECONCILE,
+	};
+	int slot = -1;
+	bool send = false;
+
+	taskENTER_CRITICAL();
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		if (usbhid_report_reconcile_pending[i].hid == hid &&
+		    usbhid_report_reconcile_pending[i].generation == generation) {
+			slot = i;
+			break;
+		}
+		if (slot < 0 && !usbhid_report_reconcile_pending[i].hid)
+			slot = i;
+	}
+	if (slot >= 0) {
+		usbhid_report_reconcile_pending[slot].hid = hid;
+		usbhid_report_reconcile_pending[slot].generation = generation;
+		if (!usbhid_report_reconcile_wake_queued) {
+			usbhid_report_reconcile_wake_queued = true;
+			send = true;
+		}
+	}
+	taskEXIT_CRITICAL();
+
+	if (slot < 0 || !send)
+		return slot >= 0;
+	if (xQueueSendToFront(usbhid_report_queue, &event, 0) == pdPASS)
+		return true;
+
+	taskENTER_CRITICAL();
+	if (usbhid_report_reconcile_pending[slot].hid == hid &&
+	    usbhid_report_reconcile_pending[slot].generation == generation)
+		memset(&usbhid_report_reconcile_pending[slot], 0,
+		       sizeof(usbhid_report_reconcile_pending[slot]));
+	usbhid_report_reconcile_wake_queued = false;
+	taskEXIT_CRITICAL();
+	return false;
+}
 
 int usbhid_report_init(void)
 {
@@ -105,13 +166,23 @@ int usbhid_report_start(struct hid_device *hid)
 
 void usbhid_report_close(struct hid_device *hid)
 {
+	bool defer = false;
+
 	if (!hid)
 		return;
 
 	taskENTER_CRITICAL();
 	hid->ll_report_wanted = false;
 	hid->ll_report_revision++;
+	if (hid->ll_report_owner == USBHID_REPORT_ARMED &&
+	    !hid->ll_report_host_pending) {
+		hid->ll_report_host_pending = true;
+		defer = true;
+	}
 	taskEXIT_CRITICAL();
+
+	if (defer)
+		usbh_defer_func(usbhid_report_reconcile_on_host, hid, false);
 }
 
 int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
@@ -140,6 +211,12 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 		memcpy(event.payload.interrupt, report, event.len);
 	taskENTER_CRITICAL();
 	if (hid->ll_report_owner != USBHID_REPORT_ARMED) {
+		/* An aborted PIO transfer may publish its old completion one SOF late. */
+		if (hid->ll_report_owner == USBHID_REPORT_STOPPED &&
+		    hid->ll_report_host_pending) {
+			taskEXIT_CRITICAL();
+			return 0;
+		}
 		taskEXIT_CRITICAL();
 		return -EBUSY;
 	}
@@ -198,24 +275,12 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 	taskEXIT_CRITICAL();
 
 	/*
-	 * Keep one explicit control slot beyond the one interrupt slot per HID.
-	 * A second completed GET is dropped instead of consuming interrupt capacity
-	 * or blocking the transport owner behind parser-side synchronous I/O.
+	 * Each bounded async request has a reserved queue slot. The report task may
+	 * therefore wait for parser ownership without blocking transport completion
+	 * or dropping a later GET_REPORT.
 	 */
-	taskENTER_CRITICAL();
-	if (usbhid_control_report_queued) {
-		taskEXIT_CRITICAL();
+	if (xQueueSendToBack(usbhid_report_queue, &event, 0) != pdPASS)
 		return -EBUSY;
-	}
-	usbhid_control_report_queued = true;
-	taskEXIT_CRITICAL();
-
-	if (xQueueSendToBack(usbhid_report_queue, &event, 0) != pdPASS) {
-		taskENTER_CRITICAL();
-		usbhid_control_report_queued = false;
-		taskEXIT_CRITICAL();
-		return -EBUSY;
-	}
 
 	return 0;
 }
@@ -291,12 +356,13 @@ static void usbhid_report_reconcile_on_host(void *data)
 {
 	struct hid_device *hid = data;
 	enum usbhid_report_host_action action;
+	u32 generation;
 	u32 revision;
 	bool ok;
 
 	for (;;) {
 		taskENTER_CRITICAL();
-		if (hid->ll_transport_stopping &&
+		if ((hid->ll_transport_stopping || !hid->ll_report_wanted) &&
 		    hid->ll_report_owner == USBHID_REPORT_ARMED) {
 			hid->ll_report_owner = USBHID_REPORT_STOPPED;
 			action = USBHID_REPORT_HOST_ABORT;
@@ -313,6 +379,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 			taskEXIT_CRITICAL();
 			return;
 		}
+		generation = hid->ll_generation;
 		revision = hid->ll_report_revision;
 		taskEXIT_CRITICAL();
 
@@ -321,7 +388,18 @@ static void usbhid_report_reconcile_on_host(void *data)
 			    !tuh_hid_receive_ready(hid->dev_addr, hid->instance))
 				(void)tuh_hid_receive_abort(hid->dev_addr,
 							   hid->instance);
+			/*
+			 * Fence re-arm through the report task. If PIO completed while
+			 * abort raced its SOF, that old HCD event is already ahead of the
+			 * next host defer and cannot consume the newly armed owner.
+			 */
+			if (usbhid_report_queue_reconcile(hid, generation))
+				return;
+
+			/* The pending table and its dedicated wake slot are bounded. */
+			usbhid_backend_rx_rearm_failed();
 			taskENTER_CRITICAL();
+			hid->ll_report_wanted = false;
 			hid->ll_report_host_pending = false;
 			taskEXIT_CRITICAL();
 			return;
@@ -331,7 +409,9 @@ static void usbhid_report_reconcile_on_host(void *data)
 		     tuh_hid_receive_report(hid->dev_addr, hid->instance);
 		if (ok) {
 			taskENTER_CRITICAL();
-			if (!hid->ll_transport_stopping) {
+			if (!hid->ll_transport_stopping &&
+			    hid->ll_report_wanted &&
+			    hid->ll_report_revision == revision) {
 				hid->ll_report_host_pending = false;
 				taskEXIT_CRITICAL();
 				return;
@@ -357,11 +437,6 @@ static void usbhid_report_reconcile_on_host(void *data)
 static void usbhid_control_report_finish(struct usbhid_report_event *event,
 					 int status)
 {
-	taskENTER_CRITICAL();
-	configASSERT(usbhid_control_report_queued);
-	usbhid_control_report_queued = false;
-	taskEXIT_CRITICAL();
-
 	/* Parsing is part of upstream control-I/O completion. */
 	event->payload.control.done(event->hid,
 				    event->payload.control.context, status);
@@ -414,6 +489,41 @@ void usbhid_report_task(void *pvParameters)
 		if (xQueuePeek(usbhid_report_queue, &event,
 			       portMAX_DELAY) != pdPASS)
 			continue;
+
+		if (event.kind == USBHID_REPORT_EVENT_RECONCILE) {
+			struct usbhid_report_reconcile
+				pending[CFG_TUH_HID];
+
+			if (xQueueReceive(usbhid_report_queue, &event, 0) != pdPASS)
+				continue;
+			taskENTER_CRITICAL();
+			memcpy(pending, usbhid_report_reconcile_pending,
+			       sizeof(pending));
+			memset(usbhid_report_reconcile_pending, 0,
+			       sizeof(usbhid_report_reconcile_pending));
+			usbhid_report_reconcile_wake_queued = false;
+			taskEXIT_CRITICAL();
+
+			/* Keep every retained hid alive across two SOFs, then fence host. */
+			vTaskDelay(USBHID_REPORT_ABORT_DRAIN_TICKS);
+			for (int i = 0; i < CFG_TUH_HID; i++) {
+				bool reconcile;
+
+				if (!pending[i].hid)
+					continue;
+				taskENTER_CRITICAL();
+				reconcile =
+					pending[i].generation ==
+						pending[i].hid->ll_generation &&
+					pending[i].hid->ll_report_host_pending;
+				taskEXIT_CRITICAL();
+				if (reconcile)
+					usbh_defer_func(
+						usbhid_report_reconcile_on_host,
+						pending[i].hid, false);
+			}
+			continue;
+		}
 
 		if (event.kind == USBHID_REPORT_EVENT_CONTROL) {
 			TaskHandle_t parser_owner =

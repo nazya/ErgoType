@@ -11,6 +11,7 @@
 
 #define HID_ASYNC_REPORT_MAX 257u
 #define HID_ASYNC_DATA_MAX 257u
+#define HID_ASYNC_REQUEST_QUEUE_LEN 4u
 
 struct hid_async_request;
 
@@ -20,6 +21,7 @@ typedef void (*hid_async_complete_t)(const struct hid_async_request *req,
 enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_REPORT,
 	HID_ASYNC_REQUEST_OUTPUT_REPORT,
+	HID_ASYNC_REQUEST_IDLE,
 	HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR,
 	HID_ASYNC_REQUEST_STRING_DESCRIPTOR,
 #if 0
@@ -53,6 +55,7 @@ struct hid_async_request {
 	u16 len;
 	u16 actual_len;
 	u16 string_langid;
+	u16 control_value;
 	u32 generation;
 	u32 serial;
 	u8 xfer_result;
@@ -90,6 +93,8 @@ int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 				      size_t len,
 				      hid_async_complete_t complete,
 				      void *context);
+int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
+			 hid_async_complete_t complete, void *context);
 int hid_async_queue_device_descriptor(u8 dev_addr,
 				      hid_async_complete_t complete,
 				      void *context);
@@ -136,13 +141,7 @@ int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);
 int hid_async_synchronize_preprobe(void);
 
-/* Completion ingress called only by the TinyUSB callback facade. */
-void hid_async_backend_get_report_complete(u8 dev_addr, u8 instance,
-					   u8 report_id, u8 report_type,
-					   u16 len);
-void hid_async_backend_set_report_complete(u8 dev_addr, u8 instance,
-					   u8 report_id, u8 report_type,
-					   u16 len);
+/* Interrupt-OUT completion ingress called by the TinyUSB callback facade. */
 void hid_async_backend_report_sent(u8 dev_addr, u8 instance,
 				   const u8 *report, u16 len);
 

@@ -5,62 +5,24 @@
 > and do not run Linux continuations. See `async-hid-progress.md` and
 > `deferred-hid-drivers.md` for the current boundary.
 
-This note records the next HID host direction after the working generic HID
-input slice.
+This note records the historical design that preceded the active transport.
+Its old line-number anchors and proposed state-machine conversions are retained
+below as rationale, not as a description of the current tree.
 
-The current working model is:
+The active implementation now has these properties:
 
-- TinyUSB interrupt reports are parsed directly from `tuh_hid_report_received_cb()`.
-- Linux HID parser/input mapping stays active.
-- Linux synchronous hardware request/wait paths are disabled until they are
-  converted to async state machines.
+- TinyUSB callbacks copy or publish bounded records and return; Linux parsing,
+  probe, remove, and continuations run in task context.
+- `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
+  parsing, matching the upstream caller contract without blocking TinyUSB.
+- Raw GET/SET, interrupt output, and SET_IDLE keep their synchronous ll-driver
+  contracts as task-side waits over the same serialized async owner.
+- HID EP0 GET/SET and SET_IDLE use direct asynchronous `tuh_control_xfer()` so
+  completion retains the real TinyUSB result, actual length, and request serial.
+- Generic `usb_control_msg()`, arbitrary URBs, and drivers needing those paths
+  remain deferred.
 
-The next goal is to re-enable selected driver/control behavior without bringing
-back Linux-style blocking waits.
-
-## Current Anchors
-
-Repo paths are relative to `../ErgoType` unless noted.
-
-- `usb_host/task.c:67`: host task currently loops on `tuh_task()`.
-- `usb_host/usbhid.c`: TinyUSB-to-Linux USB HID transport glue now holds the
-  `hid_ll_driver` boundary that was split out during earlier bring-up work.
-- `usb_host/usbhid.c:328`: interrupt report callback copies the TinyUSB const
-  report into a writable stack buffer and calls `hid_safe_input_report()`.
-- `usb_host/usbhid.c:442`: `.request` queues `hid_hw_request()` through
-  `hid_async_queue_report()`, matching upstream `usbhid_submit_report()` as a
-  best-effort async submit path.
-- `usb_host/usbhid.c:455`: `.wait` is currently a no-op with the
-  upstream `usbhid_wait_io()` anchor.
-- `usb_host/usbhid.c:466`: `.raw_request` queues raw SET_REPORT
-  through `hid_async_queue_raw_set_report()` and still returns `-ENOSYS` for
-  raw GET_REPORT until each caller has an explicit async continuation.
-- `usb_host/hid_async.c:217`: `hid_async_queue_raw_get_report()` queues raw
-  GET_REPORT for explicit async continuations. It mirrors Linux
-  `usbhid_get_raw_report()` handling for unnumbered reports by keeping report
-  ID 0 in byte 0 and receiving payload at byte 1.
-- `usb_host/hid_async.c`: the generic `usb_control_msg()` /
-  `usb_interrupt_msg()` bridge is kept as a deferred `#if 0` block. Current
-  linked drivers use report GET/SET/OUTPUT paths only; blocking USB control
-  call sites must still be converted deliberately before their drivers are
-  linked.
-- `usb_host/usbhid.c:494`: `.output_report` queues interrupt OUT
-  reports through `hid_async_queue_output_report()` and returns after enqueue.
-- `usb_host/usbhid.c:509`: `.idle` defers synchronous `SET_IDLE`.
-- `usb_host/usbhid.c`: synchronous `usb_control_msg()` currently returns
-  `-ENOSYS`; any caller reaching it must be converted or kept out of CMake.
-- `usb_host/linux/drivers/hid/hid-core.c:2097`: upstream `__hid_request()`
-  expects `hid_hw_raw_request()` to return data immediately.
-- `usb_host/hid_workqueue.c`: active `schedule_work()` users run from a
-  dedicated firmware workqueue task.
-- `usb_host/hid_timer.c`: active `timer_list` users run from a dedicated
-  firmware timer task.
-- `usb_host/linux/drivers/hid/hid-input.c:1874`: LED worker path can use
-  `SET_REPORT`; active `schedule_work()` reaches the async `.request` path.
-- `usb_host/linux/drivers/hid/hid-input.c:1978`: resolution multiplier
-  `GET_REPORT + hid_hw_wait()` is converted to explicit async continuation.
-- `usb_host/linux/drivers/hid/hid-input.c:2007`: resolution multiplier
-  `SET_REPORT` is queued through the HID async task.
+See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.
 
 ## Remapper Reference
 

@@ -2018,8 +2018,8 @@ static void usbhid_close(struct hid_device *hid)
 {
 	/*
 	 * Upstream close kills interrupt IN unless ALWAYS_POLL is active. The port
-	 * stops rearming here; one already armed transfer may remain parked and is
-	 * either reused by reopen or consumed once without entering the parser.
+	 * reconciles an already armed transfer in the TinyUSB host owner; reopen is
+	 * serialized with that abort before the receive chain is armed again.
 	 */
 	if (!(hid->quirks & HID_QUIRK_ALWAYS_POLL))
 		usbhid_report_close(hid);
@@ -2330,16 +2330,26 @@ static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
 
 static int usbhid_idle(struct hid_device *hid, int report, int idle, int reqtype)
 {
+	struct usbhid_sync_request sync = {
+		.task = xTaskGetCurrentTaskHandle(),
+	};
+	int ret;
+
+	if (reqtype != HID_REQ_SET_IDLE)
+		return -EINVAL;
+	if (!usbhid_io_get(hid))
+		return -ENODEV;
+
 	/*
 	 * return hid_set_idle(dev, ifnum, report, idle);
-	 * SET_IDLE is a synchronous control request; keep it deferred with the
-	 * rest of the hardware request path.
+	 * Keep the upstream synchronous ll_driver contract over the serialized
+	 * async EP0 owner; no TinyUSB callback waits for this completion.
 	 */
-	(void)hid;
-	(void)report;
-	(void)idle;
-	(void)reqtype;
-	return 0;
+	ret = hid_async_queue_idle(hid, (u8)report, (u8)idle,
+				   usbhid_sync_complete, &sync);
+	ret = usbhid_sync_wait(&sync, ret);
+	usbhid_io_put(hid);
+	return ret;
 }
 
 int tuh_usb_control_msg(struct usb_device *dev, unsigned int pipe,

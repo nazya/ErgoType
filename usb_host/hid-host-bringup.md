@@ -11,10 +11,12 @@ The following paths have produced input events on hardware:
 - a generic USB keyboard, including the keyboard interface of a composite
   ErgoType device;
 - the Holtek keyboard emulator, including its report-descriptor fixup;
+- the active haptic-touchpad emulator, including pointer events and the
+  multitouch/haptic probe path;
 - the PMW pointing-device path, independently of USB host input.
 
 Working firmware runs before attaching a heavy HID device have reported roughly
-45-48 KiB of free FreeRTOS heap. That is an observed operating margin, not a
+43-48 KiB of free FreeRTOS heap. That is an observed operating margin, not a
 guaranteed allocation size: HID parsing also needs a sufficiently large
 contiguous block while a device is being added.
 
@@ -61,6 +63,12 @@ Linux-shaped output requests are serialized by the HID async task. For
 and otherwise EP0; FEATURE reports and `.raw_request()` stay on EP0, while
 `.output_report()` is interrupt-only. Boot-keyboard start clears NumLock
 through the `.request()` route.
+
+EP0 report requests are submitted as direct asynchronous TinyUSB control
+transfers from the host owner task. Completion is matched by request serial and
+preserves the real transfer result and actual length; SET_IDLE uses the same
+path. Caller tasks may wait for the Linux ll-driver contract, but TinyUSB
+callbacks never wait or run the Linux continuation.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -191,6 +199,13 @@ overhead) in the FreeRTOS heap at startup with the current
 allocation with deterministic capacity; include this cost in post-enumeration
 and haptic heap checks.
 
+The report executor additionally reserves five 80-byte control-result slots
+(one active plus the four-entry async queue) and one close/reopen fence slot.
+Compared with the former `CFG_TUH_HID + 1` queue this costs 400 B more startup
+heap. Its coalesced reconcile table costs 32 B of static RAM. The async request
+object remains 304 B, and the linked image remains at 243,236 B `.bss` in this
+checkpoint.
+
 ## Log Reference
 
 | Message | Meaning |
@@ -203,10 +218,12 @@ and haptic heap checks.
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
+| `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
 | `DBG: HID_OUTPUT_Q` / `DBG: HID_OUTPUT_OK` | `.output_report()` queued and completed its interrupt-OUT-only transfer. |
+| `DBG: HID_IDLE_Q` / `DBG: HID_IDLE_OK` / `ERR: HID_IDLE_SUB` / `ERR: HID_IDLE_FAIL` | The ll-driver queued a zero-data SET_IDLE control transfer and submit/completion succeeded or failed. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally
@@ -236,10 +253,12 @@ the driver. Keep both sides synchronized.
 No gaming FF driver is active. The tested Stadia/`ff-memless` implementation is
 preserved in checkpoint `hid: stabilize stadia ff teardown`, but both sources are excluded from CMake.
 
-The generic `ff-core`, evdev upload/play/stop/erase boundary, workqueue bridge,
-and async output transport remain for a future standard haptic touchpad port.
-That port still needs `hid-haptic`/`hid-multitouch`, async feature GET_REPORT
-initialization, and real synchronization/lifetime review before enablement.
+The generic `ff-core`, `hid-haptic`, `hid-multitouch`, evdev
+upload/play/stop/erase boundary, workqueue bridge, and async output transport
+are active for the standard haptic-touchpad path. The two-Pico emulator has
+verified enumeration, pointer input, and haptic cursor feedback. A real
+touchpad, strict output ordering, repeated teardown, and the new exact-control
+completion checkpoint still need hardware coverage.
 
 The evdev writer lifetime fix remains active because keyboard LED writes share
 the same KeyD-versus-disconnect ownership boundary even without an FF driver.
