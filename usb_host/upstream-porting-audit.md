@@ -115,8 +115,9 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `hidraw.h` is an extended proxy contract, but hidraw is not linked/claimed.
   hiddev also remains disabled and active code uses stubs.
 - Audited callback-safe `raw_event`, synchronous HID report request/wait, and
-  returned GET data are active. Generic USB URB/control adapters, unaudited
-  hooks, hidraw/hiddev runtime, and PIDFF remain deferred.
+  returned GET data are active. Bounded task-side USB control and interrupt-OUT
+  adapters are active; generic URBs, synchronous interrupt-IN, unaudited hooks,
+  hidraw/hiddev runtime, and PIDFF remain deferred.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 

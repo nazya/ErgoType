@@ -21,6 +21,9 @@ void tusb_host_task(void *pvParameters)
 
     (void)pvParameters;
 
+    /* TinyUSB callbacks and tuh_task() are owned by this task exclusively. */
+    hid_async_host_task_register();
+
     tusb_rhport_init_t host_init = {
         .role = TUSB_ROLE_HOST,
         .speed = TUSB_SPEED_AUTO,

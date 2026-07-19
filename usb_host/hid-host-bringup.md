@@ -66,9 +66,10 @@ through the `.request()` route.
 
 EP0 report requests are submitted as direct asynchronous TinyUSB control
 transfers from the host owner task. Completion is matched by request serial and
-preserves the real transfer result and actual length; SET_IDLE uses the same
-path. Caller tasks may wait for the Linux ll-driver contract, but TinyUSB
-callbacks never wait or run the Linux continuation.
+preserves the real transfer result and actual length. SET_IDLE uses the generic
+device-level EP0 lane while retaining its HID-interface lifetime lease. Caller
+tasks may wait for the Linux ll-driver contract, but TinyUSB callbacks never
+wait or run the Linux continuation.
 
 Interrupt OUT is also submitted directly from the host owner. The request owns
 the complete endpoint wire image until completion, and TinyUSB returns the real
@@ -224,8 +225,8 @@ request object remains 304 B. Exact endpoint callbacks add 1,280 B of TinyUSB
 device state. Direct IN/OUT leave one-byte class placeholders, while four
 64-byte IN buffers and their lifecycle metadata live in scratch X. The host
 transfer storage now occupies 916 B there and ends 1,132 B below the core-1
-stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,168 B of
-`.bss` and keeps 312 B of main-SRAM link headroom in this checkpoint.
+stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,304 B of
+`.bss` and keeps 176 B of main-SRAM link headroom in this checkpoint.
 
 ## Log Reference
 
@@ -246,7 +247,6 @@ stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,168 B of
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
 | `DBG: HID_OUTPUT_Q` / `DBG: HID_OUTPUT_OK` | `.output_report()` queued and completed its interrupt-OUT-only transfer. |
-| `DBG: HID_IDLE_Q` / `DBG: HID_IDLE_OK` / `ERR: HID_IDLE_SUB` / `ERR: HID_IDLE_FAIL` | The ll-driver queued a zero-data SET_IDLE control transfer and submit/completion succeeded or failed. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally

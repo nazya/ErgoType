@@ -6,7 +6,9 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
+#include "host/hcd.h"
 #include "host/usbh_pvt.h"
+#include "pio_usb.h"
 
 #include "hid_async.h"
 #include "stdio_tusb_cdc.h"
@@ -25,8 +27,8 @@
 #define HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
 /* Match upstream usbhid's five-second watchdog for active ctrl/out I/O. */
 #define HID_ASYNC_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(USB_CTRL_SET_TIMEOUT)
-/* PIO-USB can publish an aborted completion at the end of the next SOF. */
-#define HID_ASYNC_ABORT_DRAIN_TICKS ((TickType_t)2)
+/* PIO-USB can publish an aborted completion at the end of a later SOF. */
+#define HID_ASYNC_ABORT_DRAIN_FRAMES 2u
 #define HID_ASYNC_DEVICE_ADDR_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
 #define HID_ASYNC_SLOT_COUNT \
 	(HID_ASYNC_REQUEST_QUEUE_LEN + 1u + CFG_TUH_HID)
@@ -60,6 +62,8 @@ enum hid_async_lane {
 	HID_ASYNC_LANE_PREPROBE,
 	HID_ASYNC_LANE_CTRL,
 	HID_ASYNC_LANE_OUT,
+	HID_ASYNC_LANE_DEVICE_CTRL,
+	HID_ASYNC_LANE_DEVICE_OUT,
 };
 
 enum hid_async_slot_state {
@@ -83,6 +87,7 @@ struct hid_async_slot {
 	bool cancel_requested;
 	bool submit_started;
 	int completion_status;
+	TickType_t queued_at;
 	TickType_t submit_start;
 	TickType_t retry_at;
 	TickType_t xfer_start;
@@ -91,8 +96,14 @@ struct hid_async_slot {
 static struct hid_async_slot *hid_async_slots;
 static SemaphoreHandle_t hid_async_epoch_mutex;
 static TaskHandle_t hid_async_task_handle;
+static TaskHandle_t hid_async_host_task_handle;
 static u8 hid_async_preprobe_head;
 static u8 hid_async_preprobe_tail;
+/* Bounded device-level lanes avoid adding full wire buffers to every cache. */
+static u8 hid_async_device_ctrl_head;
+static u8 hid_async_device_ctrl_tail;
+static u8 hid_async_device_out_head;
+static u8 hid_async_device_out_tail;
 static u8 hid_async_ctrl_active;
 static u8 hid_async_schedule_cursor;
 static u32 hid_async_serial;
@@ -102,6 +113,12 @@ static int hid_async_submit(struct hid_async_request *req);
 static void hid_async_xfer_complete(tuh_xfer_t *xfer);
 static void hid_async_host_call_sync(struct hid_async_host_call *call);
 static void hid_async_notify_task(void);
+
+static bool hid_async_lane_is_out(enum hid_async_lane lane)
+{
+	return lane == HID_ASYNC_LANE_OUT ||
+	       lane == HID_ASYNC_LANE_DEVICE_OUT;
+}
 
 static struct hid_async_slot *hid_async_slot_for_request_locked(
 		struct hid_async_request *req)
@@ -120,7 +137,16 @@ static void hid_async_call_on_host(void *data)
 	struct hid_async_host_call *call = data;
 	struct hid_async_slot *slot;
 	TaskHandle_t waiter = call->waiter;
+	bool logical_aborted;
+	bool physical_aborted;
 	bool is_current = false;
+	TaskHandle_t host_task = xTaskGetCurrentTaskHandle();
+
+	taskENTER_CRITICAL();
+	configASSERT(!hid_async_host_task_handle ||
+		     hid_async_host_task_handle == host_task);
+	hid_async_host_task_handle = host_task;
+	taskEXIT_CRITICAL();
 
 	/*
 	 * TinyUSB submission and generation-less abort both run in the host owner.
@@ -143,15 +169,40 @@ static void hid_async_call_on_host(void *data)
 				      !((struct usbhid_device *)
 					slot->req.hid->driver_data)->transport_stopping);
 		else if (call->action == HID_ASYNC_HOST_ABORT)
-			is_current = slot->state == HID_ASYNC_SLOT_RETIRING;
+			is_current = slot->state == HID_ASYNC_SLOT_RETIRING &&
+				     !slot->completion_ready;
 	}
 	taskEXIT_CRITICAL();
 
+	call->status = 0;
 	if (call->action == HID_ASYNC_HOST_SUBMIT)
 		call->status = is_current ? hid_async_submit(call->request) :
 					    -ENODEV;
-	else if (call->action == HID_ASYNC_HOST_ABORT && is_current)
-		(void)tuh_edpt_abort_xfer(call->dev_addr, call->ep_addr);
+	else if (call->action == HID_ASYNC_HOST_ABORT && is_current) {
+		if (call->ep_addr) {
+			(void)tuh_edpt_abort_xfer(call->dev_addr, call->ep_addr);
+		} else {
+			/*
+			 * TinyUSB owns one global logical EP0 transfer. Its public abort
+			 * releases that owner immediately, but PIO may already have
+			 * published completion for the current SETUP/DATA/ACK stage. Keep
+			 * TinyUSB's old owner until the HCD proves that it canceled an
+			 * active stage without publishing completion. A raced completion
+			 * remains FIFO-ahead of the next host pass and may safely advance
+			 * the old logical transfer instead of being applied to a new one.
+			 */
+			physical_aborted = hcd_edpt_abort_xfer(
+				usbh_get_rhport(call->dev_addr), call->dev_addr, 0);
+			if (!physical_aborted) {
+				call->status = -EAGAIN;
+			} else {
+				logical_aborted = tuh_edpt_abort_xfer(call->dev_addr, 0);
+				/* The validated old owner must still be the global EP0. */
+				configASSERT(logical_aborted);
+				(void)logical_aborted;
+			}
+		}
+	}
 	taskENTER_CRITICAL();
 	call->done = true;
 	taskEXIT_CRITICAL();
@@ -180,6 +231,60 @@ static void hid_async_notify_task(void)
 		xTaskNotifyGiveIndexed(task, HID_ASYNC_NOTIFY_INDEX);
 }
 
+void hid_async_host_task_register(void)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+
+	/* TinyUSB host callbacks and tuh_task() share this single owner task. */
+	taskENTER_CRITICAL();
+	configASSERT(!hid_async_host_task_handle ||
+		     hid_async_host_task_handle == task);
+	hid_async_host_task_handle = task;
+	taskEXIT_CRITICAL();
+}
+
+bool hid_async_sync_call_allowed(void)
+{
+	TaskHandle_t caller;
+	TaskHandle_t executor;
+	TaskHandle_t host;
+
+	if (xPortIsInsideInterrupt() ||
+	    xTaskGetSchedulerState() != taskSCHEDULER_RUNNING)
+		return false;
+	caller = xTaskGetCurrentTaskHandle();
+
+	taskENTER_CRITICAL();
+	executor = hid_async_task_handle;
+	host = hid_async_host_task_handle;
+	taskEXIT_CRITICAL();
+
+	/* Either owner would wait for work which only that same task can advance. */
+	return caller != executor && caller != host;
+}
+
+int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation)
+{
+	if (!hid_async_slots || !generation || !dev_addr ||
+	    dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
+		return -ENODEV;
+
+	taskENTER_CRITICAL();
+	*generation = hid_async_device_generation[dev_addr];
+	taskEXIT_CRITICAL();
+	return 0;
+}
+
+static void hid_async_drain_abort_frames(void)
+{
+	u32 start = pio_usb_host_get_frame_number();
+
+	/* FreeRTOS ticks and the independent PIO SOF timer need not share phase. */
+	while (pio_usb_host_get_frame_number() - start <
+	       HID_ASYNC_ABORT_DRAIN_FRAMES)
+		vTaskDelay(1);
+}
+
 static struct hid_async_slot *hid_async_slot_from_id(u8 id)
 {
 	if (!id || id > HID_ASYNC_SLOT_COUNT)
@@ -200,6 +305,16 @@ static void hid_async_slot_fifo_locked(struct hid_async_slot *slot,
 	if (slot->lane == HID_ASYNC_LANE_PREPROBE) {
 		*head = &hid_async_preprobe_head;
 		*tail = &hid_async_preprobe_tail;
+		return;
+	}
+	if (slot->lane == HID_ASYNC_LANE_DEVICE_CTRL) {
+		*head = &hid_async_device_ctrl_head;
+		*tail = &hid_async_device_ctrl_tail;
+		return;
+	}
+	if (slot->lane == HID_ASYNC_LANE_DEVICE_OUT) {
+		*head = &hid_async_device_out_head;
+		*tail = &hid_async_device_out_tail;
 		return;
 	}
 
@@ -237,6 +352,7 @@ static int hid_async_slot_queue_locked(const struct hid_async_request *req,
 	slot->req = *req;
 	slot->lane = (u8)lane;
 	slot->state = HID_ASYNC_SLOT_QUEUED;
+	slot->queued_at = xTaskGetTickCount();
 	id = hid_async_slot_id(slot);
 	hid_async_slot_fifo_locked(slot, &head, &tail);
 	if (*tail) {
@@ -264,20 +380,29 @@ static bool hid_async_slot_is_head_locked(struct hid_async_slot *slot)
 
 static void hid_async_slot_release_locked(struct hid_async_slot *slot)
 {
-	struct hid_async_slot *next;
+	struct hid_async_slot *previous_slot = NULL;
 	u8 *head;
 	u8 *tail;
+	u8 previous = 0;
+	u8 cursor;
 	u8 id = hid_async_slot_id(slot);
 
 	hid_async_slot_fifo_locked(slot, &head, &tail);
-	configASSERT(*head == id);
-	*head = slot->next;
-	if (!*head)
-		*tail = 0;
-	else {
-		next = hid_async_slot_from_id(*head);
-		configASSERT(next);
+	cursor = *head;
+	while (cursor && cursor != id) {
+		previous = cursor;
+		previous_slot = hid_async_slot_from_id(cursor);
+		configASSERT(previous_slot);
+		cursor = previous_slot->next;
 	}
+	configASSERT(cursor == id);
+	if (previous_slot)
+		previous_slot->next = slot->next;
+	else
+		*head = slot->next;
+	if (*tail == id)
+		*tail = previous;
+	configASSERT(!!*head == !!*tail);
 	memset(slot, 0, sizeof(*slot));
 }
 
@@ -618,36 +743,6 @@ int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 				       complete, context);
 }
 
-int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
-			 hid_async_complete_t complete, void *context)
-{
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-	int ret;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid)
-		return -EINVAL;
-	usbhid = hid->driver_data;
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_IDLE;
-	req.hid = hid;
-	req.reqtype = HID_REQ_SET_IDLE;
-	req.dev_addr = usbhid->dev_addr;
-	req.instance = usbhid->instance;
-	req.report_id = report_id;
-	req.control_value = TU_U16(idle, report_id);
-	req.complete = complete;
-	req.context = context;
-
-	ret = hid_async_queue_hid_request(&req);
-	if (!ret)
-		async_msg("DBG: HID_IDLE_Q");
-	return ret;
-}
-
 int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
 			       hid_async_complete_t complete, void *context)
 {
@@ -718,69 +813,43 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 	return hid_async_queue_preprobe_continuation(&req);
 }
 
-#if 0
 /*
- * Deferred: async usb_control_msg()/usb_interrupt_msg() bridge is for drivers
- * outside the current CMake allowlist. Report GET/SET remains active above.
+ * Upstream Linux USB core owns control and per-endpoint queues while task
+ * callers sleep. The firmware captures the address epoch before enqueue,
+ * stores wire data in the fixed slot, and wakes the caller after task-context
+ * completion; neither TinyUSB callbacks nor the executor itself may wait here.
  */
-static int hid_async_queue_usb_control_msg_flags(struct hid_device *hid,
-						 struct usb_device *dev,
-						 unsigned int pipe,
-						 u8 request, u8 requesttype,
-						 u16 value, u16 index,
-						 const void *data, u16 size,
-						 int timeout,
-						 bool complete_on_cancel,
-						 hid_async_complete_t complete,
-						 void *context)
+static int hid_async_queue_usb_request(struct hid_async_request *req,
+				       u32 generation,
+				       enum hid_async_lane lane)
 {
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-	u8 *req_data;
+	int ret;
 
-	if (!hid_async_slots)
+	if (!hid_async_slots || !req->dev_addr ||
+	    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
 		return -ENODEV;
-	usbhid = hid->driver_data;
 
-	// usb_control_msg() carries direction in both pipe and bmRequestType.
-	// TinyUSB control setup uses bmRequestType, and the blocking timeout
-	// argument has no async equivalent here.
-	(void)pipe;
-	(void)timeout;
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_USB_CONTROL;
-	req.hid = hid;
-	req.dev_addr = dev->dev_addr;
-	req.instance = usbhid->instance;
-	req.control_request = request;
-	req.control_requesttype = requesttype;
-	req.control_value = value;
-	req.control_index = index;
-	req.len = size;
-	req.complete_on_cancel = complete_on_cancel;
-	req.complete = complete;
-	req.context = context;
-	if (size > HID_ASYNC_REPORT_MAX) {
-		req.heap_data = pvPortMalloc(size);
-		if (!req.heap_data)
-			return -ENOMEM;
+	taskENTER_CRITICAL();
+	if (generation != hid_async_device_generation[req->dev_addr]) {
+		ret = -ENODEV;
+	} else {
+		req->generation = generation;
+		ret = hid_async_slot_queue_locked(req, lane);
 	}
-	req_data = hid_async_request_data(&req);
-	if (data && size)
-		memcpy(req_data, data, size);
-
-	if (xQueueSendToBack(hid_async_request_queue, &req, 0) != pdPASS) {
-		hid_async_request_free(&req);
-		return -EBUSY;
-	}
-
-	return 0;
+	taskEXIT_CRITICAL();
+	if (!ret)
+		hid_async_notify_task();
+	return ret;
 }
 
-int hid_async_queue_usb_control_msg(struct hid_device *hid,
-				    struct usb_device *dev,
-				    unsigned int pipe,
+static u32 hid_async_timeout_from_ms(int timeout)
+{
+	TickType_t ticks = pdMS_TO_TICKS((u32)timeout);
+
+	return ticks ? (u32)ticks : 1u;
+}
+
+int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
 				    const void *data, u16 size,
@@ -788,79 +857,72 @@ int hid_async_queue_usb_control_msg(struct hid_device *hid,
 				    hid_async_complete_t complete,
 				    void *context)
 {
-	return hid_async_queue_usb_control_msg_flags(hid, dev, pipe, request,
-						     requesttype, value, index,
-						     data, size, timeout,
-						     false, complete, context);
+	struct hid_async_request req;
+
+	if (size > HID_ASYNC_DATA_MAX)
+		return -EMSGSIZE;
+	if (size && !data)
+		return -EINVAL;
+	if (timeout <= 0)
+		return -EINVAL;
+
+	memset(&req, 0, sizeof(req));
+	req.kind = HID_ASYNC_REQUEST_USB_CONTROL;
+	req.dev_addr = dev_addr;
+	req.control_request = request;
+	req.control_requesttype = requesttype;
+	req.control_value = value;
+	req.control_index = index;
+	req.len = size;
+	req.timeout_ticks = hid_async_timeout_from_ms(timeout);
+	req.complete_on_cancel = true;
+	req.complete = complete;
+	req.context = context;
+	if (size && !(requesttype & TUSB_DIR_IN_MASK))
+		memcpy(req.data, data, size);
+
+	return hid_async_queue_usb_request(&req, generation,
+					   HID_ASYNC_LANE_DEVICE_CTRL);
 }
 
-int hid_async_queue_usb_control_msg_cancelable(struct hid_device *hid,
-					       struct usb_device *dev,
-					       unsigned int pipe,
-					       u8 request, u8 requesttype,
-					       u16 value, u16 index,
-					       const void *data, u16 size,
-					       int timeout,
-					       hid_async_complete_t complete,
-					       void *context)
-{
-	return hid_async_queue_usb_control_msg_flags(hid, dev, pipe, request,
-						     requesttype, value, index,
-						     data, size, timeout,
-						     true, complete, context);
-}
-
-int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
-				      struct usb_device *dev,
-				      unsigned int pipe,
-				      const void *data, u16 size,
-				      int timeout,
+int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
+				      u8 ep_addr, const void *data,
+				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context)
 {
-	struct usbhid_device *usbhid;
 	struct hid_async_request req;
 
-	if (!hid_async_request_queue)
-		return -ENODEV;
-	usbhid = hid->driver_data;
-
-	if (size > HID_ASYNC_REPORT_MAX)
-		return -EIO;
-
-	/*
-	 * usb_interrupt_msg() targets an interrupt endpoint selected by pipe.
-	 * TinyUSB HID host exposes interrupt OUT through the HID instance, so
-	 * pipe and timeout are only kept for the Linux-shaped call boundary.
-	 */
-	(void)pipe;
-	(void)timeout;
+	if (!ep_addr || (ep_addr & TUSB_DIR_IN_MASK))
+		return -EINVAL;
+	if (size > HID_ASYNC_DATA_MAX)
+		return -EMSGSIZE;
+	if (size && !data)
+		return -EINVAL;
+	if (timeout <= 0)
+		return -EINVAL;
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_USB_INTERRUPT;
-	req.hid = hid;
-	req.dev_addr = dev->dev_addr;
-	req.instance = usbhid->instance;
+	req.dev_addr = dev_addr;
+	req.ep_addr = ep_addr;
 	req.len = size;
+	req.timeout_ticks = hid_async_timeout_from_ms(timeout);
+	req.complete_on_cancel = true;
 	req.complete = complete;
 	req.context = context;
-	if (data && size)
+	if (size)
 		memcpy(req.data, data, size);
 
-	if (xQueueSendToBack(hid_async_request_queue, &req, 0) != pdPASS)
-		return -EBUSY;
-
-	return 0;
+	return hid_async_queue_usb_request(&req, generation,
+					   HID_ASYNC_LANE_DEVICE_OUT);
 }
-#endif
 
 static int hid_async_submit_control(struct hid_async_request *req)
 {
 	struct usbhid_device *usbhid = req->hid->driver_data;
 	u8 *data = req->data + req->data_offset;
 	u16 len = req->len - req->data_offset;
-	u16 value = req->kind == HID_ASYNC_REQUEST_IDLE ?
-		    req->control_value : TU_U16(req->report_type, req->report_id);
 	tusb_control_request_t const request = {
 		.bmRequestType_bit = {
 			.recipient = TUSB_REQ_RCPT_INTERFACE,
@@ -869,9 +931,32 @@ static int hid_async_submit_control(struct hid_async_request *req)
 				     TUSB_DIR_IN : TUSB_DIR_OUT,
 		},
 		.bRequest = (u8)req->reqtype,
-		.wValue = tu_htole16(value),
+		.wValue = tu_htole16(TU_U16(req->report_type, req->report_id)),
 		.wIndex = tu_htole16((u16)
 			usbhid->usb_altsetting.desc.bInterfaceNumber),
+		.wLength = tu_htole16(len),
+	};
+	tuh_xfer_t xfer = {
+		.daddr = req->dev_addr,
+		.ep_addr = 0,
+		.setup = &request,
+		.buffer = len ? data : NULL,
+		.complete_cb = hid_async_xfer_complete,
+		.user_data = (uintptr_t)req->serial,
+	};
+
+	return tuh_control_xfer(&xfer) ? 0 : -EAGAIN;
+}
+
+static int hid_async_submit_usb_control(struct hid_async_request *req)
+{
+	u8 *data = req->data + req->data_offset;
+	u16 len = req->len - req->data_offset;
+	tusb_control_request_t const request = {
+		.bmRequestType = req->control_requesttype,
+		.bRequest = req->control_request,
+		.wValue = tu_htole16(req->control_value),
+		.wIndex = tu_htole16(req->control_index),
 		.wLength = tu_htole16(len),
 	};
 	tuh_xfer_t xfer = {
@@ -944,8 +1029,12 @@ static int hid_async_submit(struct hid_async_request *req)
 					       (uintptr_t)req->serial);
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
 		return hid_async_submit_interrupt_out(req);
+	} else if (req->kind == HID_ASYNC_REQUEST_USB_INTERRUPT) {
+		return hid_async_submit_interrupt_out(req);
 	} else if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
 		return hid_async_submit_clear_halt(req);
+	} else if (req->kind == HID_ASYNC_REQUEST_USB_CONTROL) {
+		return hid_async_submit_usb_control(req);
 	} else {
 		return hid_async_submit_control(req);
 	}
@@ -978,6 +1067,16 @@ static bool hid_async_request_is_preprobe(const struct hid_async_request *req)
 {
 	return req->kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR ||
 	       req->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR;
+}
+
+static TickType_t hid_async_request_xfer_timeout(
+		const struct hid_async_request *req)
+{
+	if (req->timeout_ticks)
+		return (TickType_t)req->timeout_ticks;
+	return hid_async_request_is_preprobe(req) ?
+		HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS :
+		HID_ASYNC_XFER_TIMEOUT_TICKS;
 }
 
 static int hid_async_xfer_status(u8 result)
@@ -1141,7 +1240,7 @@ static bool hid_async_slot_invalid_locked(struct hid_async_slot *slot)
 
 static void hid_async_slot_clear_physical_locked(struct hid_async_slot *slot)
 {
-	if (slot->lane != HID_ASYNC_LANE_OUT &&
+	if (!hid_async_lane_is_out((enum hid_async_lane)slot->lane) &&
 	    hid_async_ctrl_active == hid_async_slot_id(slot))
 		hid_async_ctrl_active = 0;
 }
@@ -1150,17 +1249,12 @@ static void hid_async_log_result(const struct hid_async_request *req,
 				 int status, bool submit_failure)
 {
 	if (submit_failure) {
-		if (req->kind == HID_ASYNC_REQUEST_IDLE)
-			async_msg("ERR: HID_IDLE_SUB");
-		else if (!req->report && req->reqtype == HID_REQ_SET_REPORT)
+		if (!req->report && req->reqtype == HID_REQ_SET_REPORT)
 			async_msg("ERR: HID_RAW_SET_SUB");
 		return;
 	}
 
-	if (req->kind == HID_ASYNC_REQUEST_IDLE) {
-		async_msg(status < 0 ? "ERR: HID_IDLE_FAIL" :
-				       "DBG: HID_IDLE_OK");
-	} else if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
+	if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
 		async_msg(status < 0 ? "ERR: HID_CLEAR_HALT_FAIL" :
 				       "DBG: HID_CLEAR_HALT_OK");
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
@@ -1194,7 +1288,7 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 
 	if (canceled) {
 		/* A removed preprobe object has no client lifetime left. */
-		if (req->complete && req->hid)
+		if (req->complete && (req->hid || req->complete_on_cancel))
 			req->complete(req, -ENODEV);
 	} else {
 		hid_async_log_result(req, status, submit_failure);
@@ -1272,30 +1366,44 @@ static bool hid_async_retire_slot(struct hid_async_slot *slot)
 		.request = req,
 		.dev_addr = req->dev_addr,
 		.instance = req->instance,
-		.ep_addr = req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT ?
-			   req->ep_addr : 0,
+		.ep_addr = hid_async_lane_is_out(
+			(enum hid_async_lane)slot->lane) ? req->ep_addr : 0,
 		.generation = req->generation,
 		.serial = req->serial,
 		.action = HID_ASYNC_HOST_ABORT,
 	};
 	bool completed;
+	bool ep0 = !call.ep_addr;
 
 	taskENTER_CRITICAL();
 	completed = slot->completion_ready;
-	if (!completed) {
-		slot->accepting_completion = false;
+	if (!completed)
 		slot->state = HID_ASYNC_SLOT_RETIRING;
-	}
 	taskEXIT_CRITICAL();
 	if (completed)
 		return true;
 
-	hid_async_host_call_sync(&call);
-	vTaskDelay(HID_ASYNC_ABORT_DRAIN_TICKS);
-	call.action = HID_ASYNC_HOST_FENCE;
-	hid_async_host_call_sync(&call);
+	if (ep0) {
+		/*
+		 * A PIO completion which wins the abort race may advance one old
+		 * TinyUSB control stage. Leave the global EP0 occupied, drain that
+		 * FIFO event, and retry the newly active stage. SETUP/DATA/ACK are
+		 * finite; a NAKing stage remains active and is canceled directly.
+		 */
+		do {
+			hid_async_host_call_sync(&call);
+			if (call.status == -EAGAIN)
+				hid_async_drain_abort_frames();
+		} while (call.status == -EAGAIN);
+	} else {
+		hid_async_host_call_sync(&call);
+		hid_async_drain_abort_frames();
+		call.action = HID_ASYNC_HOST_FENCE;
+		hid_async_host_call_sync(&call);
+	}
 
 	taskENTER_CRITICAL();
+	slot->accepting_completion = false;
 	completed = slot->completion_ready;
 	hid_async_slot_clear_physical_locked(slot);
 	taskEXIT_CRITICAL();
@@ -1334,12 +1442,12 @@ static bool hid_async_process_active(TickType_t now)
 
 		if (candidate->state != HID_ASYNC_SLOT_ACTIVE)
 			continue;
-		timeout = hid_async_request_is_preprobe(&candidate->req) ?
-			HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS :
-			HID_ASYNC_XFER_TIMEOUT_TICKS;
+		timeout = hid_async_request_xfer_timeout(&candidate->req);
 		completed = candidate->completion_ready;
 		canceled = hid_async_slot_invalid_locked(candidate);
-		timed_out = now - candidate->xfer_start >= timeout;
+		timed_out = candidate->req.timeout_ticks ?
+			now - candidate->queued_at >= timeout :
+			now - candidate->xfer_start >= timeout;
 		if (completed || canceled || timed_out) {
 			slot = candidate;
 			break;
@@ -1370,23 +1478,35 @@ static bool hid_async_process_active(TickType_t now)
 	return true;
 }
 
-static struct hid_async_slot *hid_async_find_canceled_head(void)
+static bool hid_async_process_queued_terminal(TickType_t now)
 {
 	struct hid_async_slot *slot = NULL;
+	bool canceled = false;
+	bool timed_out = false;
 
 	taskENTER_CRITICAL();
 	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
 		struct hid_async_slot *candidate = &hid_async_slots[i];
 
-		if (candidate->state == HID_ASYNC_SLOT_QUEUED &&
-		    hid_async_slot_is_head_locked(candidate) &&
-		    hid_async_slot_invalid_locked(candidate)) {
+		if (candidate->state != HID_ASYNC_SLOT_QUEUED)
+			continue;
+		canceled = hid_async_slot_invalid_locked(candidate);
+		timed_out = candidate->req.timeout_ticks &&
+			now - candidate->queued_at >=
+			(TickType_t)candidate->req.timeout_ticks;
+		if (canceled || timed_out) {
 			slot = candidate;
 			break;
 		}
 	}
 	taskEXIT_CRITICAL();
-	return slot;
+	if (!slot)
+		return false;
+
+	/* Queued work has no physical owner, so it can leave any FIFO position. */
+	hid_async_finish_slot(slot, canceled ? -ENODEV : -ETIMEDOUT,
+				 canceled, timed_out);
+	return true;
 }
 
 static struct hid_async_slot *hid_async_find_ready_head(TickType_t now)
@@ -1405,14 +1525,19 @@ static struct hid_async_slot *hid_async_find_ready_head(TickType_t now)
 		    !hid_async_slot_is_head_locked(candidate) ||
 		    hid_async_slot_invalid_locked(candidate))
 			continue;
-		timeout = hid_async_request_is_preprobe(&candidate->req) ?
-			HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
-			HID_ASYNC_SUBMIT_TIMEOUT_TICKS;
-		submit_expired = candidate->submit_started &&
+		timeout = candidate->req.timeout_ticks ?
+			(TickType_t)candidate->req.timeout_ticks :
+			(hid_async_request_is_preprobe(&candidate->req) ?
+			 HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
+			 HID_ASYNC_SUBMIT_TIMEOUT_TICKS);
+		submit_expired = candidate->req.timeout_ticks ?
+			now - candidate->queued_at >= timeout :
+			candidate->submit_started &&
 			now - candidate->submit_start >= timeout;
 		/* A busy shared EP0 must not mask another lane's submit watchdog. */
 		if (!submit_expired) {
-			if (candidate->lane != HID_ASYNC_LANE_OUT &&
+			if (!hid_async_lane_is_out(
+				(enum hid_async_lane)candidate->lane) &&
 			    hid_async_ctrl_active)
 				continue;
 			if (candidate->submit_started &&
@@ -1430,9 +1555,11 @@ static struct hid_async_slot *hid_async_find_ready_head(TickType_t now)
 static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 {
 	struct hid_async_request *req = &slot->req;
-	TickType_t timeout = hid_async_request_is_preprobe(req) ?
-		HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
-		HID_ASYNC_SUBMIT_TIMEOUT_TICKS;
+	TickType_t timeout = req->timeout_ticks ?
+		(TickType_t)req->timeout_ticks :
+		(hid_async_request_is_preprobe(req) ?
+		 HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
+		 HID_ASYNC_SUBMIT_TIMEOUT_TICKS);
 	bool canceled;
 	bool timed_out;
 	int ret;
@@ -1443,7 +1570,8 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 		slot->submit_started = true;
 		slot->submit_start = now;
 	}
-	timed_out = now - slot->submit_start >= timeout;
+	timed_out = req->timeout_ticks ? now - slot->queued_at >= timeout :
+		    now - slot->submit_start >= timeout;
 	if (!canceled && !timed_out) {
 		if (!req->serial) {
 			req->serial = ++hid_async_serial;
@@ -1455,7 +1583,7 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 		slot->completion_ready = false;
 		slot->accepting_completion = true;
 		slot->state = HID_ASYNC_SLOT_SUBMIT_PENDING;
-		if (slot->lane != HID_ASYNC_LANE_OUT) {
+		if (!hid_async_lane_is_out((enum hid_async_lane)slot->lane)) {
 			configASSERT(!hid_async_ctrl_active);
 			hid_async_ctrl_active = hid_async_slot_id(slot);
 		}
@@ -1516,26 +1644,33 @@ static TickType_t hid_async_next_wait(TickType_t now)
 
 		if (slot->state == HID_ASYNC_SLOT_RELEASE_PENDING ||
 		    slot->completion_ready ||
-		    (slot->cancel_requested &&
-		     (slot->state == HID_ASYNC_SLOT_ACTIVE ||
-		      (slot->state == HID_ASYNC_SLOT_QUEUED &&
-		       hid_async_slot_is_head_locked(slot))))) {
+		    ((slot->state == HID_ASYNC_SLOT_ACTIVE ||
+		      slot->state == HID_ASYNC_SLOT_QUEUED) &&
+		     hid_async_slot_invalid_locked(slot))) {
 			wait = 0;
 			break;
 		}
 		if (slot->state == HID_ASYNC_SLOT_ACTIVE) {
-			timeout = hid_async_request_is_preprobe(&slot->req) ?
-				HID_ASYNC_PREPROBE_XFER_TIMEOUT_TICKS :
-				HID_ASYNC_XFER_TIMEOUT_TICKS;
-			left = hid_async_ticks_left(now, slot->xfer_start,
+			timeout = hid_async_request_xfer_timeout(&slot->req);
+			left = hid_async_ticks_left(now,
+					slot->req.timeout_ticks ?
+					slot->queued_at : slot->xfer_start,
 						    timeout);
 			wait = min_t(TickType_t, wait, left);
 			continue;
 		}
-		if (slot->state != HID_ASYNC_SLOT_QUEUED ||
-		    !hid_async_slot_is_head_locked(slot))
+		if (slot->state != HID_ASYNC_SLOT_QUEUED)
 			continue;
-		if (slot->submit_started) {
+		if (slot->req.timeout_ticks) {
+			left = hid_async_ticks_left(now, slot->queued_at,
+				(TickType_t)slot->req.timeout_ticks);
+			wait = min_t(TickType_t, wait, left);
+			if (!left)
+				continue;
+		}
+		if (!hid_async_slot_is_head_locked(slot))
+			continue;
+		if (slot->submit_started && !slot->req.timeout_ticks) {
 			timeout = hid_async_request_is_preprobe(&slot->req) ?
 				HID_ASYNC_PREPROBE_SUBMIT_TIMEOUT_TICKS :
 				HID_ASYNC_SUBMIT_TIMEOUT_TICKS;
@@ -1545,7 +1680,8 @@ static TickType_t hid_async_next_wait(TickType_t now)
 			if (!left)
 				continue;
 		}
-		if (slot->lane != HID_ASYNC_LANE_OUT && hid_async_ctrl_active)
+		if (!hid_async_lane_is_out((enum hid_async_lane)slot->lane) &&
+		    hid_async_ctrl_active)
 			continue;
 		if (!slot->submit_started) {
 			wait = 0;
@@ -1575,11 +1711,8 @@ void hid_async_task(void *pvParameters)
 			continue;
 		if (hid_async_process_active(now))
 			continue;
-		slot = hid_async_find_canceled_head();
-		if (slot) {
-			hid_async_finish_slot(slot, -ENODEV, true, false);
+		if (hid_async_process_queued_terminal(now))
 			continue;
-		}
 		slot = hid_async_find_ready_head(now);
 		if (slot) {
 			(void)hid_async_start_slot(slot, now);
@@ -1606,15 +1739,18 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 
 		if (!serial || req->serial != serial ||
 		    (candidate->state != HID_ASYNC_SLOT_ACTIVE &&
-		     candidate->state != HID_ASYNC_SLOT_SUBMIT_PENDING) ||
+		     candidate->state != HID_ASYNC_SLOT_SUBMIT_PENDING &&
+		     candidate->state != HID_ASYNC_SLOT_RETIRING) ||
 		    !candidate->accepting_completion ||
 		    req->dev_addr != xfer->daddr ||
 		    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX ||
 		    req->generation != hid_async_device_generation[req->dev_addr])
 			continue;
-		if ((candidate->lane == HID_ASYNC_LANE_OUT &&
+		if ((hid_async_lane_is_out(
+			(enum hid_async_lane)candidate->lane) &&
 		     xfer->ep_addr != req->ep_addr) ||
-		    (candidate->lane != HID_ASYNC_LANE_OUT && xfer->ep_addr))
+		    (!hid_async_lane_is_out(
+			(enum hid_async_lane)candidate->lane) && xfer->ep_addr))
 			continue;
 
 		slot = candidate;

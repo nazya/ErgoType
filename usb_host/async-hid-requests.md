@@ -15,12 +15,14 @@ The active implementation now has these properties:
   probe, remove, and continuations run in task context.
 - `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
   parsing, matching the upstream caller contract without blocking TinyUSB.
-- Raw GET/SET, interrupt output, and SET_IDLE keep their synchronous ll-driver
-  contracts as task-side waits over the same serialized async owner.
-- HID EP0 GET/SET and SET_IDLE use direct asynchronous `tuh_control_xfer()` so
+- Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
+  as task-side waits over the serialized async owner.
+- HID EP0 GET/SET use direct asynchronous `tuh_control_xfer()` so
   completion retains the real TinyUSB result, actual length, and request serial.
-- Generic `usb_control_msg()`, arbitrary URBs, and drivers needing those paths
-  remain deferred.
+- Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` now
+  use fixed async slots with physical-device epoch leases. SET_IDLE exercises
+  that generic EP0 path while retaining the HID-interface lifetime lease.
+- Arbitrary URBs, interrupt-IN messages, and larger transfers remain deferred.
 
 See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.
 

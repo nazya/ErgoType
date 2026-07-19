@@ -39,8 +39,9 @@ ownership that the port still does not provide.
 
 Current unsupported patterns include:
 
-- `usb_control_msg()` / `usb_submit_urb()` when the response is required before
-  continuing
+- `usb_submit_urb()` and request-specific kill/resubmit ownership
+- synchronous interrupt-IN or control/interrupt transfers larger than the
+  fixed 257-byte transport buffer
 - `usb_string()` or explicit string-descriptor reads when the string is required
   beyond the pre-probe product/manufacturer/serial snapshots
 - multi-interface protocols that require a complete USB-core ownership model,
@@ -48,9 +49,10 @@ Current unsupported patterns include:
 - protocols that need more reliable/larger request FIFOs than the bounded
   serialized HID queue currently provides
 
-The generic helpers remain disabled instead of pretending success. Each new
-primitive needs explicit submit, completion, cancellation, and device-generation
-semantics in the TinyUSB transport owner.
+Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` have
+explicit submit, completion, timeout, cancellation, and device-generation
+semantics in the TinyUSB transport owner. The unsupported helpers remain
+disabled instead of pretending success.
 
 ## Other Deferred Reasons
 
@@ -90,9 +92,9 @@ output report through the same route.
 Drivers beyond the current boundary need extensions to the existing
 sync-over-async transport:
 
-- expose honest transfer result and short-transfer length for control requests
-- add bounded per-request completion ownership instead of global special cases
-- implement generic control/URB operations only for audited linked users
+- add request-specific URB submit/kill/resubmit ownership
+- add synchronous interrupt-IN without stealing continuous HID polling
+- extend the fixed transport buffer only for an audited linked user
 - retain generation-based cancellation on unmount and fast replug
 
 The Linux-shaped caller may block only in a task; TinyUSB callbacks must remain

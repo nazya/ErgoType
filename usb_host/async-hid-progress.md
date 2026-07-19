@@ -26,8 +26,10 @@
   transfer carries the request serial in `user_data`, and completion preserves
   TinyUSB's real result and actual data length. Successful short transfers are
   no longer confused with failures; STALL and timeout remain distinguishable.
-  A zero-data SET_IDLE uses the same transport and keeps the upstream
-  synchronous ll-driver return contract by waiting only in the caller task.
+  Task-context `usb_control_msg()` now uses a fixed device-level async lane and
+  a physical-device epoch lease. A zero-data SET_IDLE reaches that generic
+  path while retaining the HID-interface lease and the upstream synchronous
+  ll-driver return contract.
 - Normal GET_REPORT receive lengths follow upstream `hid_submit_ctrl()`: they
   are rounded to EP0 max-packet size and capped by the fixed transport buffer,
   while raw GET_REPORT keeps its caller-supplied length. Only the actual bytes
@@ -130,8 +132,9 @@
   `hid_hw_wait()`, including returned feature data during probe. The bounded
   firmware queue still rejects overload instead of attempting Linux's much
   larger control/output FIFOs.
-- Drivers that need generic USB URBs/control helpers, broad Linux subsystem
-  state, or unaudited callback behavior stay out of `CMakeLists.txt`.
+- Drivers that need generic USB URBs, interrupt-IN synchronous messages,
+  transfers larger than the fixed bridge buffer, broad Linux subsystem state,
+  or unaudited callback behavior stay out of `CMakeLists.txt`.
 - `usb_host/deferred-hid-drivers.md` records the current deferred boundary and
   examples.
 
@@ -164,4 +167,4 @@
   protocol failure is intentionally parked in this checkpoint instead of being
   immediately rearmed; clear-halt and delayed retry come next.
 - Extend the serialized transport explicitly before importing drivers that need
-  generic `usb_control_msg()`, URBs, or larger request/response protocols.
+  URBs, interrupt-IN synchronous messages, or larger request/response protocols.

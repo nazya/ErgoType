@@ -80,6 +80,8 @@ struct usbhid_device {
 	u8 report_slot;
 	bool report_wanted;
 	bool report_host_pending;
+	/* Cross-interface readers may enter only after hid_add_device() succeeds. */
+	bool driver_ready;
 	bool transport_stopping;
 	bool disconnect_queued;
 

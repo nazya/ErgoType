@@ -14,7 +14,9 @@
 
 #include "hid-ids.h"
 // #include "usbhid/usbhid.h"
-// The upstream usbhid private header is not needed by this driver body here.
+// Firmware needs only scoped sibling-interface lifetime glue, not Linux's
+// private URB state.
+#include "usb_host/usbhid.h"
 
 /* Holtek based keyboards (USB ID 04d9:a055) have the following issues:
  * - The report descriptor specifies an excessively large number of consumer
@@ -123,23 +125,38 @@ static int holtek_kbd_input_event(struct input_dev *dev, unsigned int type,
 	struct usb_device *usb_dev = hid_to_usb_dev(hid);
 
 	/* Locate the boot interface, to receive the LED change events */
-	struct usb_interface *boot_interface = usb_ifnum_to_if(usb_dev, 0);
-	struct hid_device *boot_hid;
+	// struct usb_interface *boot_interface = usb_ifnum_to_if(usb_dev, 0);
+	// struct hid_device *boot_hid;
+	// Firmware interface shims are HID-owned. Atomically find and pin the
+	// sibling HID until LED forwarding no longer dereferences its input list.
+	struct hid_device *boot_hid = usbhid_ifnum_io_get(usb_dev, 0);
 	struct hid_input *boot_hid_input;
+	int ret;
 
-	if (unlikely(boot_interface == NULL))
+	// if (unlikely(boot_interface == NULL))
+	if (unlikely(boot_hid == NULL))
 		return -ENODEV;
 
-	boot_hid = usb_get_intfdata(boot_interface);
+	// boot_hid = usb_get_intfdata(boot_interface);
+	// The scoped lookup above returns the same intfdata owner already pinned.
 	if (list_empty(&boot_hid->inputs)) {
 		hid_err(hid, "no inputs found\n");
-		return -ENODEV;
+		// return -ENODEV;
+		// The firmware lease must be released before this early return.
+		ret = -ENODEV;
+		goto out;
 	}
 	boot_hid_input = list_first_entry(&boot_hid->inputs,
 		struct hid_input, list);
 
-	return boot_hid_input->input->event(boot_hid_input->input, type, code,
-			value);
+	// return boot_hid_input->input->event(boot_hid_input->input, type, code,
+	// 		value);
+	// Release the firmware lifetime lease after the upstream forwarding call.
+	ret = boot_hid_input->input->event(boot_hid_input->input, type, code,
+					  value);
+out:
+	usbhid_ifnum_io_put(boot_hid);
+	return ret;
 }
 
 static int holtek_kbd_probe(struct hid_device *hdev,

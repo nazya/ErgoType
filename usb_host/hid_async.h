@@ -10,7 +10,7 @@
  */
 
 #define HID_ASYNC_REPORT_MAX 257u
-#define HID_ASYNC_DATA_MAX 257u
+#define HID_ASYNC_DATA_MAX USB_HOST_SYNC_MSG_MAX
 /* Bounded queued-work budget; B4 stores it in pool slots, not a FreeRTOS queue. */
 #define HID_ASYNC_REQUEST_QUEUE_LEN 4u
 
@@ -22,18 +22,11 @@ typedef void (*hid_async_complete_t)(const struct hid_async_request *req,
 enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_REPORT,
 	HID_ASYNC_REQUEST_OUTPUT_REPORT,
-	HID_ASYNC_REQUEST_IDLE,
 	HID_ASYNC_REQUEST_CLEAR_HALT,
 	HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR,
 	HID_ASYNC_REQUEST_STRING_DESCRIPTOR,
-#if 0
-	/*
-	 * Deferred: no currently linked HID driver needs async usb_control_msg(),
-	 * usb_interrupt_msg(), or URB transport.
-	 */
 	HID_ASYNC_REQUEST_USB_CONTROL,
 	HID_ASYNC_REQUEST_USB_INTERRUPT,
-#endif
 };
 
 struct hid_async_request {
@@ -48,30 +41,19 @@ struct hid_async_request {
 	u8 data_offset;
 	u8 ep_addr;
 	u8 string_index;
-#if 0
-	/* Deferred with HID_ASYNC_REQUEST_USB_CONTROL. */
 	u8 control_request;
 	u8 control_requesttype;
-#endif
 	u16 len;
 	u16 actual_len;
 	u16 string_langid;
 	u16 control_value;
+	u16 control_index;
+	u32 timeout_ticks;
 	u32 generation;
 	u32 serial;
 	u8 xfer_result;
-#if 0
-	/* Deferred with HID_ASYNC_REQUEST_USB_CONTROL. */
-	u16 control_value;
-	u16 control_index;
-	tusb_control_request_t control_setup;
-	u8 *heap_data;
-#endif
 	u8 data[HID_ASYNC_DATA_MAX];
-#if 0
-	/* Deferred with cancelable USB control requests. */
 	bool complete_on_cancel;
-#endif
 	hid_async_complete_t complete;
 	void *context;
 };
@@ -94,8 +76,6 @@ int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 				      size_t len,
 				      hid_async_complete_t complete,
 				      void *context);
-int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
-			 hid_async_complete_t complete, void *context);
 int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
 			       hid_async_complete_t complete, void *context);
 int hid_async_control_report_hold(const struct hid_async_request *req);
@@ -107,40 +87,21 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 				      u32 generation,
 				      hid_async_complete_t complete,
 				      void *context);
-#if 0
-/*
- * Deferred: no currently linked HID driver needs async usb_control_msg(),
- * usb_interrupt_msg(), or URB transport. Keep the boundary for drivers that
- * will be re-enabled with matching hardware/emulator coverage.
- */
-struct usb_device;
-
-int hid_async_queue_usb_control_msg(struct hid_device *hid,
-				    struct usb_device *dev,
-				    unsigned int pipe,
+int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);
+void hid_async_host_task_register(void);
+bool hid_async_sync_call_allowed(void);
+int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
 				    const void *data, u16 size,
 				    int timeout,
 				    hid_async_complete_t complete,
 				    void *context);
-int hid_async_queue_usb_control_msg_cancelable(struct hid_device *hid,
-					       struct usb_device *dev,
-					       unsigned int pipe,
-					       u8 request, u8 requesttype,
-					       u16 value, u16 index,
-					       const void *data, u16 size,
-					       int timeout,
-					       hid_async_complete_t complete,
-					       void *context);
-int hid_async_queue_usb_interrupt_msg(struct hid_device *hid,
-				      struct usb_device *dev,
-				      unsigned int pipe,
-				      const void *data, u16 size,
-				      int timeout,
+int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
+				      u8 ep_addr, const void *data,
+				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context);
-#endif
 int hid_async_cancel_device(u8 dev_addr, u8 instance);
 int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);

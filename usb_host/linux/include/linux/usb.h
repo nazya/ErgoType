@@ -26,11 +26,16 @@
 #define USB_STATUS_TYPE_STANDARD USB_TYPE_STANDARD
 #define USB_STATUS_TYPE_PTM 1
 #define USB_DT_STRING TUSB_DESC_STRING
+/* Linux pipe encoding is distinct from endpoint bmAttributes values. */
+#define PIPE_ISOCHRONOUS 0
+#define PIPE_INTERRUPT 1
 #define PIPE_CONTROL 2
-#define PIPE_INTERRUPT 3
+#define PIPE_BULK 3
 #define USB_CTRL_GET_TIMEOUT 5000
 #define USB_CTRL_SET_TIMEOUT 5000
 #define USB_MAX_SYNCHRONOUS_TIMEOUT 60000
+/* Fixed inline payload owned by the firmware's synchronous USB bridge. */
+#define USB_HOST_SYNC_MSG_MAX 257u
 #define USB_HOST_ENDPOINT_MAX 4
 #define USB_DT_ENDPOINT TUSB_DESC_ENDPOINT
 #define USB_ENDPOINT_XFER_INT TUSB_XFER_INTERRUPT
@@ -168,7 +173,10 @@ static inline void *usb_get_intfdata(struct usb_interface *intf)
 	return dev_get_drvdata(&intf->dev);
 }
 
-struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev, unsigned int ifnum);
+// extern struct usb_interface *usb_ifnum_to_if(const struct usb_device *dev,
+// 					       unsigned ifnum);
+// Firmware interface shims are HID-owned rather than configuration-owned;
+// cross-interface users must take the scoped usbhid transport lease.
 struct usb_device *usb_hub_find_child(struct usb_device *hdev, int port1);
 
 /**
@@ -200,7 +208,11 @@ static inline unsigned int __create_pipe(struct usb_device *dev,
 
 #define usb_pipein(pipe)	((pipe) & USB_DIR_IN)
 #define usb_pipeout(pipe)	(!usb_pipein(pipe))
+#define usb_pipedevice(pipe)	(((pipe) >> 8) & 0x7f)
 #define usb_pipeendpoint(pipe)	(((pipe) >> 15) & 0x0f)
+#define usb_pipetype(pipe)	(((pipe) >> 30) & 3)
+#define usb_pipeint(pipe)	(usb_pipetype((pipe)) == PIPE_INTERRUPT)
+#define usb_pipecontrol(pipe)	(usb_pipetype((pipe)) == PIPE_CONTROL)
 #define usb_sndctrlpipe(dev, endpoint)	\
 	((PIPE_CONTROL << 30) | __create_pipe(dev, endpoint))
 #define usb_rcvctrlpipe(dev, endpoint)	\
@@ -242,10 +254,8 @@ static inline bool usb_check_int_endpoints(const struct usb_interface *intf,
 
 #if 0
 /*
- * Deferred: current linked HID drivers do not use Linux URB transport or
- * synchronous descriptor/status/string helpers. Keep the upstream-shaped USB
- * control surface here, but do not expose it until a worker/state-machine path
- * can execute these requests outside TinyUSB callbacks.
+ * Deferred: URB ownership needs request-specific kill/resubmit semantics; it
+ * must not use urb->context as a HID owner or reuse the synchronous bridge.
  */
 struct usb_ctrlrequest {
 	u8 bRequestType;
@@ -292,24 +302,46 @@ static inline void usb_fill_control_urb(struct urb *urb,
 	urb->complete = complete_fn;
 	urb->context = context;
 }
+#endif
 
-int tuh_usb_control_msg(struct usb_device *dev, unsigned int pipe,
-			u8 request, u8 requesttype, u16 value, u16 index,
-			void *data, u16 size, int timeout);
-
-#define usb_control_msg tuh_usb_control_msg
+/*
+ * Linux USB core normally blocks the task caller here. TinyUSB callbacks stay
+ * nonblocking; the port keeps this contract over its fixed async slot owner.
+ */
+extern int usb_control_msg(struct usb_device *dev, unsigned int pipe,
+	__u8 request, __u8 requesttype, __u16 value, __u16 index,
+	void *data, __u16 size, int timeout);
+extern int usb_interrupt_msg(struct usb_device *usb_dev, unsigned int pipe,
+	void *data, int len, int *actual_length, int timeout);
 
 static inline int usb_control_msg_send(struct usb_device *dev, u8 endpoint,
 				       u8 request, u8 requesttype,
-				       u16 value, u16 index, const void *data,
+				       u16 value, u16 index,
+				       const void *driver_data,
 				       u16 size, int timeout, gfp_t memflags)
 {
 	int ret;
 
+	/* Linux USB core accepts larger DMA buffers; this port has fixed slots. */
+	if (size > USB_HOST_SYNC_MSG_MAX)
+		return -EMSGSIZE;
+
+	// u8 *data = NULL;
+	//
+	// if (size) {
+	// 	data = kmemdup(driver_data, size, memflags);
+	// 	if (!data)
+	// 		return -ENOMEM;
+	// }
+	// The fixed async slot copies OUT data before enqueue returns, so no
+	// temporary DMA allocation is needed at this firmware boundary.
+	u8 *data = (u8 *)driver_data;
 	(void)memflags;
 
 	ret = usb_control_msg(dev, usb_sndctrlpipe(dev, endpoint), request,
-			      requesttype, value, index, (void *)data, size, timeout);
+			      requesttype, value, index, data, size, timeout);
+	// kfree(data);
+	// The slot owns its copy; driver_data remains caller-owned.
 	if (ret < 0)
 		return ret;
 
@@ -318,36 +350,44 @@ static inline int usb_control_msg_send(struct usb_device *dev, u8 endpoint,
 
 static inline int usb_control_msg_recv(struct usb_device *dev, u8 endpoint,
 				       u8 request, u8 requesttype,
-				       u16 value, u16 index, void *data,
+				       u16 value, u16 index, void *driver_data,
 				       u16 size, int timeout, gfp_t memflags)
 {
-	u8 *recv_data;
+	u8 *data;
 	int ret;
 
-	if (!size || !data)
+	if (!size || !driver_data)
 		return -EINVAL;
+	/* Reject outside the fixed bridge before the upstream temporary copy. */
+	if (size > USB_HOST_SYNC_MSG_MAX)
+		return -EMSGSIZE;
 
-	recv_data = kmalloc(size, memflags);
-	if (!recv_data)
+	data = kmalloc(size, memflags);
+	if (!data)
 		return -ENOMEM;
 
 	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, endpoint), request,
-			      requesttype, value, index, recv_data, size, timeout);
+			      requesttype, value, index, data, size, timeout);
 	if (ret < 0)
 		goto exit;
 
 	if (ret == size) {
-		memcpy(data, recv_data, size);
+		memcpy(driver_data, data, size);
 		ret = 0;
 	} else {
 		ret = -EREMOTEIO;
 	}
 
 exit:
-	kfree(recv_data);
+	kfree(data);
 	return ret;
 }
 
+#if 0
+/*
+ * Deferred: enumeration already caches descriptors and strings asynchronously;
+ * expose these allocation-heavy USB-core helpers only with a linked consumer.
+ */
 static inline int usb_get_descriptor(struct usb_device *dev, unsigned char desctype,
 				     unsigned char descindex, void *buf, int size)
 {

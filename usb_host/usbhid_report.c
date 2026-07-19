@@ -38,7 +38,7 @@ _Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >
 	       "HID report lanes require a dedicated task notification index");
 #define USBHID_INTERRUPT_REPORT_MAX 64u
 /* PIO-USB may publish a raced completion at the end of a later SOF. */
-#define USBHID_REPORT_ABORT_DRAIN_TICKS ((TickType_t)2)
+#define USBHID_REPORT_ABORT_DRAIN_FRAMES 2u
 /* A busy async FIFO must either drain or park this endpoint within 8 seconds. */
 #define USBHID_CLEAR_HALT_QUEUE_RETRY_MS 32u
 #define USBHID_CLEAR_HALT_QUEUE_RETRY_MAX 250u
@@ -49,6 +49,16 @@ enum usbhid_report_owner {
 	USBHID_REPORT_QUEUED,
 	USBHID_REPORT_ACTIVE,
 };
+
+static void usbhid_report_drain_abort_frames(void)
+{
+	u32 start = pio_usb_host_get_frame_number();
+
+	/* FreeRTOS ticks and the independent PIO SOF timer need not share phase. */
+	while (pio_usb_host_get_frame_number() - start <
+	       USBHID_REPORT_ABORT_DRAIN_FRAMES)
+		vTaskDelay(1);
+}
 
 enum usbhid_report_host_action {
 	USBHID_REPORT_HOST_NONE,
@@ -1350,7 +1360,7 @@ static bool usbhid_report_process_reconcile(void)
 
 	/* Only an abort needs two SOFs before the host-owner fence. */
 	if (drain_mask)
-		vTaskDelay(USBHID_REPORT_ABORT_DRAIN_TICKS);
+		usbhid_report_drain_abort_frames();
 	for (int i = 0; i < CFG_TUH_HID; i++) {
 		struct usbhid_device *pending_usbhid;
 		bool reconcile;
