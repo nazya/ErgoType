@@ -110,6 +110,8 @@ struct usb_host_interface {
 	// Firmware stores a small fixed endpoint snapshot in the local
 	// usb_interface shim instead of allocating Linux USB core altsettings.
 	struct usb_host_endpoint endpoint[USB_HOST_ENDPOINT_MAX];
+	bool has_interrupt_in;
+	u8 interrupt_in_endpoint;
 	bool has_interrupt_out;
 	u8 interrupt_out_endpoint;
 };

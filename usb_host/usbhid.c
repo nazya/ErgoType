@@ -109,6 +109,8 @@ enum usbhid_transport_fault {
 	USBHID_FAULT_RX_REARM = 1u << 5,
 	USBHID_FAULT_RAW_INTERFACE = 1u << 6,
 	USBHID_FAULT_TOPOLOGY = 1u << 7,
+	USBHID_FAULT_RX_STALL = 1u << 8,
+	USBHID_FAULT_RX_XFER = 1u << 9,
 };
 
 enum usbhid_preprobe_stage {
@@ -1406,6 +1408,12 @@ void usbhid_backend_rx_rearm_failed(void)
 	usbhid_transport_fault(USBHID_FAULT_RX_REARM);
 }
 
+void usbhid_backend_rx_transfer_failed(uint8_t xfer_result)
+{
+	usbhid_transport_fault(xfer_result == XFER_RESULT_STALLED ?
+		USBHID_FAULT_RX_STALL : USBHID_FAULT_RX_XFER);
+}
+
 static void usbhid_lifecycle_log_transport_faults(void)
 {
 	u32 faults;
@@ -1431,6 +1439,10 @@ static void usbhid_lifecycle_log_transport_faults(void)
 		async_msg("ERR: HID_RAW_INTERFACE_FULL");
 	if (faults & USBHID_FAULT_TOPOLOGY)
 		async_msg("ERR: HID_USB_PARENT_MISSING");
+	if (faults & USBHID_FAULT_RX_STALL)
+		async_msg("ERR: HID_RX_STALL");
+	if (faults & USBHID_FAULT_RX_XFER)
+		async_msg("ERR: HID_RX_XFER_FAIL");
 }
 
 static void usbhid_lifecycle_disconnect_hid(struct hid_device *hid,
@@ -1658,6 +1670,13 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 			const struct usb_endpoint_descriptor *ep =
 				&hid->usb_altsetting.endpoint[i].desc;
 
+			if (!hid->usb_altsetting.has_interrupt_in &&
+			    (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN &&
+			    usb_endpoint_xfer_int(ep)) {
+				hid->usb_altsetting.has_interrupt_in = true;
+				hid->usb_altsetting.interrupt_in_endpoint =
+					ep->bEndpointAddress;
+			}
 			if (!hid->usb_altsetting.has_interrupt_out &&
 			    (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_OUT &&
 			    usb_endpoint_xfer_int(ep)) {
@@ -1772,10 +1791,11 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 		goto fail;
 	}
 
-	// tuh_hid_receive_report(dev_addr, instance);
-	// Start interrupt IN from usbhid_open()/usbhid_start() after the Linux HID
-	// device binds, matching upstream hid_start_in() lifecycle instead of
-	// probe-time report delivery.
+	/*
+	 * Direct interrupt IN starts from usbhid_open()/usbhid_start() after the
+	 * Linux HID device binds, matching upstream hid_start_in() lifecycle
+	 * instead of probe-time report delivery.
+	 */
 	hid->ll_rdesc = NULL;
 	hid->ll_rsize = 0;
 	kfree(rdesc);
@@ -1891,24 +1911,31 @@ void usbhid_backend_device_umount(uint8_t dev_addr)
 	usbhid_backend_device_detach(dev_addr);
 }
 
-void usbhid_backend_report_received(uint8_t dev_addr, uint8_t instance,
-				    uint8_t const *report, uint16_t len)
+void usbhid_backend_report_completed(uint8_t dev_addr, uint8_t instance,
+				     uint32_t generation,
+				     uint8_t const *report, uint16_t bufsize,
+				     uint32_t len, uint8_t xfer_result)
 {
 	struct hid_device *hid = usbhid_lookup(dev_addr, instance);
-	uint8_t protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
+	uint8_t protocol_mode = HID_PROTOCOL_REPORT;
+	bool parse = xfer_result == XFER_RESULT_SUCCESS;
 	int ret;
 
-	if (protocol_mode == HID_PROTOCOL_BOOT)
-		usbhid_transport_fault(USBHID_FAULT_PROTOCOL_BOOT);
-
-	if (hid) {
-		ret = usbhid_report_submit(hid, report, len,
-					   protocol_mode != HID_PROTOCOL_BOOT);
-		if (ret < 0)
-			usbhid_transport_fault(USBHID_FAULT_REPORT_DROP);
-	} else {
-		usbhid_transport_fault(USBHID_FAULT_REPORT_DROP);
+	/* A fenced completion from an older TinyUSB address epoch is expected. */
+	if (!hid || hid->ll_generation != generation)
+		return;
+	if (parse) {
+		protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
+		if (protocol_mode == HID_PROTOCOL_BOOT) {
+			usbhid_transport_fault(USBHID_FAULT_PROTOCOL_BOOT);
+			parse = false;
+		}
 	}
+
+	ret = usbhid_report_submit(hid, report, bufsize, len, xfer_result,
+				   parse);
+	if (ret < 0)
+		usbhid_transport_fault(USBHID_FAULT_REPORT_DROP);
 }
 
 /*
@@ -1997,6 +2024,7 @@ static void usbhid_stop(struct hid_device *hid)
 		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 	usbhid_report_wait_idle(hid);
 	usbhid_io_wait_idle(hid);
+	usbhid_report_release(hid);
 }
 
 static int usbhid_open(struct hid_device *hid)

@@ -34,7 +34,12 @@ void tuh_umount_cb(uint8_t dev_addr)
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 				uint8_t const *report, uint16_t len)
 {
-	usbhid_backend_report_received(dev_addr, instance, report, len);
+	/* Direct endpoint IN owns this path. A class receive would be unexpected. */
+	(void)dev_addr;
+	(void)instance;
+	(void)report;
+	(void)len;
+	usbhid_backend_rx_rearm_failed();
 }
 
 usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *driver_count)

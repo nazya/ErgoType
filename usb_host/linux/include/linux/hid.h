@@ -671,7 +671,9 @@ struct hid_device {
 	u32 ll_report_revision;
 	u32 ll_io_pending;
 	TaskHandle_t ll_control_waiter;
+	u16 ll_report_bufsize;
 	u8 ll_report_owner;
+	u8 ll_report_slot;
 	bool ll_report_wanted;
 	bool ll_report_host_pending;
 	bool ll_transport_stopping;

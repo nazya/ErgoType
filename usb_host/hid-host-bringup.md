@@ -40,7 +40,7 @@ TinyUSB mount
   -> device/string descriptor pre-probe
   -> Linux HID report parse
   -> synchronous driver match and probe
-  -> hidinput open, then TinyUSB interrupt-IN receive starts
+  -> hidinput open, then direct TinyUSB endpoint-IN receive starts
   -> Linux HID input mapping -> evdev -> KeyD
 ```
 
@@ -75,6 +75,16 @@ the complete endpoint wire image until completion, and TinyUSB returns the real
 transfer result, actual length, and request serial. The old report-sent facade,
 which could only manufacture success for whichever request happened to be
 active, is not part of this path.
+
+Interrupt IN follows the same exact-completion boundary without entering the
+serialized control/OUT broker: every HID interface may have one independent IN
+transfer. The port selects the first interrupt-IN endpoint, as upstream does,
+and arms a persistent slot for the largest parsed INPUT report (report ID
+included, capped at 64 bytes). Completion queues a pointer to that slot; the
+Linux HID parser runs in the report task before the slot can be rearmed. This
+removes the old callback copy, retains the real HCD result, and keeps failed or
+stalled payload out of Linux HID and KeyD. STALL clear-halt and protocol-error
+retry are deliberately not synthesized yet.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -205,15 +215,17 @@ overhead) in the FreeRTOS heap at startup with the current
 allocation with deterministic capacity; include this cost in post-enumeration
 and haptic heap checks.
 
-The report executor additionally reserves five 80-byte control-result slots
-(one active plus the four-entry async queue) and one close/reopen fence slot.
-Compared with the former `CFG_TUH_HID + 1` queue this costs 400 B more startup
-heap. Its coalesced reconcile table costs 32 B of static RAM. The async request
-object remains 304 B. Exact endpoint callbacks add 1,280 B of TinyUSB device
-state; removing the unused HID class OUT staging saves 240 B. The host transfer
-buffers occupy 820 B in scratch X, ending 1,228 B below the core-1 stack. With
-the 216.75 KiB FreeRTOS heap, the linked image uses 243,208 B of `.bss` and
-keeps 272 B of main-SRAM link headroom in this checkpoint.
+The report executor has ten 36-byte event slots: four interrupt completions,
+five control results (one active plus the four-entry async queue), and one
+close/reopen fence. Zero-copy interrupt events reduce queue payload by 440 B
+versus the former ten 80-byte events; the static control handoff is 44 B
+smaller too. Its coalesced reconcile table costs 32 B of static RAM. The async
+request object remains 304 B. Exact endpoint callbacks add 1,280 B of TinyUSB
+device state. Direct IN/OUT leave one-byte class placeholders, while four
+64-byte IN buffers and their lifecycle metadata live in scratch X. The host
+transfer storage now occupies 916 B there and ends 1,132 B below the core-1
+stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,168 B of
+`.bss` and keeps 312 B of main-SRAM link headroom in this checkpoint.
 
 ## Log Reference
 
@@ -226,6 +238,8 @@ keeps 272 B of main-SRAM link headroom in this checkpoint.
 | `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
+| `ERR: HID_RX_STALL` | Interrupt IN stalled. Payload was discarded and polling was parked pending real endpoint clear-halt recovery. |
+| `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and polling was parked pending bounded delayed retry. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |

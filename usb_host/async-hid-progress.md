@@ -65,6 +65,16 @@
   an earlier result waits for parser ownership. Interrupt-IN close is reconciled
   in the TinyUSB owner: abort completion is drained for two SOFs before a raced
   reopen may arm a new receive.
+- Interrupt IN now uses the first interrupt-IN endpoint directly, matching
+  upstream endpoint selection and preserving TinyUSB's exact transfer result
+  and actual length. The request length is the largest parsed INPUT report,
+  including its report ID, with an explicit 64-byte port limit. Four persistent
+  transport slots keep DMA storage alive through task-side parsing; queued
+  events carry a zero-copy slot reference, and the endpoint is rearmed only
+  after that event is consumed. Successful payload is dropped while
+  `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
+  Non-success payload never reaches the HID parser; recovery for STALL and
+  protocol failure remains a separate transport checkpoint.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -74,6 +84,12 @@
 
 ## Manual Test Notes
 
+- 2026-07-19: host checkpoint `hid: preserve exact interrupt output completion` booted with 43,008 B minimum free
+  heap, a 43,160 B largest free block, and 938 words free at the TinyUSB task
+  watermark. Repeated `c` press/release reports reached the input boundary.
+  This verifies exact interrupt OUT and is the baseline immediately before the
+  direct interrupt-IN checkpoint; direct IN still requires its own hardware
+  pass.
 - 2026-07-19: host checkpoint `hid: retire queued cancels outside callbacks` passed the strict hi-res wheel
   emulator again after queued cancel retirement moved out of TinyUSB unmount
   callbacks. Pointer events resumed normally after reconnect.
@@ -141,5 +157,11 @@
 - Exercise SET_IDLE on a path that actually calls the ll-driver `.idle` hook;
   enumeration-time TinyUSB SET_IDLE happens before this transport is mounted and
   is not proof of the new request path.
+- Verify direct interrupt IN with keyboard and pointer traffic, then repeated
+  unplug/replug. The expected normal path has no `HID_RX_STALL`,
+  `HID_RX_XFER_FAIL`, `HID_RX_REARM_FAIL`, or `HID_REPORT_SKIP`. Record heap,
+  largest free block, block count, and the TinyUSB stack watermark. A STALL or
+  protocol failure is intentionally parked in this checkpoint instead of being
+  immediately rearmed; clear-halt and delayed retry come next.
 - Extend the serialized transport explicitly before importing drivers that need
   generic `usb_control_msg()`, URBs, or larger request/response protocols.

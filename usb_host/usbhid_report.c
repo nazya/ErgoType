@@ -12,10 +12,10 @@
 #include "usbhid_report.h"
 
 /*
- * Interrupt-IN executor. TinyUSB owns a report buffer only while RX is armed;
- * its callback moves ownership to a bounded copied event and returns. The
- * complete Linux HID input path runs in task context, then the TinyUSB host
- * task is asked to arm the next transfer.
+ * Interrupt-IN executor. A bounded port slot owns each RX buffer from arm
+ * through task-side parsing. The exact TinyUSB endpoint callback publishes
+ * only a pointer to that stable slot; the endpoint is not rearmed until the
+ * event has been consumed.
  *
  * There is exactly one owner per HID interface:
  *
@@ -32,6 +32,7 @@
 #define USBHID_REPORT_QUEUE_LEN \
 	(CFG_TUH_HID + USBHID_CONTROL_REPORT_SLOTS + \
 	 USBHID_RECONCILE_EVENT_SLOTS)
+#define USBHID_INTERRUPT_REPORT_MAX 64u
 /* PIO-USB may publish a raced completion at the end of a later SOF. */
 #define USBHID_REPORT_ABORT_DRAIN_TICKS ((TickType_t)2)
 
@@ -61,7 +62,11 @@ struct usbhid_report_event {
 	u16 len;
 	bool parse;
 	union {
-		u8 interrupt[CFG_TUH_HID_EPIN_BUFSIZE];
+		struct {
+			u8 *data;
+			u16 bufsize;
+			u8 xfer_result;
+		} interrupt;
 		struct {
 			u8 *data;
 			void *context;
@@ -78,15 +83,196 @@ struct usbhid_report_reconcile {
 	u32 generation;
 };
 
+struct usbhid_report_rx_slot {
+	struct hid_device *owner;
+	u32 generation;
+	u32 serial;
+	u16 bufsize;
+	u8 dev_addr;
+	u8 instance;
+	u8 ep_addr;
+};
+
 static QueueHandle_t usbhid_report_queue;
 static struct usbhid_report_event usbhid_control_report_handoff;
 static bool usbhid_control_report_handoff_ready;
+CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN
+static struct usbhid_report_rx_slot usbhid_report_rx_slots[CFG_TUH_HID];
+CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN
+static u8 usbhid_report_rx_buffers[CFG_TUH_HID]
+	[USBHID_INTERRUPT_REPORT_MAX];
+static u32 usbhid_report_serial;
 /* ll_report_host_pending retains each hid until the fenced host pass. */
 static struct usbhid_report_reconcile
 	usbhid_report_reconcile_pending[CFG_TUH_HID];
 static bool usbhid_report_reconcile_wake_queued;
 
 static void usbhid_report_reconcile_on_host(void *data);
+static void usbhid_report_xfer_complete(tuh_xfer_t *xfer);
+
+static u32 usbhid_report_next_serial_locked(void)
+{
+	if (!++usbhid_report_serial)
+		++usbhid_report_serial;
+	return usbhid_report_serial;
+}
+
+static int usbhid_report_prepare(struct hid_device *hid)
+{
+	struct hid_report_enum *report_enum;
+	struct hid_report *report;
+	u32 insize = 0;
+	int slot = -1;
+
+	if (!hid->usb_altsetting.has_interrupt_in)
+		return -ENODEV;
+
+	/* Match upstream usbhid's interrupt URB length, including report ID. */
+	report_enum = &hid->report_enum[HID_INPUT_REPORT];
+	list_for_each_entry(report, &report_enum->report_list, list) {
+		u32 size = DIV_ROUND_UP(report->size, 8) +
+			   report_enum->numbered;
+
+		if (size > insize)
+			insize = size;
+	}
+	if (!insize)
+		return -ENODEV;
+	if (insize > USBHID_INTERRUPT_REPORT_MAX)
+		return -EMSGSIZE;
+
+	taskENTER_CRITICAL();
+	if (hid->ll_transport_stopping) {
+		taskEXIT_CRITICAL();
+		return -ENODEV;
+	}
+	if (hid->ll_report_slot) {
+		slot = hid->ll_report_slot - 1;
+		if (slot >= CFG_TUH_HID ||
+		    usbhid_report_rx_slots[slot].owner != hid)
+			slot = -1;
+	} else {
+		for (int i = 0; i < CFG_TUH_HID; i++) {
+			if (!usbhid_report_rx_slots[i].owner) {
+				slot = i;
+				break;
+			}
+		}
+		if (slot >= 0) {
+			usbhid_report_rx_slots[slot].owner = hid;
+			hid->ll_report_slot = slot + 1;
+		}
+	}
+	if (slot >= 0) {
+		hid->ll_report_bufsize = (u16)insize;
+		usbhid_report_rx_slots[slot].bufsize = (u16)insize;
+	}
+	taskEXIT_CRITICAL();
+
+	return slot >= 0 ? 0 : -ENOMEM;
+}
+
+static bool usbhid_report_arm_on_host(struct hid_device *hid, u32 generation)
+{
+	struct usbhid_report_rx_slot *slot;
+	tuh_xfer_t xfer = { 0 };
+	u32 serial;
+	u16 bufsize;
+	u8 ep_addr;
+	int index;
+
+	taskENTER_CRITICAL();
+	index = hid->ll_report_slot ? hid->ll_report_slot - 1 : -1;
+	if (index < 0 || index >= CFG_TUH_HID ||
+	    usbhid_report_rx_slots[index].owner != hid ||
+	    usbhid_report_rx_slots[index].serial ||
+	    !hid->ll_report_bufsize ||
+	    !hid->usb_altsetting.has_interrupt_in) {
+		taskEXIT_CRITICAL();
+		return false;
+	}
+
+	slot = &usbhid_report_rx_slots[index];
+	serial = usbhid_report_next_serial_locked();
+	bufsize = hid->ll_report_bufsize;
+	ep_addr = hid->usb_altsetting.interrupt_in_endpoint;
+	slot->generation = generation;
+	slot->serial = serial;
+	slot->bufsize = bufsize;
+	slot->dev_addr = hid->dev_addr;
+	slot->instance = hid->instance;
+	slot->ep_addr = ep_addr;
+	taskEXIT_CRITICAL();
+
+	xfer.daddr = hid->dev_addr;
+	xfer.ep_addr = ep_addr;
+	xfer.buffer = usbhid_report_rx_buffers[index];
+	xfer.buflen = bufsize;
+	xfer.complete_cb = usbhid_report_xfer_complete;
+	xfer.user_data = serial;
+	if (tuh_edpt_xfer(&xfer))
+		return true;
+
+	taskENTER_CRITICAL();
+	if (slot->owner == hid && slot->serial == serial)
+		slot->serial = 0;
+	taskEXIT_CRITICAL();
+	return false;
+}
+
+static void usbhid_report_abort_on_host(struct hid_device *hid)
+{
+	struct usbhid_report_rx_slot *slot;
+	u8 ep_addr = 0;
+	int index;
+
+	taskENTER_CRITICAL();
+	index = hid->ll_report_slot ? hid->ll_report_slot - 1 : -1;
+	if (index >= 0 && index < CFG_TUH_HID) {
+		slot = &usbhid_report_rx_slots[index];
+		if (slot->owner == hid && slot->serial) {
+			ep_addr = slot->ep_addr;
+			slot->serial = 0;
+		}
+	}
+	taskEXIT_CRITICAL();
+
+	if (ep_addr && tuh_hid_mounted(hid->dev_addr, hid->instance) &&
+	    usbh_edpt_busy(hid->dev_addr, ep_addr))
+		(void)tuh_edpt_abort_xfer(hid->dev_addr, ep_addr);
+}
+
+static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
+{
+	struct usbhid_report_rx_slot completed = { 0 };
+	u8 *report = NULL;
+	u32 serial;
+
+	if (!xfer || !(serial = (u32)xfer->user_data))
+		return;
+
+	taskENTER_CRITICAL();
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		struct usbhid_report_rx_slot *slot =
+			&usbhid_report_rx_slots[i];
+
+		if (slot->serial != serial || slot->dev_addr != xfer->daddr ||
+		    slot->ep_addr != xfer->ep_addr)
+			continue;
+		completed = *slot;
+		report = usbhid_report_rx_buffers[i];
+		slot->serial = 0;
+		break;
+	}
+	taskEXIT_CRITICAL();
+
+	/* Cleared serials are aborted/unplugged epochs; their payload is stale. */
+	if (!report)
+		return;
+	usbhid_backend_report_completed(completed.dev_addr,
+		completed.instance, completed.generation, report,
+		completed.bufsize, xfer->actual_len, (u8)xfer->result);
+}
 
 static bool usbhid_report_queue_reconcile(struct hid_device *hid,
 					   u32 generation)
@@ -134,6 +320,7 @@ static bool usbhid_report_queue_reconcile(struct hid_device *hid,
 
 int usbhid_report_init(void)
 {
+	memset(usbhid_report_rx_slots, 0, sizeof(usbhid_report_rx_slots));
 	usbhid_report_queue = xQueueCreate(USBHID_REPORT_QUEUE_LEN,
 					  sizeof(struct usbhid_report_event));
 	return usbhid_report_queue ? 0 : -ENOMEM;
@@ -142,9 +329,13 @@ int usbhid_report_init(void)
 int usbhid_report_start(struct hid_device *hid)
 {
 	bool defer;
+	int ret;
 
 	if (!hid || !usbhid_report_queue)
 		return -ENODEV;
+	ret = usbhid_report_prepare(hid);
+	if (ret)
+		return ret;
 
 	taskENTER_CRITICAL();
 	if (hid->ll_transport_stopping) {
@@ -186,13 +377,19 @@ void usbhid_report_close(struct hid_device *hid)
 }
 
 int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
-			 uint16_t len, bool parse)
+			 uint16_t bufsize, uint32_t len, uint8_t xfer_result,
+			 bool parse)
 {
 	struct usbhid_report_event event = {
 		.kind = USBHID_REPORT_EVENT_INTERRUPT,
 		.hid = hid,
-		.len = len,
-		.parse = parse,
+		.len = len <= UINT16_MAX ? (u16)len : 0,
+		.parse = parse && xfer_result == XFER_RESULT_SUCCESS,
+		.payload.interrupt = {
+			.data = (u8 *)report,
+			.bufsize = bufsize,
+			.xfer_result = xfer_result,
+		},
 	};
 	int status = 0;
 
@@ -201,14 +398,13 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 	if (!hid)
 		return -ENODEV;
 	/* A completed transfer must advance ownership even if its payload is bad. */
-	if (!report || len > CFG_TUH_HID_EPIN_BUFSIZE) {
+	if (!report || !bufsize || bufsize > USBHID_INTERRUPT_REPORT_MAX ||
+	    len > bufsize || len > UINT16_MAX) {
 		event.len = 0;
 		event.parse = false;
 		status = -EMSGSIZE;
 	}
 
-	if (event.len)
-		memcpy(event.payload.interrupt, report, event.len);
 	taskENTER_CRITICAL();
 	if (hid->ll_report_owner != USBHID_REPORT_ARMED) {
 		/* An aborted PIO transfer may publish its old completion one SOF late. */
@@ -231,8 +427,10 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 
 	if (xQueueSendToBack(usbhid_report_queue, &event, 0) != pdPASS) {
 		taskENTER_CRITICAL();
-		if (hid->ll_report_owner == USBHID_REPORT_QUEUED)
+		if (hid->ll_report_owner == USBHID_REPORT_QUEUED) {
 			hid->ll_report_owner = USBHID_REPORT_STOPPED;
+			hid->ll_report_wanted = false;
+		}
 		taskEXIT_CRITICAL();
 		return -EBUSY;
 	}
@@ -309,6 +507,8 @@ void usbhid_report_stop(struct hid_device *hid)
 
 void usbhid_report_unplug(struct hid_device *hid)
 {
+	int slot;
+
 	if (!hid)
 		return;
 
@@ -319,6 +519,28 @@ void usbhid_report_unplug(struct hid_device *hid)
 	/* TinyUSB closes the physical endpoint around its unmount callback. */
 	if (hid->ll_report_owner == USBHID_REPORT_ARMED)
 		hid->ll_report_owner = USBHID_REPORT_STOPPED;
+	slot = hid->ll_report_slot ? hid->ll_report_slot - 1 : -1;
+	if (slot >= 0 && slot < CFG_TUH_HID &&
+	    usbhid_report_rx_slots[slot].owner == hid)
+		usbhid_report_rx_slots[slot].serial = 0;
+	taskEXIT_CRITICAL();
+}
+
+void usbhid_report_release(struct hid_device *hid)
+{
+	int slot;
+
+	if (!hid)
+		return;
+
+	taskENTER_CRITICAL();
+	slot = hid->ll_report_slot ? hid->ll_report_slot - 1 : -1;
+	if (slot >= 0 && slot < CFG_TUH_HID &&
+	    usbhid_report_rx_slots[slot].owner == hid)
+		memset(&usbhid_report_rx_slots[slot], 0,
+		       sizeof(usbhid_report_rx_slots[slot]));
+	hid->ll_report_slot = 0;
+	hid->ll_report_bufsize = 0;
 	taskEXIT_CRITICAL();
 }
 
@@ -384,10 +606,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 		taskEXIT_CRITICAL();
 
 		if (action == USBHID_REPORT_HOST_ABORT) {
-			if (tuh_hid_mounted(hid->dev_addr, hid->instance) &&
-			    !tuh_hid_receive_ready(hid->dev_addr, hid->instance))
-				(void)tuh_hid_receive_abort(hid->dev_addr,
-							   hid->instance);
+			usbhid_report_abort_on_host(hid);
 			/*
 			 * Fence re-arm through the report task. If PIO completed while
 			 * abort raced its SOF, that old HCD event is already ahead of the
@@ -406,7 +625,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 		}
 
 		ok = tuh_hid_mounted(hid->dev_addr, hid->instance) &&
-		     tuh_hid_receive_report(hid->dev_addr, hid->instance);
+		     usbhid_report_arm_on_host(hid, generation);
 		if (ok) {
 			taskENTER_CRITICAL();
 			if (!hid->ll_transport_stopping &&
@@ -484,6 +703,7 @@ void usbhid_report_task(void *pvParameters)
 	for (;;) {
 		struct usbhid_report_event event;
 		bool defer = false;
+		bool transfer_failed;
 		bool process;
 
 		if (xQueuePeek(usbhid_report_queue, &event,
@@ -609,20 +829,31 @@ void usbhid_report_task(void *pvParameters)
 			  event.generation == event.hid->ll_generation &&
 			  event.hid->ll_report_wanted &&
 			  !event.hid->ll_transport_stopping;
+		transfer_failed = process &&
+			event.payload.interrupt.xfer_result != XFER_RESULT_SUCCESS;
 		if (event.hid->ll_report_owner == USBHID_REPORT_QUEUED)
 			event.hid->ll_report_owner = USBHID_REPORT_ACTIVE;
+		/* ALWAYS_POLL keeps the URB alive while closed, but drops payload. */
+		if (!event.hid->ll_open_count)
+			process = false;
 		taskEXIT_CRITICAL();
 
 		if (process && event.parse)
 			(void)hid_safe_input_report(event.hid,
 						HID_INPUT_REPORT,
-						event.payload.interrupt,
-						sizeof(event.payload.interrupt),
+						event.payload.interrupt.data,
+						event.payload.interrupt.bufsize,
 						event.len, 1);
+		if (transfer_failed)
+			usbhid_backend_rx_transfer_failed(
+				event.payload.interrupt.xfer_result);
 
 		taskENTER_CRITICAL();
 		if (event.hid->ll_report_owner == USBHID_REPORT_ACTIVE)
 			event.hid->ll_report_owner = USBHID_REPORT_STOPPED;
+		/* Recovery is a separate transport step; never spin on STALL/failure. */
+		if (transfer_failed)
+			event.hid->ll_report_wanted = false;
 		if (!event.hid->ll_transport_stopping &&
 		    event.hid->ll_report_wanted &&
 		    !event.hid->ll_report_host_pending) {
