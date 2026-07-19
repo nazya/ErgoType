@@ -70,6 +70,12 @@ preserves the real transfer result and actual length; SET_IDLE uses the same
 path. Caller tasks may wait for the Linux ll-driver contract, but TinyUSB
 callbacks never wait or run the Linux continuation.
 
+Interrupt OUT is also submitted directly from the host owner. The request owns
+the complete endpoint wire image until completion, and TinyUSB returns the real
+transfer result, actual length, and request serial. The old report-sent facade,
+which could only manufacture success for whichever request happened to be
+active, is not part of this path.
+
 ## What `HID_REPORT_SKIP` Meant
 
 `ERR: HID_REPORT_SKIP` was a late receive-path symptom, not the original parser
@@ -178,7 +184,7 @@ Zydacron.
 Current memory-related settings are:
 
 ```text
-configTOTAL_HEAP_SIZE       217 KiB
+configTOTAL_HEAP_SIZE       216.75 KiB
 configMINIMAL_STACK_SIZE    384 words
 hid_async_task              512 words
 keyd_task                   7,168 words
@@ -203,8 +209,11 @@ The report executor additionally reserves five 80-byte control-result slots
 (one active plus the four-entry async queue) and one close/reopen fence slot.
 Compared with the former `CFG_TUH_HID + 1` queue this costs 400 B more startup
 heap. Its coalesced reconcile table costs 32 B of static RAM. The async request
-object remains 304 B, and the linked image remains at 243,236 B `.bss` in this
-checkpoint.
+object remains 304 B. Exact endpoint callbacks add 1,280 B of TinyUSB device
+state; removing the unused HID class OUT staging saves 240 B. The host transfer
+buffers occupy 820 B in scratch X, ending 1,228 B below the core-1 stack. With
+the 216.75 KiB FreeRTOS heap, the linked image uses 243,208 B of `.bss` and
+keeps 272 B of main-SRAM link headroom in this checkpoint.
 
 ## Log Reference
 

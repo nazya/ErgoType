@@ -36,7 +36,11 @@
   `.request(HID_REQ_SET_REPORT)` sends an `HID_OUTPUT_REPORT` over interrupt
   OUT when the interface exposes that endpoint and otherwise uses EP0
   SET_REPORT. FEATURE reports and `.raw_request()` remain control-only, while
-  `.output_report()` remains interrupt-only.
+  `.output_report()` remains interrupt-only. Interrupt OUT uses a direct
+  endpoint transfer with the complete wire image and request serial, so its
+  real result and actual length are preserved instead of being synthesized by
+  the TinyUSB HID callback facade. As upstream does, the first interrupt OUT
+  endpoint is selected and a successful short transfer remains successful.
 - `usbhid_start()` now clears the NumLock output field on boot keyboards and
   submits the whole output report through that same `.request()` route,
   matching upstream startup behavior.
@@ -126,7 +130,9 @@
 - Verify the output-routing/startup-LED checkpoint on hardware: a boot keyboard
   without interrupt OUT must receive the enumeration-time NumLock reset over
   EP0, and an OUTPUT request on an interface with interrupt OUT must use that
-  endpoint. Keep these as separate observations.
+  endpoint. For the direct-OUT checkpoint also verify normal input after boot,
+  unplug/replug, and haptic or LED output without `HID_OUTPUT_FAIL` or
+  `HID_REPORT_OUT_FAIL`. Keep these as separate observations.
 - Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
   fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
   must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or parser-queue

@@ -388,15 +388,12 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			report->type == HID_OUTPUT_REPORT &&
 			hid->usb_altsetting.has_interrupt_out &&
 			hid->usb_altsetting.interrupt_out_endpoint;
-	if (interrupt_out && len > CFG_TUH_HID_EPOUT_BUFSIZE)
-		return -EIO;
 
 	if (reqtype == HID_REQ_SET_REPORT) {
 		hid_output_report(report, req.data);
 		if (interrupt_out) {
-			/* TinyUSB adds a nonzero report ID to interrupt OUT. */
+			/* hid_output_report() already produced the endpoint wire image. */
 			req.kind = HID_ASYNC_REQUEST_OUTPUT_REPORT;
-			req.data_offset = report->id ? 1 : 0;
 			req.ep_addr =
 				hid->usb_altsetting.interrupt_out_endpoint;
 		}
@@ -417,6 +414,8 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 				  void *context)
 {
 	struct hid_async_request req;
+	bool skip_report_id;
+	size_t wire_len;
 	int ret;
 
 	if (!hid_async_request_queue)
@@ -424,12 +423,12 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 	if (!hid || !buf || !len)
 		return -EINVAL;
 
-	if (len > HID_ASYNC_REPORT_MAX + 1)
-		return -EIO;
 	if (!hid->usb_altsetting.has_interrupt_out ||
 	    !hid->usb_altsetting.interrupt_out_endpoint)
 		return -ENOSYS;
-	if (len - (buf[0] == 0) > CFG_TUH_HID_EPOUT_BUFSIZE)
+	skip_report_id = buf[0] == 0;
+	wire_len = len - skip_report_id;
+	if (wire_len > HID_ASYNC_DATA_MAX)
 		return -EIO;
 
 	memset(&req, 0, sizeof(req));
@@ -439,10 +438,11 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 	req.instance = hid->instance;
 	req.report_id = buf[0];
 	req.ep_addr = hid->usb_altsetting.interrupt_out_endpoint;
-	req.len = (u16)(len - 1);
+	req.len = (u16)wire_len;
 	req.complete = complete;
 	req.context = context;
-	memcpy(req.data, buf + 1, req.len);
+	if (wire_len)
+		memcpy(req.data, buf + skip_report_id, wire_len);
 
 	ret = hid_async_queue_hid_request(&req);
 
@@ -772,6 +772,22 @@ static int hid_async_submit_control(struct hid_async_request *req)
 	return tuh_control_xfer(&xfer) ? 0 : -EAGAIN;
 }
 
+static int hid_async_submit_interrupt_out(struct hid_async_request *req)
+{
+	u8 *data = req->data + req->data_offset;
+	u16 len = req->len - req->data_offset;
+	tuh_xfer_t xfer = {
+		.daddr = req->dev_addr,
+		.ep_addr = req->ep_addr,
+		.buflen = len,
+		.buffer = len ? data : NULL,
+		.complete_cb = hid_async_xfer_complete,
+		.user_data = (uintptr_t)req->serial,
+	};
+
+	return tuh_edpt_xfer(&xfer) ? 0 : -EAGAIN;
+}
+
 static int hid_async_submit(struct hid_async_request *req)
 {
 	u8 *data = req->data + req->data_offset;
@@ -788,8 +804,7 @@ static int hid_async_submit(struct hid_async_request *req)
 					       hid_async_xfer_complete,
 					       (uintptr_t)req->serial);
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
-		ok = tuh_hid_send_report(req->dev_addr, req->instance,
-					 req->report_id, data, len);
+		return hid_async_submit_interrupt_out(req);
 	} else {
 		return hid_async_submit_control(req);
 	}
@@ -914,8 +929,6 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 				       const struct hid_async_completion *completion,
 				       int *status, bool *canceled)
 {
-	u16 expected_len;
-
 	if (!hid_async_completion_matches(active, completion))
 		return false;
 
@@ -924,11 +937,8 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 		*status = -ENODEV;
 		*canceled = true;
 	} else if (completion->kind == HID_ASYNC_COMPLETE_OUTPUT) {
-		/* TinyUSB's sent length already includes a nonzero report ID. */
 		active->actual_len = completion->len;
-		expected_len = active->len - active->data_offset +
-			       (active->report_id != 0);
-		*status = completion->len == expected_len ? 0 : -EIO;
+		*status = hid_async_xfer_status(completion->xfer_result);
 	} else {
 		active->actual_len = completion->len;
 		/* Raw report ID zero is transport-owned, as in upstream usbhid. */
@@ -1345,30 +1355,6 @@ static bool hid_async_stamp_xfer_completion(
 	return is_current;
 }
 
-static bool hid_async_stamp_output_completion(
-		struct hid_async_completion *completion)
-{
-	bool is_current;
-
-	taskENTER_CRITICAL();
-	is_current = hid_async_active && hid_async_accepting_completion &&
-		  hid_async_active_kind == HID_ASYNC_COMPLETE_OUTPUT &&
-		  completion->dev_addr == hid_async_active_dev_addr &&
-		  completion->instance == hid_async_active_instance &&
-		  completion->dev_addr <= HID_ASYNC_DEVICE_ADDR_MAX &&
-		  hid_async_active_generation ==
-			hid_async_device_generation[completion->dev_addr];
-	if (is_current) {
-		completion->report_id = hid_async_active_report_id;
-		completion->report_type = hid_async_active_report_type;
-		completion->generation = hid_async_active_generation;
-		completion->serial = hid_async_active_serial;
-	}
-	taskEXIT_CRITICAL();
-
-	return is_current;
-}
-
 static void hid_async_queue_completion(
 		const struct hid_async_completion *completion)
 {
@@ -1392,8 +1378,7 @@ static void hid_async_queue_completion(
 
 static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 {
-	u16 requested = tu_le16toh(xfer->setup->wLength);
-	u32 actual = requested ? xfer->actual_len : 0;
+	u32 actual = xfer->actual_len;
 	struct hid_async_completion completion = {
 		.dev_addr = xfer->daddr,
 		.len = (u16)min_t(u32, actual, UINT16_MAX),
@@ -1401,25 +1386,14 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 	};
 	u32 serial = (u32)xfer->user_data;
 
-	/* PIO-USB may report the eight-byte setup stage for a no-data request. */
+	if (!xfer->ep_addr) {
+		u16 requested = tu_le16toh(xfer->setup->wLength);
+
+		/* PIO-USB may count setup bytes for a no-data control request. */
+		if (!requested)
+			completion.len = 0;
+	}
 	if (!hid_async_stamp_xfer_completion(&completion, serial))
-		return;
-	hid_async_queue_completion(&completion);
-}
-
-void hid_async_backend_report_sent(uint8_t dev_addr, uint8_t instance,
-				   uint8_t const *report, uint16_t len)
-{
-	struct hid_async_completion completion = {
-		.kind = HID_ASYNC_COMPLETE_OUTPUT,
-		.dev_addr = dev_addr,
-		.instance = instance,
-		.len = len,
-		.xfer_result = XFER_RESULT_SUCCESS,
-	};
-
-	(void)report;
-	if (!hid_async_stamp_output_completion(&completion))
 		return;
 	hid_async_queue_completion(&completion);
 }

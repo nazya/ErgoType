@@ -126,7 +126,8 @@
 #define CFG_TUH_ENUMERATION_BUFSIZE 512 // Host descriptor/control scratch buffer; each byte is .bss. 512->256 saves 256 B, but too small skips/fails long config or HID report descriptors.
 
 #ifndef CFG_TUH_MEM_SECTION
-#define CFG_TUH_MEM_SECTION
+/* Keep DMA-visible host transfer buffers below the core-1 stack in scratch X. */
+#define CFG_TUH_MEM_SECTION      __attribute__((section(".scratch_x.tinyusb_host")))
 #endif
 
 #ifndef CFG_TUH_MEM_ALIGN
@@ -134,10 +135,11 @@
 #endif
 
 #define CFG_TUH_HUB              1  // USB hub class support. 1 costs one host hub/device slot plus hub state; 0 saves roughly 100-200 B but external hubs stop working.
-#define CFG_TUH_DEVICE_MAX       4  // Max directly managed non-hub USB devices. Each extra slot costs one usbh_device_t, roughly 80-100 B. Direct ErgoType-to-ErgoType needs 1.
+#define CFG_TUH_DEVICE_MAX       4  // Max directly managed non-hub USB devices. Direct ErgoType-to-ErgoType needs 1; exact endpoint callbacks make each slot larger.
+#define CFG_TUH_API_EDPT_XFER    1  // Preserve result/user_data for direct interrupt-OUT. Costs 1280 B with 5 host slots and 16 endpoint numbers.
 #define CFG_TUH_HID              4  // Max HID interfaces, not report IDs. Peer ErgoType NKRO needs 3: keyboard/consumer, mouse, WebHID. Each extra costs HID state plus IN/OUT buffers.
 #define CFG_TUH_HID_EPIN_BUFSIZE 64 // Interrupt IN buffer per HID interface. Cost is CFG_TUH_HID bytes per byte here. 64 keeps full-speed HID reports safe.
-#define CFG_TUH_HID_EPOUT_BUFSIZE 64 // Interrupt OUT buffer per HID interface. Cost is CFG_TUH_HID bytes per byte here. Current ErgoType peer has no HID OUT endpoint, so 1/0 can save about 252-256 B when CFG_TUH_HID=4.
+#define CFG_TUH_HID_EPOUT_BUFSIZE 1  // Direct endpoint OUT owns its request buffer; retain a one-byte class placeholder and save 240 B of unused staging.
 
 
 #ifdef __cplusplus

@@ -141,8 +141,4 @@ int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);
 int hid_async_synchronize_preprobe(void);
 
-/* Interrupt-OUT completion ingress called by the TinyUSB callback facade. */
-void hid_async_backend_report_sent(u8 dev_addr, u8 instance,
-				   const u8 *report, u16 len);
-
 #endif

@@ -37,12 +37,6 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 	usbhid_backend_report_received(dev_addr, instance, report, len);
 }
 
-void tuh_hid_report_sent_cb(uint8_t dev_addr, uint8_t instance,
-			    uint8_t const *report, uint16_t len)
-{
-	hid_async_backend_report_sent(dev_addr, instance, report, len);
-}
-
 usbh_class_driver_t const *usbh_app_driver_get_cb(uint8_t *driver_count)
 {
 	return usbhid_backend_app_driver_get(driver_count);

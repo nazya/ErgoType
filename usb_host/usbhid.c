@@ -1658,7 +1658,8 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 			const struct usb_endpoint_descriptor *ep =
 				&hid->usb_altsetting.endpoint[i].desc;
 
-			if ((ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_OUT &&
+			if (!hid->usb_altsetting.has_interrupt_out &&
+			    (ep->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_OUT &&
 			    usb_endpoint_xfer_int(ep)) {
 				hid->usb_altsetting.has_interrupt_out = true;
 				hid->usb_altsetting.interrupt_out_endpoint =
@@ -2317,8 +2318,8 @@ static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
 
 	// ret = usb_interrupt_msg(dev, usbhid->urbout->pipe, buf, count,
 	//			   &actual_length, USB_CTRL_SET_TIMEOUT);
-	// TinyUSB interrupt OUT is queued through the HID async task; the report
-	// sent callback only wakes that task and never blocks TinyUSB callbacks.
+	// TinyUSB interrupt OUT is queued through the HID async task; its exact
+	// endpoint completion only wakes that task and never blocks the host owner.
 	int ret = hid_async_queue_output_report(hid, buf, len,
 						usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);

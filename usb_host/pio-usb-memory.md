@@ -223,10 +223,11 @@ Current wider smoke-test config:
 ```c
 #define CFG_TUH_HUB                 1
 #define CFG_TUH_DEVICE_MAX          4
+#define CFG_TUH_API_EDPT_XFER       1
 #define CFG_TUH_HID                 4
 #define CFG_TUH_ENUMERATION_BUFSIZE 512
 #define CFG_TUH_HID_EPIN_BUFSIZE    64
-#define CFG_TUH_HID_EPOUT_BUFSIZE   64
+#define CFG_TUH_HID_EPOUT_BUFSIZE   1
 ```
 
 Direct single-peer config:
@@ -247,7 +248,18 @@ Tradeoffs:
 - `CFG_TUH_HID=3`: saves roughly 100-150 B versus 4 with current buffers. Enough for ErgoType NKRO. Use `2` only for boot keyboard+mouse. Use more for composite devices with more HID interfaces.
 - `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Risk: devices with larger config/report descriptors can fail or be skipped during enumeration.
 - `CFG_TUH_HID_EPIN_BUFSIZE=64`: keep at 64 for normal full-speed HID IN reports.
-- `CFG_TUH_HID_EPOUT_BUFSIZE=1`: saves about 250 B versus 64 when `CFG_TUH_HID=4`. Safe only for devices without HID interrupt OUT endpoint. Control SET_REPORT is separate.
+- `CFG_TUH_API_EDPT_XFER=1`: stores an exact callback and request serial per
+  endpoint. With five host slots and 16 endpoint numbers this costs 1,280 B,
+  but exposes the real interrupt-transfer result and actual length.
+- `CFG_TUH_HID_EPOUT_BUFSIZE=1`: saves 240 B versus 64 when
+  `CFG_TUH_HID=4`. Interrupt OUT remains supported because this port submits
+  the request-owned wire buffer directly instead of using TinyUSB's class
+  staging buffer. Control SET_REPORT is separate.
+
+`CFG_TUH_MEM_SECTION` places TinyUSB's DMA-visible host transfer buffers in
+scratch X. In the current RP2040 link they occupy 820 B and end 1,228 B below
+the real core-1 stack; this preserves the FreeRTOS heap without overlapping a
+stack. The endpoint callback table itself remains in main SRAM.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.
