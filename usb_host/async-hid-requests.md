@@ -16,12 +16,15 @@ The active implementation now has these properties:
 - `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
   parsing, matching the upstream caller contract without blocking TinyUSB.
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
-  as task-side waits over the serialized async owner.
+  through the upstream usbhid helpers and generic task-side
+  `usb_control_msg()` / `usb_interrupt_msg()` waits.
 - HID EP0 GET/SET use direct asynchronous `tuh_control_xfer()` so
   completion retains the real TinyUSB result, actual length, and request serial.
 - Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` now
-  use fixed async slots with physical-device epoch leases. SET_IDLE exercises
-  that generic EP0 path while retaining the HID-interface lifetime lease.
+  use fixed async slots with physical-device epoch leases. Interface/endpoint
+  owner tags make those slots participate in per-HID stop/cancel; generic OUT
+  storage is ordered per physical endpoint rather than globally. SET_IDLE and
+  raw GET/SET exercise the generic EP0 path.
 - Arbitrary URBs, interrupt-IN messages, and larger transfers remain deferred.
 
 See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.
@@ -164,6 +167,11 @@ request wait forever.
 
 ## Why Linux Wait Cannot Be Used Directly
 
+Historical note: this restriction applied when probe/driver code still ran in
+TinyUSB callback or host-owner context. The active lifecycle/workqueue model
+does preserve Linux waits in ordinary task context; only callbacks and the
+TinyUSB/executor owner tasks are forbidden from blocking on the bridge.
+
 Linux call sites often assume this shape:
 
 ```c
@@ -233,18 +241,14 @@ After resolution multiplier works:
      interface that exposes it and EP0 otherwise
    - FEATURE/raw requests stay on EP0; `.output_report()` is interrupt-only
    - `usbhid_start()` clears boot-keyboard NumLock through this route
-2. Raw SET_REPORT transport branch:
-   - `usbhid.c` queues raw SET_REPORT through
-     `hid_async_queue_raw_set_report()`.
-   - `hid_async_queue_raw_get_report()` now provides the matching raw
-     GET_REPORT building block for driver-specific continuations. It does not
-     make `.raw_request` synchronous; callers still need explicit state.
+2. Raw SET_REPORT transport branch (completed by the later generic bridge):
+   - the specialized raw GET/SET builders were removed
+   - `usbhid_get_raw_report()` and `usbhid_set_raw_report()` again follow the
+     upstream bodies and call generic `usb_control_msg()`
    - `hid-razer.c` keeps its upstream `hid_hw_raw_request()` call active; the
-     TinyUSB transport boundary turns that SET_FEATURE payload into an async
-     queue entry.
-   - The `.raw_request` return value means "queued", not "USB transfer
-     completed"; drivers that need returned data or completion status still need
-     explicit state.
+     caller waits in task context while TinyUSB remains free to complete it
+   - `.raw_request` now returns the completed USB byte count or errno, matching
+     upstream; it no longer means merely "queued"
 
 3. Driver feature/raw hooks:
    - `hid-vivaldi-common.c` is the first feature_mapping conversion; it queues

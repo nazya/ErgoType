@@ -167,6 +167,8 @@ static u32 usbhid_generation;
 static u32 usbhid_report_descriptor_serial;
 static u32 usbhid_transport_faults;
 static bool usbhid_lifecycle_wake_pending;
+static bool usbhid_io_get(struct hid_device *hid);
+static void usbhid_io_put(struct hid_device *hid);
 static void usbhid_io_wait_idle(struct hid_device *hid);
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype);
@@ -295,13 +297,20 @@ static void usbhid_usb_device_io_put(struct usbhid_usb_device *entry)
  * Linux usb_pipe_endpoint() resolves an endpoint from struct usb_device. This
  * compact TinyUSB cache keeps endpoint descriptors in its live HID interface
  * shims instead, so resolve the same physical-device/endpoint relationship at
- * the transport boundary without growing every device-cache entry.
+ * the transport boundary without growing every device-cache entry. Pin that
+ * interface at the same time so its generic request participates in firmware
+ * interface stop/cancel. This is a local stronger lifetime adaptation; Linux
+ * `usb_interrupt_msg()` creates a synchronous device/endpoint URB rather than
+ * attaching that hidden URB to `struct usbhid_device`.
  */
-static bool usbhid_usb_device_has_interrupt_endpoint(
-		const struct usb_device *dev, u8 ep_addr)
+static int usbhid_usb_device_interrupt_owner_get(
+		const struct usb_device *dev, u8 ep_addr,
+		struct hid_device **owner)
 {
 	const u8 ep_addrs[] = { ep_addr, 0 };
-	bool found = false;
+	int ret = -EINVAL;
+
+	*owner = NULL;
 
 	taskENTER_CRITICAL();
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
@@ -310,12 +319,54 @@ static bool usbhid_usb_device_has_interrupt_endpoint(
 
 		if (usbhid && interface_to_usbdev(usbhid->intf) == dev &&
 		    usb_check_int_endpoints(usbhid->intf, ep_addrs)) {
-			found = true;
+			if (usbhid->transport_stopping) {
+				ret = -ENODEV;
+			} else {
+				usbhid->io_pending++;
+				*owner = hid;
+				ret = 0;
+			}
 			break;
 		}
 	}
 	taskEXIT_CRITICAL();
-	return found;
+	return ret;
+}
+
+/*
+ * Linux `usb_control_msg()` creates a synchronous device request; it does not
+ * infer an interface owner from wIndex. The firmware bridge deliberately tags
+ * a matching HID interface so stop can cancel/wake that task-side wait before
+ * teardown. Non-interface requests remain physical-device-owned.
+ */
+static int usbhid_usb_device_control_owner_get(
+		const struct usb_device *dev, u8 requesttype, u16 index,
+		struct hid_device **owner)
+{
+	int ret = 0;
+
+	*owner = NULL;
+	if ((requesttype & USB_RECIP_MASK) != USB_RECIP_INTERFACE)
+		return 0;
+
+	taskENTER_CRITICAL();
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+
+		if (!usbhid || interface_to_usbdev(usbhid->intf) != dev ||
+		    usbhid->ifnum != index)
+			continue;
+		if (usbhid->transport_stopping) {
+			ret = -ENODEV;
+		} else {
+			usbhid->io_pending++;
+			*owner = hid;
+		}
+		break;
+	}
+	taskEXIT_CRITICAL();
+	return ret;
 }
 
 static struct usbhid_usb_device *usbhid_usb_device_slot(uint8_t dev_addr)
@@ -2145,6 +2196,132 @@ static void usbhid_close(struct hid_device *hid)
 		usbhid_report_close(hid);
 }
 
+static int usbhid_get_raw_report(struct hid_device *hid,
+		unsigned char report_number, __u8 *buf, size_t count,
+		unsigned char report_type)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usb_device *dev = hid_to_usb_dev(hid);
+	struct usb_interface *intf = usbhid->intf;
+	struct usb_host_interface *interface = intf->cur_altsetting;
+	int skipped_report_id = 0;
+	int ret;
+
+	/* Byte 0 is the report number. Report data starts at byte 1.*/
+	buf[0] = report_number;
+	if (report_number == 0x0) {
+		/* Offset the return buffer by 1, so that the report ID
+		   will remain in byte 0. */
+		buf++;
+		count--;
+		skipped_report_id = 1;
+	}
+	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+		HID_REQ_GET_REPORT,
+		USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+		((report_type + 1) << 8) | report_number,
+		interface->desc.bInterfaceNumber, buf, count,
+		USB_CTRL_SET_TIMEOUT);
+
+	/* count also the report id */
+	if (ret > 0 && skipped_report_id)
+		ret++;
+
+	return ret;
+}
+
+static int usbhid_set_raw_report(struct hid_device *hid, unsigned int reportnum,
+				 __u8 *buf, size_t count, unsigned char rtype)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usb_device *dev = hid_to_usb_dev(hid);
+	struct usb_interface *intf = usbhid->intf;
+	struct usb_host_interface *interface = intf->cur_altsetting;
+	int ret, skipped_report_id = 0;
+
+	/* Byte 0 is the report number. Report data starts at byte 1.*/
+	if ((rtype == HID_OUTPUT_REPORT) &&
+	    (hid->quirks & HID_QUIRK_SKIP_OUTPUT_REPORT_ID))
+		buf[0] = 0;
+	else
+		buf[0] = reportnum;
+
+	if (buf[0] == 0x0) {
+		/* Don't send the Report ID */
+		buf++;
+		count--;
+		skipped_report_id = 1;
+	}
+
+	ret = usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
+			HID_REQ_SET_REPORT,
+			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			((rtype + 1) << 8) | reportnum,
+			interface->desc.bInterfaceNumber, buf, count,
+			USB_CTRL_SET_TIMEOUT);
+	/* count also the report id, if this was a numbered report. */
+	if (ret > 0 && skipped_report_id)
+		ret++;
+
+	return ret;
+}
+
+static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t count)
+{
+	// struct usbhid_device *usbhid = hid->driver_data;
+	// struct usb_device *dev = hid_to_usb_dev(hid);
+	// Firmware disconnect can run on the other core; acquire the HID lease
+	// before dereferencing its embedded interface and endpoint snapshot.
+	struct usbhid_device *usbhid;
+	struct usb_device *dev;
+	u8 ep_addr;
+	int actual_length, skipped_report_id = 0, ret;
+
+	if (!usbhid_io_get(hid))
+		return -ENODEV;
+	usbhid = hid->driver_data;
+	dev = hid_to_usb_dev(hid);
+
+	// if (!usbhid->urbout)
+	// 	return -ENOSYS;
+	// TinyUSB owns no persistent output URB; the parsed interface snapshot is
+	// the equivalent proof that this HID has an interrupt-OUT transport.
+	if (!usbhid->usb_altsetting.has_interrupt_out ||
+	    !usbhid->usb_altsetting.interrupt_out_endpoint) {
+		ret = -ENOSYS;
+		goto out;
+	}
+	ep_addr = usbhid->usb_altsetting.interrupt_out_endpoint;
+
+	if (buf[0] == 0x0) {
+		/* Don't send the Report ID */
+		buf++;
+		count--;
+		skipped_report_id = 1;
+	}
+
+	// ret = usb_interrupt_msg(dev, usbhid->urbout->pipe,
+	// 				buf, count, &actual_length,
+	// 				USB_CTRL_SET_TIMEOUT);
+	// Build the same interrupt-OUT pipe from the TinyUSB-owned endpoint; the
+	// generic bridge below preserves synchronous upstream return semantics.
+	ret = usb_interrupt_msg(dev, usb_sndintpipe(dev, ep_addr), buf, count,
+				&actual_length, USB_CTRL_SET_TIMEOUT);
+	/* return the number of bytes transferred */
+	if (ret == 0) {
+		ret = actual_length;
+		/* count also the report id */
+		if (skipped_report_id)
+			ret++;
+	}
+
+	// return ret;
+	// Release the firmware HID lease after the synchronous generic request.
+out:
+	usbhid_io_put(hid);
+	return ret;
+}
+
 static int usbhid_parse(struct hid_device *hid)
 {
 	struct usb_interface *intf = to_usb_interface(hid->dev.parent);
@@ -2595,9 +2772,6 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 			      __u8 *buf, size_t len, unsigned char rtype,
 			      int reqtype)
 {
-	struct usbhid_sync_request sync = {
-		.task = xTaskGetCurrentTaskHandle(),
-	};
 	int ret;
 
 	if (!usbhid_io_get(hid))
@@ -2605,62 +2779,24 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 
 	switch (reqtype) {
 	case HID_REQ_GET_REPORT:
-		/* Byte 0 is the report number. Report data starts at byte 1. */
-		buf[0] = reportnum;
 		// return usbhid_get_raw_report(hid, reportnum, buf, len, rtype);
-		// Queue the same synchronous raw GET through the async TinyUSB owner;
-		// completion copies the response back before this task returns.
-		sync.buf = buf;
-		sync.bufsize = len;
-		ret = hid_async_queue_raw_get_report_id(hid, reportnum, rtype, len,
-							 usbhid_sync_complete, &sync);
-		ret = usbhid_sync_wait(&sync, ret);
-		if (!ret)
-			ret = (int)sync.actual_len;
+		// Firmware disconnect waits for the HID lease acquired above, so keep
+		// the upstream result until that lease can be released below.
+		ret = usbhid_get_raw_report(hid, reportnum, buf, len, rtype);
 		break;
 	case HID_REQ_SET_REPORT:
-		/* Byte 0 is the report number. Report data starts at byte 1. */
-		if ((rtype == HID_OUTPUT_REPORT) &&
-		    (hid->quirks & HID_QUIRK_SKIP_OUTPUT_REPORT_ID))
-			buf[0] = 0;
-		else
-			buf[0] = reportnum;
 		// return usbhid_set_raw_report(hid, reportnum, buf, len, rtype);
-		// Queue raw SET_REPORT through the HID async task and wait in the
-		// calling task; TinyUSB callbacks remain nonblocking.
-		ret = hid_async_queue_raw_set_report(hid, reportnum, rtype, buf, len,
-						     usbhid_sync_complete, &sync);
-		ret = usbhid_sync_wait(&sync, ret);
-		if (!ret)
-			ret = (int)sync.actual_len;
+		// Firmware disconnect waits for the HID lease acquired above, so keep
+		// the upstream result until that lease can be released below.
+		ret = usbhid_set_raw_report(hid, reportnum, buf, len, rtype);
 		break;
 	default:
+		// return -EIO;
+		// Release the firmware HID lease on the common return path.
 		ret = -EIO;
 		break;
 	}
 
-	usbhid_io_put(hid);
-	return ret;
-}
-
-static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
-{
-	struct usbhid_sync_request sync = {
-		.task = xTaskGetCurrentTaskHandle(),
-	};
-
-	if (!usbhid_io_get(hid))
-		return -ENODEV;
-
-	// ret = usb_interrupt_msg(dev, usbhid->urbout->pipe, buf, count,
-	//			   &actual_length, USB_CTRL_SET_TIMEOUT);
-	// TinyUSB interrupt OUT is queued through the HID async task; its exact
-	// endpoint completion only wakes that task and never blocks the host owner.
-	int ret = hid_async_queue_output_report(hid, buf, len,
-						usbhid_sync_complete, &sync);
-	ret = usbhid_sync_wait(&sync, ret);
-	if (!ret)
-		ret = (int)sync.actual_len + (buf[0] == 0);
 	usbhid_io_put(hid);
 	return ret;
 }
@@ -2701,7 +2837,8 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 		    void *data, u16 size, int timeout)
 {
 	struct usbhid_sync_request sync = { 0 };
-	struct usbhid_usb_device *owner;
+	struct usbhid_usb_device *physical_owner;
+	struct hid_device *hid_owner;
 	u32 generation;
 	u8 dev_addr;
 	int ret;
@@ -2720,9 +2857,14 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 		return -EAGAIN;
 	sync.task = xTaskGetCurrentTaskHandle();
 
-	ret = usbhid_usb_device_io_get(dev, &owner, &dev_addr, &generation);
+	ret = usbhid_usb_device_io_get(dev, &physical_owner, &dev_addr,
+				       &generation);
 	if (ret)
 		return ret;
+	ret = usbhid_usb_device_control_owner_get(dev, requesttype, index,
+						 &hid_owner);
+	if (ret)
+		goto out_physical;
 	if (requesttype & USB_DIR_IN) {
 		sync.buf = data;
 		sync.bufsize = size;
@@ -2732,14 +2874,17 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	 * usb_control_msg() blocks in Linux USB core. The fixed-slot executor owns
 	 * EP0 here; completion only wakes this task and unplug returns -ENODEV.
 	 */
-	ret = hid_async_queue_usb_control_msg(dev_addr, generation, request,
-					      requesttype, value, index, data,
-					      size, timeout,
+	ret = hid_async_queue_usb_control_msg(hid_owner, dev_addr, generation,
+					      request, requesttype, value,
+					      index, data, size, timeout,
 					      usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);
 	if (!ret)
 		ret = (int)sync.actual_len;
-	usbhid_usb_device_io_put(owner);
+	if (hid_owner)
+		usbhid_io_put(hid_owner);
+out_physical:
+	usbhid_usb_device_io_put(physical_owner);
 	return ret;
 }
 
@@ -2747,7 +2892,8 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 		      void *data, int len, int *actual_length, int timeout)
 {
 	struct usbhid_sync_request sync = { 0 };
-	struct usbhid_usb_device *owner;
+	struct usbhid_usb_device *physical_owner;
+	struct hid_device *hid_owner;
 	u32 generation;
 	u8 dev_addr;
 	u8 ep_addr;
@@ -2776,7 +2922,8 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 		return -EAGAIN;
 	sync.task = xTaskGetCurrentTaskHandle();
 
-	ret = usbhid_usb_device_io_get(dev, &owner, &dev_addr, &generation);
+	ret = usbhid_usb_device_io_get(dev, &physical_owner, &dev_addr,
+				       &generation);
 	if (ret)
 		return ret;
 	// ep = usb_pipe_endpoint(usb_dev, pipe);
@@ -2785,24 +2932,25 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 	// TinyUSB stores the endpoint descriptor in each live HID interface shim;
 	// the device lease keeps this exact physical cache epoch from being reused.
 	// The shared upstream len < 0 condition was already checked above.
-	if (!usbhid_usb_device_has_interrupt_endpoint(dev, ep_addr)) {
-		ret = -EINVAL;
+	ret = usbhid_usb_device_interrupt_owner_get(dev, ep_addr, &hid_owner);
+	if (ret)
 		goto out;
-	}
 
 	/*
 	 * Linux usb_interrupt_msg() waits on an URB. TinyUSB interrupt-IN remains
 	 * continuously owned by usbhid_report; this generic task bridge therefore
 	 * exposes only endpoint-addressed interrupt-OUT without stealing that lane.
 	 */
-	ret = hid_async_queue_usb_interrupt_out(dev_addr, generation, ep_addr,
-						data, (u16)len, timeout,
-						usbhid_sync_complete, &sync);
+	ret = hid_async_queue_usb_interrupt_out(hid_owner, dev_addr, generation,
+						ep_addr, data, (u16)len,
+						timeout, usbhid_sync_complete,
+						&sync);
 	ret = usbhid_sync_wait(&sync, ret);
 	if (actual_length)
 		*actual_length = (int)sync.actual_len;
+	usbhid_io_put(hid_owner);
 out:
-	usbhid_usb_device_io_put(owner);
+	usbhid_usb_device_io_put(physical_owner);
 	return ret;
 }
 

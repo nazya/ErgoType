@@ -38,7 +38,6 @@ struct hid_async_request {
 	u8 instance;
 	u8 report_id;
 	u8 report_type;
-	u8 data_offset;
 	u8 ep_addr;
 	u8 string_index;
 	u8 control_request;
@@ -63,19 +62,6 @@ void hid_async_task(void *pvParameters);
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
 			   hid_async_complete_t complete, void *context);
-int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
-				  size_t len, hid_async_complete_t complete,
-				  void *context);
-int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
-				   enum hid_report_type report_type,
-				   const __u8 *buf, size_t len,
-				   hid_async_complete_t complete,
-				   void *context);
-int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
-				      enum hid_report_type report_type,
-				      size_t len,
-				      hid_async_complete_t complete,
-				      void *context);
 int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
 			       hid_async_complete_t complete, void *context);
 int hid_async_control_report_hold(const struct hid_async_request *req);
@@ -90,14 +76,16 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);
 void hid_async_host_task_register(void);
 bool hid_async_sync_call_allowed(void);
-int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
+int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
+				    u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
 				    const void *data, u16 size,
 				    int timeout,
 				    hid_async_complete_t complete,
 				    void *context);
-int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
+int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
+				      u32 generation,
 				      u8 ep_addr, const void *data,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,

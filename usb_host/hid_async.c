@@ -370,12 +370,36 @@ static int hid_async_slot_queue_locked(const struct hid_async_request *req,
 
 static bool hid_async_slot_is_head_locked(struct hid_async_slot *slot)
 {
+	struct hid_async_slot *previous;
 	u8 *head;
 	u8 *tail;
+	u8 cursor;
 
 	hid_async_slot_fifo_locked(slot, &head, &tail);
 	(void)tail;
-	return *head == hid_async_slot_id(slot);
+	if (slot->lane != HID_ASYNC_LANE_DEVICE_CTRL &&
+	    slot->lane != HID_ASYNC_LANE_DEVICE_OUT)
+		return *head == hid_async_slot_id(slot);
+
+	/*
+	 * Linux USB core orders URBs per device endpoint, not across unrelated
+	 * devices. The fixed pool uses one storage list for generic requests, so
+	 * skip older entries with a different physical ordering key instead of
+	 * imposing a firmware-only global head-of-line block.
+	 */
+	cursor = *head;
+	while (cursor && cursor != hid_async_slot_id(slot)) {
+		previous = hid_async_slot_from_id(cursor);
+		configASSERT(previous);
+		if (previous->req.dev_addr == slot->req.dev_addr &&
+		    previous->req.generation == slot->req.generation &&
+		    (slot->lane == HID_ASYNC_LANE_DEVICE_CTRL ||
+		     previous->req.ep_addr == slot->req.ep_addr))
+			return false;
+		cursor = previous->next;
+	}
+	configASSERT(cursor == hid_async_slot_id(slot));
+	return true;
 }
 
 static void hid_async_slot_release_locked(struct hid_async_slot *slot)
@@ -607,142 +631,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	return 0;
 }
 
-int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
-				  size_t len, hid_async_complete_t complete,
-				  void *context)
-{
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-	bool skip_report_id;
-	size_t wire_len;
-	int ret;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid || !buf || !len)
-		return -EINVAL;
-	usbhid = hid->driver_data;
-
-	if (!usbhid->usb_altsetting.has_interrupt_out ||
-	    !usbhid->usb_altsetting.interrupt_out_endpoint)
-		return -ENOSYS;
-	skip_report_id = buf[0] == 0;
-	wire_len = len - skip_report_id;
-	if (wire_len > HID_ASYNC_DATA_MAX)
-		return -EIO;
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_OUTPUT_REPORT;
-	req.hid = hid;
-	req.dev_addr = usbhid->dev_addr;
-	req.instance = usbhid->instance;
-	req.report_id = buf[0];
-	req.ep_addr = usbhid->usb_altsetting.interrupt_out_endpoint;
-	req.len = (u16)wire_len;
-	req.complete = complete;
-	req.context = context;
-	if (wire_len)
-		memcpy(req.data, buf + skip_report_id, wire_len);
-
-	ret = hid_async_queue_hid_request(&req);
-
-	if (!ret)
-		async_msg("DBG: HID_OUTPUT_Q");
-	return ret;
-}
-
-int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
-				   enum hid_report_type report_type,
-				   const __u8 *buf, size_t len,
-				   hid_async_complete_t complete,
-				   void *context)
-{
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-	bool skip_report_id;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid || !buf || !len ||
-	    !hid_async_report_type_valid(report_type))
-		return -EINVAL;
-	if (len > HID_ASYNC_REPORT_MAX)
-		return -EIO;
-	usbhid = hid->driver_data;
-
-	/* Match usbhid_set_raw_report(): byte zero is always transport-owned. */
-	skip_report_id = report_id == 0 ||
-			 (report_type == HID_OUTPUT_REPORT &&
-			  (hid->quirks & HID_QUIRK_SKIP_OUTPUT_REPORT_ID));
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_REPORT;
-	req.hid = hid;
-	req.reqtype = HID_REQ_SET_REPORT;
-	req.dev_addr = usbhid->dev_addr;
-	req.instance = usbhid->instance;
-	req.report_id = report_id;
-	req.report_type = hid_async_tinyusb_report_type(report_type);
-	req.data_offset = skip_report_id ? 1 : 0;
-	req.len = (u16)len;
-	req.complete = complete;
-	req.context = context;
-	req.data[0] = skip_report_id ? 0 : report_id;
-	if (req.len > 1)
-		memcpy(req.data + 1, buf + 1, req.len - 1);
-
-	return hid_async_queue_hid_request(&req);
-}
-
-static int hid_async_queue_raw_get(struct hid_device *hid, u8 report_id,
-				   enum hid_report_type report_type,
-				   size_t len, hid_async_complete_t complete,
-				   void *context)
-{
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid || !len || !hid_async_report_type_valid(report_type))
-		return -EINVAL;
-	if (len > HID_ASYNC_REPORT_MAX)
-		return -EIO;
-	usbhid = hid->driver_data;
-
-	memset(&req, 0, sizeof(req));
-	req.kind = HID_ASYNC_REQUEST_REPORT;
-	req.hid = hid;
-	req.reqtype = HID_REQ_GET_REPORT;
-	req.dev_addr = usbhid->dev_addr;
-	req.instance = usbhid->instance;
-	req.report_id = report_id;
-	req.report_type = hid_async_tinyusb_report_type(report_type);
-	req.len = (u16)len;
-	req.complete = complete;
-	req.context = context;
-
-	/*
-	 * usbhid_get_raw_report() leaves report ID 0 in buf[0] and receives
-	 * unnumbered payload at buf + 1, then counts that byte in ret.
-	 */
-	req.data[0] = report_id;
-	if (!report_id)
-		req.data_offset = 1;
-
-	return hid_async_queue_hid_request(&req);
-}
-
-int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
-				      enum hid_report_type report_type,
-				      size_t len,
-				      hid_async_complete_t complete,
-				      void *context)
-{
-	return hid_async_queue_raw_get(hid, report_id, report_type, len,
-				       complete, context);
-}
-
 int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
 			       hid_async_complete_t complete, void *context)
 {
@@ -818,11 +706,15 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
  * callers sleep. The firmware captures the address epoch before enqueue,
  * stores wire data in the fixed slot, and wakes the caller after task-context
  * completion; neither TinyUSB callbacks nor the executor itself may wait here.
+ * A matching HID owner is non-owning slot metadata: the synchronous caller's
+ * io_pending lease keeps it alive and lets interface stop cancel the wait
+ * immediately instead of leaving it to the physical-device timeout.
  */
 static int hid_async_queue_usb_request(struct hid_async_request *req,
 				       u32 generation,
 				       enum hid_async_lane lane)
 {
+	struct usbhid_device *usbhid;
 	int ret;
 
 	if (!hid_async_slots || !req->dev_addr ||
@@ -832,6 +724,16 @@ static int hid_async_queue_usb_request(struct hid_async_request *req,
 	taskENTER_CRITICAL();
 	if (generation != hid_async_device_generation[req->dev_addr]) {
 		ret = -ENODEV;
+	} else if (req->hid) {
+		usbhid = req->hid->driver_data;
+		if (usbhid->transport_stopping ||
+		    usbhid->dev_addr != req->dev_addr) {
+			ret = -ENODEV;
+		} else {
+			req->instance = usbhid->instance;
+			req->generation = generation;
+			ret = hid_async_slot_queue_locked(req, lane);
+		}
 	} else {
 		req->generation = generation;
 		ret = hid_async_slot_queue_locked(req, lane);
@@ -849,7 +751,8 @@ static u32 hid_async_timeout_from_ms(int timeout)
 	return ticks ? (u32)ticks : 1u;
 }
 
-int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
+int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
+				    u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
 				    const void *data, u16 size,
@@ -868,6 +771,7 @@ int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_USB_CONTROL;
+	req.hid = owner;
 	req.dev_addr = dev_addr;
 	req.control_request = request;
 	req.control_requesttype = requesttype;
@@ -885,7 +789,8 @@ int hid_async_queue_usb_control_msg(u8 dev_addr, u32 generation,
 					   HID_ASYNC_LANE_DEVICE_CTRL);
 }
 
-int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
+int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
+				      u32 generation,
 				      u8 ep_addr, const void *data,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,
@@ -904,6 +809,7 @@ int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_USB_INTERRUPT;
+	req.hid = owner;
 	req.dev_addr = dev_addr;
 	req.ep_addr = ep_addr;
 	req.len = size;
@@ -921,8 +827,8 @@ int hid_async_queue_usb_interrupt_out(u8 dev_addr, u32 generation,
 static int hid_async_submit_control(struct hid_async_request *req)
 {
 	struct usbhid_device *usbhid = req->hid->driver_data;
-	u8 *data = req->data + req->data_offset;
-	u16 len = req->len - req->data_offset;
+	u8 *data = req->data;
+	u16 len = req->len;
 	tusb_control_request_t const request = {
 		.bmRequestType_bit = {
 			.recipient = TUSB_REQ_RCPT_INTERFACE,
@@ -950,8 +856,8 @@ static int hid_async_submit_control(struct hid_async_request *req)
 
 static int hid_async_submit_usb_control(struct hid_async_request *req)
 {
-	u8 *data = req->data + req->data_offset;
-	u16 len = req->len - req->data_offset;
+	u8 *data = req->data;
+	u16 len = req->len;
 	tusb_control_request_t const request = {
 		.bmRequestType = req->control_requesttype,
 		.bRequest = req->control_request,
@@ -998,8 +904,8 @@ static int hid_async_submit_clear_halt(struct hid_async_request *req)
 
 static int hid_async_submit_interrupt_out(struct hid_async_request *req)
 {
-	u8 *data = req->data + req->data_offset;
-	u16 len = req->len - req->data_offset;
+	u8 *data = req->data;
+	u16 len = req->len;
 	tuh_xfer_t xfer = {
 		.daddr = req->dev_addr,
 		.ep_addr = req->ep_addr,
@@ -1014,8 +920,8 @@ static int hid_async_submit_interrupt_out(struct hid_async_request *req)
 
 static int hid_async_submit(struct hid_async_request *req)
 {
-	u8 *data = req->data + req->data_offset;
-	u16 len = req->len - req->data_offset;
+	u8 *data = req->data;
+	u16 len = req->len;
 	bool ok;
 
 	if (req->kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR) {
@@ -1248,25 +1154,15 @@ static void hid_async_slot_clear_physical_locked(struct hid_async_slot *slot)
 static void hid_async_log_result(const struct hid_async_request *req,
 				 int status, bool submit_failure)
 {
-	if (submit_failure) {
-		if (!req->report && req->reqtype == HID_REQ_SET_REPORT)
-			async_msg("ERR: HID_RAW_SET_SUB");
+	if (submit_failure)
 		return;
-	}
 
 	if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
 		async_msg(status < 0 ? "ERR: HID_CLEAR_HALT_FAIL" :
 				       "DBG: HID_CLEAR_HALT_OK");
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
-		if (status < 0)
-			async_msg(req->report ? "ERR: HID_REPORT_OUT_FAIL" :
-						"ERR: HID_OUTPUT_FAIL");
-		else
-			async_msg(req->report ? "DBG: HID_REPORT_OUT_OK" :
-						"DBG: HID_OUTPUT_OK");
-	} else if (!req->report && req->reqtype == HID_REQ_SET_REPORT) {
-		async_msg(status < 0 ? "ERR: HID_RAW_SET_FAIL" :
-				       "DBG: HID_RAW_SET_OK");
+		async_msg(status < 0 ? "ERR: HID_REPORT_OUT_FAIL" :
+				       "DBG: HID_REPORT_OUT_OK");
 	} else if (req->report && req->reqtype == HID_REQ_SET_REPORT) {
 		async_msg(status < 0 ? "ERR: HID_REPORT_SET_FAIL" :
 				       "DBG: HID_REPORT_SET_OK");
@@ -1754,11 +1650,9 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 			continue;
 
 		slot = candidate;
-		if (!xfer->ep_addr && req->len == req->data_offset)
+		if (!xfer->ep_addr && !req->len)
 			actual = 0;
 		req->actual_len = (u16)actual;
-		if (actual && req->data_offset)
-			req->actual_len += req->data_offset;
 		req->xfer_result = xfer->result;
 		slot->completion_status = hid_async_xfer_status(xfer->result);
 		slot->completion_ready = true;

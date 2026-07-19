@@ -85,8 +85,10 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `hid-multitouch`/`hid-haptic` are active; Stadia/`ff-memless` are unlinked.
   Haptic uses `input_ff_create()` and device-managed timing.
 - The existing lifecycle task probes. Feature/raw/OUTPUT traffic passes through
-  `hid_async_task`; caller tasks wait, TinyUSB callbacks do not. Mutexes,
-  refcount, work cancellation, and async drain cover teardown.
+  `hid_async_task`; caller tasks wait, TinyUSB callbacks do not. Raw GET/SET and
+  `.output_report()` use the upstream usbhid helper bodies over the generic
+  USB-message bridge. HID owner tags, mutexes, refcount, work cancellation, and
+  async drain cover teardown.
 - The temporary manual layout-change hook ignores the startup notification,
   builds and uploads/plays Press, then erases/stops it on the next change.
   Effect state is caller-owned; no test helper or field was added to the
@@ -116,8 +118,9 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   hiddev also remains disabled and active code uses stubs.
 - Audited callback-safe `raw_event`, synchronous HID report request/wait, and
   returned GET data are active. Bounded task-side USB control and interrupt-OUT
-  adapters are active; generic URBs, synchronous interrupt-IN, unaudited hooks,
-  hidraw/hiddev runtime, and PIDFF remain deferred.
+  adapters are active with per-interface cancellation and endpoint-keyed OUT
+  order; generic URBs, synchronous interrupt-IN, unaudited hooks, hidraw/hiddev
+  runtime, and PIDFF remain deferred.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 

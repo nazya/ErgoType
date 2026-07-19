@@ -66,14 +66,17 @@ through the `.request()` route.
 
 EP0 report requests are submitted as direct asynchronous TinyUSB control
 transfers from the host owner task. Completion is matched by request serial and
-preserves the real transfer result and actual length. SET_IDLE uses the generic
-device-level EP0 lane while retaining its HID-interface lifetime lease. Caller
-tasks may wait for the Linux ll-driver contract, but TinyUSB callbacks never
-wait or run the Linux continuation.
+preserves the real transfer result and actual length. SET_IDLE and upstream
+raw GET/SET use the generic device-level EP0 lane; an interface owner tag makes
+stop/cancel wake the task immediately. Caller tasks may wait for the Linux
+ll-driver contract, but TinyUSB callbacks never wait or run the Linux
+continuation.
 
 Interrupt OUT is also submitted directly from the host owner. The request owns
 the complete endpoint wire image until completion, and TinyUSB returns the real
-transfer result, actual length, and request serial. The old report-sent facade,
+transfer result, actual length, and request serial. `.output_report()` uses the
+upstream synchronous helper over that generic bridge, whose fixed storage is
+ordered per device endpoint instead of globally. The old report-sent facade,
 which could only manufacture success for whichever request happened to be
 active, is not part of this path.
 
@@ -246,7 +249,6 @@ stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,304 B of
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
-| `DBG: HID_OUTPUT_Q` / `DBG: HID_OUTPUT_OK` | `.output_report()` queued and completed its interrupt-OUT-only transfer. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally

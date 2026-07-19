@@ -24,8 +24,9 @@ because USB descriptor/string metadata is available before `hid_ignore()` and
 driver probe. TinyUSB completions only publish bounded completion records; the
 serialized async task resumes the waiting task-side continuation.
 
-Razer is in this bucket: the tested macro-enable SET_REPORT uses the serialized
-HID request owner, and USB strings are available before probe.
+Razer is in this bucket: the tested macro-enable SET_REPORT uses upstream
+`usbhid_set_raw_report()` over the generic async USB owner, and USB strings are
+available before probe.
 
 Regular FEATURE and raw requests stay on EP0; `.output_report()` remains the
 interrupt-only entry point and returns `-ENOSYS` without an OUT endpoint.
@@ -50,8 +51,10 @@ Current unsupported patterns include:
   serialized HID queue currently provides
 
 Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` have
-explicit submit, completion, timeout, cancellation, and device-generation
-semantics in the TinyUSB transport owner. The unsupported helpers remain
+explicit submit, completion, timeout, per-interface cancellation, and
+device-generation semantics in the TinyUSB transport owner. Their fixed pool
+orders generic interrupt OUT per device endpoint, so one NAKing device does not
+hold unrelated endpoints behind a global FIFO. The unsupported helpers remain
 disabled instead of pretending success.
 
 ## Other Deferred Reasons
@@ -102,12 +105,15 @@ bounded publishers.
 
 ## Examples To Keep Deferred Until Their Dependencies Exist
 
-These are examples from upstream classes that need callback-unsafe request or
-string/control-response handling before they can be trusted:
+These are examples from upstream classes that still need a driver-by-driver
+subsystem/lifecycle audit before they can be trusted. Synchronous raw GET/SET
+by itself is no longer a transport blocker:
 
-- `hid-alps.c`: raw GET/SET feature report init paths use returned data.
+- `hid-alps.c`: raw GET/SET transport is present, but the surrounding init and
+  device-specific state remain unaudited.
 - `hid-letsketch.c`: uses `usb_string()` for tablet string data.
-- `hid-lg.c` / `hid-lg4ff.c`: feature/raw requests and wait-style init paths.
+- `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
+  wait-style init dependencies remain unaudited.
 - `hid-logitech-hidpp.c`: request/response protocol with wait queues.
 - `hid-multitouch.c`: feature GET_REPORT state must be read before setup.
 - `hid-ntrig.c`: USB control-message firmware/query path.

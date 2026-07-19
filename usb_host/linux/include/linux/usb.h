@@ -20,6 +20,8 @@
 #define USB_TYPE_VENDOR 0x40
 #define USB_RECIP_DEVICE 0
 #define USB_RECIP_INTERFACE 0x01
+/* Upstream ch9.h owns this mask; the compact port has no separate ch9 shim. */
+#define USB_RECIP_MASK 0x1f
 #define USB_REQ_GET_STATUS TUSB_REQ_GET_STATUS
 #define USB_REQ_CLEAR_FEATURE 1
 #define USB_REQ_GET_DESCRIPTOR TUSB_REQ_GET_DESCRIPTOR
