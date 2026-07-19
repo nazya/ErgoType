@@ -2383,6 +2383,8 @@ static int usbhid_wait_io(struct hid_device *hid)
 			     usbhid->control_waiter == task);
 		usbhid->control_waiter = task;
 		taskEXIT_CRITICAL();
+		/* The owner predicate changed after a probe-time GET was queued. */
+		usbhid_control_report_owner_ready();
 	}
 
 	/*

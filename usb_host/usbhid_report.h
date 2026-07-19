@@ -23,6 +23,8 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 				 usbhid_control_report_done_t done,
 				 void *context);
 bool usbhid_control_report_process_owned(struct hid_device *hid);
+/* Control-wait glue: wake the report task after publishing control_waiter. */
+void usbhid_control_report_owner_ready(void);
 int usbhid_report_start(struct hid_device *hid);
 void usbhid_report_close(struct hid_device *hid);
 void usbhid_report_stop(struct hid_device *hid);
