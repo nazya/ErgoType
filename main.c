@@ -288,19 +288,28 @@ static void app_task(void *pvParameters)
         else
             hid_async_ready = true;
 
+        bool hid_workqueue_ready = false;
         int hid_workqueue_ret = hid_workqueue_init();
         if (hid_workqueue_ret < 0)
             async_msg("ERR: HID_WORKQUEUE_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(hid_workqueue_task, NULL,
+                                        MIN_STACK_SIZE, NULL,
+                                        IDLE_PRIORITY + 3, CORE1,
+                                        NULL) != pdPASS)
+            async_msg("ERR: HID_WORKQUEUE_TASK_FAIL");
         else
-            xTaskCreateAffinitySet(hid_workqueue_task, NULL, MIN_STACK_SIZE, NULL,
-                                   IDLE_PRIORITY + 3, CORE1, NULL);
+            hid_workqueue_ready = true;
 
+        bool hid_timer_ready = false;
         int hid_timer_ret = hid_timer_init();
         if (hid_timer_ret < 0)
             async_msg("ERR: HID_TIMER_INIT_FAIL");
+        else if (xTaskCreateAffinitySet(hid_timer_task, NULL, MIN_STACK_SIZE,
+                                        NULL, IDLE_PRIORITY + 3, CORE1,
+                                        NULL) != pdPASS)
+            async_msg("ERR: HID_TIMER_TASK_FAIL");
         else
-            xTaskCreateAffinitySet(hid_timer_task, NULL, MIN_STACK_SIZE, NULL,
-                                   IDLE_PRIORITY + 3, CORE1, NULL);
+            hid_timer_ready = true;
 
         bool usbhid_lifecycle_ready = false;
         int usbhid_lifecycle_ret = usbhid_lifecycle_init();
@@ -325,8 +334,8 @@ static void app_task(void *pvParameters)
         else
             usbhid_report_ready = true;
 
-        if (hid_async_ready && usbhid_lifecycle_ready &&
-            usbhid_report_ready) {
+        if (hid_async_ready && hid_workqueue_ready && hid_timer_ready &&
+            usbhid_lifecycle_ready && usbhid_report_ready) {
             BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, "tuh", TUH_STACK_SIZE,
                                                               NULL, TUSB_PRIORITY, CORE1, NULL);
             if (host_task_ret != pdPASS)

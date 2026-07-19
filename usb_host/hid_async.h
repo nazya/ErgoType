@@ -22,6 +22,7 @@ enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_REPORT,
 	HID_ASYNC_REQUEST_OUTPUT_REPORT,
 	HID_ASYNC_REQUEST_IDLE,
+	HID_ASYNC_REQUEST_CLEAR_HALT,
 	HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR,
 	HID_ASYNC_REQUEST_STRING_DESCRIPTOR,
 #if 0
@@ -95,6 +96,8 @@ int hid_async_queue_raw_get_report_id(struct hid_device *hid, u8 report_id,
 				      void *context);
 int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
 			 hid_async_complete_t complete, void *context);
+int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
+			       hid_async_complete_t complete, void *context);
 int hid_async_queue_device_descriptor(u8 dev_addr,
 				      hid_async_complete_t complete,
 				      void *context);

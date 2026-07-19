@@ -430,6 +430,20 @@ static inline __force_inline endpoint_t * _find_ep(uint8_t root_idx,
   return NULL;
 }
 
+bool pio_usb_host_endpoint_reset_data_toggle(uint8_t root_idx,
+                                             uint8_t device_address,
+                                             uint8_t ep_address) {
+  endpoint_t *ep = _find_ep(root_idx, device_address, ep_address);
+
+  /* The TinyUSB host owner calls this only after the transfer and STALL IRQ. */
+  if (!ep || ep->has_transfer || ep->transfer_started) {
+    return false;
+  }
+
+  ep->data_id = 0;
+  return true;
+}
+
 bool pio_usb_host_endpoint_open(uint8_t root_idx, uint8_t device_address,
                                 uint8_t const *desc_endpoint, bool need_pre) {
   const endpoint_descriptor_t *d = (const endpoint_descriptor_t *)desc_endpoint;

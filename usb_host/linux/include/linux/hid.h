@@ -4,7 +4,8 @@
 /*
  * Reduced Linux HID compatibility contract for the firmware port. The active
  * parser/driver C files stay close to upstream Linux; this header carries only
- * the declarations/macros those files need plus local transport fields.
+ * the declarations/macros those files need. USB transport state lives in the
+ * usbhid-private object referenced by hid_device::driver_data.
  */
 
 #include "hid_compat.h"
@@ -28,6 +29,8 @@
 #endif
 
 #define HID_MAX_IDS 256
+#define HID_DT_HID			(USB_TYPE_CLASS | 0x01)
+#define HID_DT_REPORT			(USB_TYPE_CLASS | 0x02)
 #define HID_MAX_DESCRIPTOR_SIZE 4096
 #define HID_MAX_FIELDS 256
 // #define HID_MAX_USAGES 12288
@@ -581,11 +584,9 @@ struct hid_device {
 	const __u8 *dev_rdesc;						/* device report descriptor */
 	const __u8 *bpf_rdesc;						/* bpf modified report descriptor, if any */
 	const __u8 *rdesc;						/* currently used report descriptor */
-	const __u8 *ll_rdesc;						/* port transport report descriptor */
 	unsigned int dev_rsize;
 	unsigned int bpf_rsize;
 	unsigned int rsize;
-	unsigned int ll_rsize;
 	unsigned int collection_size;					/* Number of allocated hid_collections */
 	struct hid_collection *collection;				/* List of HID collections */
 	unsigned int maxcollection;						/* Number of parsed collections */
@@ -658,48 +659,12 @@ struct hid_device {
 	struct kref ref;
 
 	unsigned int id;						/* system unique id */
-
-	/*
-	 * Port-only TinyUSB callback identity. Upstream Linux gets this context
-	 * through usbhid/usb_interface objects; TinyUSB callbacks pass dev_addr
-	 * and HID instance, so the firmware lookup stores both on hid_device.
-	 */
-	u8 dev_addr;
-	u8 instance;
-	u32 ll_generation;
-	wait_queue_head_t ll_wait;
-	u32 ll_report_revision;
-	u32 ll_io_pending;
-	TaskHandle_t ll_control_waiter;
-	u16 ll_report_bufsize;
-	u8 ll_report_owner;
-	u8 ll_report_slot;
-	bool ll_report_wanted;
-	bool ll_report_host_pending;
-	bool ll_transport_stopping;
-	bool ll_disconnect_queued;
-	bool ll_always_poll;
-	bool ll_resume_running;
-	unsigned long ll_resume_deadline;
-	/*
-	 * Port-only minimal USB core shim. Upstream hid_device is parented by
-	 * Linux USB core objects; firmware embeds just enough usb_device,
-	 * usb_host_interface, and usb_interface state for imported HID code.
-	 */
-	struct usb_device usb_dev;
-	struct usb_host_interface usb_altsetting;
-	struct usb_interface usb_intf;
 };
 
 #define to_hid_device(pdev) \
 	container_of(pdev, struct hid_device, dev)
 
-// #define hid_to_usb_dev(hid_dev) to_usb_device(hid_dev->dev.parent->parent)
-// This port has the same hid_device -> usb_interface -> usb_device parent chain.
-static inline struct usb_device *hid_to_usb_dev(struct hid_device *hid_dev)
-{
-	return to_usb_device(hid_dev->dev.parent->parent);
-}
+#define hid_to_usb_dev(hid_dev) to_usb_device(hid_dev->dev.parent->parent)
 
 static inline void *hid_get_drvdata(struct hid_device *hdev)
 {
