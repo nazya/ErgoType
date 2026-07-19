@@ -685,6 +685,7 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
 	enum usbhid_report_recovery recovery;
+	u32 async_generation;
 	u32 generation;
 	u8 ep_addr;
 	bool retry_queue = false;
@@ -722,8 +723,19 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 	ep_addr = usbhid_report_rx_slots[index].ep_addr;
 	taskEXIT_CRITICAL();
 
-	ret = hid_async_queue_clear_halt(hid, ep_addr,
-		usbhid_report_clear_halt_complete, NULL);
+	// rc = usb_clear_halt(hid_to_usb_dev(hid), usbhid->urbin->pipe);
+	// The shared report task cannot block on TinyUSB. Queue usb_clear_halt()'s
+	// standard endpoint request on the generic physical-device EP0 lane; its
+	// completion continues the upstream reset_work path asynchronously below.
+	ret = hid_async_device_epoch_snapshot(usbhid->dev_addr,
+					      &async_generation);
+	if (!ret)
+		ret = hid_async_queue_usb_control_msg(hid, usbhid->dev_addr,
+			async_generation, USB_REQ_CLEAR_FEATURE,
+			USB_RECIP_ENDPOINT,
+			USB_ENDPOINT_HALT, ep_addr, NULL, 0,
+			USB_CTRL_SET_TIMEOUT,
+			usbhid_report_clear_halt_complete, NULL);
 	if (!ret)
 		return;
 

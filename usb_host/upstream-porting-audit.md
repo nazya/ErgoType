@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-17
+Updated: 2026-07-20
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -118,9 +118,18 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   hiddev also remains disabled and active code uses stubs.
 - Audited callback-safe `raw_event`, synchronous HID report request/wait, and
   returned GET data are active. Bounded task-side USB control and interrupt-OUT
-  adapters are active with per-interface cancellation and endpoint-keyed OUT
-  order; generic URBs, synchronous interrupt-IN, unaudited hooks, hidraw/hiddev
-  runtime, and PIDFF remain deferred.
+  adapters are active with per-interface cancellation. HID report and generic
+  control requests share same-device EP0 order; all interrupt-OUT sources share
+  endpoint-keyed order. Interrupt-IN STALL recovery uses that generic EP0 lane
+  for remote clear-halt, then performs the required PIO DATA0 reset and rearm
+  in the TinyUSB host owner. FAILED/TIMEOUT uses upstream's bounded delayed
+  retry. Generic URBs, synchronous interrupt-IN, unaudited hooks,
+  hidraw/hiddev runtime, and PIDFF remain deferred.
+- Linux queues a device reset after clear-halt failure or exhausted protocol
+  retry. The pinned TinyUSB/PIO stack has no safe per-device reset and
+  re-enumeration API; electrical root-port reset alone would leave TinyUSB's
+  configured-device state stale. The adjacent upstream
+  `usb_queue_reset_device()` lines remain commented and the endpoint parks.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 
@@ -129,7 +138,7 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - compared the active HID/input files with Linux `83f14548`
 - matched the active vendor allowlist against `CONFIG_HID_*`
 - checked disabled source/link status and current proxy declarations
-- `cmake --build build -j4`
+- `cmake --build build --parallel 1`
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)
 - `git diff --check`

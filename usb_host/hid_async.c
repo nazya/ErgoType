@@ -17,9 +17,9 @@
 /*
  * Upstream Linux HID transport can block in hid_hw_wait(), usb_control_msg(),
  * and related request paths. TinyUSB host callbacks cannot wait for another
- * TinyUSB callback to complete, so this firmware bridge owns bounded per-HID
- * control/OUT lanes in one executor task and resumes the ported call sites
- * through explicit completions.
+ * TinyUSB callback to complete, so this firmware bridge owns bounded pre-probe
+ * and physical-device control/OUT lanes in one executor task and resumes the
+ * ported call sites through explicit completions.
  */
 
 #define HID_ASYNC_SUBMIT_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
@@ -60,8 +60,6 @@ struct hid_async_host_call {
 
 enum hid_async_lane {
 	HID_ASYNC_LANE_PREPROBE,
-	HID_ASYNC_LANE_CTRL,
-	HID_ASYNC_LANE_OUT,
 	HID_ASYNC_LANE_DEVICE_CTRL,
 	HID_ASYNC_LANE_DEVICE_OUT,
 };
@@ -116,8 +114,7 @@ static void hid_async_notify_task(void);
 
 static bool hid_async_lane_is_out(enum hid_async_lane lane)
 {
-	return lane == HID_ASYNC_LANE_OUT ||
-	       lane == HID_ASYNC_LANE_DEVICE_OUT;
+	return lane == HID_ASYNC_LANE_DEVICE_OUT;
 }
 
 static struct hid_async_slot *hid_async_slot_for_request_locked(
@@ -300,8 +297,6 @@ static u8 hid_async_slot_id(const struct hid_async_slot *slot)
 static void hid_async_slot_fifo_locked(struct hid_async_slot *slot,
 				       u8 **head, u8 **tail)
 {
-	struct usbhid_device *usbhid;
-
 	if (slot->lane == HID_ASYNC_LANE_PREPROBE) {
 		*head = &hid_async_preprobe_head;
 		*tail = &hid_async_preprobe_tail;
@@ -312,22 +307,9 @@ static void hid_async_slot_fifo_locked(struct hid_async_slot *slot,
 		*tail = &hid_async_device_ctrl_tail;
 		return;
 	}
-	if (slot->lane == HID_ASYNC_LANE_DEVICE_OUT) {
-		*head = &hid_async_device_out_head;
-		*tail = &hid_async_device_out_tail;
-		return;
-	}
-
-	configASSERT(slot->req.hid);
-	usbhid = slot->req.hid->driver_data;
-	if (slot->lane == HID_ASYNC_LANE_CTRL) {
-		*head = &usbhid->async_ctrl_head;
-		*tail = &usbhid->async_ctrl_tail;
-	} else {
-		configASSERT(slot->lane == HID_ASYNC_LANE_OUT);
-		*head = &usbhid->async_out_head;
-		*tail = &usbhid->async_out_tail;
-	}
+	configASSERT(slot->lane == HID_ASYNC_LANE_DEVICE_OUT);
+	*head = &hid_async_device_out_head;
+	*tail = &hid_async_device_out_tail;
 }
 
 static int hid_async_slot_queue_locked(const struct hid_async_request *req,
@@ -383,14 +365,27 @@ static bool hid_async_slot_is_head_locked(struct hid_async_slot *slot)
 
 	/*
 	 * Linux USB core orders URBs per device endpoint, not across unrelated
-	 * devices. The fixed pool uses one storage list for generic requests, so
-	 * skip older entries with a different physical ordering key instead of
-	 * imposing a firmware-only global head-of-line block.
+	 * devices. The fixed pool uses one control list and one OUT list for HID
+	 * and generic requests, so skip older entries with a different physical
+	 * ordering key instead of imposing a firmware-only global head-of-line
+	 * block. A completed GET_REPORT remains stored through hid_ctrl()-shaped
+	 * parsing but no longer owns EP0; retain only usbhid's same-interface
+	 * control-report order while letting generic or sibling requests pass it.
 	 */
 	cursor = *head;
 	while (cursor && cursor != hid_async_slot_id(slot)) {
 		previous = hid_async_slot_from_id(cursor);
 		configASSERT(previous);
+		if (previous->state == HID_ASYNC_SLOT_WAIT_PARSE ||
+		    previous->state == HID_ASYNC_SLOT_RELEASE_PENDING) {
+			if (previous->state == HID_ASYNC_SLOT_WAIT_PARSE &&
+			    slot->req.kind == HID_ASYNC_REQUEST_REPORT &&
+			    previous->req.kind == HID_ASYNC_REQUEST_REPORT &&
+			    previous->req.hid == slot->req.hid)
+				return false;
+			cursor = previous->next;
+			continue;
+		}
 		if (previous->req.dev_addr == slot->req.dev_addr &&
 		    previous->req.generation == slot->req.generation &&
 		    (slot->lane == HID_ASYNC_LANE_DEVICE_CTRL ||
@@ -437,9 +432,9 @@ int hid_async_init(void)
 		return -ENOMEM;
 
 	/*
-	 * Upstream keeps per-interface ctrl/out FIFO entries in usbhid_device.
-	 * Per-interface full wire buffers would be too expensive, so their
-	 * one-based lists share this single bounded startup allocation instead.
+	 * Linux USB core orders transfers by physical endpoint. One shared fixed
+	 * pool owns the wire buffers; its control and OUT storage lists use
+	 * per-device/per-endpoint head scans without allocating at runtime.
 	 */
 	hid_async_slots = pvPortMalloc(sizeof(*hid_async_slots) *
 					 HID_ASYNC_SLOT_COUNT);
@@ -479,8 +474,13 @@ static int hid_async_queue_hid_request(struct hid_async_request *req)
 		else {
 			req->generation =
 				hid_async_device_generation[req->dev_addr];
+			/*
+			 * Linux USB core orders all submissions to the same physical
+			 * endpoint, regardless of which HID hook created them.
+			 */
 			lane = req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT ?
-				HID_ASYNC_LANE_OUT : HID_ASYNC_LANE_CTRL;
+				HID_ASYNC_LANE_DEVICE_OUT :
+				HID_ASYNC_LANE_DEVICE_CTRL;
 			ret = hid_async_slot_queue_locked(req, lane);
 		}
 	}
@@ -631,34 +631,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	return 0;
 }
 
-int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
-			       hid_async_complete_t complete, void *context)
-{
-	struct usbhid_device *usbhid;
-	struct hid_async_request req;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid || !ep_addr)
-		return -EINVAL;
-	usbhid = hid->driver_data;
-
-	memset(&req, 0, sizeof(req));
-	/*
-	 * Upstream Linux: no equivalent glue. This is the asynchronous transport
-	 * replacement for blocking usb_clear_halt() in usbhid reset_work.
-	 */
-	req.kind = HID_ASYNC_REQUEST_CLEAR_HALT;
-	req.hid = hid;
-	req.dev_addr = usbhid->dev_addr;
-	req.instance = usbhid->instance;
-	req.ep_addr = ep_addr;
-	req.complete = complete;
-	req.context = context;
-
-	return hid_async_queue_hid_request(&req);
-}
-
 int hid_async_queue_device_descriptor(u8 dev_addr,
 				      hid_async_complete_t complete,
 				      void *context)
@@ -706,9 +678,11 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
  * callers sleep. The firmware captures the address epoch before enqueue,
  * stores wire data in the fixed slot, and wakes the caller after task-context
  * completion; neither TinyUSB callbacks nor the executor itself may wait here.
- * A matching HID owner is non-owning slot metadata: the synchronous caller's
- * io_pending lease keeps it alive and lets interface stop cancel the wait
- * immediately instead of leaving it to the physical-device timeout.
+ * A matching HID owner is non-owning slot metadata. Synchronous callers hold
+ * an io_pending lease; report recovery uses its report-lifecycle barrier.
+ * Teardown publishes transport_stopping and drains every owned slot before
+ * destroying either object, while the owner tag makes interface stop cancel
+ * work immediately instead of leaving it to the physical-device timeout.
  */
 static int hid_async_queue_usb_request(struct hid_async_request *req,
 				       u32 generation,
@@ -877,31 +851,6 @@ static int hid_async_submit_usb_control(struct hid_async_request *req)
 	return tuh_control_xfer(&xfer) ? 0 : -EAGAIN;
 }
 
-static int hid_async_submit_clear_halt(struct hid_async_request *req)
-{
-	tusb_control_request_t const request = {
-		.bmRequestType_bit = {
-			.recipient = TUSB_REQ_RCPT_ENDPOINT,
-			.type = TUSB_REQ_TYPE_STANDARD,
-			.direction = TUSB_DIR_OUT,
-		},
-		.bRequest = TUSB_REQ_CLEAR_FEATURE,
-		.wValue = tu_htole16(TUSB_REQ_FEATURE_EDPT_HALT),
-		.wIndex = tu_htole16(req->ep_addr),
-		.wLength = 0,
-	};
-	tuh_xfer_t xfer = {
-		.daddr = req->dev_addr,
-		.ep_addr = 0,
-		.setup = &request,
-		.buffer = NULL,
-		.complete_cb = hid_async_xfer_complete,
-		.user_data = (uintptr_t)req->serial,
-	};
-
-	return tuh_control_xfer(&xfer) ? 0 : -EAGAIN;
-}
-
 static int hid_async_submit_interrupt_out(struct hid_async_request *req)
 {
 	u8 *data = req->data;
@@ -937,8 +886,6 @@ static int hid_async_submit(struct hid_async_request *req)
 		return hid_async_submit_interrupt_out(req);
 	} else if (req->kind == HID_ASYNC_REQUEST_USB_INTERRUPT) {
 		return hid_async_submit_interrupt_out(req);
-	} else if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
-		return hid_async_submit_clear_halt(req);
 	} else if (req->kind == HID_ASYNC_REQUEST_USB_CONTROL) {
 		return hid_async_submit_usb_control(req);
 	} else {
@@ -1157,7 +1104,11 @@ static void hid_async_log_result(const struct hid_async_request *req,
 	if (submit_failure)
 		return;
 
-	if (req->kind == HID_ASYNC_REQUEST_CLEAR_HALT) {
+	if (req->kind == HID_ASYNC_REQUEST_USB_CONTROL &&
+	    req->control_request == TUSB_REQ_CLEAR_FEATURE &&
+	    req->control_requesttype == TUSB_REQ_RCPT_ENDPOINT &&
+	    req->control_value == TUSB_REQ_FEATURE_EDPT_HALT && !req->len) {
+		/* Preserve the recovery trace after merging its EP0 wire builder. */
 		async_msg(status < 0 ? "ERR: HID_CLEAR_HALT_FAIL" :
 				       "DBG: HID_CLEAR_HALT_OK");
 	} else if (req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {

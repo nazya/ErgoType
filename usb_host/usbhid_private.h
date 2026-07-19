@@ -47,8 +47,9 @@ struct usbhid_device {
 	// unsigned int retry_delay;                                       /* Delay length in ms */
 	// struct work_struct reset_work;                                  /* Task context for resets */
 	// Linux URBs, DMA buffers, iofl, and work/timer primitives are not
-	// available. TinyUSB owner tasks and the bounded port state below replace
-	// them while retaining the upstream usbhid_device ownership boundary.
+	// available. TinyUSB owner tasks, hid_async's physical-endpoint queues, and
+	// the bounded port state below replace them while retaining the upstream
+	// usbhid_device ownership boundary.
 	wait_queue_head_t wait;                                           /* For sleeping */
 
 	/*
@@ -65,15 +66,6 @@ struct usbhid_device {
 	u32 generation;
 	u32 report_revision;
 	u32 io_pending;
-	/*
-	 * Upstream ctrlhead/ctrltail and outhead/outtail index the arrays above.
-	 * The bounded firmware transport keeps their one-based equivalents here;
-	 * entries themselves live in hid_async's single startup-allocated pool.
-	 */
-	u8 async_ctrl_head;
-	u8 async_ctrl_tail;
-	u8 async_out_head;
-	u8 async_out_tail;
 	TaskHandle_t control_waiter;
 	u16 report_bufsize;
 	u8 report_owner;

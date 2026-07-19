@@ -31,7 +31,9 @@
   owner, so interface stop cancels a blocked caller immediately instead of
   leaving it to a physical-device timeout. SET_IDLE and upstream-shaped raw
   GET/SET helpers reach that generic path while retaining the synchronous
-  ll-driver return contract.
+  ll-driver return contract. HID report requests and generic control messages
+  now share one same-device EP0 FIFO; a completed GET_REPORT retains its parser
+  slot without continuing to occupy the physical wire queue.
 - Normal GET_REPORT receive lengths follow upstream `hid_submit_ctrl()`: they
   are rounded to EP0 max-packet size and capped by the fixed transport buffer,
   while raw GET_REPORT keeps its caller-supplied length. Raw report-ID zero
@@ -47,9 +49,9 @@
   transfer with the complete wire image and request serial, so its real result
   and actual length are preserved instead of being synthesized by the TinyUSB
   HID callback facade. Generic OUT requests are ordered per device endpoint,
-  not behind unrelated devices in one global FIFO. As upstream does, the first
-  interrupt OUT endpoint is selected and a successful short transfer remains
-  successful.
+  together with `.request()` output on that endpoint, not behind unrelated
+  devices in one global FIFO. As upstream does, the first interrupt OUT
+  endpoint is selected and a successful short transfer remains successful.
 - `usbhid_start()` now clears the NumLock output field on boot keyboards and
   submits the whole output report through that same `.request()` route,
   matching upstream startup behavior.
@@ -82,8 +84,13 @@
   events carry a zero-copy slot reference, and the endpoint is rearmed only
   after that event is consumed. Successful payload is dropped while
   `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
-  Non-success payload never reaches the HID parser; recovery for STALL and
-  protocol failure remains a separate transport checkpoint.
+  Non-success payload never reaches the HID parser. STALL queues the standard
+  endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
+  only successful completion lets the TinyUSB host owner reset the PIO endpoint
+  toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
+  13/26/52/104-ms delayed retry for about one second. Clear-halt failure or
+  exhausted retry still parks the endpoint because this TinyUSB/PIO stack has
+  no safe coordinated per-device reset/re-enumeration API.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -93,10 +100,14 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: upstream raw/output helper checkpoint `hid: route synchronous usbhid helpers through generic bridge`, exact UF2
+  SHA256 `8e8402604678195e07980c211f541d87157a64a57d5e16f323d9d749c2560e8c`,
+  was reported working on hardware. The following physical-endpoint lane and
+  generic clear-halt consolidation is a new, not-yet-tested checkpoint.
 - 2026-07-20: generic USB-message checkpoint `hid: add generic asynchronous USB message bridge`, exact UF2 SHA256
   `739e0d119cd2e5dd7e64051b75181dca5d7c90c411c7cc924c64e3ceac791e6d`,
-  was reported working on hardware. The following upstream raw/output helper
-  consolidation is a new, not-yet-tested checkpoint.
+  was reported working on hardware and is the baseline immediately before the
+  now-tested upstream raw/output helper consolidation.
 - 2026-07-19: host checkpoint `hid: preserve exact interrupt output completion` booted with 43,008 B minimum free
   heap, a 43,160 B largest free block, and 938 words free at the TinyUSB task
   watermark. Repeated `c` press/release reports reached the input boundary.
@@ -174,8 +185,12 @@
 - Verify direct interrupt IN with keyboard and pointer traffic, then repeated
   unplug/replug. The expected normal path has no `HID_RX_STALL`,
   `HID_RX_XFER_FAIL`, `HID_RX_REARM_FAIL`, or `HID_REPORT_SKIP`. Record heap,
-  largest free block, block count, and the TinyUSB stack watermark. A STALL or
-  protocol failure is intentionally parked in this checkpoint instead of being
-  immediately rearmed; clear-halt and delayed retry come next.
+  largest free block, block count, and the TinyUSB stack watermark.
+- Exercise recovery with a one-shot interrupt-IN STALL fixture. Expect one
+  `HID_RX_STALL`, then `HID_CLEAR_HALT_OK`, followed by resumed input. Replug
+  repeatedly and unplug while clear-halt is active. A normal TinyUSB NAK does
+  not prove FAILED/TIMEOUT retry; that path needs a lower-level no-response or
+  bad-packet injector. The deliberate remaining deviation is endpoint parking
+  after retry exhaustion instead of Linux `usb_queue_reset_device()`.
 - Extend the serialized transport explicitly before importing drivers that need
   URBs, interrupt-IN synchronous messages, or larger request/response protocols.

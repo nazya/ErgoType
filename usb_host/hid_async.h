@@ -22,7 +22,6 @@ typedef void (*hid_async_complete_t)(const struct hid_async_request *req,
 enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_REPORT,
 	HID_ASYNC_REQUEST_OUTPUT_REPORT,
-	HID_ASYNC_REQUEST_CLEAR_HALT,
 	HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR,
 	HID_ASYNC_REQUEST_STRING_DESCRIPTOR,
 	HID_ASYNC_REQUEST_USB_CONTROL,
@@ -62,8 +61,6 @@ void hid_async_task(void *pvParameters);
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
 			   hid_async_complete_t complete, void *context);
-int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
-			       hid_async_complete_t complete, void *context);
 int hid_async_control_report_hold(const struct hid_async_request *req);
 void hid_async_control_report_release(struct hid_device *hid, u32 serial);
 int hid_async_queue_device_descriptor(u8 dev_addr,

@@ -22,9 +22,14 @@ The active implementation now has these properties:
   completion retains the real TinyUSB result, actual length, and request serial.
 - Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` now
   use fixed async slots with physical-device epoch leases. Interface/endpoint
-  owner tags make those slots participate in per-HID stop/cancel; generic OUT
-  storage is ordered per physical endpoint rather than globally. SET_IDLE and
-  raw GET/SET exercise the generic EP0 path.
+  owner tags make those slots participate in per-HID stop/cancel. HID report
+  requests and generic messages share same-device EP0 order, while all OUT
+  sources share per-physical-endpoint order rather than global or hook-specific
+  FIFOs. SET_IDLE and raw GET/SET exercise the generic EP0 path.
+- Interrupt-IN STALL recovery queues endpoint `CLEAR_FEATURE(HALT)` on that
+  same per-device EP0 lane, then resets the local PIO toggle to DATA0 and rearms
+  from the TinyUSB host owner. Protocol failure uses the upstream delayed retry
+  cadence; only the final USB-core device-reset fallback remains unavailable.
 - Arbitrary URBs, interrupt-IN messages, and larger transfers remain deferred.
 
 See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.

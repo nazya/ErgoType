@@ -68,7 +68,9 @@ EP0 report requests are submitted as direct asynchronous TinyUSB control
 transfers from the host owner task. Completion is matched by request serial and
 preserves the real transfer result and actual length. SET_IDLE and upstream
 raw GET/SET use the generic device-level EP0 lane; an interface owner tag makes
-stop/cancel wake the task immediately. Caller tasks may wait for the Linux
+stop/cancel wake the task immediately. HID report requests and generic control
+messages share same-device EP0 ordering; completed GET_REPORT parser storage no
+longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
 ll-driver contract, but TinyUSB callbacks never wait or run the Linux
 continuation.
 
@@ -76,9 +78,9 @@ Interrupt OUT is also submitted directly from the host owner. The request owns
 the complete endpoint wire image until completion, and TinyUSB returns the real
 transfer result, actual length, and request serial. `.output_report()` uses the
 upstream synchronous helper over that generic bridge, whose fixed storage is
-ordered per device endpoint instead of globally. The old report-sent facade,
-which could only manufacture success for whichever request happened to be
-active, is not part of this path.
+ordered with `.request()` output per device endpoint instead of globally or by
+ll-driver hook. The old report-sent facade, which could only manufacture
+success for whichever request happened to be active, is not part of this path.
 
 Interrupt IN follows the same exact-completion boundary without entering the
 serialized control/OUT broker: every HID interface may have one independent IN
@@ -87,8 +89,13 @@ and arms a persistent slot for the largest parsed INPUT report (report ID
 included, capped at 64 bytes). Completion queues a pointer to that slot; the
 Linux HID parser runs in the report task before the slot can be rearmed. This
 removes the old callback copy, retains the real HCD result, and keeps failed or
-stalled payload out of Linux HID and KeyD. STALL clear-halt and protocol-error
-retry are deliberately not synthesized yet.
+stalled payload out of Linux HID and KeyD. STALL queues the standard endpoint
+clear-halt request through the generic per-device EP0 lane. After remote success
+the TinyUSB host owner resets the PIO endpoint toggle to DATA0 and rearms.
+Protocol errors use upstream's bounded delayed retry. The only missing tail is
+Linux `usb_queue_reset_device()` after recovery exhaustion; a root-port reset
+would desynchronize TinyUSB's configured-device state, so this port parks the
+endpoint until a coordinated reset/re-enumeration owner exists.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -242,8 +249,10 @@ stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,304 B of
 | `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
-| `ERR: HID_RX_STALL` | Interrupt IN stalled. Payload was discarded and polling was parked pending real endpoint clear-halt recovery. |
-| `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and polling was parked pending bounded delayed retry. |
+| `ERR: HID_RX_STALL` | Interrupt IN stalled. Payload was discarded and asynchronous endpoint clear-halt recovery started. |
+| `DBG: HID_CLEAR_HALT_OK` | Remote endpoint halt was cleared; the host owner may now reset the local PIO toggle to DATA0 and rearm. |
+| `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt failed; polling is parked because coordinated TinyUSB device reset is not available. |
+| `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
