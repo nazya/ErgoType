@@ -298,10 +298,30 @@ boundary is wrong even though the board appears to be "working".
 
 ### Output Paths
 
+The following route-specific checks are pending and must not be copied into
+Hardware Verified until their signals are observed.
+
+- `device/keyboard-led` (`c09244d`, pending)
+  - shape: base-HID boot-keyboard interface with no interrupt OUT endpoint;
+    the NKRO profile has protocol NONE and does not exercise boot startup.
+  - expected enumeration-time CDC signal:
+    `HID_SET_REPORT inst=0 id=0 type=2 len=1 ...` before periodic CapsLock
+    traffic.
+  - proves the startup NumLock reset and EP0 fallback together.
+- `device/haptic-touchpad` (`2a4f966`, pending route distinction)
+  - exposes interrupt OUT, but the existing layout-haptic path calls
+    `.output_report()` directly.
+  - regresses interrupt OUT transport but does not prove that
+    `.request(HID_REQ_SET_REPORT)` selected interrupt OUT; that requires a
+    request-path trigger or `HID_REPORT_OUT_Q` / `HID_REPORT_OUT_OK` trace.
+
 - `device/holtek-kbd-a055`
   - expected device-side signal: if the host sends keyboard LEDs, the emulator
     CDC log reports `HID_SET_REPORT`.
   - expected host-side signal: no assert/block in the LED output path.
+  - an enumeration-time `first=0x00` report proves only boot reset/EP0
+    fallback; the later `first=0x02` report is still required to prove the
+    Holtek LED redirect.
 - `device/google-stadiaff` (historical, checkpoint `hid: stabilize stadia ff teardown`)
   - expected device-side signal: emulator CDC log reports SET_REPORT for
     report ID 5 after a host layout change triggers rumble.

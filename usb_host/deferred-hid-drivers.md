@@ -16,6 +16,8 @@ The current build may include drivers that only need one of these patterns:
   data needed during probe
 - synchronous-looking HID raw GET/SET and interrupt-output calls, because the
   wait happens in a firmware task while TinyUSB remains free to run
+- upstream-shaped `.request()` OUTPUT routing: interrupt OUT when the
+  interface exposes it, EP0 SET_REPORT otherwise
 
 These drivers can run from the current pre-probe plus lifecycle-task probe path
 because USB descriptor/string metadata is available before `hid_ignore()` and
@@ -24,6 +26,9 @@ serialized async task resumes the waiting task-side continuation.
 
 Razer is in this bucket: the tested macro-enable SET_REPORT uses the serialized
 HID request owner, and USB strings are available before probe.
+
+Regular FEATURE and raw requests stay on EP0; `.output_report()` remains the
+interrupt-only entry point and returns `-ENOSYS` without an OUT endpoint.
 
 ## Unimplemented Transport Boundary
 
@@ -77,13 +82,14 @@ CapsLock/NumLock/ScrollLock output remains in the generic HID input path:
 LED SET_REPORT through the HID ll_driver request path. The deferred LED class
 means `/sys/class/leds`-style brightness devices and vendor LED/RGB panels,
 which need a firmware proxy/API before they are useful in this embedded host.
+On boot-keyboard start, `usbhid` also clears NumLock and submits the complete
+output report through the same route.
 
 ## Future Transport Work
 
 Drivers beyond the current boundary need extensions to the existing
 sync-over-async transport:
 
-- route HID OUTPUT to interrupt OUT when available and EP0 otherwise
 - expose honest transfer result and short-transfer length for control requests
 - add bounded per-request completion ownership instead of global special cases
 - implement generic control/URB operations only for audited linked users

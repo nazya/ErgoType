@@ -1,5 +1,10 @@
 # Async HID Requests Direction
 
+> Historical conversion plan. The active port now uses task-owned
+> sync-over-async request/wait paths; TinyUSB callbacks publish bounded records
+> and do not run Linux continuations. See `async-hid-progress.md` and
+> `deferred-hid-drivers.md` for the current boundary.
+
 This note records the next HID host direction after the working generic HID
 input slice.
 
@@ -258,12 +263,12 @@ Expected conversion:
 
 After resolution multiplier works:
 
-1. LED output reports:
-   - current anchor: `hid-input.c:1874`
-   - active `schedule_work()` now goes through the firmware workqueue bridge
-     because `.request` has an async SET_REPORT queue path
-   - generic interrupt OUT fallback is queued through
-     `hid_async_queue_output_report()`
+1. LED output reports (transport implemented; hardware route checkpoint
+   pending):
+   - `.request(HID_REQ_SET_REPORT)` uses interrupt OUT only for OUTPUT on an
+     interface that exposes it and EP0 otherwise
+   - FEATURE/raw requests stay on EP0; `.output_report()` is interrupt-only
+   - `usbhid_start()` clears boot-keyboard NumLock through this route
 2. Raw SET_REPORT transport branch:
    - `usbhid.c` queues raw SET_REPORT through
      `hid_async_queue_raw_set_report()`.

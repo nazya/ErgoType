@@ -56,6 +56,12 @@ Interrupt-IN receive is armed from `usbhid_open()` or `usbhid_start()`, not
 from probe. Ignored or failed interfaces therefore do not keep delivering
 reports to an unbound Linux HID object.
 
+Linux-shaped output requests are serialized by the HID async task. For
+`.request(HID_REQ_SET_REPORT)`, OUTPUT reports use interrupt OUT when present
+and otherwise EP0; FEATURE reports and `.raw_request()` stay on EP0, while
+`.output_report()` is interrupt-only. Boot-keyboard start clears NumLock
+through the `.request()` route.
+
 ## What `HID_REPORT_SKIP` Meant
 
 `ERR: HID_REPORT_SKIP` was a late receive-path symptom, not the original parser
@@ -198,6 +204,9 @@ and haptic heap checks.
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
+| `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
+| `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
+| `DBG: HID_OUTPUT_Q` / `DBG: HID_OUTPUT_OK` | `.output_report()` queued and completed its interrupt-OUT-only transfer. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally

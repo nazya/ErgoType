@@ -162,6 +162,8 @@ static u32 usbhid_report_descriptor_serial;
 static u32 usbhid_transport_faults;
 static bool usbhid_lifecycle_wake_pending;
 static void usbhid_io_wait_idle(struct hid_device *hid);
+static void usbhid_request(struct hid_device *hid, struct hid_report *report,
+			   enum hid_class_request reqtype);
 static void usbhid_lifecycle_kick(void);
 static void usbhid_transport_fault(enum usbhid_transport_fault fault);
 static void usbhid_backend_device_detach(uint8_t dev_addr);
@@ -1908,18 +1910,77 @@ void usbhid_backend_report_received(uint8_t dev_addr, uint8_t instance,
 	}
 }
 
+/*
+ * Reset LEDs which BIOS might have left on. For now, just NumLock (0x01).
+ */
+static int hid_find_field_early(struct hid_device *hid, unsigned int page,
+				unsigned int hid_code,
+				struct hid_field **pfield)
+{
+	struct hid_report *report;
+	struct hid_field *field;
+	struct hid_usage *usage;
+	int i, j;
+
+	list_for_each_entry(report,
+			    &hid->report_enum[HID_OUTPUT_REPORT].report_list,
+			    list) {
+		for (i = 0; i < report->maxfield; i++) {
+			field = report->field[i];
+			for (j = 0; j < field->maxusage; j++) {
+				usage = &field->usage[j];
+				if ((usage->hid & HID_USAGE_PAGE) == page &&
+				    (usage->hid & 0xFFFF) == hid_code) {
+					*pfield = field;
+					return j;
+				}
+			}
+		}
+	}
+
+	return -1;
+}
+
+static void usbhid_set_leds(struct hid_device *hid)
+{
+	struct hid_field *field;
+	int offset;
+
+	if ((offset = hid_find_field_early(hid, HID_UP_LED, 0x01,
+					   &field)) != -1) {
+		hid_set_field(field, offset, 0);
+		// usbhid_submit_report(hid, field->report, USB_DIR_OUT);
+		// TinyUSB submits the upstream request through the async owner task.
+		usbhid_request(hid, field->report, HID_REQ_SET_REPORT);
+	}
+}
+
 static int usbhid_start(struct hid_device *hid)
 {
+	int ret = 0;
+
 	if (usbhid_report_is_stopping(hid))
 		return -ENODEV;
 
 	/*
-	 * Upstream usbhid start may arm polling, reset LEDs, and enable wakeup.
-	 * Current callback slice has no URB allocation here; TinyUSB interrupt IN
-	 * starts here only for ALWAYS_POLL, matching upstream hid_start_in().
+	 * Firmware allocates no Linux URBs here. TinyUSB interrupt IN starts here
+	 * only for ALWAYS_POLL, matching upstream hid_start_in(); boot-keyboard LED
+	 * reset uses the same queued output/control routing as upstream usbhid.
 	 */
 	if (hid->quirks & HID_QUIRK_ALWAYS_POLL)
-		return usbhid_report_start(hid);
+		ret = usbhid_report_start(hid);
+	if (ret)
+		return ret;
+
+	/* Some keyboards don't work until their LEDs have been set. */
+	if (hid->usb_altsetting.desc.bInterfaceSubClass ==
+			USB_INTERFACE_SUBCLASS_BOOT &&
+	    hid->usb_altsetting.desc.bInterfaceProtocol ==
+			USB_INTERFACE_PROTOCOL_KEYBOARD) {
+		usbhid_set_leds(hid);
+		// device_set_wakeup_enable(&dev->dev, 1);
+		// Firmware has no Linux PM wakeup policy at this transport boundary.
+	}
 
 	return 0;
 }
@@ -2224,7 +2285,7 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 						     usbhid_sync_complete, &sync);
 		ret = usbhid_sync_wait(&sync, ret);
 		if (!ret)
-			ret = (int)len;
+			ret = (int)sync.actual_len;
 		goto out;
 	}
 
@@ -2262,7 +2323,7 @@ static int usbhid_output_report(struct hid_device *hid, __u8 *buf, size_t len)
 						usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);
 	if (!ret)
-		ret = (int)len;
+		ret = (int)sync.actual_len + (buf[0] == 0);
 	usbhid_io_put(hid);
 	return ret;
 }

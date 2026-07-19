@@ -21,6 +21,14 @@
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly.
+- The ll-driver output paths now follow upstream USB HID routing.
+  `.request(HID_REQ_SET_REPORT)` sends an `HID_OUTPUT_REPORT` over interrupt
+  OUT when the interface exposes that endpoint and otherwise uses EP0
+  SET_REPORT. FEATURE reports and `.raw_request()` remain control-only, while
+  `.output_report()` remains interrupt-only.
+- `usbhid_start()` now clears the NumLock output field on boot keyboards and
+  submits the whole output report through that same `.request()` route,
+  matching upstream startup behavior.
 - Physical detach now closes the async generation and publishes a bounded
   cache tombstone without waiting in the TinyUSB callback. The app-driver close
   path covers hubs, for which TinyUSB does not issue the common unmount callback.
@@ -39,14 +47,20 @@
   return contract while using the same asynchronous TinyUSB owner underneath.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
-- The generic ff-core/evdev boundary remains for future haptic support, but no
-  FF driver is active. Hiddev remains in its bounded firmware-proxy form.
+- The standard HID Haptics path is linked through `hid-haptic`,
+  `hid-multitouch`, ff-core, evdev, and the firmware workqueue. Broader gaming
+  FF drivers remain deferred. Hiddev remains in its bounded firmware-proxy
+  form.
 
 ## Manual Test Notes
 
 - 2026-07-19: host checkpoint `hid: retire queued cancels outside callbacks` passed the strict hi-res wheel
   emulator again after queued cancel retirement moved out of TinyUSB unmount
   callbacks. Pointer events resumed normally after reconnect.
+- 2026-07-19: host checkpoint `hid: harden callback ingress and hub retirement` enumerated the current haptic-touchpad
+  emulator, delivered keyboard/pointer events, and retained at least 43,672 B
+  of FreeRTOS heap before the HID device was attached. This verifies the
+  callback-ingress checkpoint, not the output-routing change below.
 - 2026-07-18: the strict hi-res wheel fixture verified a probe-time FEATURE
   `GET_REPORT` returning `0xA0`, locked parser state preservation, and the
   resulting raw `SET_REPORT` payload `0xA5` on hardware. Pointer events remain
@@ -88,7 +102,9 @@
   haptic allocation, direct unplug/replug, and a hub subtree reconnect. Record
   free heap and the TinyUSB stack watermark; inspect the lifecycle watermark
   separately if the hardware pass exposes any stack symptom.
-- Add upstream-like OUTPUT routing as a separate checkpoint: prefer interrupt
-  OUT when the interface exposes it and fall back to EP0 SET_REPORT otherwise.
+- Verify the output-routing/startup-LED checkpoint on hardware: a boot keyboard
+  without interrupt OUT must receive the enumeration-time NumLock reset over
+  EP0, and an OUTPUT request on an interface with interrupt OUT must use that
+  endpoint. Keep these as separate observations.
 - Extend the serialized transport explicitly before importing drivers that need
   generic `usb_control_msg()`, URBs, or larger request/response protocols.

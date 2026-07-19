@@ -128,6 +128,11 @@ static u8 hid_async_tinyusb_report_type(enum hid_report_type type)
 	return (u8)type + 1;
 }
 
+static bool hid_async_report_type_valid(enum hid_report_type type)
+{
+	return type >= HID_INPUT_REPORT && type < HID_REPORT_TYPES;
+}
+
 int hid_async_init(void)
 {
 	hid_async_epoch_mutex = xSemaphoreCreateMutex();
@@ -325,11 +330,14 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   hid_async_complete_t complete, void *context)
 {
 	struct hid_async_request req;
+	bool interrupt_out;
 	u32 len;
 	int ret;
 
 	if (!hid_async_request_queue)
 		return -ENODEV;
+	if (!hid || !report || !hid_async_report_type_valid(report->type))
+		return -EINVAL;
 
 	if (reqtype != HID_REQ_GET_REPORT && reqtype != HID_REQ_SET_REPORT)
 		return -ENOSYS;
@@ -351,15 +359,31 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	req.complete = complete;
 	req.context = context;
 
-	if (reqtype == HID_REQ_SET_REPORT)
+	interrupt_out = reqtype == HID_REQ_SET_REPORT &&
+			report->type == HID_OUTPUT_REPORT &&
+			hid->usb_altsetting.has_interrupt_out &&
+			hid->usb_altsetting.interrupt_out_endpoint;
+	if (interrupt_out && len > CFG_TUH_HID_EPOUT_BUFSIZE)
+		return -EIO;
+
+	if (reqtype == HID_REQ_SET_REPORT) {
 		hid_output_report(report, req.data);
+		if (interrupt_out) {
+			/* TinyUSB adds a nonzero report ID to interrupt OUT. */
+			req.kind = HID_ASYNC_REQUEST_OUTPUT_REPORT;
+			req.data_offset = report->id ? 1 : 0;
+			req.ep_addr =
+				hid->usb_altsetting.interrupt_out_endpoint;
+		}
+	}
 
 	ret = hid_async_queue_hid_request(&req);
 	if (ret)
 		return ret;
 
 	if (reqtype == HID_REQ_SET_REPORT)
-		async_msg("DBG: HID_REPORT_SET_Q");
+		async_msg(interrupt_out ? "DBG: HID_REPORT_OUT_Q" :
+					  "DBG: HID_REPORT_SET_Q");
 	return 0;
 }
 
@@ -368,17 +392,20 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 				  void *context)
 {
 	struct hid_async_request req;
+	int ret;
 
 	if (!hid_async_request_queue)
 		return -ENODEV;
+	if (!hid || !buf || !len)
+		return -EINVAL;
 
-	if (!len || len > HID_ASYNC_REPORT_MAX + 1)
+	if (len > HID_ASYNC_REPORT_MAX + 1)
 		return -EIO;
 	if (!hid->usb_altsetting.has_interrupt_out ||
 	    !hid->usb_altsetting.interrupt_out_endpoint)
 		return -ENOSYS;
 	if (len - (buf[0] == 0) > CFG_TUH_HID_EPOUT_BUFSIZE)
-		return -ENOSYS;
+		return -EIO;
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_OUTPUT_REPORT;
@@ -392,7 +419,11 @@ int hid_async_queue_output_report(struct hid_device *hid, const __u8 *buf,
 	req.context = context;
 	memcpy(req.data, buf + 1, req.len);
 
-	return hid_async_queue_hid_request(&req);
+	ret = hid_async_queue_hid_request(&req);
+
+	if (!ret)
+		async_msg("DBG: HID_OUTPUT_Q");
+	return ret;
 }
 
 int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
@@ -402,19 +433,20 @@ int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
 				   void *context)
 {
 	struct hid_async_request req;
-	const __u8 *data = buf;
-	size_t data_len = len;
+	bool skip_report_id;
 
 	if (!hid_async_request_queue)
 		return -ENODEV;
-
-	if (report_id == 0) {
-		data++;
-		data_len--;
-	}
-
-	if (data_len > HID_ASYNC_REPORT_MAX)
+	if (!hid || !buf || !len ||
+	    !hid_async_report_type_valid(report_type))
+		return -EINVAL;
+	if (len > HID_ASYNC_REPORT_MAX)
 		return -EIO;
+
+	/* Match usbhid_set_raw_report(): byte zero is always transport-owned. */
+	skip_report_id = report_id == 0 ||
+			 (report_type == HID_OUTPUT_REPORT &&
+			  (hid->quirks & HID_QUIRK_SKIP_OUTPUT_REPORT_ID));
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_REPORT;
@@ -424,10 +456,13 @@ int hid_async_queue_raw_set_report(struct hid_device *hid, u8 report_id,
 	req.instance = hid->instance;
 	req.report_id = report_id;
 	req.report_type = hid_async_tinyusb_report_type(report_type);
-	req.len = (u16)data_len;
+	req.data_offset = skip_report_id ? 1 : 0;
+	req.len = (u16)len;
 	req.complete = complete;
 	req.context = context;
-	memcpy(req.data, data, req.len);
+	req.data[0] = skip_report_id ? 0 : report_id;
+	if (req.len > 1)
+		memcpy(req.data + 1, buf + 1, req.len - 1);
 
 	return hid_async_queue_hid_request(&req);
 }
@@ -441,7 +476,8 @@ static int hid_async_queue_raw_get(struct hid_device *hid, u8 report_id,
 
 	if (!hid_async_request_queue)
 		return -ENODEV;
-
+	if (!hid || !len || !hid_async_report_type_valid(report_type))
+		return -EINVAL;
 	if (len > HID_ASYNC_REPORT_MAX)
 		return -EIO;
 
@@ -776,6 +812,8 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 				       const struct hid_async_completion *completion,
 				       int *status, bool *canceled)
 {
+	u16 expected_len;
+
 	if (!hid_async_completion_matches(active, completion))
 		return false;
 
@@ -784,8 +822,11 @@ static bool hid_async_apply_completion(struct hid_async_request *active,
 		*status = -ENODEV;
 		*canceled = true;
 	} else if (completion->kind == HID_ASYNC_COMPLETE_OUTPUT) {
-		active->actual_len = completion->len + active->data_offset;
-		*status = completion->len ? 0 : -EIO;
+		/* TinyUSB's sent length already includes a nonzero report ID. */
+		active->actual_len = completion->len;
+		expected_len = active->len - active->data_offset +
+			       (active->report_id != 0);
+		*status = completion->len == expected_len ? 0 : -EIO;
 	} else {
 		active->actual_len = completion->len + active->data_offset;
 		if (active->kind == HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR ||
@@ -1143,7 +1184,17 @@ void hid_async_task(void *pvParameters)
 			continue;
 		}
 
-		if (!active.report && active.reqtype == HID_REQ_SET_REPORT) {
+		if (active.kind == HID_ASYNC_REQUEST_OUTPUT_REPORT) {
+			if (status < 0)
+				async_msg(active.report ?
+					  "ERR: HID_REPORT_OUT_FAIL" :
+					  "ERR: HID_OUTPUT_FAIL");
+			else
+				async_msg(active.report ?
+					  "DBG: HID_REPORT_OUT_OK" :
+					  "DBG: HID_OUTPUT_OK");
+		} else if (!active.report &&
+			   active.reqtype == HID_REQ_SET_REPORT) {
 			if (status < 0)
 				async_msg("ERR: HID_RAW_SET_FAIL");
 			else
