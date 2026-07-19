@@ -71,6 +71,8 @@ struct usbhid_sync_request {
 /* Padded GET buffer owned from .request enqueue through parser completion. */
 struct usbhid_control_input {
 	TaskHandle_t parser_owner;
+	/* Stable async slot identity held until parser completion. */
+	u32 async_serial;
 	u16 bufsize;
 	u8 data[];
 };
@@ -2282,9 +2284,18 @@ static void usbhid_io_wait_idle(struct hid_device *hid)
 static void usbhid_control_report_done(struct hid_device *hid, void *context,
 				       int status)
 {
+	struct usbhid_control_input *input = context;
+	u32 serial = input->async_serial;
+
 	if (status < 0 && status != -ENODEV)
 		async_msg("ERR: HID_CTRL_PARSE_FAIL");
-	kfree(context);
+	/*
+	 * TinyUSB adapter: the async executor retains this request slot across
+	 * Linux-shaped control completion until the parser consumer releases it.
+	 * Release while io_pending still keeps hid and its transport state alive.
+	 */
+	hid_async_control_report_release(hid, serial);
+	kfree(input);
 	usbhid_io_put(hid);
 }
 
@@ -2312,6 +2323,19 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	configASSERT(input);
 	len = min_t(u16, req->actual_len, input->bufsize);
 	memcpy(input->data, req->data, len);
+	/*
+	 * TinyUSB adapter: upstream urbctrl storage remains owned through hid_ctrl().
+	 * Pin this executor slot before publishing its payload to the parser lane.
+	 */
+	ret = hid_async_control_report_hold(req);
+	if (ret) {
+		if (ret != -ENODEV)
+			async_msg("ERR: HID_CTRL_HOLD_FAIL");
+		kfree(input);
+		usbhid_io_put(req->hid);
+		return;
+	}
+	input->async_serial = req->serial;
 	ret = usbhid_control_report_submit(req->hid, req->report->type,
 					   input->data, input->bufsize, len,
 					   input->parser_owner,
@@ -2320,9 +2344,33 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	if (ret) {
 		if (ret != -ENODEV)
 			async_msg("ERR: HID_CTRL_PARSE_Q_FAIL");
+		hid_async_control_report_release(req->hid,
+						 input->async_serial);
 		kfree(input);
 		usbhid_io_put(req->hid);
 	}
+}
+
+// static void usbhid_submit_report(struct hid_device *hid, struct hid_report *report, unsigned char dir)
+// {
+// 	struct usbhid_device *usbhid = hid->driver_data;
+// 	unsigned long flags;
+//
+// 	spin_lock_irqsave(&usbhid->lock, flags);
+// 	__usbhid_submit_report(hid, report, dir);
+// 	spin_unlock_irqrestore(&usbhid->lock, flags);
+// }
+/*
+ * TinyUSB has neither Linux's URB FIFO nor usbhid->lock. The async executor is
+ * the serialized transport owner instead; return its enqueue status and carry
+ * the completion/context required by the firmware parser handoff.
+ */
+static int usbhid_queue_report(struct hid_device *hid,
+			       struct hid_report *report,
+			       enum hid_class_request reqtype,
+			       hid_async_complete_t complete, void *context)
+{
+	return hid_async_queue_report(hid, report, reqtype, complete, context);
 }
 
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
@@ -2355,15 +2403,22 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 		input->bufsize = (u16)bufsize;
 	}
 
-	// usbhid_submit_report(hid, report, reqtype);
+	// switch (reqtype) {
+	// case HID_REQ_GET_REPORT:
+	// 	usbhid_submit_report(hid, rep, USB_DIR_IN);
+	// 	break;
+	// case HID_REQ_SET_REPORT:
+	// 	usbhid_submit_report(hid, rep, USB_DIR_OUT);
+	// 	break;
+	// }
 	/*
-	 * Match upstream usbhid_submit_report(): queue best-effort control work and
-	 * return. GET_REPORT completion is parsed from the report queue before it
-	 * releases usbhid->io_pending, so a following hid_hw_wait() cannot observe a
-	 * false-idle handoff between transport completion and hid-core parsing.
+	 * TinyUSB adapter: the queue boundary above replaces both upstream direction
+	 * branches and carries their completion owner. GET_REPORT parsing releases
+	 * io_pending only after its report-lane consumer completes, so a following
+	 * hid_hw_wait() cannot observe a false-idle transport/parser handoff.
 	 */
-	ret = hid_async_queue_report(hid, report, reqtype,
-				     usbhid_request_complete, input);
+	ret = usbhid_queue_report(hid, report, reqtype,
+				  usbhid_request_complete, input);
 	if (ret) {
 		async_msg("ERR: HID_ASYNC_REQ_FAIL");
 		kfree(input);

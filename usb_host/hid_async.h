@@ -11,6 +11,7 @@
 
 #define HID_ASYNC_REPORT_MAX 257u
 #define HID_ASYNC_DATA_MAX 257u
+/* Bounded queued-work budget; B4 stores it in pool slots, not a FreeRTOS queue. */
 #define HID_ASYNC_REQUEST_QUEUE_LEN 4u
 
 struct hid_async_request;
@@ -33,7 +34,6 @@ enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_USB_CONTROL,
 	HID_ASYNC_REQUEST_USB_INTERRUPT,
 #endif
-	HID_ASYNC_REQUEST_BARRIER,
 };
 
 struct hid_async_request {
@@ -98,6 +98,8 @@ int hid_async_queue_idle(struct hid_device *hid, u8 report_id, u8 idle,
 			 hid_async_complete_t complete, void *context);
 int hid_async_queue_clear_halt(struct hid_device *hid, u8 ep_addr,
 			       hid_async_complete_t complete, void *context);
+int hid_async_control_report_hold(const struct hid_async_request *req);
+void hid_async_control_report_release(struct hid_device *hid, u32 serial);
 int hid_async_queue_device_descriptor(u8 dev_addr,
 				      hid_async_complete_t complete,
 				      void *context);
