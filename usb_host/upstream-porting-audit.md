@@ -133,6 +133,14 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   only after completion or the physical abort/drain/fence path, outside the
   FreeRTOS critical section. The generic bridge no longer imposes its former
   257-byte payload cap.
+- Interrupt IN restores upstream's `usbhid->inbuf` field and start/stop buffer
+  lifecycle. TinyUSB's logical transfer remains the largest INPUT report,
+  capped at 16 KiB; the firmware allocation deliberately excludes unrelated
+  OUTPUT/FEATURE maxima and adds only the PIO HCD's packet-safe tail. The old
+  four-by-64-byte scratch pool and its descriptor rejection are gone. Physical
+  detach is a two-owner fence: the callback publishes slot state, the report
+  task queues a coalesced host event, and only that post-`hcd_device_close()`
+  acknowledgement lets lifecycle release the slot and buffer.
 - Linux queues a device reset after clear-halt failure or exhausted protocol
   retry. The pinned TinyUSB/PIO stack has no safe per-device reset and
   re-enumeration API; electrical root-port reset alone would leave TinyUSB's
@@ -149,6 +157,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `cmake --build build -j4`
 - confirmed `sizeof(hid_async_request) == 60` and
   `sizeof(hid_async_slot) == 88` on the RP2040 ABI
+- confirmed `sizeof(usbhid_device) == 248`, the four RX metadata slots remain
+  80 B total, and scratch X fell from 916 B to 660 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)
 - `git diff --check`

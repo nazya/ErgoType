@@ -14,10 +14,10 @@
 #include "usbhid_report.h"
 
 /*
- * Interrupt-IN executor. A bounded port slot owns each RX buffer from arm
- * through task-side parsing. The exact TinyUSB endpoint callback publishes
- * only a pointer to that stable slot; the endpoint is not rearmed until the
- * event has been consumed.
+ * Interrupt-IN executor. Upstream's per-interface inbuf remains stable from
+ * arm through task-side parsing. The exact TinyUSB endpoint callback publishes
+ * only a pointer to that buffer; the endpoint is not rearmed until the event
+ * has been consumed.
  *
  * There is exactly one owner per HID interface:
  *
@@ -36,7 +36,6 @@
 _Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >
 		USBHID_REPORT_NOTIFY_INDEX,
 	       "HID report lanes require a dedicated task notification index");
-#define USBHID_INTERRUPT_REPORT_MAX 64u
 /* PIO-USB may publish a raced completion at the end of a later SOF. */
 #define USBHID_REPORT_ABORT_DRAIN_FRAMES 2u
 /* A busy async FIFO must either drain or park this endpoint within 8 seconds. */
@@ -73,6 +72,13 @@ enum usbhid_report_recovery {
 	USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT,
 	USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE,
 	USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE,
+};
+
+enum usbhid_report_detach_state {
+	USBHID_REPORT_DETACH_NONE,
+	USBHID_REPORT_DETACH_PENDING,
+	USBHID_REPORT_DETACH_QUEUED,
+	USBHID_REPORT_DETACH_DONE,
 };
 
 struct usbhid_input_report_event {
@@ -113,6 +119,8 @@ struct usbhid_report_rx_slot {
 	u8 ep_addr;
 	/* Port glue: bounded backpressure while queuing async CLEAR_HALT. */
 	u8 clear_halt_queue_retries;
+	/* TinyUSB closes the HCD endpoint after its application unmount hooks. */
+	u8 detach_state;
 };
 
 struct usbhid_report_retry {
@@ -128,9 +136,6 @@ static struct usbhid_control_report_event usbhid_control_report_handoff;
 static bool usbhid_control_report_handoff_ready;
 CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN
 static struct usbhid_report_rx_slot usbhid_report_rx_slots[CFG_TUH_HID];
-CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN
-static u8 usbhid_report_rx_buffers[CFG_TUH_HID]
-	[USBHID_INTERRUPT_REPORT_MAX];
 /* Keep Linux retry state out of the constrained TinyUSB scratch bank. */
 static struct usbhid_report_retry usbhid_report_retries[CFG_TUH_HID];
 static u8 usbhid_report_recovery[CFG_TUH_HID];
@@ -141,6 +146,7 @@ static struct usbhid_report_reconcile
 static u8 usbhid_report_reconcile_drain_mask;
 
 static void usbhid_report_reconcile_on_host(void *data);
+static void usbhid_report_detach_fence_on_host(void *data);
 static void usbhid_report_xfer_complete(tuh_xfer_t *xfer);
 static void hid_retry_timeout(struct timer_list *t);
 static void hid_io_error(struct hid_device *hid);
@@ -187,11 +193,8 @@ static int usbhid_report_prepare(struct hid_device *hid)
 	// if (insize > HID_MAX_BUFFER_SIZE)
 	// 	insize = HID_MAX_BUFFER_SIZE;
 	// The exact upstream cap is applied in usbhid_start() before this transport
-	// adapter reserves its fixed PIO/TinyUSB receive slot.
-	// PIO/TinyUSB owns fixed 64-byte RX slots, so reject instead of allocating
-	// and clamping to Linux's 16 KiB maximum.
-	if (insize > USBHID_INTERRUPT_REPORT_MAX)
-		return -EMSGSIZE;
+	// adapter reserves its TinyUSB receive metadata slot. usbhid->inbuf owns the
+	// task-context allocation for the full interface lifetime.
 
 	taskENTER_CRITICAL();
 	if (usbhid->transport_stopping) {
@@ -216,6 +219,7 @@ static int usbhid_report_prepare(struct hid_device *hid)
 		}
 	}
 	if (slot >= 0) {
+		configASSERT(usbhid->inbuf);
 		usbhid->report_bufsize = (u16)insize;
 		usbhid_report_rx_slots[slot].bufsize = (u16)insize;
 	}
@@ -230,6 +234,7 @@ static bool usbhid_report_arm_on_host(struct hid_device *hid, u32 generation)
 	struct usbhid_report_rx_slot *slot;
 	tuh_xfer_t xfer = { 0 };
 	u32 serial;
+	u8 *buffer;
 	u16 bufsize;
 	u8 ep_addr;
 	int index;
@@ -246,7 +251,9 @@ static bool usbhid_report_arm_on_host(struct hid_device *hid, u32 generation)
 	}
 
 	slot = &usbhid_report_rx_slots[index];
+	configASSERT(usbhid->inbuf);
 	serial = usbhid_report_next_serial_locked();
+	buffer = (u8 *)usbhid->inbuf;
 	bufsize = usbhid->report_bufsize;
 	ep_addr = usbhid->usb_altsetting.interrupt_in_endpoint;
 	slot->generation = generation;
@@ -262,8 +269,9 @@ static bool usbhid_report_arm_on_host(struct hid_device *hid, u32 generation)
 	// usb_fill_int_urb(usbhid->urbin, dev, pipe, usbhid->inbuf, insize,
 	// 		 hid_irq_in, hid, interval);
 	// TinyUSB has no URB object here: the opened endpoint retains its interval,
-	// while this stable slot supplies Linux's buffer, length, callback, and owner.
-	xfer.buffer = usbhid_report_rx_buffers[index];
+	// upstream's stable inbuf supplies the payload, and this metadata slot
+	// supplies the length, callback identity, and owner.
+	xfer.buffer = buffer;
 	xfer.buflen = bufsize;
 	xfer.complete_cb = usbhid_report_xfer_complete;
 	xfer.user_data = serial;
@@ -320,7 +328,8 @@ static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 		    slot->ep_addr != xfer->ep_addr)
 			continue;
 		completed = *slot;
-		report = usbhid_report_rx_buffers[i];
+		report = (u8 *)((struct usbhid_device *)
+			completed.owner->driver_data)->inbuf;
 		slot->serial = 0;
 		break;
 	}
@@ -338,6 +347,26 @@ static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 	usbhid_backend_report_completed(completed.dev_addr,
 		completed.instance, completed.generation, report,
 		completed.bufsize, xfer->actual_len, (u8)xfer->result);
+}
+
+/*
+ * TinyUSB 0.18 runs application/class unmount hooks inside its DEVICE_REMOVE
+ * event, before class close and hcd_device_close(). A deferred host event is
+ * therefore the physical-buffer fence: it cannot run until that remove pass
+ * has returned and the HCD can no longer write through usbhid->inbuf.
+ */
+static void usbhid_report_detach_fence_on_host(void *data)
+{
+	(void)data;
+
+	taskENTER_CRITICAL();
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		if (usbhid_report_rx_slots[i].detach_state ==
+		    USBHID_REPORT_DETACH_QUEUED)
+			usbhid_report_rx_slots[i].detach_state =
+				USBHID_REPORT_DETACH_DONE;
+	}
+	taskEXIT_CRITICAL();
 }
 
 static bool usbhid_report_queue_reconcile(struct hid_device *hid,
@@ -935,8 +964,7 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 		return -ENODEV;
 	usbhid = hid->driver_data;
 	/* A completed transfer must advance ownership even if its payload is bad. */
-	if (!report || !bufsize || bufsize > USBHID_INTERRUPT_REPORT_MAX ||
-	    len > bufsize || len > UINT16_MAX) {
+	if (!report || !bufsize || len > bufsize || len > UINT16_MAX) {
 		event.len = 0;
 		event.parse = false;
 		status = -EMSGSIZE;
@@ -1066,8 +1094,13 @@ void usbhid_report_unplug(struct hid_device *hid)
 		usbhid->report_owner = USBHID_REPORT_STOPPED;
 	slot = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
 	if (slot >= 0 && slot < CFG_TUH_HID &&
-	    usbhid_report_rx_slots[slot].owner == hid)
+	    usbhid_report_rx_slots[slot].owner == hid) {
 		usbhid_report_rx_slots[slot].serial = 0;
+		if (usbhid_report_rx_slots[slot].detach_state ==
+		    USBHID_REPORT_DETACH_NONE)
+			usbhid_report_rx_slots[slot].detach_state =
+				USBHID_REPORT_DETACH_PENDING;
+	}
 	taskEXIT_CRITICAL();
 	usbhid_report_notify_task();
 	/* TinyUSB unmount callback cannot wait for a running timer callback. */
@@ -1092,6 +1125,13 @@ void usbhid_report_release(struct hid_device *hid)
 	taskENTER_CRITICAL();
 	if (slot >= 0 && slot < CFG_TUH_HID &&
 	    usbhid_report_rx_slots[slot].owner == hid) {
+		configASSERT(usbhid->report_owner == USBHID_REPORT_STOPPED);
+		configASSERT(!usbhid->report_host_pending);
+		configASSERT(!usbhid_report_rx_slots[slot].serial);
+		configASSERT(usbhid_report_rx_slots[slot].detach_state !=
+			     USBHID_REPORT_DETACH_PENDING);
+		configASSERT(usbhid_report_rx_slots[slot].detach_state !=
+			     USBHID_REPORT_DETACH_QUEUED);
 		memset(&usbhid_report_rx_slots[slot], 0,
 		       sizeof(usbhid_report_rx_slots[slot]));
 		usbhid_report_retries[slot].stop_retry = 0;
@@ -1121,11 +1161,22 @@ bool usbhid_report_is_stopping(struct hid_device *hid)
 static bool usbhid_report_idle(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
+	bool detach_pending = false;
 	bool idle;
+	int slot;
 
 	taskENTER_CRITICAL();
+	slot = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
+	if (slot >= 0 && slot < CFG_TUH_HID &&
+	    usbhid_report_rx_slots[slot].owner == hid) {
+		u8 detach_state = usbhid_report_rx_slots[slot].detach_state;
+
+		detach_pending =
+			detach_state == USBHID_REPORT_DETACH_PENDING ||
+			detach_state == USBHID_REPORT_DETACH_QUEUED;
+	}
 	idle = usbhid->report_owner == USBHID_REPORT_STOPPED &&
-	       !usbhid->report_host_pending;
+	       !usbhid->report_host_pending && !detach_pending;
 	taskEXIT_CRITICAL();
 	return idle;
 }
@@ -1330,6 +1381,35 @@ static void usbhid_control_report_finish(
 	event->done(event->hid, event->context, status);
 }
 
+static bool usbhid_report_process_detach_fence(void)
+{
+	bool pending = false;
+
+	taskENTER_CRITICAL();
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		if (usbhid_report_rx_slots[i].owner &&
+		    usbhid_report_rx_slots[i].detach_state ==
+			USBHID_REPORT_DETACH_PENDING) {
+			usbhid_report_rx_slots[i].detach_state =
+				USBHID_REPORT_DETACH_QUEUED;
+			pending = true;
+		}
+	}
+	taskEXIT_CRITICAL();
+
+	if (!pending)
+		return false;
+
+	/*
+	 * usbh_defer_func() may wait for TinyUSB's event queue. Do that here, never
+	 * from the unmount callback whose current DEVICE_REMOVE event must return
+	 * before this fence can acknowledge hcd_device_close().
+	 */
+	/* One host event fences every interface removed in the same device pass. */
+	usbh_defer_func(usbhid_report_detach_fence_on_host, NULL, false);
+	return true;
+}
+
 static bool usbhid_report_process_reconcile(void)
 {
 	struct usbhid_report_reconcile pending[CFG_TUH_HID];
@@ -1509,6 +1589,10 @@ void usbhid_report_task(void *pvParameters)
 		bool transfer_failed;
 		bool process;
 		int index;
+
+		/* Callback ingress publishes this durable predicate before its wake. */
+		if (usbhid_report_process_detach_fence())
+			continue;
 
 		/* Host abort/rearm fences remain globally prior to both report lanes. */
 		if (usbhid_report_process_reconcile())

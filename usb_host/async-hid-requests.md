@@ -32,10 +32,11 @@ The active implementation now has these properties:
   same per-device EP0 lane, then resets the local PIO toggle to DATA0 and rearms
   from the TinyUSB host owner. Protocol failure uses the upstream delayed retry
   cadence; only the final USB-core device-reset fallback remains unavailable.
-- Arbitrary URBs, synchronous interrupt-IN messages, report-descriptor ingress
-  beyond TinyUSB's enumeration buffer, and interrupt-IN payloads above the
-  current 64-byte slot remain deferred. Generic synchronous messages use the
-  native 16-bit USB length and HID `.request()` uses the 16 KiB Linux limit.
+- Arbitrary URBs, synchronous interrupt-IN messages, and report-descriptor
+  ingress beyond TinyUSB's enumeration buffer remain deferred. Direct
+  interrupt-IN now uses upstream's per-interface buffer ownership and Linux's
+  16 KiB HID limit. Generic synchronous messages use the native 16-bit USB
+  length and HID `.request()` uses the same 16 KiB Linux limit.
 
 See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.
 

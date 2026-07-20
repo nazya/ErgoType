@@ -176,6 +176,7 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 static void usbhid_lifecycle_kick(void);
 static void usbhid_transport_fault(enum usbhid_transport_fault fault);
 static void usbhid_backend_device_detach(uint8_t dev_addr);
+static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
 
 static u32 usbhid_next_generation(void)
 {
@@ -1905,6 +1906,9 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 		usbhid_report_wait_idle(hid);
 		usbhid_io_wait_idle(hid);
+		/* A failed device_add() need not reach the HID driver's .stop(). */
+		usbhid_report_release(hid);
+		hid_free_buffers(hid_to_usb_dev(hid), hid);
 		usbhid_remove_slot(hid);
 		async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
 		goto fail;
@@ -2129,13 +2133,90 @@ static void hid_find_max_report(struct hid_device *hid, unsigned int type,
 	}
 }
 
+static int hid_alloc_buffers(struct usb_device *dev, struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usb_host_interface *interface = usbhid->intf->cur_altsetting;
+	unsigned int alloc_size = HID_MIN_BUFFER_SIZE;
+	unsigned int maxpacket = 0;
+
+	for (u8 i = 0; i < interface->desc.bNumEndpoints; i++) {
+		const struct usb_endpoint_descriptor *ep =
+			&interface->endpoint[i].desc;
+
+		if (ep->bEndpointAddress ==
+			usbhid->usb_altsetting.interrupt_in_endpoint) {
+			maxpacket = le16_to_cpu(ep->wMaxPacketSize) & 0x7ffu;
+			break;
+		}
+	}
+
+	/*
+	 * The pinned PIO HCD copies a complete received packet before checking the
+	 * logical transfer remainder. Keep the Linux length unchanged, but provide
+	 * backing space through the end of that final packet.
+	 */
+	if (maxpacket) {
+		unsigned int rounded =
+			((usbhid->report_bufsize + maxpacket - 1u) /
+			 maxpacket) * maxpacket;
+
+		if (alloc_size < rounded)
+			alloc_size = rounded;
+	} else if (alloc_size < usbhid->report_bufsize) {
+		alloc_size = usbhid->report_bufsize;
+	}
+
+	// usbhid->inbuf = usb_alloc_coherent(dev, usbhid->bufsize, GFP_KERNEL,
+	// 				    &usbhid->inbuf_dma);
+	// usbhid->outbuf = usb_alloc_coherent(dev, usbhid->bufsize, GFP_KERNEL,
+	// 				     &usbhid->outbuf_dma);
+	// usbhid->cr = kmalloc_obj(*usbhid->cr);
+	// usbhid->ctrlbuf = usb_alloc_coherent(dev, usbhid->bufsize, GFP_KERNEL,
+	// 				      &usbhid->ctrlbuf_dma);
+	// OUT and control payloads have exact per-request ownership in hid_async.
+	// This port also sizes the reusable per-interface IN backing for INPUT only,
+	// rounded above for PIO packet writes, instead of charging a large unrelated
+	// FEATURE/OUTPUT report to every interrupt receive.
+	// TinyUSB/PIO accepts ordinary SRAM rather than Linux DMA-coherent memory.
+	// Allocate in task context and retain the upstream per-interface owner.
+	(void)dev;
+	usbhid->inbuf = kmalloc(alloc_size, GFP_KERNEL);
+	// if (!usbhid->inbuf || !usbhid->outbuf || !usbhid->cr ||
+	// 		!usbhid->ctrlbuf)
+	// 	return -1;
+	// The other three owners are deliberately absent for the reason above.
+	if (!usbhid->inbuf)
+		return -1;
+
+	return 0;
+}
+
+static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	// usb_free_coherent(dev, usbhid->bufsize, usbhid->inbuf,
+	// 			 usbhid->inbuf_dma);
+	// usb_free_coherent(dev, usbhid->bufsize, usbhid->outbuf,
+	// 			 usbhid->outbuf_dma);
+	// kfree(usbhid->cr);
+	// usb_free_coherent(dev, usbhid->bufsize, usbhid->ctrlbuf,
+	// 			 usbhid->ctrlbuf_dma);
+	// The TinyUSB replacement above owns an ordinary heap buffer. Either start
+	// failed before publication, or the report stop/fence path has revoked every
+	// HCD and parser borrower here. hid_async independently releases its
+	// per-request OUT/control payloads.
+	(void)dev;
+	kfree(usbhid->inbuf);
+	usbhid->inbuf = NULL;
+}
+
 static int usbhid_start(struct hid_device *hid)
 {
 	struct usb_interface *intf = to_usb_interface(hid->dev.parent);
 	struct usb_host_interface *interface = intf->cur_altsetting;
-	// struct usb_device *dev = interface_to_usbdev(intf);
-	// TinyUSB owns the endpoint objects; keep the upstream per-device buffer
-	// policy even though the port allocates exact request buffers on demand.
+	struct usb_device *dev = interface_to_usbdev(intf);
 	struct usbhid_device *usbhid = hid->driver_data;
 	unsigned int insize = 0;
 	int ret = 0;
@@ -2157,6 +2238,11 @@ static int usbhid_start(struct hid_device *hid)
 		insize = HID_MAX_BUFFER_SIZE;
 	usbhid->report_bufsize = (u16)insize;
 
+	if (hid_alloc_buffers(dev, hid)) {
+		ret = -ENOMEM;
+		goto fail;
+	}
+
 	/*
 	 * Firmware allocates no Linux URBs here. TinyUSB interrupt IN starts here
 	 * only for ALWAYS_POLL, matching upstream hid_start_in(); boot-keyboard LED
@@ -2165,7 +2251,7 @@ static int usbhid_start(struct hid_device *hid)
 	if (hid->quirks & HID_QUIRK_ALWAYS_POLL)
 		ret = usbhid_report_start(hid);
 	if (ret)
-		return ret;
+		goto fail;
 
 	/* Some keyboards don't work until their LEDs have been set. */
 	if (interface->desc.bInterfaceSubClass ==
@@ -2178,6 +2264,17 @@ static int usbhid_start(struct hid_device *hid)
 	}
 
 	return 0;
+
+fail:
+	// usb_free_urb(usbhid->urbin);
+	// usb_free_urb(usbhid->urbout);
+	// usb_free_urb(usbhid->urbctrl);
+	// usbhid->urbin = NULL;
+	// usbhid->urbout = NULL;
+	// usbhid->urbctrl = NULL;
+	// TinyUSB owns endpoint objects rather than allocating Linux URBs.
+	hid_free_buffers(dev, hid);
+	return ret;
 }
 
 static void usbhid_stop(struct hid_device *hid)
@@ -2197,6 +2294,14 @@ static void usbhid_stop(struct hid_device *hid)
 	usbhid_report_wait_idle(hid);
 	usbhid_io_wait_idle(hid);
 	usbhid_report_release(hid);
+	// usb_free_urb(usbhid->urbin);
+	// usb_free_urb(usbhid->urbctrl);
+	// usb_free_urb(usbhid->urbout);
+	// usbhid->urbin = NULL;
+	// usbhid->urbctrl = NULL;
+	// usbhid->urbout = NULL;
+	// TinyUSB endpoint ownership was synchronously revoked above.
+	hid_free_buffers(hid_to_usb_dev(hid), hid);
 }
 
 static int usbhid_open(struct hid_device *hid)

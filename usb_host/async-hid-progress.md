@@ -90,10 +90,15 @@
 - Interrupt IN now uses the first interrupt-IN endpoint directly, matching
   upstream endpoint selection and preserving TinyUSB's exact transfer result
   and actual length. The request length is the largest parsed INPUT report,
-  including its report ID, with an explicit 64-byte port limit. Four persistent
-  transport slots keep DMA storage alive through task-side parsing; queued
-  events carry a zero-copy slot reference, and the endpoint is rearmed only
-  after that event is consumed. Successful payload is dropped while
+  including its report ID, capped at Linux's 16 KiB HID limit. Upstream's
+  per-interface `inbuf` ownership is restored; task context allocates INPUT-only
+  backing with one-packet minimum/tail padding required by the pinned PIO HCD.
+  Four persistent transport slots retain only lifecycle/callback metadata;
+  queued events borrow `inbuf` zero-copy, and the endpoint is rearmed only after
+  that event is consumed. Physical unplug publishes a durable detach state;
+  the report task queues one host-owner fence which completes only after
+  TinyUSB's class/HCD close pass, so no callback allocates, waits, or frees the
+  buffer. Successful payload is dropped while
   `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
   Non-success payload never reaches the HID parser. STALL queues the standard
   endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
@@ -111,15 +116,19 @@
 
 ## Manual Test Notes
 
-- 2026-07-20: uncommitted buffer-ownership checkpoint, exact UF2 SHA256
+- 2026-07-20: uncommitted dynamic interrupt-IN checkpoint, exact UF2 SHA256
+  `13edb5b61ca9c57f8da59613eb65b05cb8944f78c4bfef74f6cc50357264bd37`,
+  builds with `text=477972`, `data=660`, and `bss=243308`. It removes the
+  fixed 64-byte RX ceiling and adds a post-HCD-close detach fence. It has not
+  yet been tested on hardware; do not commit it before that pass.
+- 2026-07-20: request buffer-ownership checkpoint `hid: give async requests explicit buffer ownership`, exact UF2 SHA256
   `290ed22778c8905c49d2006bcb719ada1c3e8147cca4e4c41c8744025bde14e8`,
-  builds with `text=477444`, `data=916`, and `bss=243308`. It has not yet been
-  tested on hardware; do not commit it before that pass.
+  builds with `text=477444`, `data=916`, and `bss=243308`, and was reported
+  working on hardware. It is the baseline for the uncommitted dynamic-IN step.
 - 2026-07-20: physical-endpoint scheduling / generic clear-halt checkpoint
   `hid: serialize requests by physical USB lane`, exact UF2 SHA256
   `8c21c80630bcc857e381fff4d466eb9defc392f7c9e67a58e8743401986ff235`,
-  was reported working on hardware. The buffer-ownership checkpoint above is
-  the next uncommitted hardware candidate.
+  was reported working on hardware.
 - 2026-07-20: upstream raw/output helper checkpoint `hid: route synchronous usbhid helpers through generic bridge`, exact UF2
   SHA256 `8e8402604678195e07980c211f541d87157a64a57d5e16f323d9d749c2560e8c`,
   was reported working on hardware and is the baseline immediately before the

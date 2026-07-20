@@ -21,7 +21,7 @@ struct usbhid_device {
 	unsigned int bufsize;                                           /* URB buffer size */
 
 	// struct urb *urbin;                                              /* Input URB */
-	// char *inbuf;                                                    /* Input buffer */
+	char *inbuf;                                                       /* Input buffer */
 	// dma_addr_t inbuf_dma;                                           /* Input buffer dma */
 	//
 	// struct urb *urbctrl;                                            /* Control URB */

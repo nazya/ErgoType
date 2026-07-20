@@ -87,13 +87,19 @@ of this path.
 Interrupt IN follows the same exact-completion boundary without entering the
 serialized control/OUT broker: every HID interface may have one independent IN
 transfer. The port selects the first interrupt-IN endpoint, as upstream does,
-and arms a persistent slot for the largest parsed INPUT report (report ID
-included, capped at 64 bytes). Completion queues a pointer to that slot; the
-Linux HID parser runs in the report task before the slot can be rearmed. This
-removes the old callback copy, retains the real HCD result, and keeps failed or
-stalled payload out of Linux HID and KeyD. STALL queues the standard endpoint
-clear-halt request through the generic per-device EP0 lane. After remote success
-the TinyUSB host owner resets the PIO endpoint toggle to DATA0 and rearms.
+and arms upstream's per-interface `inbuf` for the largest parsed INPUT report
+(report ID included, capped at 16 KiB). Completion queues a borrowed pointer;
+the Linux HID parser runs in the report task before the buffer can be rearmed.
+The backing allocation is INPUT-only, at least one 64-byte packet, and rounded
+through the final advertised endpoint packet because the pinned PIO HCD copies
+that packet before checking the logical remainder. The TinyUSB transfer and
+parser lengths remain the exact INPUT size. This removes the old callback copy,
+retains the real HCD result, and keeps failed or stalled payload out of Linux
+HID and KeyD. On unplug, callback-published state is fenced through the report
+and host tasks until TinyUSB has completed class/HCD close; only then may task
+teardown free `inbuf`. STALL queues the standard endpoint clear-halt request
+through the generic per-device EP0 lane. After remote success the TinyUSB host
+owner resets the PIO endpoint toggle to DATA0 and rearms.
 Protocol errors use upstream's bounded delayed retry. The only missing tail is
 Linux `usb_queue_reset_device()` after recovery exhaustion; a root-port reset
 would desynchronize TinyUSB's configured-device state, so this port parks the
@@ -237,11 +243,16 @@ request is now 60 B and its slot is 88 B. Nine metadata slots plus the shared
 257-byte pre-probe scratch request 1,049 B from heap_4 and occupy a 1,064 B
 block, versus the former 3,072 B inline-buffer block: 2,008 B of persistent heap
 is recovered. Exact endpoint callbacks add 1,280 B of TinyUSB device state.
-Direct IN/OUT leave one-byte class placeholders, while four
-64-byte IN buffers and their lifecycle metadata live in scratch X. The host
-transfer storage now occupies 916 B there and ends 1,132 B below the core-1
-stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,308 B of
-`.bss` and keeps 172 B of main-SRAM link headroom in this checkpoint.
+Direct IN/OUT leave one-byte class placeholders. The four 20-byte direct-IN
+metadata slots remain in scratch X, while each attached HID interface owns one
+task-allocated receive buffer of
+`max(64, round_up(input_size, wMaxPacketSize))` bytes. A normal 64-byte backing
+costs a 72-byte heap_4 block; the 16 KiB logical limit plus worst packet tail
+can cost up to a 16,456-byte block. There is no allocation or free per report.
+Host transfer storage now occupies 660 B in scratch X and ends 1,388 B below
+the core-1 stack. The `inbuf` pointer grows `struct usbhid_device` from 244 B to
+248 B without changing its 256-byte heap_4 block. The linked image still
+reports 243,308 B of `.bss` and keeps 172 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.
