@@ -22,7 +22,7 @@ custom_accel_function_init(struct custom_accel_function *accel_function,
 			   const int32_t *points,
 			   int32_t scale);
 
-struct coords_q10
+struct coords
 custom_accel_function_filter(struct custom_accel_function *accel_function,
 			     int32_t dx,
 			     int32_t dy,

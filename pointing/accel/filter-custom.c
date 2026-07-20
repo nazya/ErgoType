@@ -1,8 +1,6 @@
 #include "filter-custom.h"
 #include "filter-math.h"
 
-#include <limits.h>
-
 #define MOTION_TIMEOUT_MS 1000u
 #define FIRST_MOTION_TIME_INTERVAL_MS 7u
 
@@ -13,63 +11,6 @@
 // {
 // 	return (a_q10 << Q10_SHIFT) / b_q10;
 // }
-
-static uint32_t
-fraction_to_fixed(uint32_t numerator,
-		  uint32_t denominator,
-		  uint32_t first_bit)
-{
-	uint32_t result = 0;
-
-	for (uint32_t bit = first_bit; bit != 0; bit >>= 1) {
-		numerator <<= 1;
-		if (numerator >= denominator) {
-			numerator -= denominator;
-			result |= bit;
-		}
-	}
-
-	return result;
-}
-
-static int32_t
-ratio_to_q10(int32_t numerator, uint32_t denominator)
-{
-	if (abs32(numerator) <= INT32_MAX / Q10_ONE)
-		return numerator * Q10_ONE / (int32_t)denominator;
-
-	int32_t whole = numerator / (int32_t)denominator;
-	int32_t remainder = numerator % (int32_t)denominator;
-	uint32_t fraction = fraction_to_fixed(abs32(remainder),
-					      denominator,
-					      (uint32_t)Q10_ONE >> 1);
-
-	return whole * Q10_ONE + (remainder < 0 ? -(int32_t)fraction :
-							 (int32_t)fraction);
-}
-
-static int32_t
-intercept_factor_q10(int32_t intercept,
-		     uint32_t delta_time_ms,
-		     uint32_t distance)
-{
-	uint32_t multiplier = delta_time_ms * (uint32_t)Q10_ONE;
-	if (abs32(intercept) <= INT32_MAX / multiplier)
-		return intercept * (int32_t)multiplier / (int32_t)distance;
-
-	int32_t whole = intercept / (int32_t)distance;
-	int32_t remainder = intercept % (int32_t)distance;
-	uint32_t fraction_q20 = fraction_to_fixed(abs32(remainder),
-						  distance,
-						  1u << 19);
-	int32_t fraction =
-		(int32_t)((fraction_q20 * delta_time_ms) >> Q10_SHIFT);
-	int32_t result = whole * (int32_t)multiplier;
-
-	result += remainder < 0 ? -fraction : fraction;
-
-	return result;
-}
 
 void
 custom_accel_function_init(struct custom_accel_function *accel_function,
@@ -86,12 +27,12 @@ custom_accel_function_init(struct custom_accel_function *accel_function,
 	accel_function->last_delta_time_ms = FIRST_MOTION_TIME_INTERVAL_MS;
 }
 
-static int32_t
+static float
 custom_accel_function_calculate_speed(struct custom_accel_function *accel_function,
 				      int32_t dx,
 				      int32_t dy,
 				      uint32_t time_ms,
-				      uint32_t *distance_out,
+				      float *distance_out,
 				      uint32_t *delta_time_out)
 {
 	uint32_t delta_time_ms =
@@ -102,22 +43,22 @@ custom_accel_function_calculate_speed(struct custom_accel_function *accel_functi
 	if (delta_time_ms > MOTION_TIMEOUT_MS)
 		delta_time_ms = FIRST_MOTION_TIME_INTERVAL_MS;
 
-	uint32_t distance = distance_scaled(dx * accel_function->scale,
-					    dy * accel_function->scale);
+	float distance = distance_float((float)(dx * accel_function->scale),
+					(float)(dy * accel_function->scale));
 
 	accel_function->last_time_ms = time_ms;
 	accel_function->last_delta_time_ms = delta_time_ms;
 	*distance_out = distance;
 	*delta_time_out = delta_time_ms;
 
-	return (int32_t)(distance / delta_time_ms);
+	return distance / (float)delta_time_ms;
 }
 
-static int32_t
+static float
 custom_accel_function_profile(const struct custom_accel_function *accel_function,
-			      int32_t speed_in,
+			      float speed_in,
 			      uint32_t delta_time_ms,
-			      uint32_t distance)
+			      float distance)
 {
 	size_t idx;
 	int32_t y0;
@@ -141,24 +82,24 @@ custom_accel_function_profile(const struct custom_accel_function *accel_function
 	int32_t intercept = y0 - (int32_t)idx * slope;
 
 	// Step and points stay in config scale; that scale cancels from the factor.
-	return ratio_to_q10(slope, (uint32_t)accel_function->step) +
-	       intercept_factor_q10(intercept, delta_time_ms, distance);
+	return (float)slope / (float)accel_function->step +
+	       (float)intercept * (float)delta_time_ms / (float)distance;
 }
 
-struct coords_q10
+struct coords
 custom_accel_function_filter(struct custom_accel_function *accel_function,
 			     int32_t dx,
 			     int32_t dy,
 			     uint32_t time_ms)
 {
-	struct coords_q10 accelerated_q10 = { 0, 0 };
-	uint32_t distance;
+	struct coords accelerated = { 0.0f, 0.0f };
+	float distance;
 	uint32_t delta_time_ms;
-	int32_t speed;
-	int32_t factor_q10;
+	float speed;
+	float factor;
 
 	if (dx == 0 && dy == 0)
-		return accelerated_q10;
+		return accelerated;
 
 	speed = custom_accel_function_calculate_speed(accel_function,
 						     dx,
@@ -166,18 +107,18 @@ custom_accel_function_filter(struct custom_accel_function *accel_function,
 						     time_ms,
 						     &distance,
 						     &delta_time_ms);
-	if (distance == 0)
-		return (struct coords_q10){ 0, 0 };
+	if (distance == 0.0f)
+		return (struct coords){ 0.0f, 0.0f };
 
-	factor_q10 = custom_accel_function_profile(accel_function,
-						   speed,
-						   delta_time_ms,
-						   distance);
+	factor = custom_accel_function_profile(accel_function,
+					       speed,
+					       delta_time_ms,
+					       distance);
 
-	accelerated_q10 = (struct coords_q10) {
-		.x_q10 = dx * factor_q10,
-		.y_q10 = dy * factor_q10,
+	accelerated = (struct coords) {
+		.x = (float)dx * factor,
+		.y = (float)dy * factor,
 	};
 
-	return accelerated_q10;
+	return accelerated;
 }

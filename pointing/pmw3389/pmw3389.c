@@ -64,6 +64,9 @@
 #define LiftCutoff_Cal1  0x4A
 #define Motion_Burst  0x50
 #define Motion_Burst_Size 6
+#define Motion_Burst_MOT 0x80u
+#define Motion_Burst_Lift_Stat 0x10u
+#define Motion_Burst_Recovery_Mask 0x07u
 #define Motion_Burst_Delta_X 2
 #define Motion_Burst_Delta_Y 4
 #define LiftCutoff_Cal_Timeout 0x71
@@ -76,6 +79,7 @@
 #define LiftCutoff_Cal2  0x65
 
 #define PMW3389_PRODUCT_ID_EXPECTED 0x47u
+#define PMW3389_SROM_ID_EXPECTED 0xE8u
 
 // Timing (PMW3389 datasheet)
 //
@@ -91,12 +95,18 @@
 // - uses 20us for tSCLK-NCS (write)
 // - uses 100us after write (comment: "safe lower bound")
 //
-// We match the Teensy delays here.
-#define PMW3389_TSRAD_US 100u
+// Previous Teensy-reference timings:
+// #define PMW3389_TSRAD_US 100u
+// #define PMW3389_TSRAD_MOTBR_US 35u
+// #define PMW3389_TSRW_US 20u
+// #define PMW3389_TSCLK_NCS_WRITE_US 20u
+// #define PMW3389_TSWW_TSWR_US 100u
+
+#define PMW3389_TSRAD_US 160u
 #define PMW3389_TSRAD_MOTBR_US 35u
 #define PMW3389_TSRW_US 20u
-#define PMW3389_TSCLK_NCS_WRITE_US 20u
-#define PMW3389_TSWW_TSWR_US 100u
+#define PMW3389_TSCLK_NCS_WRITE_US 35u
+#define PMW3389_TSWW_TSWR_US 145u
 
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
 
@@ -161,10 +171,10 @@ static void write_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr, uint8_t d
     busy_wait_us_32(PMW3389_TSWW_TSWR_US);
 }
 
-static void upload_firmware(const pmw33xx_cfg_t *cfg)
+static bool upload_firmware(const pmw33xx_cfg_t *cfg)
 {
     // Write 0 to Rest_En bit of Config2 register to disable Rest mode.
-    write_register(cfg, Config2, 0x20);
+    write_register(cfg, Config2, 0x00);
 
     // write 0x1d in SROM_enable reg for initializing
     write_register(cfg, SROM_Enable, 0x1d);
@@ -188,8 +198,11 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg)
         busy_wait_us_32(15);
     }
 
+    cs_deselect(cfg);
+    busy_wait_us_32(200);
+
     // Read the SROM_ID register to verify the ID before any other register reads or writes.
-    read_register(cfg, SROM_ID);
+    uint8_t srom_id = read_register(cfg, SROM_ID);
 
     // Write 0x00 to Config2 register for wired mouse or 0x20 for wireless mouse design.
     write_register(cfg, Config2, 0x00);
@@ -197,9 +210,10 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg)
     write_register(cfg, Angle_Tune, 90);
 
     cs_deselect(cfg);
+    return srom_id == (uint8_t)PMW3389_SROM_ID_EXPECTED;
 }
 
-static void perform_startup(const pmw33xx_cfg_t *cfg)
+static bool perform_startup(const pmw33xx_cfg_t *cfg)
 {
     cs_deselect(cfg); // ensure that the serial port is reset
     cs_select(cfg);
@@ -213,8 +227,9 @@ static void perform_startup(const pmw33xx_cfg_t *cfg)
     read_register(cfg, Delta_Y_L);
     read_register(cfg, Delta_Y_H);
 
-    upload_firmware(cfg);
+    bool srom_valid = upload_firmware(cfg);
     vTaskDelay(pdMS_TO_TICKS(10));
+    return srom_valid;
 }
 
 void pmw3389_set_cpi(const pmw33xx_cfg_t *cfg)
@@ -227,7 +242,7 @@ void pmw3389_set_cpi(const pmw33xx_cfg_t *cfg)
     write_register(cfg, Motion_Burst, 0x00);
 }
 
-void pmw3389_get_deltas(const pmw33xx_cfg_t *cfg, int16_t *dx, int16_t *dy)
+bool pmw3389_get_deltas(const pmw33xx_cfg_t *cfg, int16_t *dx, int16_t *dy)
 {
     spi_inst_t *spi = pmw3389_spi(cfg);
     pmw3389_spi_prepare(cfg);
@@ -244,10 +259,17 @@ void pmw3389_get_deltas(const pmw33xx_cfg_t *cfg, int16_t *dx, int16_t *dy)
     cs_deselect(cfg);
     busy_wait_us_32(1);
 
+    if (data[0] & Motion_Burst_Recovery_Mask)
+        write_register(cfg, Motion_Burst, 0x00);
+
+    if (!(data[0] & Motion_Burst_MOT) || (data[0] & Motion_Burst_Lift_Stat))
+        return false;
+
     *dx = (int16_t)(((uint16_t)data[Motion_Burst_Delta_X + 1] << 8) |
                     data[Motion_Burst_Delta_X]);
     *dy = (int16_t)(((uint16_t)data[Motion_Burst_Delta_Y + 1] << 8) |
                     data[Motion_Burst_Delta_Y]);
+    return true;
 }
 
 bool pmw3389_init(const pmw33xx_cfg_t *cfg)
@@ -256,8 +278,8 @@ bool pmw3389_init(const pmw33xx_cfg_t *cfg)
     gpio_set_dir((uint)cfg->cs, GPIO_OUT);
     gpio_put((uint)cfg->cs, 1);
 
-    perform_startup(cfg);
+    bool srom_valid = perform_startup(cfg);
 
     uint8_t pid = read_register(cfg, Product_ID);
-    return pid == (uint8_t)PMW3389_PRODUCT_ID_EXPECTED;
+    return srom_valid && pid == (uint8_t)PMW3389_PRODUCT_ID_EXPECTED;
 }

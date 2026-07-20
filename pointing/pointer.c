@@ -33,34 +33,6 @@ static int32_t x125pct(int32_t value)
     return value < 0 ? -magnitude : magnitude;
 }
 
-static int32_t scaled_to_q10(int32_t value, int32_t scale)
-{
-    int32_t whole = value / scale;
-    int32_t rem = value % scale;
-    int32_t q10 = whole * Q10_ONE;
-
-    if (rem < 0)
-        q10 -= ((-rem * Q10_ONE) + scale / 2) / scale;
-    else
-        q10 += (rem * Q10_ONE + scale / 2) / scale;
-
-    return q10;
-}
-
-static void accel_prepare(accel_profile_cfg_t *accel)
-{
-    switch (accel->profile) {
-    case ACCEL_PROFILE_NONE:
-        return;
-    case ACCEL_PROFILE_FLAT:
-    case ACCEL_PROFILE_ADAPTIVE:
-        accel->speed = scaled_to_q10(accel->speed, accel->scale);
-        return;
-    case ACCEL_PROFILE_CUSTOM:
-        return;
-    }
-}
-
 static void mot_irq_handler(uint gpio, uint32_t events)
 {
     // Only `GPIO_IRQ_EDGE_FALL` is enabled for motion pins (see `mot_gpio_init()`).
@@ -118,8 +90,6 @@ void pointing_device_task(void *pvParameters)
     config_t *config = pvParameters;
     struct filter_state *pmw3360_filters = NULL;
     struct filter_state *pmw3389_filters = NULL;
-    accel_prepare(&config->move_accel);
-    accel_prepare(&config->scroll_accel);
 
     if (config->nr_pmw3360) {
         pmw3360_filters = pvPortMalloc(sizeof(*pmw3360_filters) * config->nr_pmw3360);
@@ -191,10 +161,11 @@ void pointing_device_task(void *pvParameters)
                 continue;
             int16_t dx = 0;
             int16_t dy = 0;
-            pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy);
+            if (!pmw3389_get_deltas(&config->pmw3389[i], &dx, &dy))
+                continue;
             // Temporary transform for the current trackball prototype, whose sensor is mounted at 30 degrees.
             // This may move to config if per-device coordinate transforms are needed.
-            int32_t x = x125pct(dx);
+            int32_t x = dx;
             int32_t y = -dy;
             uint8_t role = config->pmw3389[i].role;
             filter_process(&pmw3389_filters[i], &x, &y);

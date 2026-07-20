@@ -70,6 +70,21 @@
 #define Raw_Data_Burst  0x64
 #define LiftCutoff_Tune2  0x65
 
+#define PMW3360_SROM_ID_EXPECTED 0x04u
+
+// Previous timings:
+// #define PMW3360_TSRAD_US 100u
+// #define PMW3360_TSRAD_MOTBR_US 35u
+// #define PMW3360_TSRW_US 20u
+// #define PMW3360_TSCLK_NCS_WRITE_US 20u
+// #define PMW3360_TSWW_TSWR_US 100u
+
+#define PMW3360_TSRAD_US 160u
+#define PMW3360_TSRAD_MOTBR_US 35u
+#define PMW3360_TSRW_US 20u
+#define PMW3360_TSCLK_NCS_WRITE_US 35u
+#define PMW3360_TSWW_TSWR_US 145u
+
 static spi_inst_t *const spi_by_idx[MAX_SPI] = { spi0, spi1 };
 
 static inline spi_inst_t *pmw3360_spi(const pmw33xx_cfg_t *cfg)
@@ -104,14 +119,14 @@ static uint8_t read_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr) {
     // send adress of the register, with MSBit = 0 to indicate it's a read
     uint8_t x = reg_addr & 0x7f;
     spi_write_blocking(spi, &x, 1);
-    busy_wait_us_32(100);              // tSRAD
+    busy_wait_us_32(PMW3360_TSRAD_US); // tSRAD
     // read data
     uint8_t data;
     spi_read_blocking(spi, 0, &data, 1);
 
     busy_wait_us_32(1);                // tSCLK-NCS for read operation is 120ns
     cs_deselect(cfg);
-    busy_wait_us_32(19);               // tSRW/tSRR (=20us) minus tSCLK-NCS
+    busy_wait_us_32(PMW3360_TSRW_US - 1u); // tSRW/tSRR minus tSCLK-NCS
 
     return data;
 }
@@ -127,16 +142,16 @@ static void write_register(const pmw33xx_cfg_t *cfg, uint8_t reg_addr, uint8_t d
     // send data
     spi_write_blocking(spi, &data, 1);
 
-    busy_wait_us_32(20);               // tSCLK-NCS for write operation
+    busy_wait_us_32(PMW3360_TSCLK_NCS_WRITE_US); // tSCLK-NCS for write operation
     cs_deselect(cfg);
-    busy_wait_us_32(100);              // tSWW/tSWR (=120us) minus tSCLK-NCS. Could be shortened, but is looks like a safe lower bound 
+    busy_wait_us_32(PMW3360_TSWW_TSWR_US); // tSWW/tSWR minus tSCLK-NCS
 }
 
-static void upload_firmware(const pmw33xx_cfg_t *cfg) {
+static bool upload_firmware(const pmw33xx_cfg_t *cfg) {
     // send the firmware to the chip, cf p.18 of the datasheet
 
     // Write 0 to Rest_En bit of Config2 register to disable Rest mode.
-    write_register(cfg, Config2, 0x20);
+    write_register(cfg, Config2, 0x00);
 
     // write 0x1d in SROM_enable reg for initializing
     write_register(cfg, SROM_Enable, 0x1d);
@@ -161,8 +176,11 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg) {
         busy_wait_us_32(15);
     }
 
+    cs_deselect(cfg);
+    busy_wait_us_32(200);
+
     // Read the SROM_ID register to verify the ID before any other register reads or writes.
-    read_register(cfg, SROM_ID);
+    uint8_t srom_id = read_register(cfg, SROM_ID);
 
     // Write 0x00 to Config2 register for wired mouse or 0x20 for wireless mouse design.
     write_register(cfg, Config2, 0x00);
@@ -174,9 +192,10 @@ static void upload_firmware(const pmw33xx_cfg_t *cfg) {
     write_register(cfg, Angle_Snap, 0xC0);
 
     cs_deselect(cfg);
+    return srom_id == (uint8_t)PMW3360_SROM_ID_EXPECTED;
 }
 
-static void perform_startup(const pmw33xx_cfg_t *cfg) {
+static bool perform_startup(const pmw33xx_cfg_t *cfg) {
     cs_deselect(cfg);              // ensure that the serial port is reset
     cs_select(cfg);                // ensure that the serial port is reset
     cs_deselect(cfg);              // ensure that the serial port is reset
@@ -189,8 +208,9 @@ static void perform_startup(const pmw33xx_cfg_t *cfg) {
     read_register(cfg, Delta_Y_L);
     read_register(cfg, Delta_Y_H);
     // upload the firmware
-    upload_firmware(cfg);
+    bool srom_valid = upload_firmware(cfg);
     vTaskDelay(pdMS_TO_TICKS(10));
+    return srom_valid;
 }
 
 void pmw3360_set_cpi(const pmw33xx_cfg_t *cfg) {
@@ -206,7 +226,7 @@ void pmw3360_get_deltas(const pmw33xx_cfg_t *cfg, int16_t *dx, int16_t *dy) {
 
     uint8_t address = Motion_Burst;
     spi_write_blocking(spi, &address, 1);
-    busy_wait_us_32(35);
+    busy_wait_us_32(PMW3360_TSRAD_MOTBR_US);
 
     uint8_t data[Motion_Burst_Size];
     spi_read_blocking(spi, 0, data, sizeof(data));
@@ -226,6 +246,5 @@ bool pmw3360_init(const pmw33xx_cfg_t *cfg) {
     gpio_set_dir((uint)cfg->cs, GPIO_OUT);
     gpio_put((uint)cfg->cs, 1);
 
-    perform_startup(cfg);
-    return true;
+    return perform_startup(cfg);
 }

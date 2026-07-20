@@ -6,8 +6,8 @@
 #include "filter-adaptive.h"
 
 struct pointer_accelerator_flat {
-	int32_t factor_q10;
-	int32_t speed_adjustment_q10;
+	float factor;
+	float speed_adjustment;
 };
 
 void
@@ -15,9 +15,10 @@ pointer_accelerator_flat_init(struct pointer_accelerator_flat *accel_filter);
 
 void
 accelerator_set_speed_flat(struct pointer_accelerator_flat *accel_filter,
-			   int32_t speed_adjustment_q10);
+			   int32_t speed_adjustment,
+			   int32_t scale);
 
-struct coords_q10
+struct coords
 accelerator_filter_flat(const struct pointer_accelerator_flat *accel_filter,
 			int32_t dx,
 			int32_t dy);

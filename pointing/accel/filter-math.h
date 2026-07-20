@@ -1,21 +1,19 @@
 #ifndef FILTER_MATH_H
 #define FILTER_MATH_H
 
+#include <math.h>
 #include <stdint.h>
-
-#define Q10_SHIFT 10
-#define Q10_ONE ((int32_t)(1u << Q10_SHIFT))
-
-static inline int32_t
-q10_mul(int32_t a_q10, int32_t b_q10)
-{
-	return (a_q10 * b_q10) >> Q10_SHIFT;
-}
 
 static inline uint32_t
 abs32(int32_t value)
 {
 	return value >= 0 ? (uint32_t)value : (uint32_t)(-value);
+}
+
+static inline float
+absf32(float value)
+{
+	return value >= 0.0f ? value : -value;
 }
 
 /*
@@ -59,6 +57,12 @@ distance_scaled(int32_t x_scaled, int32_t y_scaled)
 	//        (min >> 2) + (min >> 3) + (min >> 6) + (min >> 7);
 
 	return max + (min >> 2) + (min >> 3);
+}
+
+static inline float
+distance_float(float x, float y)
+{
+	return sqrtf(x * x + y * y);
 }
 
 #endif

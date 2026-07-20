@@ -140,6 +140,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         hardware_i2c
         hardware_pio
         hardware_clocks
+        m
 
         # pico_cyw43_arch_none
 )

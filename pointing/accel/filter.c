@@ -22,7 +22,8 @@ filter_init(struct filter_state *filter,
 					 cpi,
 					 filter_cfg->adaptive_velocity_averaging);
 		pointer_accelerator_set_speed(filter->accelerator.adaptive,
-					      filter_cfg->speed);
+					      filter_cfg->speed,
+					      filter_cfg->scale);
 		pointer_accelerator_restart(filter->accelerator.adaptive,
 					    (uint32_t)xTaskGetTickCount() *
 						    portTICK_PERIOD_MS);
@@ -37,7 +38,8 @@ filter_init(struct filter_state *filter,
 	case ACCEL_PROFILE_FLAT:
 		pointer_accelerator_flat_init(&filter->accelerator.flat);
 		accelerator_set_speed_flat(&filter->accelerator.flat,
-					   filter_cfg->speed);
+					   filter_cfg->speed,
+					   filter_cfg->scale);
 		break;
 	}
 }
@@ -48,35 +50,35 @@ filter_process(struct filter_state *filter,
 	       int32_t *dy)
 {
 	uint32_t time_ms = (uint32_t)xTaskGetTickCount() * portTICK_PERIOD_MS;
-	struct coords_q10 accelerated_q10;
+	struct coords accelerated;
 
 	switch (filter->profile) {
 	case ACCEL_PROFILE_NONE:
 		return;
 	case ACCEL_PROFILE_ADAPTIVE:
 		if (filter->accelerator.adaptive->dpi >= DEFAULT_MOUSE_DPI)
-			accelerated_q10 = accelerator_filter_linear(filter->accelerator.adaptive,
-								   *dx,
-								   *dy,
-								   time_ms);
+			accelerated = accelerator_filter_linear(filter->accelerator.adaptive,
+								*dx,
+								*dy,
+								time_ms);
 		else
-			accelerated_q10 = accelerator_filter_low_dpi(filter->accelerator.adaptive,
-							    *dx,
-							    *dy,
-							    time_ms);
+			accelerated = accelerator_filter_low_dpi(filter->accelerator.adaptive,
+								 *dx,
+								 *dy,
+								 time_ms);
 		break;
 	case ACCEL_PROFILE_CUSTOM:
-		accelerated_q10 = custom_accel_function_filter(&filter->accelerator.custom,
-							     *dx,
-							     *dy,
-							     time_ms);
+		accelerated = custom_accel_function_filter(&filter->accelerator.custom,
+							   *dx,
+							   *dy,
+							   time_ms);
 		break;
 	case ACCEL_PROFILE_FLAT:
-		accelerated_q10 = accelerator_filter_flat(&filter->accelerator.flat,
-							  *dx,
-							  *dy);
+		accelerated = accelerator_filter_flat(&filter->accelerator.flat,
+						      *dx,
+						      *dy);
 		break;
 	}
 
-	coords_q10_to_int(accelerated_q10, &filter->residue, dx, dy);
+	coords_to_int(accelerated, &filter->residue, dx, dy);
 }

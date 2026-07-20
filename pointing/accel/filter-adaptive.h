@@ -9,13 +9,13 @@
 #define DEFAULT_MOUSE_DPI 1000
 #define MAX_TRACKERS 16
 
-struct coords_q10 {
-	int32_t x_q10;
-	int32_t y_q10;
+struct coords {
+	float x;
+	float y;
 };
 
 struct pointer_tracker {
-	struct coords_q10 delta;
+	struct coords delta;
 	uint32_t time_ms;
 	uint32_t dir;
 };
@@ -29,18 +29,18 @@ struct pointer_trackers {
 struct pointer_accelerator {
 	int dpi;
 
-	int32_t last_velocity_q10;
-	int32_t threshold_q10;
-	int32_t max_accel_q10;
-	int32_t incline_q10;
-	int32_t speed_adjustment_q10;
+	float last_velocity;
+	float threshold;
+	float max_accel;
+	float incline;
+	float speed_adjustment;
 
 	struct pointer_trackers trackers;
 };
 
 struct coords_residue {
-	int32_t x_q10;
-	int32_t y_q10;
+	float x;
+	float y;
 };
 
 void
@@ -50,7 +50,8 @@ pointer_accelerator_init(struct pointer_accelerator *accel,
 
 void
 pointer_accelerator_set_speed(struct pointer_accelerator *accel,
-			      int32_t speed_adjustment_q10);
+			      int32_t speed_adjustment,
+			      int32_t scale);
 
 void
 pointer_accelerator_set_dpi(struct pointer_accelerator *accel,
@@ -60,22 +61,22 @@ pointer_accelerator_set_dpi(struct pointer_accelerator *accel,
 void
 pointer_accelerator_restart(struct pointer_accelerator *accel, uint32_t time_ms);
 
-struct coords_q10
+struct coords
 accelerator_filter_linear(struct pointer_accelerator *accel,
 			  int32_t dx,
 			  int32_t dy,
 			  uint32_t time_ms);
 
-struct coords_q10
+struct coords
 accelerator_filter_low_dpi(struct pointer_accelerator *accel,
 			   int32_t dx,
 			   int32_t dy,
 			   uint32_t time_ms);
 
 void
-coords_q10_to_int(struct coords_q10 accelerated_q10,
-		  struct coords_residue *residue,
-		  int32_t *dx,
-		  int32_t *dy);
+coords_to_int(struct coords accelerated,
+	      struct coords_residue *residue,
+	      int32_t *dx,
+	      int32_t *dy);
 
 #endif
