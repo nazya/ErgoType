@@ -2608,7 +2608,8 @@ void usbhid_backend_host_control_idle(void)
 }
 
 int usbhid_backend_queue_device_reset(struct hid_device *hid,
-				      uint32_t report_revision)
+				      uint32_t report_revision,
+				      bool reset_work_running)
 {
 	struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
 	struct usb_device *dev = usbhid ? interface_to_usbdev(usbhid->intf) : NULL;
@@ -2622,9 +2623,14 @@ int usbhid_backend_queue_device_reset(struct hid_device *hid,
 
 		if (&entry->dev != dev)
 			continue;
-		/* Match cancel_work_sync(&usbhid->reset_work) at close. */
-		if (usbhid->transport_stopping || !usbhid->report_wanted ||
-		    usbhid->report_revision != report_revision) {
+		/*
+		 * Close cancels pending reset_work. An already-running equivalent may
+		 * publish across close, matching the upstream outcome; stop still fences it.
+		 */
+		if (usbhid->transport_stopping ||
+		    (!reset_work_running &&
+		     (!usbhid->report_wanted ||
+		      usbhid->report_revision != report_revision))) {
 			ret = -ECANCELED;
 		} else if (usbhid_reset->state != USBHID_RESET_IDLE &&
 		    usbhid_reset->generation == entry->generation) {

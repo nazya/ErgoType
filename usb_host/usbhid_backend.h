@@ -24,7 +24,8 @@ void usbhid_backend_rx_rearm_failed(void);
 void usbhid_backend_rx_transfer_failed(uint8_t xfer_result);
 /* Report recovery publishes work; the lifecycle task owns reset/re-enumeration. */
 int usbhid_backend_queue_device_reset(struct hid_device *hid,
-				      uint32_t report_revision);
+				      uint32_t report_revision,
+				      bool reset_work_running);
 /* Host-owner handoff matching TinyUSB hub.c's reset-to-attach callback. */
 void usbhid_backend_hub_reset_host_complete(uint8_t hub_addr,
 					    uint8_t hub_port,

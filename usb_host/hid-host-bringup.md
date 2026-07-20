@@ -115,7 +115,14 @@ slot release or matching teardown wakes it to retry the durable enqueue
 predicate for at most one second; the transfer timeout starts only after
 admission. Nonblocking report
 and CLEAR_HALT work cannot steal logically reserved capacity, and recovery's
-dedicated slot remains outside ordinary admission.
+dedicated slot remains outside ordinary admission. A saturated CLEAR_HALT does
+not poll that pool: the report task parks its durable reset-work state until a
+normal slot is released or an unused reservation is removed. Capacity changes
+during the unlocked enqueue attempt are latched, so the transition to sleep
+cannot lose the only wake edge. The retry timer is reserved for actual
+interrupt-I/O protocol failures; the report task sleeps until a capacity edge
+or the absolute eight-second local saturation deadline. Unrelated notifications
+only recheck that same durable predicate and deadline, without periodic polling.
 
 Interrupt OUT is also submitted directly from the host owner. Each asynchronous
 `.request()` SET owns an exact enqueue-time report snapshot until completion,
@@ -147,7 +154,10 @@ same exact-generation fence. Linux relies on the USB reset-default Report
 protocol, so there is no retained mode or port-only BOOT suppression. STALL
 queues the standard endpoint clear-halt request
 through the generic per-device EP0 lane. After remote success the TinyUSB host
-owner resets the PIO endpoint toggle to DATA0 and rearms.
+owner resets the PIO endpoint toggle to DATA0 and rearms. If close races an
+already active request, success still resets that local toggle and wire failure
+still requests device reset, matching running Linux `reset_work`; only rearm is
+suppressed while closed. Stop/unplug cancels the obsolete transport epoch.
 Protocol errors use upstream's bounded delayed retry. The remaining difference
 from Linux is the implementation behind `usb_queue_reset_device()`. After
 recovery exhaustion this port makes the same reset decision, but its lifecycle
@@ -354,8 +364,8 @@ can cost up to a 16,456-byte block. There is no allocation or free per report.
 Host transfer storage now occupies 708 B in scratch X and ends 1,340 B below
 the core-1 stack. Removing transitional descriptor ownership shrinks
 `struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
-248 B per attached HID. The linked image reports 243,296 B of `.bss` and keeps
-232 B of main-SRAM link headroom.
+248 B per attached HID. The linked image reports 243,312 B of `.bss` and keeps
+216 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.

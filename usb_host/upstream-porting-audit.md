@@ -163,7 +163,15 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   endpoint-keyed order. Interrupt-IN STALL recovery uses that generic EP0 lane
   for remote clear-halt, then performs the required PIO DATA0 reset and rearm
   in the TinyUSB host owner. FAILED/TIMEOUT uses upstream's bounded delayed
-  retry. Generic URBs, synchronous interrupt-IN, unaudited hooks,
+  retry. Local CLEAR_HALT slot admission is now wait-queue shaped rather than
+  timer-polled: normal-slot release or a dropped unused reservation wakes the
+  durable report-task state, and a capacity latch closes the unlocked enqueue
+  race. Its report-task notification wait retains the absolute eight-second
+  local bound without another timer. Once its wire request is active, close no
+  longer drops completion:
+  success performs the host DATA0 reset and wire failure keeps Linux's device-
+  reset decision, while only interrupt-IN rearm depends on the open state.
+  Generic URBs, synchronous interrupt-IN, unaudited hooks,
   hidraw/hiddev runtime, and PIDFF remain deferred.
 - `usbhid_start()` again computes the exact upstream per-device `bufsize` from
   INPUT, OUTPUT, and FEATURE reports. GET_REPORT uses that rounded EP0 limit and
@@ -240,7 +248,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   or hub-port teardown/re-enumeration. This is deliberately stronger than
   Linux's successful in-place reset because pinned TinyUSB has no safe API to
   restore configured class state in place. Software-only async-pool exhaustion
-  does not take this path; it parks and reports a local rearm failure. Reset
+  does not take this path; CLEAR_HALT waits for an exact capacity edge, while a
+  fatal pre-wire submit error parks and reports a local rearm failure. Reset
   progression is wait-queue shaped rather than polled: exact retirement,
   mount/enumeration, async-slot-release, and host-global-control-IDLE
   publications wake lifecycle, and only the phase deadline supplies a timed

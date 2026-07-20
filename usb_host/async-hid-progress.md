@@ -187,7 +187,15 @@
   its own one-second local deadline before a successfully queued request
   receives its complete transfer interval. The two descriptor helpers contain
   no local FreeRTOS retry loop, and `hid_get_class_descriptor()` is
-  upstream-identical.
+  upstream-identical. CLEAR_HALT saturation is also condition-driven: the
+  report task atomically claims Linux's reset-work-shaped state, parks it on
+  local `-EBUSY`, and retries only after normal-slot release or a reservation
+  is removed without consuming a slot. A one-byte capacity latch closes the
+  release-during-enqueue race. The former 32-ms admission polling timer is
+  gone; the report task sleeps until a capacity edge or the preserved absolute
+  eight-second local saturation deadline. Unrelated wakes only recheck that
+  same deadline, while the report timer now represents only upstream's
+  protocol-error retry.
 - The report executor reserves space for all four queued async requests plus
   the active ordinary control request. Probe-owned GETs do not occupy that
   queue; their current upstream caller issues one request and immediately waits
@@ -221,7 +229,11 @@
   STALL queues the standard
   endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
   only successful completion lets the TinyUSB host owner reset the PIO endpoint
-  toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
+  toggle to DATA0 and rearm. Like an already running upstream `reset_work`, an
+  active clear-halt finishes across HID close: success still resets the host
+  toggle and a wire failure still publishes device reset; `report_wanted`
+  gates only the later interrupt-IN rearm. Stop/unplug still cancels the old
+  transport epoch. FAILED/TIMEOUT follows upstream's
   13/26/52/104-ms delayed retry for about one second. Clear-halt transfer
   failure, exhausted protocol retry, or failure to reset the local PIO DATA0
   state now queues the upstream device-reset fallback. Reset publication is
@@ -280,6 +292,13 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: generic synchronous-request admission checkpoint `usb: make synchronous request admission waitable`,
+  exact UF2 SHA256
+  `b58404971ae20b6de376f8dc22ae9912a429a1d8b56086dfd852c8555cf87a64`,
+  clean-builds with `text=491156`, `data=708`, and `bss=243296`. Normal boot,
+  enumeration, emulator input, pointer movement, and wheel events were reported
+  working on hardware. The subsequent edge-driven CLEAR_HALT-admission change
+  is not part of that verified image.
 - 2026-07-20: SHA-pinned HID-open/report-ownership image, exact UF2 SHA256
   `c0a58d7adf6d1bb8fac1d94d713f53443271235254dbe4cdd7ed5c8e923e6df2`,
   was reported working for normal boot, enumeration, emulator input, and mouse

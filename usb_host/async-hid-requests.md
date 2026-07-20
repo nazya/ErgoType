@@ -65,7 +65,12 @@ The active implementation now has these properties:
   no longer contain FreeRTOS-specific admission loops. The recovery slot remains
   outside this wait queue, and nonblocking report/CLEAR_HALT traffic uses only
   unreserved surplus. The one-second local admission and transfer deadlines
-  start independently.
+  start independently. CLEAR_HALT itself retains a durable report-task wait
+  state on local saturation; normal-slot release or a non-consuming reservation
+  unlink wakes it. Its old 32-ms polling retry is not part of the protocol
+  timer, which remains dedicated to upstream's interrupt-I/O error cadence.
+  The report task's notification wait carries the preserved absolute
+  eight-second local admission bound without another timer object.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
   descriptors are now fetched by task-side `usbhid_parse()` at their
   class-declared size through the generic asynchronous EP0 owner, up to Linux's

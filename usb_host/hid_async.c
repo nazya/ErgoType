@@ -15,6 +15,7 @@
 #include "stdio_tusb_cdc.h"
 #include "usbhid_backend.h"
 #include "usbhid_private.h"
+#include "usbhid_report.h"
 
 /*
  * Upstream Linux HID transport can block in hid_hw_wait(), usb_control_msg(),
@@ -415,6 +416,16 @@ static void hid_async_admission_wake_all_locked(void)
 					 1u, eSetBits);
 }
 
+static void hid_async_normal_capacity_changed_locked(void)
+{
+	/* Every waiter retries its own FIFO predicate after this wake edge. */
+	hid_async_admission_wake_all_locked();
+	/* A nonwaiting producer may enter only beyond all logical reservations. */
+	if (hid_async_normal_free_count_locked() >
+	    hid_async_admission_waiter_count_locked())
+		usbhid_report_capacity_available_locked();
+}
+
 static void hid_async_admission_link_locked(
 		struct hid_async_admission_waiter *waiter)
 {
@@ -430,7 +441,7 @@ static void hid_async_admission_link_locked(
 }
 
 static void hid_async_admission_unlink_locked(
-		struct hid_async_admission_waiter *waiter)
+		struct hid_async_admission_waiter *waiter, bool slot_consumed)
 {
 	struct hid_async_admission_waiter **link =
 		&hid_async_state.admission_head;
@@ -444,7 +455,10 @@ static void hid_async_admission_unlink_locked(
 	waiter->next = NULL;
 	waiter->linked = false;
 	/* Head removal hands the admission baton to the next durable waiter. */
-	hid_async_admission_wake_all_locked();
+	if (slot_consumed)
+		hid_async_admission_wake_all_locked();
+	else
+		hid_async_normal_capacity_changed_locked();
 }
 
 static int hid_async_slot_queue_locked(const struct hid_async_request *req,
@@ -601,7 +615,7 @@ static u8 *hid_async_slot_release_locked(struct hid_async_slot *slot,
 	configASSERT(!!*head == !!*tail);
 	memset(slot, 0, sizeof(*slot));
 	if (id <= HID_ASYNC_NORMAL_SLOT_COUNT)
-		hid_async_admission_wake_all_locked();
+		hid_async_normal_capacity_changed_locked();
 	return owned_data;
 }
 
@@ -805,7 +819,7 @@ static int hid_async_queue_usb_request(struct hid_async_request *req,
 		ret = hid_async_slot_queue_locked(req, lane, waiter);
 	}
 	if (ret != -EBUSY && waiter)
-		hid_async_admission_unlink_locked(waiter);
+		hid_async_admission_unlink_locked(waiter, ret == 0);
 	hid_transport_unlock();
 	if (!ret)
 		hid_async_notify_task();
@@ -866,7 +880,7 @@ static int hid_async_wait_queue_usb_request(struct hid_async_request *req,
 	if (ret != -EBUSY)
 		return ret;
 	hid_transport_lock();
-	hid_async_admission_unlink_locked(&waiter);
+	hid_async_admission_unlink_locked(&waiter, false);
 	hid_transport_unlock();
 	return -EBUSY;
 }
