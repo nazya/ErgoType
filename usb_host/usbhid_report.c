@@ -1041,15 +1041,14 @@ void usbhid_report_close(struct hid_device *hid)
 }
 
 int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
-			 uint16_t bufsize, uint32_t len, uint8_t xfer_result,
-			 bool parse)
+			 uint16_t bufsize, uint32_t len, uint8_t xfer_result)
 {
 	struct usbhid_device *usbhid;
 	struct usbhid_input_report_event event = {
 		.hid = hid,
 		.data = (u8 *)report,
 		.len = len <= UINT16_MAX ? (u16)len : 0,
-		.parse = parse && xfer_result == XFER_RESULT_SUCCESS,
+		.parse = xfer_result == XFER_RESULT_SUCCESS,
 		.bufsize = bufsize,
 		.xfer_result = xfer_result,
 	};
@@ -1692,6 +1691,7 @@ void usbhid_report_task(void *pvParameters)
 		bool defer = false;
 		bool io_retry = false;
 		bool polling;
+		bool protocol_boot;
 		bool transfer_failed;
 		bool process;
 		int index;
@@ -1745,6 +1745,22 @@ void usbhid_report_task(void *pvParameters)
 			  usbhid->report_wanted &&
 			  !usbhid->transport_stopping;
 		polling = process;
+		/*
+		 * Previous callback-side port:
+		 *     protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
+		 *     if (protocol_mode == HID_PROTOCOL_BOOT) {
+		 *             usbhid_transport_fault(USBHID_FAULT_PROTOCOL_BOOT);
+		 *             parse = false;
+		 *     }
+		 *
+		 * TinyUSB's selected mode is captured at mount and immutable in this
+		 * build. Keep callback ingress free of parser-delivery policy and decide
+		 * that here under the exact interface-generation fence. A future
+		 * SET_PROTOCOL path must update the same retained field.
+		 */
+		protocol_boot = polling &&
+			event.xfer_result == XFER_RESULT_SUCCESS &&
+			usbhid->protocol_mode == HID_PROTOCOL_BOOT;
 		transfer_failed = polling &&
 				 event.xfer_result != XFER_RESULT_SUCCESS;
 		if (usbhid->report_owner == USBHID_REPORT_QUEUED)
@@ -1774,7 +1790,9 @@ void usbhid_report_task(void *pvParameters)
 		// 			      urb->actual_length, 1);
 		// TinyUSB supplies the stable slot and exact actual length. Resume-time
 		// suppression is not wired yet; normal open/ALWAYS_POLL parsing is here.
-		if (process && event.parse)
+		if (protocol_boot)
+			usbhid_backend_rx_protocol_boot();
+		if (process && event.parse && !protocol_boot)
 			(void)hid_safe_input_report(event.hid,
 						HID_INPUT_REPORT,
 						event.data, event.bufsize,

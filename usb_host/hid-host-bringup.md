@@ -37,10 +37,16 @@ The active path is:
 
 ```text
 TinyUSB mount
-  -> publish mount state and wake lifecycle task
+  -> capture HID instance/interface/protocol identity and wake lifecycle task
+  -> publish global mount state from the existing USB cache epoch
+  -> task-side reset-state observation, when recovery owns the port
   -> task-side device/string descriptor pre-probe
-  -> exact task-side GET_DESCRIPTOR(report), capped at 4 KiB
-  -> Linux HID report parse
+  -> build usb_device/usb_interface from the lifecycle cache and raw snapshot
+  -> atomically replace the probe token with the live HID transport object
+  -> hid_add_device() enters Linux usbhid_parse()
+  -> validate HID class descriptor and derive report size
+  -> exact async-backed GET_DESCRIPTOR(report), capped at 4 KiB
+  -> Linux HID report parse and release the transient descriptor buffer
   -> synchronous driver match and probe
   -> hidinput open, then direct TinyUSB endpoint-IN receive starts
   -> Linux HID input mapping -> evdev -> KeyD
@@ -59,6 +65,26 @@ probe path.
 Interrupt-IN receive is armed from `usbhid_open()` or `usbhid_start()`, not
 from probe. Ignored or failed interfaces therefore do not keep delivering
 reports to an unbound Linux HID object.
+
+The corresponding remove path is split at the same ownership boundary:
+
+```text
+TinyUSB physical remove/app-driver close
+  -> publish disconnect for every live interface and stop direct IN
+  -> rotate/cancel the physical-address async epoch and retire the cache entry
+TinyUSB HID class close
+  -> invalidate the exact pending probe token
+  -> idempotently publish the exact interface disconnect
+lifecycle task
+  -> usbhid_disconnect(struct usb_interface *)
+  -> synchronize async/report/I/O owners
+  -> hid_destroy_device() and free the USB-HID transport object
+```
+
+The physical publication is intentionally earlier than HID class close: it is
+the producer fence for both ordinary devices and hubs. TinyUSB omits the common
+unmount callback for hubs, so the raw application-driver close remains the
+device-level fallback. No callback waits or frees Linux-owned state.
 
 Linux-shaped output requests are serialized by the HID async task. For
 `.request(HID_REQ_SET_REPORT)`, OUTPUT reports use interrupt OUT when present
@@ -99,7 +125,10 @@ parser lengths remain the exact INPUT size. This removes the old callback copy,
 retains the real HCD result, and keeps failed or stalled payload out of Linux
 HID and KeyD. On unplug, callback-published state is fenced through the report
 and host tasks until TinyUSB has completed class/HCD close; only then may task
-teardown free `inbuf`. STALL queues the standard endpoint clear-halt request
+teardown free `inbuf`. The completion callback does not select HID parser
+policy: the report task checks the mount-captured boot/report mode under the
+same exact-generation fence and suppresses BOOT payload there. STALL queues the
+standard endpoint clear-halt request
 through the generic per-device EP0 lane. After remote success the TinyUSB host
 owner resets the PIO endpoint toggle to DATA0 and rearms.
 Protocol errors use upstream's bounded delayed retry. The remaining difference
@@ -116,13 +145,16 @@ HID transport, it accepts the HID descriptor after endpoint[0], opens no more
 than the interface's advertised endpoint count, and publishes its class slot
 only after endpoint success. It still performs normal SET_IDLE/SET_PROTOCOL,
 but no longer does a duplicate report-descriptor read through the shared
-512-byte enumeration buffer. It mounts with a NULL descriptor pointer; after
-the exact global-mount fence, lifecycle performs the single authoritative
-Linux-shaped report-descriptor read with an exact-size owned buffer and four
-attempts. The firmware-only full device-descriptor refetch separately gets four
-accepted attempts with 100-ms backoff and carries both cache and TinyUSB address
-epochs across the string chain. The configuration-descriptor limit remains
-512 bytes.
+512-byte enumeration buffer. It mounts with a NULL descriptor pointer and
+publishes only TinyUSB's ephemeral class identity. After the exact global-mount
+fence and shared device/string pre-probe, lifecycle builds the retained
+interface shim. Linux-shaped `usbhid_parse()` then validates its HID descriptor,
+derives the report size, and performs the single authoritative read with an
+exact-size local buffer and four real USB attempts. Local async-pool admission
+waits do not consume those attempts and are bounded by the control timeout. The
+firmware-only full device-descriptor refetch separately gets four accepted
+attempts with 100-ms backoff and carries both cache and TinyUSB address epochs
+across the string chain. The configuration-descriptor limit remains 512 bytes.
 
 EP0 cancellation cannot wait forever for a PIO completion event. The executor
 allows three two-SOF/FIFO fences for TinyUSB's SETUP/DATA/ACK stages. If the
@@ -251,14 +283,15 @@ first two use 384-word stacks and lifecycle uses 512 words; together with task
 overhead they consumed about 6.6 KiB in the measured build. Consolidating them
 is a later architecture change, not part of this bring-up fix.
 
-The callback-safe transport pool now has a 2,556 B payload (plus allocator
-overhead) in the FreeRTOS heap at startup with the current
+The callback-safe lifecycle transport pool now has a 2,756 B payload (plus
+allocator overhead) in the FreeRTOS heap at startup with the current
 `CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
-`CFG_TUH_HID=4` configuration. Replacing four inline 512-byte descriptor slots
-with five 20-byte metadata slots shrinks the payload by 2,012 B and the aligned
-heap_4 allocation by 2,008 B. Lifecycle allocates at most one exact-size report
-descriptor transiently (up to 4 KiB), and transfers its ownership directly into
-probe. Include both the persistent pool and transient descriptor in
+`CFG_TUH_HID=4` configuration. It includes four 16-byte probe-identity slots
+and the single aligned 256-byte device/string descriptor scratch; callbacks own
+neither payload. Lifecycle serializes probe, so
+`usbhid_parse()` allocates at most one exact-size report descriptor transiently
+(up to 4 KiB), owns it through asynchronous completion/cancel, and frees it
+before returning. Include both the persistent pool and transient descriptor in
 post-enumeration and haptic heap checks.
 
 The report executor has ten 36-byte event slots: four interrupt completions,
@@ -266,10 +299,13 @@ five control results (one active plus the four-entry async queue), and one
 close/reopen fence. Zero-copy interrupt events reduce queue payload by 440 B
 versus the former ten 80-byte events; the static control handoff is 44 B
 smaller too. Its coalesced reconcile table costs 32 B of static RAM. The async
-request is now 64 B and its slot is 92 B. Ten metadata slots plus the shared
-257-byte pre-probe scratch request 1,177 B from heap_4 and occupy a 1,192 B
-block, versus the former 3,072 B inline-buffer block: 1,880 B of persistent heap
-is recovered. Exact endpoint callbacks add 1,280 B of TinyUSB device state.
+request is now 60 B and its slot is 88 B. Ten metadata slots request 880 B from
+heap_4 and occupy an 888 B block. Device/string policy and its aligned 256-byte
+scratch now live in the existing lifecycle transport pool, whose 2,756-byte
+payload occupies a 2,768-byte block. Together those two persistent blocks use
+3,656 B, 72 B less than the immediately preceding shared-async-scratch design,
+without adding an allocation or fragmentation point. Exact endpoint callbacks
+add 1,280 B of TinyUSB device state.
 Direct IN/OUT leave one-byte class placeholders. The four 20-byte direct-IN
 metadata slots remain in scratch X, while each attached HID interface owns one
 task-allocated receive buffer of
@@ -277,9 +313,10 @@ task-allocated receive buffer of
 costs a 72-byte heap_4 block; the 16 KiB logical limit plus worst packet tail
 can cost up to a 16,456-byte block. There is no allocation or free per report.
 Host transfer storage now occupies 660 B in scratch X and ends 1,388 B below
-the core-1 stack. The `inbuf` pointer grows `struct usbhid_device` from 244 B to
-248 B without changing its 256-byte heap_4 block. The linked image still
-reports 243,308 B of `.bss` and keeps 172 B of main-SRAM link headroom.
+the core-1 stack. Removing transitional descriptor ownership shrinks
+`struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
+248 B per attached HID. The linked image reports
+243,332 B of `.bss` and keeps 196 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.
@@ -295,8 +332,8 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
 | `ERR: HID_USB_DEV_ALLOC_FAIL` | The bounded physical-device cache has no reusable slot. |
-| `ERR: HID_PROBE_DEFER_FAIL` | Report-descriptor metadata was invalid or all bounded metadata slots were occupied. |
-| `ERR: HID_DESC_ALLOC_FAIL` | Lifecycle could not allocate the exact report-descriptor buffer; the pending fetch is retried. |
+| `ERR: HID_PROBE_DEFER_FAIL` | Mount/pre-probe identity could not be retained, the bounded probe slots were occupied, or device-descriptor pre-probe exhausted its attempts. |
+| `ERR: HID_PROBE_NOMEM` | A parser/probe allocation failed, including the transient exact-size report-descriptor buffer. |
 | `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
@@ -308,8 +345,8 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
-| `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
-| `ERR: HID_DEV_DESC_SUB` / `HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` | One full device-descriptor refetch attempt failed. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
+| `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request exceeded its bounded timeout. Pre-probe allows one second for local slot admission without consuming a wire attempt, then uses the normal five-second Linux USB GET timeout; other generic messages use their caller-supplied timeout. |
+| `ERR: HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` / `HID_DEV_DESC_TYPE` | One full device-descriptor refetch attempt failed, returned fewer than 18 bytes, or returned the wrong descriptor type. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
 | `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |
 | `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
 | `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |

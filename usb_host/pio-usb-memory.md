@@ -37,15 +37,16 @@ This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
-The active 2026-07-20 descriptor-retry/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=493620`, `data=660`, and
-`bss=243308`. `__bss_end__` remains `0x2003ff54`, leaving 172 B before scratch
+The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=490924`, `data=660`, and
+`bss=243332`. `__bss_end__` is `0x2003ff3c`, leaving 196 B before scratch
 X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
-root/hub reset state did not increase static RAM: `usbhid_reset_coordinator` is
-32 B and the complete heap-owned `usbhid_transport_pool` is 2,556 B. The
-separate client generation makes `hid_async_request` 64 B and each of ten
-`hid_async_slot`s 92 B; with the shared 257-byte preprobe buffer their 1,177-byte
-request occupies a 1,192-byte heap_4 block.
+root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
+the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
+aligned 256-byte lifecycle descriptor scratch. `hid_async_request` is 60 B and
+each of ten `hid_async_slot`s is 88 B; their metadata-only 880-byte payload
+occupies an 888-byte heap_4 block. The transport pool occupies a 2,768-byte
+block, so the two allocations total 3,656 B with no descriptor-time allocation.
 
 ## Layers
 
@@ -259,8 +260,8 @@ Tradeoffs:
 - `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Larger
   configuration descriptors can still fail enumeration. The build-local
   TinyUSB HID class deliberately skips every duplicate report-descriptor
-  prefetch; lifecycle instead fetches the class-declared size once through
-  async EP0, up to Linux's 4 KiB limit.
+  prefetch; task-side `usbhid_parse()` instead fetches the class-declared size
+  once through async EP0, up to Linux's 4 KiB limit.
 - `CFG_TUH_HID_EPIN_BUFSIZE=1`: direct interrupt IN uses upstream's
   per-interface `inbuf` through the endpoint API, so TinyUSB's class buffer is
   an unused placeholder. Task context sizes that backing for the parsed INPUT
@@ -280,20 +281,20 @@ endpoint callback table remains in main SRAM. Per-interface interrupt-IN
 payload backing is ordinary PIO-visible SRAM from heap_4: normally a 72-byte
 block for 64 bytes, allocated once at start and freed after the detach fence.
 
-The callback transport pool uses five 20-byte report-descriptor metadata slots
-instead of four inline 512-byte descriptor buffers. Its payload shrinks by
-2,012 B and the aligned heap_4 allocation by 2,008 B. Lifecycle holds at most
-one exact descriptor buffer across all devices while EP0 fetch/probe is active;
-a maximum-size descriptor consumes about 4 KiB transiently and is released
-after probe or fenced cancellation.
+The callback transport pool uses four 16-byte probe-identity slots instead of
+four inline 512-byte descriptor buffers. Its payload shrinks by 2,044 B and the
+aligned heap_4 allocation by 2,040 B. Lifecycle serializes probe, so task-side
+`usbhid_parse()` holds at most one exact descriptor buffer across all devices;
+a maximum-size descriptor consumes about 4 KiB transiently and is released on
+parser return after completion or fenced cancellation.
 
-Device-reset recovery reserves one additional 92-byte async slot which normal
-requests cannot consume. With ten slots and the shared 257-byte descriptor
-scratch, async startup requests 1,177 B (a 1,192-byte heap_4 block). The
-2,556-byte transport pool occupies a 2,568-byte heap_4 block. Together these
-recovery changes cost about 208 B of persistent heap versus the preceding
-exact-descriptor checkpoint; the coordinator's root pending flag fits its
-existing 32-byte layout.
+Device-reset recovery reserves one additional 88-byte async slot which normal
+requests cannot consume. Ten metadata-only slots request 880 B (an 888-byte
+heap_4 block). Device/string pre-probe uses the aligned 256-byte scratch inside
+the 2,756-byte lifecycle transport pool (a 2,768-byte block) and reaches TinyUSB
+through the same generic control lane as other synchronous USB calls. The
+dedicated recovery slot remains unavailable to normal traffic; moving scratch
+ownership removes 72 B of persistent heap without adding a block.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

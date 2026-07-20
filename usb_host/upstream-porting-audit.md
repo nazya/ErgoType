@@ -141,26 +141,48 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   detach is a two-owner fence: the callback publishes slot state, the report
   task queues a coalesced host event, and only that post-`hcd_device_close()`
   acknowledgement lets lifecycle release the slot and buffer.
+- USB detach now preserves the upstream `usbhid_disconnect(struct
+  usb_interface *)` entry shape after `usbhid_probe()`. TinyUSB's earlier
+  physical and HID-class callbacks only publish an idempotent disconnect bit,
+  close the report producer, and wake lifecycle. The task-side function keeps
+  the upstream `usb_get_intfdata()` / disconnected / destroy / free sequence
+  visible, with the firmware's async/report/I/O synchronization inserted before
+  destruction. Physical publication remains authoritative before address-epoch
+  cancel and `hcd_device_close()`; raw app-driver close supplies that fence for
+  hubs, where TinyUSB omits its common unmount callback.
+- Interrupt completion no longer owns retained HID protocol policy. It pins the
+  exact interface generation and publishes the bounded report record; the
+  report task reads the mount-captured protocol mode under that same ownership
+  fence. The previous callback-side BOOT branch remains documented adjacent to
+  the task replacement, and invalid/failed payload still cannot enter the
+  upstream `hid_safe_input_report()` call.
 - Report-descriptor ingress now preserves the pinned
   `hid_get_class_descriptor()` request tuple and retry shape beside the local
   replacement: standard interface `GET_DESCRIPTOR`, exact class-declared
   length, one zeroed buffer, four attempts, and acceptance of the final positive
-  short read. The port-specific difference is scheduling those attempts through
-  the lifecycle task and async EP0 owner before entering the synchronous Linux
-  parser. Cancellation keeps the exact buffer owned through the physical-device
-  generation fence. Descriptors up to Linux's 4 KiB limit no longer depend on
-  TinyUSB's 512-byte enumeration scratch; configuration descriptors still do.
+  short read. The synchronous Linux parser now owns that buffer and calls the
+  generic async-backed `usb_control_msg()` from lifecycle task context. Local
+  pool admission waits are bounded and do not consume a wire attempt;
+  cancellation wakes the blocked parser while its exact buffer remains live.
+  Descriptors up to Linux's 4 KiB limit no longer depend on TinyUSB's 512-byte
+  enumeration scratch; configuration descriptors still do.
   A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
   `hidh_open()` and prefetch blocks commented beside their port replacements.
   Its two-pass current-interface scanner mirrors Linux's accepted HID-descriptor
   positions, caps opened/stored endpoints at `bNumEndpoints`, and publishes the
   TinyUSB class slot only after endpoint success. SET_IDLE/SET_PROTOCOL remain
-  unchanged, then the class mounts with `NULL` so lifecycle is the sole report-
-  descriptor owner. The firmware-only full device-descriptor refetch carries a
-  separate cache/client generation beside TinyUSB's address generation and uses
-  four accepted attempts with 100-ms deadline wakeups; detach cannot restamp an
-  old preprobe as the new address epoch. The installed callback documentation
-  still describes stock behavior; this firmware intentionally passes `NULL`.
+  unchanged, then the class mounts with `NULL` so task-side `usbhid_parse()` is
+  the sole report-descriptor owner. Firmware-only device/string reconstruction
+  is now wholly lifecycle-owned: adjacent upstream `usb_get_descriptor()` /
+  `usb_get_string()` calls stay visible while the compact port sends their
+  standard request tuples through generic async-backed `usb_control_msg()` and
+  one aligned pool scratch. There is no private descriptor kind, FIFO, callback
+  continuation, or scratch in `hid_async`. Device-descriptor recovery retains
+  four accepted attempts with 100-ms deadline wakeups. The generic call pins
+  TinyUSB's address epoch and exact cache record; lifecycle then rechecks its
+  separate cache generation before mutation, so detach cannot restamp an old
+  preprobe as the new address epoch. The installed callback documentation still
+  describes stock behavior; this firmware intentionally passes `NULL`.
 - Linux queues a device reset after clear-halt transfer failure or exhausted
   protocol retry. The adjacent upstream `usb_queue_reset_device()` lines remain
   commented; the port publishes the same terminal decision into a lifecycle
@@ -197,7 +219,7 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `cmake --build build -j4`
 - confirmed `sizeof(hid_async_request) == 64` and
   `sizeof(hid_async_slot) == 92` on the RP2040 ABI
-- confirmed `sizeof(usbhid_device) == 248`, the four RX metadata slots remain
+- confirmed `sizeof(usbhid_device) == 240`, the four RX metadata slots remain
   80 B total, and scratch X fell from 916 B to 660 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)

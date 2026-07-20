@@ -2,29 +2,52 @@
 
 ## Current Scope
 
-- `usb_host/usbhid.c` owns a bounded USB-device cache and report-descriptor
-  metadata slots allocated before the TinyUSB host starts. TinyUSB callbacks do
-  not allocate, wait, or log; they publish interface metadata and wake the
-  lifecycle task. Global mount also leaves device-descriptor submission to that
-  task instead of continuing pre-probe through the async broker in callback
-  context.
+- `usb_host/usbhid.c` owns a bounded USB-device cache and fixed probe-identity
+  slots allocated before the TinyUSB host starts. Its bounded
+  application-driver ingest copies the ephemeral raw configuration stream;
+  mount/unmount callbacks do not allocate, wait, log, or interpret that retained
+  snapshot. HID mount captures only TinyUSB's instance-to-interface
+  identity/protocol and wakes the lifecycle task. Global mount also consumes
+  the already published cache epoch and leaves device/string descriptor policy
+  to lifecycle. Lifecycle calls the ordinary async-backed `usb_control_msg()`
+  and may sleep; the executor and TinyUSB callbacks only transport/complete the
+  standard request. After shared device/string pre-probe, lifecycle constructs
+  the retained USB-interface shim and Linux's `usbhid_parse()` validates the
+  HID descriptor in that task context. Reset recovery consumes the same durable
+  `mount_complete` predicate rather than advancing its state in the callback.
 - HID interface mount no longer has to guess whether USB strings or
-  `bcdDevice` are ready. After pre-probe, the lifecycle task fetches the exact
-  class-declared report descriptor through the asynchronous EP0 owner and moves
-  that buffer into `usbhid_probe()`. Report descriptors are therefore supported
-  through Linux's 4 KiB `HID_MAX_DESCRIPTOR_SIZE`, independently of TinyUSB's
-  512-byte enumeration scratch buffer.
+  `bcdDevice` are ready. After pre-probe, lifecycle enters `usbhid_probe()`;
+  its synchronous Linux parse callback allocates the exact class-declared
+  buffer, fetches it through the asynchronous EP0 owner, parses it, and frees
+  it before returning. Report descriptors are therefore supported through
+  Linux's 4 KiB `HID_MAX_DESCRIPTOR_SIZE`, independently of TinyUSB's 512-byte
+  enumeration scratch buffer.
 - The pre-probe sequence currently fetches the device descriptor, LANGID,
   product string, manufacturer string, and serial string. That makes
   `hid->version`, `hid->name`, and `hid->uniq` available before
-  `hid_ignore()`, `hid_lookup_quirk()`, and driver probe.
-- The raw interface snapshot is still captured from TinyUSB mount data before
-  TinyUSB normalizes the HID boot/report protocol field. That is functional
-  metadata: it feeds Linux-like `hid->type` decisions such as the Razer mouse
-  interface path.
+  `hid_ignore()`, `hid_lookup_quirk()`, and driver probe. Lifecycle performs at
+  most one descriptor wire operation before returning through top-level
+  disconnect/reset handling. Required device-descriptor admission retries
+  without consuming a wire attempt; optional strings remain best-effort and a
+  persistently full local slot pool cannot prevent an otherwise usable probe.
+- The raw interface snapshot preserves USB's HID subclass and interface
+  protocol (none/keyboard/mouse) before TinyUSB reconstructs its class-facing
+  view. That is functional metadata: it feeds Linux-like `hid->type` decisions
+  such as the Razer mouse interface path. The probe token now carries that
+  snapshot's interface number through probe, so task-side `usbhid_probe()`
+  builds its USB shims only from lifecycle-owned device/interface state instead
+  of rereading live TinyUSB VID/PID and interface tables. HID unmount rotates
+  that same token before TinyUSB clears its class slot, so probe liveness also
+  no longer polls the host-owned `tuh_hid_mounted()` table from the lifecycle
+  task. The selected boot/report mode follows that token into retained interface
+  state as well. Report completion now publishes only transfer metadata; the
+  report task applies the retained-mode parser gate under the exact interface
+  generation fence instead of rereading TinyUSB's class slot in the callback.
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
-  never run Linux driver continuations directly.
+  never run Linux driver continuations directly. Device/string pre-probe has no
+  private request kind, FIFO, scratch, or completion continuation in this layer;
+  it uses the same generic device-control path as task-side Linux USB calls.
 - HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
   `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
   transfer carries the request serial in `user_data`, and completion preserves
@@ -63,10 +86,13 @@
   queued request, matching upstream's enqueue-time value semantics. Generic
   synchronous control and interrupt-OUT requests instead borrow the blocked
   caller's buffer through physical completion or fenced cancellation. Removing
-  the old 257-byte inline payloads shrinks `hid_async_request` from 312 B to
-  64 B and its slot from 340 B to 92 B; one 257-byte shared pre-probe scratch
-  remains in the ten-slot startup allocation. The extra generation word is the
-  caller/cache epoch, deliberately distinct from TinyUSB's address epoch.
+  the old 257-byte inline payloads and the private pre-probe metadata shrinks
+  `hid_async_request` from 312 B to 60 B and its slot from 340 B to 88 B. The
+  ten-slot executor allocation is now metadata-only. One aligned 256-byte
+  lifecycle scratch lives in the existing transport-pool allocation, so moving
+  descriptor policy out of the executor adds no heap block or fragmentation.
+  The generic request carries TinyUSB's address epoch; lifecycle separately
+  revalidates its physical-cache generation after every blocking call.
   Generic control uses USB's native 16-bit length, while HID `.request()`
   remains bounded by `HID_MAX_BUFFER_SIZE`.
 - `usbhid_start()` now clears the NumLock output field on boot keyboards and
@@ -75,27 +101,39 @@
 - Physical detach now closes the async generation and publishes a bounded
   cache tombstone without waiting in the TinyUSB callback. The app-driver close
   path covers hubs, for which TinyUSB does not issue the common unmount callback.
+  That physical callback also publishes `disconnect_queued` and stops direct IN
+  for every live interface before rotating the address-wide async epoch. The
+  later HID class close is an idempotent exact-interface publisher. Neither path
+  destroys a Linux HID object: lifecycle calls the upstream-shaped
+  `usbhid_disconnect(struct usb_interface *)`, synchronizes report/async/I/O
+  owners, and only then removes and frees it.
   Parent cache entries remain retired until their child subtree and HID objects
   are gone; fast reuse of the same device address starts a distinct generation.
   Cache fields are filled under one critical section and `valid` is published
   last. Callback HID lookups acquire an `io_pending` lease in that same section,
   and input completion also matches the exact interface generation, so pointer
   lifetime no longer depends on the current task affinity/priority ordering.
-  Lifecycle flags and descriptor slots remain authoritative if the one-entry
+  Lifecycle flags and probe slots remain authoritative if the one-entry
   wake queue is already full.
 - Report-descriptor fetch preserves upstream `hid_get_class_descriptor()`
   behavior: one zeroed exact-size buffer, up to four reads, and acceptance of a
-  final successful short read. At most one such buffer exists across devices;
-  cancel and fast-replug retain it until the async generation fence completes.
+  final successful short read. The lifecycle task serializes probe, so at most
+  one such buffer exists across devices; it remains local to `usbhid_parse()`
+  until async completion/cancel and is freed on every parser return path.
+  Local `-EBUSY` admission waits yield without consuming one of the four real
+  USB attempts, but the normal control timeout bounds a persistently full pool.
   The SHA-pinned build-local TinyUSB HID class no longer performs its earlier
   duplicate read into the 512-byte enumeration buffer: it completes class mount
   with `NULL`, which is the only value consumed by this callback facade, and
-  lifecycle performs the single authoritative fetch. Configuration descriptors
-  remain separately limited by the enumeration scratch buffer. The firmware-
+  task-side `usbhid_parse()` performs the single authoritative fetch through
+  the generic asynchronous control broker. Configuration descriptors remain
+  separately limited by the enumeration scratch buffer. The firmware-
   only full device-descriptor refetch now retains pending HID metadata across
   three transient failures, with four accepted attempts and 100-ms lifecycle
-  deadlines. Its request carries both the physical-cache generation and the
-  TinyUSB address generation, so detach/reuse cannot retarget a retry.
+  deadlines. `usb_control_msg()` pins the exact physical cache entry and
+  TinyUSB address epoch while blocked; lifecycle checks the captured cache
+  generation again before publishing any descriptor or string field, so
+  detach/reuse cannot retarget a retry.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -127,7 +165,8 @@
   TinyUSB's class/HCD close pass, so no callback allocates, waits, or frees the
   buffer. Successful payload is dropped while
   `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
-  Non-success payload never reaches the HID parser. STALL queues the standard
+  Non-success payload never reaches the HID parser. BOOT-mode suppression is
+  also decided here rather than in endpoint completion context. STALL queues the standard
   endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
   only successful completion lets the TinyUSB host owner reset the PIO endpoint
   toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
@@ -165,8 +204,10 @@
   current interface extras (including after endpoint[0]), opens no more than
   `bNumEndpoints`, and publishes the class slot only after endpoint success.
   TinyUSB still performs SET_IDLE and SET_PROTOCOL, then mounts without
-  borrowing the shared enumeration buffer; lifecycle owns the one exact-size
-  Linux-style descriptor request and its retry/error semantics.
+  borrowing the shared enumeration buffer; mount publishes only its ephemeral
+  class identity. Lifecycle builds the retained interface, then upstream-shaped
+  `usbhid_parse()` validates its HID metadata and owns the one exact-size
+  descriptor request and its retry/error semantics.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -276,7 +317,7 @@
 
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
-- Verify exact lifecycle report-descriptor fetch with normal enumeration,
+- Verify task-side `usbhid_parse()` report-descriptor fetch with normal enumeration,
   haptic allocation, direct unplug/replug, and a hub subtree reconnect. Also
   exercise a report descriptor larger than 512 bytes. Record free heap and the
   TinyUSB stack watermark; inspect the lifecycle watermark separately if the

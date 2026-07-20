@@ -13,11 +13,19 @@ The active implementation now has these properties:
 
 - TinyUSB callbacks copy or publish bounded records and return; Linux parsing,
   probe, remove, and continuations run in task context.
+- Physical/HID unmount callbacks publish an idempotent disconnect fence; the
+  lifecycle task alone invokes upstream-shaped `usbhid_disconnect()`, waits for
+  report/async/I/O ownership, and destroys the HID object. Interrupt completion
+  likewise publishes transfer metadata only; boot/report parser policy belongs
+  to the report task.
 - `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
   parsing, matching the upstream caller contract without blocking TinyUSB.
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.
+- Device and string pre-probe policy is lifecycle-owned and uses that same
+  generic `usb_control_msg()` path with one transport-pool scratch. The async
+  executor has no descriptor-specific request kind, FIFO, or continuation.
 - HID EP0 GET/SET use direct asynchronous `tuh_control_xfer()` so
   completion retains the real TinyUSB result, actual length, and request serial.
 - Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` now
@@ -39,8 +47,9 @@ The active implementation now has these properties:
   from the host owner, avoiding a recursive send to TinyUSB's only host queue;
   exact physical and parent generations fence any raced replacement epoch.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
-  descriptors are now fetched by the lifecycle task at their class-declared
-  size through the generic asynchronous EP0 owner, up to Linux's 4 KiB limit;
+  descriptors are now fetched by task-side `usbhid_parse()` at their
+  class-declared size through the generic asynchronous EP0 owner, up to Linux's
+  4 KiB limit;
   TinyUSB's enumeration buffer still limits configuration descriptors. Direct
   interrupt-IN uses upstream's per-interface buffer ownership and Linux's
   16 KiB HID limit. Generic synchronous messages use the native 16-bit USB

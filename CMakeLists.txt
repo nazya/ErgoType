@@ -318,10 +318,10 @@ set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
                             "${PICO_TINYUSB_PATH}/src/host")
 
 # TinyUSB's HID class assumes interface -> HID -> endpoint layout and prefetches
-# the report descriptor into its 512-byte enumeration buffer before our
-# Linux-shaped transport can fetch it. Generate a second build-local source
+# the report descriptor into its 512-byte enumeration buffer before task-side
+# Linux `usbhid_parse()` can request it. Generate a second build-local source
 # which scans the bounded interface extras like Linux, leaves SET_IDLE/
-# SET_PROTOCOL in TinyUSB, and hands descriptor ownership/retry to lifecycle.
+# SET_PROTOCOL in TinyUSB, and hands descriptor ownership/retry to that parser.
 # The installed SDK remains untouched.
 set(TINYUSB_HIDH_SOURCE
     "${PICO_TINYUSB_PATH}/src/class/hid/hid_host.c")
@@ -590,7 +590,7 @@ set(TINYUSB_HIDH_REPORT_DESC_PORT [=[
       //                                 usbh_get_enum_buf(), p_hid->report_desc_len,
       //                                 process_set_config, CONFIG_COMPLETE);
       // }
-      // Firmware lifecycle owns one exact-size, four-attempt Linux-style fetch.
+      // Firmware usbhid_parse() owns one exact-size, four-attempt Linux fetch.
       config_driver_mount_complete(daddr, idx, NULL, 0);
       break;
 
