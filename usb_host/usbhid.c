@@ -239,7 +239,6 @@ static u32 usbhid_probe_serial;
 static u32 usbhid_transport_faults;
 static bool usbhid_lifecycle_wake_pending;
 static bool usbhid_io_get(struct hid_device *hid);
-static void usbhid_io_put(struct hid_device *hid);
 static void usbhid_io_wait_idle(struct hid_device *hid);
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype);
@@ -3821,14 +3820,22 @@ static bool usbhid_io_get(struct hid_device *hid)
 	return acquired;
 }
 
-static void usbhid_io_put(struct hid_device *hid)
+void usbhid_io_put(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
+	TaskHandle_t waiter = NULL;
 
 	hid_transport_lock();
 	configASSERT(usbhid->io_pending);
 	usbhid->io_pending--;
+	// wake_up(&usbhid->wait);
+	// The port's aggregate io_pending replaces upstream CTRL/OUT running bits;
+	// snapshot its only idle edge under the transport mutex and notify unlocked.
+	if (!usbhid->io_pending)
+		waiter = usbhid->wait.task;
 	hid_transport_unlock();
+	if (waiter)
+		xTaskNotifyGive(waiter);
 }
 
 /*
@@ -3912,6 +3919,7 @@ static int usbhid_control_input_publish_owned(
 		struct usbhid_control_input *input, u16 len)
 {
 	struct usbhid_device *usbhid = req->hid->driver_data;
+	TaskHandle_t waiter = NULL;
 	int ret = 0;
 
 	input->len = len;
@@ -3925,8 +3933,14 @@ static int usbhid_control_input_publish_owned(
 		ret = -EBUSY;
 	} else {
 		usbhid->owned_control_input = input;
+		// wake_up(&usbhid->wait);
+		// This probe GET cannot reach the final idle edge until its lifecycle
+		// wait owner first parses and releases the published input.
+		waiter = usbhid->wait.task;
 	}
 	hid_transport_unlock();
+	if (waiter)
+		xTaskNotifyGive(waiter);
 	return ret;
 }
 
@@ -4127,15 +4141,31 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
  * those bounded request timeouts replace upstream's outer 10*HZ timeout. A
  * probe-owned GET cannot run on the report task because its caller still owns
  * driver_input_lock; consume that completion in the waiting lifecycle task
- * without opening interrupt input on the half-built HID device.
+ * without opening interrupt input on the half-built HID device. The existing
+ * per-interface wait head carries only the wake edge; io_pending and the owned
+ * input pointer remain the durable predicates, as Linux wait_event requires.
  */
 static int usbhid_wait_io(struct hid_device *hid)
 {
+	struct usbhid_device *usbhid = hid->driver_data;
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+
+	/* The linked probe callers serialize hid_hw_wait() per HID interface. */
+	hid_transport_lock();
+	configASSERT(!usbhid->wait.task || usbhid->wait.task == task);
+	usbhid->wait.task = task;
+	hid_transport_unlock();
+
 	while (!usbhid_io_idle(hid)) {
 		if (usbhid_control_input_process_owned(hid))
 			continue;
-		vTaskDelay(1);
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 	}
+
+	hid_transport_lock();
+	configASSERT(usbhid->wait.task == task);
+	usbhid->wait.task = NULL;
+	hid_transport_unlock();
 	return usbhid_report_is_stopping(hid) ? -ENODEV : 0;
 }
 

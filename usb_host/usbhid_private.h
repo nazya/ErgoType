@@ -91,4 +91,7 @@ struct usbhid_device {
 	struct usb_interface usb_intf;
 };
 
+/* Upstream Linux: no equivalent; shared TinyUSB/FreeRTOS transport lease. */
+void usbhid_io_put(struct hid_device *hid);
+
 #endif

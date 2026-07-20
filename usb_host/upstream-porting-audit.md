@@ -83,7 +83,10 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   port sends ordinary GET completion to the report task, but a probe GET whose
   lifecycle caller still owns `driver_input_lock` publishes its request buffer
   directly to that interface's `.wait()` owner. This avoids a firmware-only
-  queue handoff without opening interrupt input on a half-built device.
+  queue handoff without opening interrupt input on a half-built device. The
+  existing per-interface wait head now carries the corresponding upstream-style
+  wake edge; the broader firmware `io_pending` lease remains the durable
+  predicate, so `hid_hw_wait()` no longer needs one-tick polling.
 - TinyUSB callbacks are task-context publishers in this port. One explicit
   transport mutex now replaces the former common FreeRTOS critical
   domain across async slots, lifecycle/cache state, and report ownership. The

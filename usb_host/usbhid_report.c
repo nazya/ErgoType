@@ -475,9 +475,9 @@ static bool usbhid_report_cancel_recovery_timer(struct hid_device *hid,
 			}
 		}
 	}
-	configASSERT(usbhid->io_pending);
-	usbhid->io_pending--;
 	hid_transport_unlock();
+	/* Release through the common wait-head wake edge after timer state settles. */
+	usbhid_io_put(hid);
 	return reconcile;
 }
 

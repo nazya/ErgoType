@@ -155,10 +155,14 @@
   `owned_control_input` slot, and the waiting lifecycle task consumes it under
   the `driver_input_lock` it already owns. In both cases `hid_hw_wait()` drains
   through the end of parsing, so callers cannot observe a transport-complete/
-  parser-pending false idle. Interrupt-IN stays gated until probe finishes,
-  while returned feature fields are preserved instead of being lost to lock
-  contention. Raw GET/SET and interrupt output keep their upstream synchronous
-  return contract while using the same asynchronous TinyUSB owner underneath.
+  parser-pending false idle. It now registers the existing per-interface wait
+  head before testing those durable predicates; owner publication or the final
+  I/O release supplies a task wake instead of one-tick polling. This adds no
+  queue, semaphore, or heap allocation. Interrupt-IN stays gated until probe
+  finishes, while returned feature fields are preserved instead of being lost
+  to lock contention. Raw GET/SET and interrupt output keep their upstream
+  synchronous return contract while using the same asynchronous TinyUSB owner
+  underneath.
 - The report executor reserves space for all four queued async requests plus
   the active ordinary control request. Probe-owned GETs do not occupy that
   queue; their current upstream caller issues one request and immediately waits
