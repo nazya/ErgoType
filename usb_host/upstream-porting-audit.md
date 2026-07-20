@@ -79,6 +79,11 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `driver_input_lock` serializes input parsing with remove. Async cancel drops
   queued reports and waits any dequeued parser/completion through its last HID
   access before destruction.
+- Upstream `hid_ctrl()` parses a completed control URB in its callback. This
+  port sends ordinary GET completion to the report task, but a probe GET whose
+  lifecycle caller still owns `driver_input_lock` publishes its request buffer
+  directly to that interface's `.wait()` owner. This avoids a firmware-only
+  queue handoff without opening interrupt input on a half-built device.
 - TinyUSB callbacks are task-context publishers in this port. One explicit
   transport mutex now replaces the former common FreeRTOS critical
   domain across async slots, lifecycle/cache state, and report ownership. The

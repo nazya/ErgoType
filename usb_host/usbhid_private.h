@@ -4,6 +4,8 @@
 
 #include "linux/include/linux/hid.h"
 
+struct usbhid_control_input;
+
 /*
  * USB-specific HID struct, to be pointed to
  * from struct hid_device->driver_data
@@ -68,7 +70,8 @@ struct usbhid_device {
 	u32 generation;
 	u32 report_revision;
 	u32 io_pending;
-	TaskHandle_t control_waiter;
+	/* Upstream Linux: no equivalent; direct probe-GET completion for .wait(). */
+	struct usbhid_control_input *owned_control_input;
 	u16 report_bufsize;
 	u8 report_owner;
 	u8 report_slot;

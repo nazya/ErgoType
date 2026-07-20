@@ -38,8 +38,8 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=491004`, `data=660`, and
-`bss=243336`. `__bss_end__` is `0x2003ff40`, leaving 192 B before scratch
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=490316`, `data=660`, and
+`bss=243300`. `__bss_end__` is `0x2003ff1c`, leaving 228 B before scratch
 X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
 the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
@@ -299,6 +299,14 @@ dedicated recovery slot remains unavailable to normal traffic; moving scratch
 ownership removes 72 B of persistent heap. Replacing the transport's global
 critical regions adds one separate persistent 96-byte mutex block; it is
 startup-only and does not churn during attach/report traffic.
+
+The report task's input queue occupies a 176-byte heap_4 block (four 20-byte
+events plus the queue object), and its ordinary-control queue occupies 232 B
+(five 28-byte events plus the queue object), for 408 B combined. Probe-owned
+GET completion bypasses that queue through a per-interface pointer into the
+existing request buffer. Removing the old global handoff saves 36 B of `.bss`,
+and shrinking the control event saves 24 B of persistent queue heap. Its
+temporary GET header is 16 B instead of 12 B and is freed after parse/cancel.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

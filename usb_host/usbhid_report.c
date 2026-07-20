@@ -98,12 +98,10 @@ struct usbhid_control_report_event {
 	u8 *data;
 	void *context;
 	usbhid_control_report_done_t done;
-	TaskHandle_t parser_owner;
 	u32 generation;
 	u16 len;
 	u16 bufsize;
 	u8 report_type;
-	bool parse;
 };
 
 struct usbhid_report_reconcile {
@@ -134,8 +132,6 @@ struct usbhid_report_retry {
 static QueueHandle_t usbhid_input_report_queue;
 static QueueHandle_t usbhid_control_report_queue;
 static TaskHandle_t usbhid_report_task_handle;
-static struct usbhid_control_report_event usbhid_control_report_handoff;
-static bool usbhid_control_report_handoff_ready;
 CFG_TUH_MEM_SECTION CFG_TUH_MEM_ALIGN
 static struct usbhid_report_rx_slot usbhid_report_rx_slots[CFG_TUH_HID];
 /* Keep Linux retry state out of the constrained TinyUSB scratch bank. */
@@ -165,12 +161,6 @@ static void usbhid_report_notify_task(void)
 	hid_transport_unlock();
 	if (task)
 		(void)xTaskNotifyGiveIndexed(task, USBHID_REPORT_NOTIFY_INDEX);
-}
-
-void usbhid_control_report_owner_ready(void)
-{
-	/* Port glue: driver_input_lock readiness is not a FreeRTOS queue event. */
-	usbhid_report_notify_task();
 }
 
 static u32 usbhid_report_next_serial_locked(void)
@@ -1107,7 +1097,7 @@ int usbhid_report_submit(struct hid_device *hid, const uint8_t *report,
 
 int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 				 uint8_t *report, uint16_t bufsize,
-				 uint16_t len, TaskHandle_t parser_owner,
+				 uint16_t len,
 				 usbhid_control_report_done_t done,
 				 void *context)
 {
@@ -1117,9 +1107,7 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 		.data = report,
 		.context = context,
 		.done = done,
-		.parser_owner = parser_owner,
 		.len = len,
-		.parse = true,
 		.bufsize = bufsize,
 		.report_type = report_type,
 	};
@@ -1139,8 +1127,9 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 	hid_transport_unlock();
 
 	/*
-	 * Each bounded async request has a reserved control-lane slot. Waiting for
-	 * parser ownership therefore cannot block interrupt-IN or its host fence.
+	 * The ordinary HID GET completion budget has five queue slots. Probe-owned
+	 * GETs bypass them, so their lifecycle parser cannot block interrupt-IN or
+	 * its host fence while driver_input_lock remains held.
 	 */
 	if (xQueueSendToBack(usbhid_control_report_queue, &event, 0) != pdPASS)
 		return -EBUSY;
@@ -1567,61 +1556,15 @@ static bool usbhid_report_process_reconcile(void)
 	return true;
 }
 
-enum usbhid_control_report_result {
-	USBHID_CONTROL_REPORT_EMPTY,
-	USBHID_CONTROL_REPORT_BLOCKED,
-	USBHID_CONTROL_REPORT_PROCESSED,
-};
-
-static enum usbhid_control_report_result
-usbhid_control_report_process_one(void)
+static bool usbhid_control_report_process_one(void)
 {
 	struct usbhid_control_report_event event;
 	struct usbhid_device *usbhid;
-	TaskHandle_t parser_owner;
 	bool process;
 
-	if (xQueuePeek(usbhid_control_report_queue, &event, 0) != pdPASS)
-		return USBHID_CONTROL_REPORT_EMPTY;
-
-	usbhid = event.hid->driver_data;
-	parser_owner = event.parser_owner;
-	hid_transport_lock();
-	process = event.generation == usbhid->generation &&
-		  !usbhid->transport_stopping;
-	hid_transport_unlock();
-
-	/*
-	 * A probe-time GET belongs to the lifecycle task already holding
-	 * driver_input_lock. Keep the event at the control-lane head until that
-	 * task enters hid_hw_wait(), then hand off only this control report.
-	 */
-	if (process && event.parse && parser_owner &&
-	    sema_owned_by_task(&event.hid->driver_input_lock, parser_owner)) {
-		bool waiter_ready;
-
-		hid_transport_lock();
-		waiter_ready = usbhid->control_waiter == parser_owner &&
-			       !usbhid_control_report_handoff_ready;
-		hid_transport_unlock();
-		if (!waiter_ready)
-			return USBHID_CONTROL_REPORT_BLOCKED;
-
-		if (xQueueReceive(usbhid_control_report_queue, &event, 0) !=
-		    pdPASS)
-			return USBHID_CONTROL_REPORT_EMPTY;
-		hid_transport_lock();
-		configASSERT(!usbhid_control_report_handoff_ready);
-		usbhid_control_report_handoff = event;
-		usbhid_control_report_handoff_ready = true;
-		hid_transport_unlock();
-		/* The owner runs one priority below this task. */
-		vTaskDelay(1);
-		return USBHID_CONTROL_REPORT_PROCESSED;
-	}
-
 	if (xQueueReceive(usbhid_control_report_queue, &event, 0) != pdPASS)
-		return USBHID_CONTROL_REPORT_EMPTY;
+		return false;
+
 	usbhid = event.hid->driver_data;
 	hid_transport_lock();
 	process = event.generation == usbhid->generation &&
@@ -1633,49 +1576,12 @@ usbhid_control_report_process_one(void)
 	 * hid_safe_input_report() owns the nonblocking parser lock; its return value
 	 * is not a USB completion status and must not cause this event to be replayed.
 	 */
-	if (process && event.parse)
+	if (process)
 		(void)hid_safe_input_report(
 			event.hid,
 			(enum hid_report_type)event.report_type,
 			event.data, event.bufsize, event.len, 0);
 	usbhid_control_report_finish(&event, process ? 0 : -ENODEV);
-	return USBHID_CONTROL_REPORT_PROCESSED;
-}
-
-bool usbhid_control_report_process_owned(struct hid_device *hid)
-{
-	struct usbhid_device *usbhid;
-	struct usbhid_control_report_event event;
-	TaskHandle_t task = xTaskGetCurrentTaskHandle();
-	bool process;
-
-	if (!hid || !sema_owned_by_current(&hid->driver_input_lock))
-		return false;
-	usbhid = hid->driver_data;
-
-	hid_transport_lock();
-	if (!usbhid_control_report_handoff_ready ||
-	    usbhid_control_report_handoff.hid != hid ||
-	    usbhid_control_report_handoff.parser_owner != task ||
-	    usbhid->control_waiter != task) {
-		hid_transport_unlock();
-		return false;
-	}
-	event = usbhid_control_report_handoff;
-	usbhid_control_report_handoff_ready = false;
-	process = event.generation == usbhid->generation &&
-		  !usbhid->transport_stopping;
-	hid_transport_unlock();
-
-	usbhid_control_report_finish(&event,
-		process && event.parse ?
-			hid_safe_input_report_locked(
-				hid,
-				(enum hid_report_type)event.report_type,
-				event.data, event.bufsize, event.len, 0) :
-			-ENODEV);
-	/* The handoff predicate changed after its event was copied locally. */
-	usbhid_report_notify_task();
 	return true;
 }
 
@@ -1691,8 +1597,6 @@ void usbhid_report_task(void *pvParameters)
 	for (;;) {
 		struct usbhid_device *usbhid;
 		struct usbhid_input_report_event event;
-		enum usbhid_control_report_result control_result =
-			USBHID_CONTROL_REPORT_EMPTY;
 		bool clear_halt = false;
 		bool defer = false;
 		bool io_retry = false;
@@ -1710,23 +1614,15 @@ void usbhid_report_task(void *pvParameters)
 		if (usbhid_report_process_reconcile())
 			continue;
 
-		if (prefer_control) {
-			control_result = usbhid_control_report_process_one();
-			if (control_result == USBHID_CONTROL_REPORT_PROCESSED) {
-				prefer_control = false;
-				continue;
-			}
+		if (prefer_control && usbhid_control_report_process_one()) {
+			prefer_control = false;
+			continue;
 		}
 
 		if (xQueueReceive(usbhid_input_report_queue, &event, 0) != pdPASS) {
-			if (!prefer_control) {
-				control_result =
-					usbhid_control_report_process_one();
-				if (control_result ==
-				    USBHID_CONTROL_REPORT_PROCESSED) {
-					prefer_control = false;
-					continue;
-				}
+			if (!prefer_control && usbhid_control_report_process_one()) {
+				prefer_control = false;
+				continue;
 			}
 			if (usbhid_report_process_reconcile())
 				continue;
@@ -1736,8 +1632,7 @@ void usbhid_report_task(void *pvParameters)
 			 */
 			(void)ulTaskNotifyTakeIndexed(
 				USBHID_REPORT_NOTIFY_INDEX, pdTRUE,
-				control_result == USBHID_CONTROL_REPORT_BLOCKED ?
-					1 : portMAX_DELAY);
+				portMAX_DELAY);
 			continue;
 		}
 		prefer_control = true;

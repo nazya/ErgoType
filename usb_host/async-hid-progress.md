@@ -150,18 +150,20 @@
   generation again before publishing any descriptor or string field, so
   detach/reuse cannot retarget a retry.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
-  Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
-  drains through the end of parsing, so callers cannot observe
-  a transport-complete/parser-pending false idle. During probe, the waiting
-  lifecycle task consumes only its completed control GET under the lock it
-  already owns. Interrupt-IN therefore stays gated until probe finishes, while
-  returned feature fields are preserved instead of being lost to lock
+  Ordinary GET_REPORT completion enters the report queue. A probe-owned GET
+  instead publishes its existing request buffer through the interface-local
+  `owned_control_input` slot, and the waiting lifecycle task consumes it under
+  the `driver_input_lock` it already owns. In both cases `hid_hw_wait()` drains
+  through the end of parsing, so callers cannot observe a transport-complete/
+  parser-pending false idle. Interrupt-IN stays gated until probe finishes,
+  while returned feature fields are preserved instead of being lost to lock
   contention. Raw GET/SET and interrupt output keep their upstream synchronous
   return contract while using the same asynchronous TinyUSB owner underneath.
 - The report executor reserves space for all four queued async requests plus
-  the active request, so a second fast control GET is no longer discarded while
-  an earlier result waits for parser ownership. Interrupt-IN close is reconciled
-  in the TinyUSB owner: abort completion is drained for two SOFs before a raced
+  the active ordinary control request. Probe-owned GETs do not occupy that
+  queue; their current upstream caller issues one request and immediately waits
+  for its direct per-interface completion. Interrupt-IN close is reconciled in
+  the TinyUSB owner: abort completion is drained for two SOFs before a raced
   reopen may arm a new receive. EP0 retirement is also bounded: three two-SOF
   host-owner fences cover SETUP/DATA/ACK, after which a SHA-pinned TinyUSB helper
   matches daddr + callback + serial and synthesizes the old owner's TIMEOUT
@@ -345,9 +347,9 @@
   `HID_SUBMIT_TO`, or `HID_XFER_TO`. Keep these as separate observations.
 - Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
   fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
-  must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or parser-queue
-  errors. Record post-attachment heap; the enlarged report queue costs 400 B of
-  startup heap and its reconcile table adds 32 B of static RAM.
+  must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or
+  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap; the two report queues
+  occupy 408 B of startup heap and the reconcile table adds 32 B of static RAM.
 - Exercise SET_IDLE on a path that actually calls the ll-driver `.idle` hook;
   enumeration-time TinyUSB SET_IDLE happens before this transport is mounted and
   is not proof of the new request path.

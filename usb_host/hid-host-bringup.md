@@ -294,18 +294,22 @@ neither payload. Lifecycle serializes probe, so
 before returning. Include both the persistent pool and transient descriptor in
 post-enumeration and haptic heap checks.
 
-The report executor has ten 36-byte event slots: four interrupt completions,
-five control results (one active plus the four-entry async queue), and one
-close/reopen fence. Zero-copy interrupt events reduce queue payload by 440 B
-versus the former ten 80-byte events; the static control handoff is 44 B
-smaller too. Its coalesced reconcile table costs 32 B of static RAM. The async
-request is now 60 B and its slot is 88 B. Ten metadata slots request 880 B from
-heap_4 and occupy an 888 B block. Device/string policy and its aligned 256-byte
-scratch now live in the existing lifecycle transport pool, whose 2,756-byte
-payload occupies a 2,768-byte block. Together those two persistent blocks use
-3,656 B, 72 B less than the immediately preceding shared-async-scratch design,
-before synchronization. The explicit transport mutex adds one persistent
-84-byte FreeRTOS queue object, which occupies a 96-byte heap_4 block; all three
+The report executor has two persistent queues. Four 20-byte interrupt events
+plus the 84-byte FreeRTOS queue object request 164 B and occupy a 176-byte
+heap_4 block. Five 28-byte ordinary-control results request 224 B and occupy a
+232-byte block. The two queues therefore occupy 408 B. Probe-owned GET
+completion bypasses the control queue and reuses its request buffer through one
+per-interface pointer; the former global handoff is gone. Relative to the
+immediately preceding implementation this saves 24 B of persistent heap and
+36 B of `.bss`; the temporary GET header grows from 12 B to 16 B. The coalesced
+reconcile table still costs 32 B of static RAM. The async request is 60 B and
+its slot is 88 B. Ten metadata slots request 880 B from heap_4 and occupy an
+888 B block. Device/string policy and its aligned 256-byte scratch live in the
+existing lifecycle transport pool, whose 2,756-byte payload occupies a
+2,768-byte block. Together those two persistent blocks use 3,656 B, 72 B less
+than the immediately preceding shared-async-scratch design, before
+synchronization. The explicit transport mutex adds one persistent 84-byte
+FreeRTOS queue object, which occupies a 96-byte heap_4 block; all three
 transport allocations therefore use 3,752 B. It is allocated once at startup
 and never churned during attach/report traffic. Exact endpoint callbacks add
 1,280 B of TinyUSB device state.
@@ -318,8 +322,8 @@ can cost up to a 16,456-byte block. There is no allocation or free per report.
 Host transfer storage now occupies 660 B in scratch X and ends 1,388 B below
 the core-1 stack. Removing transitional descriptor ownership shrinks
 `struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
-248 B per attached HID. The linked image reports
-243,336 B of `.bss` and keeps 192 B of main-SRAM link headroom.
+248 B per attached HID. The linked image reports 243,300 B of `.bss` and keeps
+228 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.
@@ -348,6 +352,7 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
+| `ERR: HID_CTRL_DISPATCH_FAIL` | A completed control GET could not be published to its ordinary report queue or direct probe owner. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request exceeded its bounded timeout. Pre-probe allows one second for local slot admission without consuming a wire attempt, then uses the normal five-second Linux USB GET timeout; other generic messages use their caller-supplied timeout. |
 | `ERR: HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` / `HID_DEV_DESC_TYPE` | One full device-descriptor refetch attempt failed, returned fewer than 18 bytes, or returned the wrong descriptor type. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
 | `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |

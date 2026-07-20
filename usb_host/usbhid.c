@@ -97,6 +97,8 @@ struct usbhid_control_input {
 	/* Stable async slot identity held until parser completion. */
 	u32 async_serial;
 	u16 bufsize;
+	u16 len;
+	u8 report_type;
 	u8 data[];
 };
 
@@ -3898,6 +3900,36 @@ static void usbhid_control_report_done(struct hid_device *hid, void *context,
 	usbhid_io_put(hid);
 }
 
+/*
+ * Upstream Linux: no equivalent. hid_ctrl() completes and parses the control
+ * URB in one callback. A probe-time GET in this port completes on the async
+ * task while its lifecycle caller still owns driver_input_lock, so publish the
+ * completed buffer back to that same HID owner instead of routing it through
+ * the report task.
+ */
+static int usbhid_control_input_publish_owned(
+		const struct hid_async_request *req,
+		struct usbhid_control_input *input, u16 len)
+{
+	struct usbhid_device *usbhid = req->hid->driver_data;
+	int ret = 0;
+
+	input->len = len;
+	input->report_type = req->report->type;
+
+	hid_transport_lock();
+	if (usbhid->transport_stopping) {
+		ret = -ENODEV;
+	} else if (usbhid->owned_control_input) {
+		/* Owner-tagged callers issue one GET and immediately wait for it. */
+		ret = -EBUSY;
+	} else {
+		usbhid->owned_control_input = input;
+	}
+	hid_transport_unlock();
+	return ret;
+}
+
 static void usbhid_request_complete(const struct hid_async_request *req,
 				    int status)
 {
@@ -3924,7 +3956,7 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	/*
 	 * TinyUSB adapter: the completion-owned input buffer is also the direct EP0
 	 * destination and remains owned through hid_ctrl(). Pin this executor slot
-	 * before publishing its payload to the parser lane.
+	 * before publishing its payload to its parser consumer.
 	 */
 	ret = hid_async_control_report_hold(req);
 	if (ret) {
@@ -3935,19 +3967,51 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 		return;
 	}
 	input->async_serial = req->serial;
-	ret = usbhid_control_report_submit(req->hid, req->report->type,
-					   input->data, input->bufsize, len,
-					   input->parser_owner,
-					   usbhid_control_report_done,
-					   input);
+	if (input->parser_owner)
+		ret = usbhid_control_input_publish_owned(req, input, len);
+	else
+		ret = usbhid_control_report_submit(req->hid, req->report->type,
+						   input->data, input->bufsize,
+						   len,
+						   usbhid_control_report_done,
+						   input);
 	if (ret) {
 		if (ret != -ENODEV)
-			async_msg("ERR: HID_CTRL_PARSE_Q_FAIL");
+			async_msg("ERR: HID_CTRL_DISPATCH_FAIL");
 		hid_async_control_report_release(req->hid,
 						 input->async_serial);
 		kfree(input);
 		usbhid_io_put(req->hid);
 	}
+}
+
+/* Consume only the completion published for this driver_input_lock owner. */
+static bool usbhid_control_input_process_owned(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usbhid_control_input *input = NULL;
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	bool process = false;
+
+	hid_transport_lock();
+	if (usbhid->owned_control_input &&
+	    usbhid->owned_control_input->parser_owner == task) {
+		input = usbhid->owned_control_input;
+		usbhid->owned_control_input = NULL;
+		process = !usbhid->transport_stopping;
+	}
+	hid_transport_unlock();
+	if (!input)
+		return false;
+
+	configASSERT(sema_owned_by_current(&hid->driver_input_lock));
+	usbhid_control_report_done(
+		hid, input,
+		process ? hid_safe_input_report_locked(
+			hid, (enum hid_report_type)input->report_type,
+			input->data, input->bufsize, input->len, 0) :
+			-ENODEV);
+	return true;
 }
 
 // static void usbhid_submit_report(struct hid_device *hid, struct hid_report *report, unsigned char dir)
@@ -4029,8 +4093,8 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	/*
 	 * TinyUSB adapter: the queue boundary above replaces both upstream direction
 	 * branches and carries their completion owner. GET_REPORT parsing releases
-	 * io_pending only after its report-lane consumer completes, so a following
-	 * hid_hw_wait() cannot observe a false-idle transport/parser handoff.
+	 * io_pending only after either its report-task consumer or probe owner
+	 * completes, so hid_hw_wait() cannot observe a false-idle parser handoff.
 	 */
 	ret = usbhid_queue_report(hid, report, reqtype,
 				  input ? input->data : NULL,
@@ -4043,39 +4107,34 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	}
 }
 
+// static int usbhid_wait_io(struct hid_device *hid)
+// {
+// 	struct usbhid_device *usbhid = hid->driver_data;
+//
+// 	if (!wait_event_timeout(usbhid->wait,
+// 				(!test_bit(HID_CTRL_RUNNING, &usbhid->iofl) &&
+// 				!test_bit(HID_OUT_RUNNING, &usbhid->iofl)),
+// 					10*HZ)) {
+// 		dbg_hid("timeout waiting for ctrl or out queue to clear\n");
+// 		return -1;
+// 	}
+//
+// 	return 0;
+// }
+/*
+ * TinyUSB adapter: io_pending is the stronger firmware I/O/lifetime lease,
+ * including parser completion. Each queued request has its own watchdog, so
+ * those bounded request timeouts replace upstream's outer 10*HZ timeout. A
+ * probe-owned GET cannot run on the report task because its caller still owns
+ * driver_input_lock; consume that completion in the waiting lifecycle task
+ * without opening interrupt input on the half-built HID device.
+ */
 static int usbhid_wait_io(struct hid_device *hid)
 {
-	struct usbhid_device *usbhid = hid->driver_data;
-	TaskHandle_t task = xTaskGetCurrentTaskHandle();
-	bool owns_input_lock = sema_owned_by_current(&hid->driver_input_lock);
-
-	if (owns_input_lock) {
-		hid_transport_lock();
-		configASSERT(!usbhid->control_waiter ||
-			     usbhid->control_waiter == task);
-		usbhid->control_waiter = task;
-		hid_transport_unlock();
-		/* The owner predicate changed after a probe-time GET was queued. */
-		usbhid_control_report_owner_ready();
-	}
-
-	/*
-	 * Probe owns driver_input_lock while resolution multipliers are fetched.
-	 * Let that same task consume only its completed control GET; opening the
-	 * lock here would also admit interrupt-IN into a half-built input device.
-	 */
 	while (!usbhid_io_idle(hid)) {
-		if (owns_input_lock &&
-		    usbhid_control_report_process_owned(hid))
+		if (usbhid_control_input_process_owned(hid))
 			continue;
 		vTaskDelay(1);
-	}
-
-	if (owns_input_lock) {
-		hid_transport_lock();
-		if (usbhid->control_waiter == task)
-			usbhid->control_waiter = NULL;
-		hid_transport_unlock();
 	}
 	return usbhid_report_is_stopping(hid) ? -ENODEV : 0;
 }
