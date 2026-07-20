@@ -309,10 +309,12 @@ Zydacron.
 Current memory-related settings are:
 
 ```text
-configTOTAL_HEAP_SIZE       216.75 KiB
+configTOTAL_HEAP_SIZE       218.75 KiB
 configMINIMAL_STACK_SIZE    384 words
 hid_async_task              512 words
-keyd_task                   7,168 words
+keyd_task                   5,120 words
+TinyUSB host task           512 words
+HID report task             1,024 words
 PIO_USB_EP_POOL_CNT         8
 PIO_USB_DEVICE_CNT          4
 PIO_USB_ROOT_PORT_CNT       1

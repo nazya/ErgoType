@@ -93,6 +93,23 @@ static u32 s32ton(__s32 value, unsigned int n)
  * Register a new report for a device.
  */
 
+/*
+ * Upstream Linux: no equivalent; report_id_hash[] provides direct lookup.
+ * RP2040 keeps the same 8-bit ID semantics through the already-owned sparse
+ * report list, avoiding three 256-pointer tables in every hid_device.
+ */
+static struct hid_report *hid_report_enum_lookup(
+		struct hid_report_enum *report_enum, unsigned int id)
+{
+	struct hid_report *report;
+
+	list_for_each_entry(report, &report_enum->report_list, list)
+		if (report->id == id)
+			return report;
+
+	return NULL;
+}
+
 struct hid_report *hid_register_report(struct hid_device *device,
 				       enum hid_report_type type, unsigned int id,
 				       unsigned int application)
@@ -102,8 +119,12 @@ struct hid_report *hid_register_report(struct hid_device *device,
 
 	if (id >= HID_MAX_IDS)
 		return NULL;
-	if (report_enum->report_id_hash[id])
-		return report_enum->report_id_hash[id];
+	// if (report_enum->report_id_hash[id])
+	// 	return report_enum->report_id_hash[id];
+	// The RP2040 sparse report index preserves every valid report ID.
+	report = hid_report_enum_lookup(report_enum, id);
+	if (report)
+		return report;
 
 	report = kzalloc_obj(struct hid_report);
 	if (!report)
@@ -117,7 +138,8 @@ struct hid_report *hid_register_report(struct hid_device *device,
 	report->size = 0;
 	report->device = device;
 	report->application = application;
-	report_enum->report_id_hash[id] = report;
+	// report_enum->report_id_hash[id] = report;
+	// report_list below is also the RP2040 report-ID index.
 
 	list_add_tail(&report->list, &report_enum->report_list);
 	INIT_LIST_HEAD(&report->field_entry_list);
@@ -130,7 +152,12 @@ EXPORT_SYMBOL_GPL(hid_register_report);
  * Register a new field for this report.
  */
 
-static struct hid_field *hid_register_field(struct hid_report *report, unsigned usages)
+// static struct hid_field *hid_register_field(struct hid_report *report, unsigned usages)
+// RP2040 input arrays keep one value per physical report slot rather than per
+// selector while retaining the complete upstream usage and priority tables.
+static struct hid_field *hid_register_field(struct hid_report *report,
+					   unsigned usages,
+					   unsigned value_count)
 {
 	struct hid_field *field;
 
@@ -139,9 +166,14 @@ static struct hid_field *hid_register_field(struct hid_report *report, unsigned 
 		return NULL;
 	}
 
+	// field = kvzalloc((sizeof(struct hid_field) +
+	// 		  usages * sizeof(struct hid_usage) +
+	// 		  3 * usages * sizeof(unsigned int)), GFP_KERNEL);
+	// Input-array values are report slots; selector metadata still uses usages.
 	field = kvzalloc((sizeof(struct hid_field) +
 			  usages * sizeof(struct hid_usage) +
-			  3 * usages * sizeof(unsigned int)), GFP_KERNEL);
+			  (usages + 2 * value_count) * sizeof(unsigned int)),
+			 GFP_KERNEL);
 	if (!field)
 		return NULL;
 
@@ -149,8 +181,12 @@ static struct hid_field *hid_register_field(struct hid_report *report, unsigned 
 	report->field[field->index] = field;
 	field->usage = (struct hid_usage *)(field + 1);
 	field->value = (s32 *)(field->usage + usages);
-	field->new_value = (s32 *)(field->value + usages);
-	field->usages_priorities = (s32 *)(field->new_value + usages);
+	// field->new_value = (s32 *)(field->value + usages);
+	// field->usages_priorities = (s32 *)(field->new_value + usages);
+	// Only INPUT ARRAY fields pass value_count < usages; their runtime value
+	// paths index value/new_value by report_count, never by selector index.
+	field->new_value = (s32 *)(field->value + value_count);
+	field->usages_priorities = (s32 *)(field->new_value + value_count);
 	field->report = report;
 
 	return field;
@@ -372,6 +408,7 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	struct hid_field *field;
 	unsigned int max_buffer_size = HID_MAX_BUFFER_SIZE;
 	unsigned int usages;
+	unsigned int value_count;
 	unsigned int offset;
 	unsigned int i;
 	unsigned int application;
@@ -416,7 +453,13 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	usages = max_t(unsigned, parser->local.usage_index,
 				 parser->global.report_count);
 
-	field = hid_register_field(report, usages);
+	// field = hid_register_field(report, usages);
+	// INPUT ARRAY fields store report_count physical values while preserving
+	// every selector in usage[] for value-to-usage translation.
+	value_count = report_type == HID_INPUT_REPORT &&
+		      !(flags & HID_MAIN_ITEM_VARIABLE) ?
+		      parser->global.report_count : usages;
+	field = hid_register_field(report, usages, value_count);
 	if (!field)
 		return 0;
 
@@ -814,15 +857,24 @@ static void hid_free_report(struct hid_report *report)
  */
 static void hid_close_report(struct hid_device *device)
 {
-	unsigned i, j;
+	// unsigned i, j;
+	// The RP2040 sparse index has no dense ID range to scan during teardown.
+	unsigned i;
 
 	for (i = 0; i < HID_REPORT_TYPES; i++) {
 		struct hid_report_enum *report_enum = device->report_enum + i;
+		struct hid_report *report, *next;
 
-		for (j = 0; j < HID_MAX_IDS; j++) {
-			struct hid_report *report = report_enum->report_id_hash[j];
-			if (report)
-				hid_free_report(report);
+		// for (j = 0; j < HID_MAX_IDS; j++) {
+		// 	struct hid_report *report = report_enum->report_id_hash[j];
+		// 	if (report)
+		// 		hid_free_report(report);
+		// }
+		// Every report is already present exactly once in the sparse index.
+		list_for_each_entry_safe(report, next,
+					 &report_enum->report_list, list) {
+			list_del(&report->list);
+			hid_free_report(report);
 		}
 		memset(report_enum, 0, sizeof(*report_enum));
 		INIT_LIST_HEAD(&report_enum->report_list);
@@ -1183,7 +1235,9 @@ struct hid_report *hid_validate_values(struct hid_device *hid,
 				&hid->report_enum[type].report_list,
 				struct hid_report, list);
 	} else {
-		report = hid->report_enum[type].report_id_hash[id];
+		// report = hid->report_enum[type].report_id_hash[id];
+		// The RP2040 report list is the sparse full-range ID index.
+		report = hid_report_enum_lookup(&hid->report_enum[type], id);
 	}
 	if (!report) {
 		hid_err(hid, "missing %s %u\n", hid_report_names[type], id);
@@ -2126,7 +2180,9 @@ static struct hid_report *hid_get_report(struct hid_report_enum *report_enum,
 	if (report_enum->numbered)
 		n = *data;
 
-	report = report_enum->report_id_hash[n];
+	// report = report_enum->report_id_hash[n];
+	// The RP2040 report list is the sparse full-range ID index.
+	report = hid_report_enum_lookup(report_enum, n);
 	if (report == NULL)
 		// dbg_hid("undefined report_id %u received\n", n);
 		// Linux diagnostic is omitted here; control flow stays the same.

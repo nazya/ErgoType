@@ -36,11 +36,12 @@
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
 /*
  * Parser/probe work runs in dedicated tasks; this owner keeps TinyUSB core and
- * callback forwarding. FreeRTOS depth is in 32-bit words: 1024 is 4 KiB.
+ * callback forwarding. FreeRTOS depth is in 32-bit words: 512 is 2 KiB.
  */
-#define TUH_STACK_SIZE 1024
+#define TUH_STACK_SIZE 512
 #define USBHID_LIFECYCLE_STACK_SIZE 512
-#define USBHID_REPORT_STACK_SIZE 1536
+#define USBHID_REPORT_STACK_SIZE 1024
+#define KEYD_STACK_SIZE 5120
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -281,7 +282,7 @@ static void app_task(void *pvParameters)
         int hid_async_ret = hid_async_init();
         if (hid_async_ret < 0)
             async_msg("ERR: HID_ASYNC_INIT_FAIL");
-        else if (xTaskCreateAffinitySet(hid_async_task, NULL, 512, NULL,
+        else if (xTaskCreateAffinitySet(hid_async_task, "hid-async", 512, NULL,
                                         IDLE_PRIORITY + 3, CORE1,
                                         NULL) != pdPASS)
             async_msg("ERR: HID_ASYNC_TASK_FAIL");
@@ -292,7 +293,7 @@ static void app_task(void *pvParameters)
         int hid_workqueue_ret = hid_workqueue_init();
         if (hid_workqueue_ret < 0)
             async_msg("ERR: HID_WORKQUEUE_INIT_FAIL");
-        else if (xTaskCreateAffinitySet(hid_workqueue_task, NULL,
+        else if (xTaskCreateAffinitySet(hid_workqueue_task, "hid-work",
                                         MIN_STACK_SIZE, NULL,
                                         IDLE_PRIORITY + 3, CORE1,
                                         NULL) != pdPASS)
@@ -304,7 +305,7 @@ static void app_task(void *pvParameters)
         int hid_timer_ret = hid_timer_init();
         if (hid_timer_ret < 0)
             async_msg("ERR: HID_TIMER_INIT_FAIL");
-        else if (xTaskCreateAffinitySet(hid_timer_task, NULL, MIN_STACK_SIZE,
+        else if (xTaskCreateAffinitySet(hid_timer_task, "hid-timer", MIN_STACK_SIZE,
                                         NULL, IDLE_PRIORITY + 3, CORE1,
                                         NULL) != pdPASS)
             async_msg("ERR: HID_TIMER_TASK_FAIL");
@@ -363,7 +364,9 @@ static void app_task(void *pvParameters)
                 pointing_motion_irq_init(pointing_task_handle, config.pmw3389[i].irq, (uint8_t)(MAX_PMW3360 + i));
         }
 
-        xTaskCreateAffinitySet(keyd_task, NULL, 7168, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
+        /* Peak use was 3,760 words with the former 7,168-word stack. */
+        xTaskCreateAffinitySet(keyd_task, NULL, KEYD_STACK_SIZE, NULL,
+                               IDLE_PRIORITY + 4, CORE0, NULL);
     }
 
     vTaskDelete(NULL);

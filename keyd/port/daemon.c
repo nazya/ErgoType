@@ -29,21 +29,39 @@ static struct keyboard *active_kbd;
 static struct vkbd *vkbd;
 static uint8_t keystate[256];
 
+static UBaseType_t task_stack_watermark(const char *name)
+{
+	TaskHandle_t task = xTaskGetHandle(name);
+
+	return task ? uxTaskGetStackHighWaterMark(task) : 0;
+}
+
 static void log_memory_watermarks(void)
 {
 	HeapStats_t heap_stats;
-	TaskHandle_t tuh_task = xTaskGetHandle("tuh");
-	UBaseType_t tuh_stack_words = tuh_task ?
-		uxTaskGetStackHighWaterMark(tuh_task) : 0;
+	UBaseType_t tuh_stack_words = task_stack_watermark("tuh");
+	UBaseType_t keyd_stack_words = uxTaskGetStackHighWaterMark(NULL);
+	UBaseType_t async_stack_words = task_stack_watermark("hid-async");
+	UBaseType_t work_stack_words = task_stack_watermark("hid-work");
+	UBaseType_t timer_stack_words = task_stack_watermark("hid-timer");
+	UBaseType_t lifecycle_stack_words = task_stack_watermark("hid-lifecycle");
+	UBaseType_t report_stack_words = task_stack_watermark("hid-report");
 
 	vPortGetHeapStats(&heap_stats);
-	dbg2("heap free=%u min=%u largest=%u blocks=%u oom=%u; tuh stack min free=%u words",
+	dbg2("heap free=%u min=%u largest=%u blocks=%u oom=%u; tuh stack min free=%u words; keyd stack min free=%u words",
 	     (unsigned int)heap_stats.xAvailableHeapSpaceInBytes,
 	     (unsigned int)heap_stats.xMinimumEverFreeBytesRemaining,
 	     (unsigned int)heap_stats.xSizeOfLargestFreeBlockInBytes,
 	     (unsigned int)heap_stats.xNumberOfFreeBlocks,
 	     (unsigned int)freertos_malloc_failure_count(),
-	     (unsigned int)tuh_stack_words);
+	     (unsigned int)tuh_stack_words,
+	     (unsigned int)keyd_stack_words);
+	dbg2("host stacks min free: async=%u work=%u timer=%u lifecycle=%u report=%u words",
+	     (unsigned int)async_stack_words,
+	     (unsigned int)work_stack_words,
+	     (unsigned int)timer_stack_words,
+	     (unsigned int)lifecycle_stack_words,
+	     (unsigned int)report_stack_words);
 }
 
 static void free_config(struct config *config)

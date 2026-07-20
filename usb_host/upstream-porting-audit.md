@@ -302,6 +302,22 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   and reject source drift. The SDK installation remains untouched.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
+- `hid_register_field()` retains upstream's single-allocation layout and full
+  usage/priority tables. The adjacent port replacement sizes `value` and
+  `new_value` by physical `report_count` only for INPUT ARRAY fields; those
+  runtime paths index report slots, while selector-to-usage translation still
+  keeps all usages. The original signature, allocation, pointer arithmetic,
+  and call remain commented beside the RP2040 memory-bounded replacement.
+- `hid_report_enum` retains upstream's `report_list` and complete report-ID
+  semantics but omits the dense 256-pointer `report_id_hash`. Exact-ID lookup
+  scans the already-owned sparse list, normally one to three entries. The
+  original member and every direct upstream access remain commented beside the
+  port replacement. ARM32 `hid_device` size falls from 3,712 B to 640 B, saving
+  3,072 B per HID interface without truncating the valid 0..255 ID range.
+- Plain `kobject_uevent()` calls retain lifecycle counters but do not build a
+  2.3 KiB environment: firmware has no userspace/netlink sink for it.
+  `kobject_uevent_env()` remains available if a real environment consumer is
+  added later.
 
 ## Checks
 

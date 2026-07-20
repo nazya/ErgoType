@@ -37,8 +37,10 @@ This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
-The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=495748`, `data=708`, and
+The active 2026-07-21 task-side-parser build instead uses a 218.75 KiB heap
+(`(219 * 1024) - 256`). The extra 2 KiB came from keeping the immutable FAT12
+format image in flash and copying it to a task-local RAM buffer only while
+formatting. Before that change, the 216.75 KiB build linked with `text=495748`, `data=708`, and
 `bss=243320`. `__bss_end__` is `0x2003ff30`, leaving 208 B before scratch
 X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
@@ -56,6 +58,24 @@ the FIFO head. Edge-driven CLEAR_HALT admission reuses the report slot's former
 one-byte retry counter as a capacity latch. Its four independent absolute
 deadlines add 16 B of static state, but no queue, timer, or heap allocation;
 keeping them separate preserves Linux's interrupt-I/O retry epoch across STALL.
+
+Linux normally allocates `value` and `new_value` for every selector in a HID
+field. This port preserves that layout except for INPUT ARRAY fields, whose
+runtime values are the physical report slots. A six-slot Consumer array with
+675 selectors therefore occupies 21,748 B instead of 27,100 B while retaining
+all 675 selector usages and their priorities.
+
+Upstream also embeds a 256-pointer `report_id_hash` in each of the three report
+enums. RP2040 keeps the same complete 8-bit report-ID domain but resolves IDs
+through the report enum's existing sparse `report_list`; typical devices have
+only one to three reports of each type. On the ARM32 ABI this changes
+`sizeof(struct hid_report_enum)` from 1,036 B to 12 B and
+`sizeof(struct hid_device)` from 3,712 B to 640 B, saving exactly 3,072 B per
+attached HID interface without capping report IDs or adding allocations.
+
+The compatibility layer also avoids constructing the 2,324-byte Linux uevent
+environment for plain lifecycle notifications. No firmware consumer receives
+that environment; only the device lifecycle counters are retained.
 
 ## Layers
 

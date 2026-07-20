@@ -1247,7 +1247,16 @@ static inline int kobject_uevent_env(struct kobject *kobj, enum kobject_action a
 
 static inline int kobject_uevent(struct kobject *kobj, enum kobject_action action)
 {
-	return kobject_uevent_env(kobj, action, NULL);
+	struct device *dev = kobj_to_dev(kobj);
+
+	// Linux constructs an environment for its userspace/netlink sink here.
+	// Firmware has no such consumer; retain lifecycle observability without a
+	// transient 2.3 KiB allocation that would only be discarded immediately.
+	if (dev) {
+		dev->uevent_count++;
+		dev->last_uevent_action = action;
+	}
+	return 0;
 }
 
 static inline void dev_set_name(struct device *dev, const char *fmt, ...)
