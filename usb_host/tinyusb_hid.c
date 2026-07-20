@@ -39,6 +39,13 @@ bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr,
 						    hub_port);
 }
 
+/* Host enum owner publishes active progress and one reuse-safe terminal. */
+void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
+			    uint8_t hub_port, bool active, bool success)
+{
+	usbhid_backend_enum_state(rhport, hub_addr, hub_port, active, success);
+}
+
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 				uint8_t const *report, uint16_t len)
 {

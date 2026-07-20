@@ -36,6 +36,9 @@ void usbhid_backend_hub_reset_host_complete(uint8_t hub_addr,
 bool usbhid_backend_hub_reenumerate_begin(uint8_t rhport,
 					  uint8_t hub_addr,
 					  uint8_t hub_port);
+/* Exact host-enumeration progress/terminal fence for reset gate ownership. */
+void usbhid_backend_enum_state(uint8_t rhport, uint8_t hub_addr,
+			       uint8_t hub_port, bool active, bool success);
 usbh_class_driver_t const *usbhid_backend_app_driver_get(
 	uint8_t *driver_count);
 

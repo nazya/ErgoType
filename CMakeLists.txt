@@ -61,9 +61,9 @@ pico_sdk_init()
 
 # Pico SDK TinyUSB commit 86ad6e56 omits tuh_mount_cb() for hub addresses, has
 # no host-owner entry which starts enumeration without requeueing itself, and
-# cannot retire an exact EP0 callback owner after a lost HCD completion event.
-# Generate one build-local source with those audited compatibility deltas;
-# never mutate the installed SDK.
+# cannot retire an exact EP0 or enumeration owner after a lost HCD completion
+# event. Generate one build-local source with those audited compatibility
+# deltas; never mutate the installed SDK.
 set(TINYUSB_USBH_SOURCE "${PICO_TINYUSB_PATH}/src/host/usbh.c")
 set(TINYUSB_USBH_PORT_SOURCE
     "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-usbh-port.c")
@@ -76,6 +76,8 @@ if(NOT TINYUSB_USBH_SHA256 STREQUAL
 endif()
 file(READ "${TINYUSB_USBH_SOURCE}" TINYUSB_USBH_CONTENT)
 set(TINYUSB_USBH_HUB_MOUNT_UPSTREAM [=[
+    enum_full_complete();
+
     if (is_hub_addr(dev_addr)) {
       TU_LOG_USBH("HUB address = %u is mounted\r\n", dev_addr);
     }else {
@@ -84,6 +86,12 @@ set(TINYUSB_USBH_HUB_MOUNT_UPSTREAM [=[
     }
 ]=])
 set(TINYUSB_USBH_HUB_MOUNT_PORT [=[
+    // Upstream TinyUSB:
+    // enum_full_complete();
+    // Firmware's terminal owner refuses a late successful mount after its
+    // no-progress watchdog has begun retiring this enumeration epoch.
+    if (!enum_full_complete(true)) return;
+
     // Upstream TinyUSB:
     // if (is_hub_addr(dev_addr)) {
     //   TU_LOG_USBH("HUB address = %u is mounted\r\n", dev_addr);
@@ -145,6 +153,7 @@ bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port
   };
 
   _dev0.enumerating = 1;
+  usbh_port_enum_start_on_host();
   return enum_new_device(&event);
 }
 
@@ -281,6 +290,8 @@ endif()
 string(REPLACE "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
        "${TINYUSB_USBH_CONTROL_RECOVER_PORT}"
        TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/usb_host/tinyusb-usbh-enum-port.cmake")
 file(WRITE "${TINYUSB_USBH_PORT_SOURCE}" "${TINYUSB_USBH_PORT_CONTENT}")
 
 get_target_property(TINYUSB_HOST_BASE_SOURCES

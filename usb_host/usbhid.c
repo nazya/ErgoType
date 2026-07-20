@@ -185,6 +185,7 @@ struct usbhid_reset_coordinator {
 	bool gate_held;
 	bool hub_io_pending;
 	bool root_io_pending;
+	bool enum_active;
 };
 
 struct usbhid_usb_device {
@@ -2259,6 +2260,45 @@ bool usbhid_backend_hub_reenumerate_begin(uint8_t rhport,
 	return allow;
 }
 
+/*
+ * Upstream Linux USB core owns enumeration and reset under the same device
+ * lock. TinyUSB exposes neither owner, so this bounded callback keeps the
+ * firmware's global EP0 gate closed from exact enum start through terminal.
+ */
+void usbhid_backend_enum_state(uint8_t rhport, uint8_t hub_addr,
+			       uint8_t hub_port, bool active, bool success)
+{
+	TickType_t now = xTaskGetTickCount();
+	bool progress = false;
+
+	taskENTER_CRITICAL();
+	if (usbhid_transport_pool && usbhid_reset->gate_held &&
+	    usbhid_reset->rhport == rhport &&
+	    usbhid_reset->hub_addr == hub_addr &&
+	    usbhid_reset->hub_port == hub_port) {
+		if (active) {
+			usbhid_reset->enum_active = true;
+			usbhid_reset->deadline = now +
+				pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
+			progress = true;
+		} else if (usbhid_reset->enum_active) {
+			usbhid_reset->enum_active = false;
+			if (!success &&
+			    usbhid_reset->state == USBHID_RESET_WAIT_REENUM)
+				usbhid_reset->state = USBHID_RESET_FAILED;
+			else
+				usbhid_reset->deadline = now +
+					pdMS_TO_TICKS(
+						USBHID_RESET_PHASE_TIMEOUT_MS);
+			progress = true;
+		}
+	}
+	taskEXIT_CRITICAL();
+
+	if (progress)
+		usbhid_lifecycle_kick();
+}
+
 static void usbhid_reset_root_attach_on_host(void *context)
 {
 	struct usbhid_usb_device *fresh;
@@ -2561,7 +2601,7 @@ static int usbhid_reset_finish(void)
 	if ((state != USBHID_RESET_COMPLETE &&
 	     state != USBHID_RESET_FAILED &&
 	     state != USBHID_RESET_CANCELLED) ||
-	    usbhid_reset->hub_io_pending) {
+	    usbhid_reset->hub_io_pending || usbhid_reset->enum_active) {
 		taskEXIT_CRITICAL();
 		return -EAGAIN;
 	}
@@ -2603,6 +2643,7 @@ static int usbhid_reset_process(void)
 	    /* Published REMOVE is an uncancellable lifetime fence. */
 	    state != USBHID_RESET_WAIT_RETIRE &&
 	    !usbhid_reset->hub_io_pending &&
+	    !usbhid_reset->enum_active &&
 	    usbhid_reset_deadline_expired(now, usbhid_reset->deadline)) {
 		usbhid_reset->state = USBHID_RESET_FAILED;
 		state = USBHID_RESET_FAILED;

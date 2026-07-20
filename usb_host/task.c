@@ -14,6 +14,18 @@
 int hid_core_init(void);
 int linux_module_initcalls_init(void);
 int hid_builtin_drivers_init(void);
+int usbh_port_enum_watchdog_on_host(void);
+
+enum {
+    USBH_PORT_ENUM_POLL_MS = 10,
+    USBH_PORT_ENUM_POLL_FAILED = 1,
+    USBH_PORT_ENUM_POLL_TIMEOUT = 2,
+};
+
+uint32_t tusb_time_millis_api(void)
+{
+    return (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+}
 
 void tusb_host_task(void *pvParameters)
 {
@@ -80,6 +92,18 @@ void tusb_host_task(void *pvParameters)
     }
 
     while (1) {
-        tuh_task();
+        int enum_event;
+
+        /*
+         * Bound each TinyUSB event-drain pass so its exact enumeration owner
+         * can retire an EP0 completion which the PIO HCD never published.
+         */
+        /* Previous firmware: tuh_task(); */
+        tuh_task_ext(USBH_PORT_ENUM_POLL_MS, false);
+        enum_event = usbh_port_enum_watchdog_on_host();
+        if (enum_event == USBH_PORT_ENUM_POLL_FAILED)
+            async_msg("ERR: HID_ENUM_FAIL");
+        else if (enum_event == USBH_PORT_ENUM_POLL_TIMEOUT)
+            async_msg("ERR: HID_ENUM_TIMEOUT");
     }
 }
