@@ -24,6 +24,7 @@ enum hid_async_request_kind {
 	HID_ASYNC_REQUEST_STRING_DESCRIPTOR,
 	HID_ASYNC_REQUEST_USB_CONTROL,
 	HID_ASYNC_REQUEST_USB_INTERRUPT,
+	HID_ASYNC_REQUEST_HUB_RESET,
 };
 
 struct hid_async_request {
@@ -40,6 +41,7 @@ struct hid_async_request {
 	u8 string_index;
 	u8 control_request;
 	u8 control_requesttype;
+	u8 hub_port;
 	u16 len;
 	u16 actual_len;
 	u16 string_langid;
@@ -88,6 +90,11 @@ int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context);
+int hid_async_control_gate_acquire(void);
+bool hid_async_control_gate_idle(void);
+void hid_async_control_gate_release(u32 paused_ticks);
+int hid_async_queue_hub_port_reset(u8 hub_addr, u32 generation, u8 hub_port,
+				   hid_async_complete_t complete, void *context);
 int hid_async_cancel_device(u8 dev_addr, u8 instance);
 int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
 int hid_async_cancel_dev_addr(u8 dev_addr);

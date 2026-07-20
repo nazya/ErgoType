@@ -72,6 +72,7 @@ enum usbhid_report_recovery {
 	USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT,
 	USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE,
 	USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE,
+	USBHID_REPORT_RECOVERY_DEVICE_RESET,
 };
 
 enum usbhid_report_detach_state {
@@ -592,6 +593,42 @@ static void hid_retry_timeout(struct timer_list *t)
 // core. This port splits that work across report, async-EP0, and host-owner
 // continuations so no TinyUSB callback waits on progress from TinyUSB itself.
 
+/*
+ * Upstream Linux: no equivalent; usb_queue_reset_device() retains the USB
+ * interface while usbcore owns reset serialization. This firmware state marks
+ * the report epoch instead. The backend snapshots physical topology and queues
+ * full TinyUSB teardown/re-enumeration without retaining this hid pointer.
+ */
+static void usbhid_report_request_device_reset(struct hid_device *hid,
+						int index, u32 generation)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	bool park = false;
+	int ret;
+
+	ret = usbhid_backend_queue_device_reset(hid);
+	if (!ret)
+		return;
+
+	/* Queue rejection leaves no reset owner, so restore the old park fallback. */
+	taskENTER_CRITICAL();
+	if (index >= 0 && index < CFG_TUH_HID &&
+	    usbhid_report_rx_slots[index].owner == hid &&
+	    usbhid_report_rx_slots[index].generation == generation &&
+	    usbhid->generation == generation &&
+	    usbhid_report_recovery[index] ==
+		USBHID_REPORT_RECOVERY_DEVICE_RESET) {
+		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
+		usbhid->report_wanted = false;
+		usbhid->report_host_pending = false;
+		park = true;
+	}
+	taskEXIT_CRITICAL();
+
+	if (park)
+		usbhid_backend_rx_rearm_failed();
+}
+
 /* Main I/O error handler */
 // static void hid_io_error(struct hid_device *hid)
 // {
@@ -638,7 +675,8 @@ static void hid_io_error(struct hid_device *hid)
 	struct usbhid_report_retry *retry;
 	unsigned long expires = 0;
 	unsigned long now = jiffies;
-	bool park = false;
+	u32 generation = 0;
+	bool device_reset = false;
 	int index;
 
 	taskENTER_CRITICAL();
@@ -669,23 +707,27 @@ static void hid_io_error(struct hid_device *hid)
 	}
 
 	if (time_after(now, retry->stop_retry)) {
-		// schedule_work(&usbhid->reset_work);
-		// TinyUSB has no coordinated USB-core reset/re-enumeration path. Park
-		// this polling epoch instead of resetting hardware behind TinyUSB's
-		// configured-device state; a later successful transfer or physical
-		// replug resets the retry epoch.
-		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
-		usbhid->report_wanted = false;
+		usbhid_report_recovery[index] =
+			USBHID_REPORT_RECOVERY_DEVICE_RESET;
 		usbhid->report_host_pending = false;
-		park = true;
+		generation = usbhid->generation;
+		device_reset = true;
 	} else {
 		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_IO_RETRY;
 		expires = now + msecs_to_jiffies(retry->retry_delay);
 	}
 	taskEXIT_CRITICAL();
 
-	if (park) {
-		usbhid_backend_rx_rearm_failed();
+	if (device_reset) {
+		// schedule_work(&usbhid->reset_work);
+		// if (test_bit(HID_RESET_PENDING, &usbhid->iofl)) {
+		// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");
+		// 	usb_queue_reset_device(usbhid->intf);
+		// }
+		// TinyUSB has no usbcore in-place reset. Queue asynchronous full
+		// teardown/re-enumeration after the same exhausted protocol retry;
+		// DEVICE_RESET prevents close/open from rearming this old epoch.
+		usbhid_report_request_device_reset(hid, index, generation);
 		return;
 	}
 	usbhid_report_schedule_recovery_timer(hid, index,
@@ -703,7 +745,7 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 	u32 generation;
 	u8 ep_addr;
 	bool retry_queue = false;
-	bool fault = false;
+	bool device_reset = false;
 	int index;
 	int ret;
 
@@ -766,13 +808,12 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 				USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT;
 			retry_queue = true;
 		} else {
-			usbhid_report_recovery[index] =
-				USBHID_REPORT_RECOVERY_NONE;
 			usbhid_report_rx_slots[index].clear_halt_queue_retries = 0;
-			fault = ret != -ENODEV && usbhid->report_wanted &&
+			device_reset = ret != -ENODEV && usbhid->report_wanted &&
 				!usbhid->transport_stopping;
-			if (fault)
-				usbhid->report_wanted = false;
+			usbhid_report_recovery[index] = device_reset ?
+				USBHID_REPORT_RECOVERY_DEVICE_RESET :
+				USBHID_REPORT_RECOVERY_NONE;
 			usbhid->report_host_pending = false;
 		}
 	}
@@ -783,14 +824,15 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 			USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT,
 			jiffies +
 			msecs_to_jiffies(USBHID_CLEAR_HALT_QUEUE_RETRY_MS));
-	} else if (fault) {
+	} else if (device_reset) {
 		// if (test_bit(HID_RESET_PENDING, &usbhid->iofl)) {
 		// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");
 		// 	usb_queue_reset_device(usbhid->intf);
 		// }
-		// There is no coordinated TinyUSB reset/re-enumeration path yet;
-		// park the endpoint after failed or starved remote clear-halt.
-		usbhid_backend_rx_rearm_failed();
+		// Linux reaches this reset after usb_clear_halt() fails. Firmware
+		// queues asynchronous full teardown/re-enumeration after the same
+		// terminal enqueue failure or starvation.
+		usbhid_report_request_device_reset(hid, index, generation);
 	}
 }
 
@@ -801,7 +843,7 @@ static void usbhid_report_clear_halt_complete(
 	struct usbhid_device *usbhid = hid->driver_data;
 	u32 generation = 0;
 	bool queue_reconcile = false;
-	bool fault = false;
+	bool device_reset = false;
 	int index;
 
 	taskENTER_CRITICAL();
@@ -818,25 +860,28 @@ static void usbhid_report_clear_halt_complete(
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE;
 			queue_reconcile = true;
 		} else {
-			usbhid_report_recovery[index] =
-				USBHID_REPORT_RECOVERY_NONE;
-			fault = status != -ENODEV && usbhid->report_wanted &&
+			device_reset = status && status != -ENODEV &&
+				generation == usbhid->generation &&
+				usbhid->report_wanted &&
 				!usbhid->transport_stopping;
-			if (fault)
-				usbhid->report_wanted = false;
+			usbhid_report_recovery[index] = device_reset ?
+				USBHID_REPORT_RECOVERY_DEVICE_RESET :
+				USBHID_REPORT_RECOVERY_NONE;
 			usbhid->report_host_pending = false;
 		}
 	}
 	taskEXIT_CRITICAL();
 
 	if (!queue_reconcile) {
-		if (fault) {
+		if (device_reset) {
 			// if (test_bit(HID_RESET_PENDING, &usbhid->iofl)) {
 			// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");
 			// 	usb_queue_reset_device(usbhid->intf);
 			// }
-			// An asynchronous EP0 failure parks for the same missing-reset reason.
-			usbhid_backend_rx_rearm_failed();
+			// Linux turns usb_clear_halt() failure into a queued device reset.
+			// Firmware queues the equivalent asynchronous full teardown and
+			// re-enumeration after the EP0 completion reports failure.
+			usbhid_report_request_device_reset(hid, index, generation);
 		}
 		return;
 	}
@@ -1224,7 +1269,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 	u32 revision;
 	u8 ep_addr;
 	int index;
-	bool fault;
+	bool device_reset;
 	bool ok;
 
 	for (;;) {
@@ -1300,17 +1345,19 @@ static void usbhid_report_reconcile_on_host(void *data)
 				BOARD_TUH_RHPORT - 1u, usbhid->dev_addr, ep_addr);
 
 			taskENTER_CRITICAL();
-			fault = false;
+			device_reset = false;
 			if (index >= 0 && index < CFG_TUH_HID &&
 			    usbhid_report_rx_slots[index].owner == hid &&
 			    usbhid_report_rx_slots[index].generation == generation &&
 			    usbhid_report_recovery[index] ==
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE) {
-				usbhid_report_recovery[index] =
-					USBHID_REPORT_RECOVERY_NONE;
 				if (!ok && !usbhid->transport_stopping) {
-					usbhid->report_wanted = false;
-					fault = true;
+					usbhid_report_recovery[index] =
+						USBHID_REPORT_RECOVERY_DEVICE_RESET;
+					device_reset = true;
+				} else {
+					usbhid_report_recovery[index] =
+						USBHID_REPORT_RECOVERY_NONE;
 				}
 			}
 			if (ok && !usbhid->transport_stopping &&
@@ -1324,10 +1371,13 @@ static void usbhid_report_reconcile_on_host(void *data)
 			// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");
 			// 	usb_queue_reset_device(usbhid->intf);
 			// }
-			// TinyUSB has no coordinated USB-core reset/re-enumeration path;
-			// park after a local DATA0 failure instead of desynchronizing HCD state.
-			if (fault)
-				usbhid_backend_rx_rearm_failed();
+			// Linux's usb_clear_halt() resets the local endpoint only after
+			// remote success. If the PIO DATA0 half fails, firmware queues full
+			// asynchronous teardown/re-enumeration instead of rearming a stale
+			// endpoint.
+			if (device_reset)
+				usbhid_report_request_device_reset(hid, index,
+								   generation);
 			return;
 		}
 

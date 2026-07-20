@@ -5,6 +5,8 @@
 
 #include "host/usbh_pvt.h"
 
+struct hid_device;
+
 /*
  * Boundary between TinyUSB host callbacks and the Linux-style USB HID
  * transport. Callback entry points may only copy bounded ingress data, rotate
@@ -22,6 +24,12 @@ void usbhid_backend_report_completed(uint8_t dev_addr, uint8_t instance,
 /* Host-owner fault ingress; lifecycle task performs the actual logging. */
 void usbhid_backend_rx_rearm_failed(void);
 void usbhid_backend_rx_transfer_failed(uint8_t xfer_result);
+/* Report recovery publishes work; the lifecycle task owns reset/re-enumeration. */
+int usbhid_backend_queue_device_reset(struct hid_device *hid);
+/* Host-owner handoff matching TinyUSB hub.c's reset-to-attach callback. */
+void usbhid_backend_hub_reset_host_complete(uint8_t hub_addr,
+					    uint8_t hub_port,
+					    void *context, int status);
 usbh_class_driver_t const *usbhid_backend_app_driver_get(
 	uint8_t *driver_count);
 
