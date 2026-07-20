@@ -738,13 +738,19 @@ static inline int device_probe(struct device *dev)
 	const struct bus_type *bus = dev->bus;
 	struct bus_type *b = (struct bus_type *)bus;
 	struct device_driver *drv;
+	// Linux driver core returns the probe error to its caller. Keep parser OOM
+	// visible through this local driver-core shim so TinyUSB can reject the HID.
+	int error = -ENODEV;
 
 	list_for_each_entry(drv, &b->drivers, bus_node) {
 		if (bus->match && !bus->match(dev, drv))
 			continue;
 
 		dev->driver = drv;
-		if (!bus->probe || bus->probe(dev) == 0) {
+		// if (!bus->probe || bus->probe(dev) == 0) {
+		// Call probe once and retain ENOMEM if no matching driver binds.
+		int probe_ret = bus->probe ? bus->probe(dev) : 0;
+		if (!probe_ret) {
 			int ret = device_sysfs_create_groups(dev, drv->dev_groups);
 
 			if (!ret) {
@@ -754,10 +760,14 @@ static inline int device_probe(struct device *dev)
 			if (bus->remove)
 				bus->remove(dev);
 		}
+		if (probe_ret == -ENOMEM)
+			error = -ENOMEM;
 		dev->driver = NULL;
 	}
 
-	return -ENODEV;
+	// return -ENODEV;
+	// Preserve parser OOM for hid_add_device() and usbhid_probe().
+	return error;
 }
 
 static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group * const *groups)

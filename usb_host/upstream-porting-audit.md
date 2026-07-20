@@ -75,6 +75,10 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
   reports and waits for dequeued parser/completion work before destruction.
 - Feature/raw/OUTPUT traffic uses `hid_async_task`: callers may wait, TinyUSB
   callbacks do not. Refcount, work cancellation, and async drain cover teardown.
+- HID field-allocation OOM aborts parsing and propagates through the local
+  driver-core shim, so TinyUSB destroys the whole interface instead of binding
+  a partial descriptor. The malloc hook leaves IRQs enabled and increments the
+  persistent UI error count; `ERR: HID_OOM` remains best-effort CDC output.
 - Evdev overflow drops only the incoming ordinary event; lifecycle sends may
   wait in their task, so producers never dequeue a QueueSet member.
 - Host keyboard LEDs use the virtual `devmon` path and synchronous evdev writer;

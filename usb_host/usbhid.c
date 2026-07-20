@@ -1094,7 +1094,10 @@ static int usbhid_probe(uint8_t dev_addr, uint8_t instance,
 	ret = hid_add_device(hid);
 	if (ret < 0) {
 		usbhid_remove_slot(hid);
-		async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
+		if (ret == -ENOMEM)
+			async_msg("ERR: HID_OOM");
+		else
+			async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
 		goto fail;
 	}
 

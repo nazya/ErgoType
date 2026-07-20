@@ -383,7 +383,9 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 				     parser->global.report_id, application);
 	if (!report) {
 		hid_err(parser->device, "hid_register_report failed\n");
-		return -1;
+		// return -1;
+		// REPORT_ID was validated above; NULL here is an allocation failure.
+		return -ENOMEM;
 	}
 
 	/* Handle both signed and unsigned cases properly */
@@ -418,8 +420,12 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 				 parser->global.report_count);
 
 	field = hid_register_field(report, usages);
+	// if (!field)
+	// 	return 0;
+	// Firmware cannot bind a partially parsed HID device after field allocation
+	// fails; preserve upstream's HID_MAX_FIELDS truncation, but propagate OOM.
 	if (!field)
-		return 0;
+		return report->maxfield == HID_MAX_FIELDS ? 0 : -ENOMEM;
 
 	field->physical = hid_lookup_collection(parser, HID_COLLECTION_PHYSICAL);
 	field->logical = hid_lookup_collection(parser, HID_COLLECTION_LOGICAL);
@@ -1412,7 +1418,12 @@ static int hid_parse_collections(struct hid_device *device)
 			goto out;
 		}
 
-		if (dispatch_type[item.type](parser, &item)) {
+		// if (dispatch_type[item.type](parser, &item)) {
+		// Firmware must preserve field-allocation failure through hid_parse().
+		int item_ret = dispatch_type[item.type](parser, &item);
+		if (item_ret) {
+			if (item_ret == -ENOMEM)
+				ret = -ENOMEM;
 			hid_err(device, "item %u %u %u %u parsing failed\n",
 				item.format,
 				(unsigned int)item.size,

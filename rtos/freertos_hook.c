@@ -29,11 +29,14 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "common/tusb_common.h"
+#include "ui/ui.h"
 
 void vApplicationMallocFailedHook(void)
 {
-  taskDISABLE_INTERRUPTS();
-  TU_ASSERT(false, );
+  // taskDISABLE_INTERRUPTS();
+  // TU_ASSERT(false, );
+  // Callers handle NULL; keep IRQs enabled so cleanup and the UI can run.
+  ui_notify_err();
 }
 
 void vApplicationStackOverflowHook(xTaskHandle pxTask, char *pcTaskName)
