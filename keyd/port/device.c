@@ -149,7 +149,7 @@ int device_init(const struct port_input_dev *port_dev, struct device *dev)
 	dev->data = NULL;
 	dev->ev_queue = port_dev->ev_queue;
 	dev->writer = port_dev->writer;
-	if (port_dev->name)
+	if (port_dev->name[0])
 		snprintf(dev->name, sizeof(dev->name), "%s", port_dev->name);
 	if (port_dev->has_haptic)
 		haptic_init(dev);

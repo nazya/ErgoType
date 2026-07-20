@@ -81,7 +81,7 @@ struct port_input_dev {
 	struct evdev_writer writer;
 	uint16_t vendor;
 	uint16_t product;
-	const char *name;
+	char name[32];
 	bool has_haptic;
 	unsigned long keybit[INPUT_BITS_TO_LONGS(KEY_CNT)];
 	unsigned long relbit[INPUT_BITS_TO_LONGS(REL_CNT)];

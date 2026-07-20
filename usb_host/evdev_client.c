@@ -66,7 +66,8 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 
 	port_dev.vendor = vendor;
 	port_dev.product = product;
-	port_dev.name = src->name ? src->name : "usb-hid";
+	strscpy(port_dev.name, src->name ? src->name : "usb-hid",
+		sizeof(port_dev.name));
 	port_dev.has_haptic = src->ff && test_bit(FF_HAPTIC, src->ffbit);
 	memcpy(port_dev.keybit, src->keybit, sizeof(port_dev.keybit));
 	memcpy(port_dev.relbit, src->relbit, sizeof(port_dev.relbit));

@@ -140,8 +140,6 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `switch_mode()` inherits upstream's void `hid_hw_request()` contract. A failed
   mode SET_REPORT is logged by the transport but cannot be returned to ff-core,
   so `haptic->mode` remains optimistic until teardown.
-- `port_input_dev.name` is a pointer while the rest of its devmon record is by
-  value; fast add/remove can free the name before KeyD copies the record.
 
 ## Headers and Deferred Runtime
 
