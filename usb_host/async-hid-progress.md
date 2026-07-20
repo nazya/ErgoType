@@ -116,15 +116,15 @@
 
 ## Manual Test Notes
 
-- 2026-07-20: uncommitted dynamic interrupt-IN checkpoint, exact UF2 SHA256
+- 2026-07-20: dynamic interrupt-IN checkpoint `hid: allocate interrupt input buffers per device`, exact UF2 SHA256
   `13edb5b61ca9c57f8da59613eb65b05cb8944f78c4bfef74f6cc50357264bd37`,
   builds with `text=477972`, `data=660`, and `bss=243308`. It removes the
-  fixed 64-byte RX ceiling and adds a post-HCD-close detach fence. It has not
-  yet been tested on hardware; do not commit it before that pass.
+  fixed 64-byte RX ceiling and adds a post-HCD-close detach fence. Normal input
+  and reconnect behavior were reported working on hardware.
 - 2026-07-20: request buffer-ownership checkpoint `hid: give async requests explicit buffer ownership`, exact UF2 SHA256
   `290ed22778c8905c49d2006bcb719ada1c3e8147cca4e4c41c8744025bde14e8`,
   builds with `text=477444`, `data=916`, and `bss=243308`, and was reported
-  working on hardware. It is the baseline for the uncommitted dynamic-IN step.
+  working on hardware. It is the baseline for the dynamic-IN step above.
 - 2026-07-20: physical-endpoint scheduling / generic clear-halt checkpoint
   `hid: serialize requests by physical USB lane`, exact UF2 SHA256
   `8c21c80630bcc857e381fff4d466eb9defc392f7c9e67a58e8743401986ff235`,
