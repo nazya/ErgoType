@@ -312,6 +312,8 @@ Hard requirements:
 - No heap allocation in completion callbacks.
 - No unbounded queues.
 - No silent drop of control requests.
+- No transport mutex held across TinyUSB/HCD calls, host-task handoff, parser
+  entry, heap operations, logging, or a blocking wait.
 
 Soft preference:
 

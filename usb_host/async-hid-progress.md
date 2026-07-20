@@ -48,6 +48,21 @@
   never run Linux driver continuations directly. Device/string pre-probe has no
   private request kind, FIFO, scratch, or completion continuation in this layer;
   it uses the same generic device-control path as task-side Linux USB calls.
+- TinyUSB mount/unmount/transfer callbacks execute in the dedicated host task,
+  not in hard IRQ context. The async, lifecycle/cache, and report modules now
+  preserve their existing common state domain with one explicit FreeRTOS
+  transport mutex instead of 163 application-level `taskENTER_CRITICAL()` entry
+  sites. That stops fixed-pool scans and report-state transitions from holding
+  FreeRTOS's scheduler-wide SMP lock with local IRQs masked. No mutex scope
+  crosses a TinyUSB/HCD call, host-task handoff, parser, blocking wait, logging,
+  or heap operation. The migrated scopes do not nest, so a normal
+  priority-inheritance mutex exposes accidental recursion. The next ownership
+  steps move callback publications into the async, report, and lifecycle task
+  queues so this shared lock can be partitioned rather than becoming permanent
+  design.
+  The separate task-only timer/workqueue bridges still contain 19 old critical
+  regions and remain a later synchronization domain; they are not mixed into
+  this transport mutex.
 - HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
   `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
   transfer carries the request serial in `user_data`, and completion preserves
@@ -109,8 +124,8 @@
   owners, and only then removes and frees it.
   Parent cache entries remain retired until their child subtree and HID objects
   are gone; fast reuse of the same device address starts a distinct generation.
-  Cache fields are filled under one critical section and `valid` is published
-  last. Callback HID lookups acquire an `io_pending` lease in that same section,
+  Cache fields are filled under the transport mutex and `valid` is published
+  last. Callback HID lookups acquire an `io_pending` lease in that same scope,
   and input completion also matches the exact interface generation, so pointer
   lifetime no longer depends on the current task affinity/priority ordering.
   Lifecycle flags and probe slots remain authoritative if the one-entry

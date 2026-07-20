@@ -304,8 +304,11 @@ heap_4 and occupy an 888 B block. Device/string policy and its aligned 256-byte
 scratch now live in the existing lifecycle transport pool, whose 2,756-byte
 payload occupies a 2,768-byte block. Together those two persistent blocks use
 3,656 B, 72 B less than the immediately preceding shared-async-scratch design,
-without adding an allocation or fragmentation point. Exact endpoint callbacks
-add 1,280 B of TinyUSB device state.
+before synchronization. The explicit transport mutex adds one persistent
+84-byte FreeRTOS queue object, which occupies a 96-byte heap_4 block; all three
+transport allocations therefore use 3,752 B. It is allocated once at startup
+and never churned during attach/report traffic. Exact endpoint callbacks add
+1,280 B of TinyUSB device state.
 Direct IN/OUT leave one-byte class placeholders. The four 20-byte direct-IN
 metadata slots remain in scratch X, while each attached HID interface owns one
 task-allocated receive buffer of
@@ -316,7 +319,7 @@ Host transfer storage now occupies 660 B in scratch X and ends 1,388 B below
 the core-1 stack. Removing transitional descriptor ownership shrinks
 `struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
 248 B per attached HID. The linked image reports
-243,332 B of `.bss` and keeps 196 B of main-SRAM link headroom.
+243,336 B of `.bss` and keeps 192 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.

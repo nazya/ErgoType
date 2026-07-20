@@ -79,6 +79,14 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `driver_input_lock` serializes input parsing with remove. Async cancel drops
   queued reports and waits any dequeued parser/completion through its last HID
   access before destruction.
+- TinyUSB callbacks are task-context publishers in this port. One explicit
+  transport mutex now replaces the former common FreeRTOS critical
+  domain across async slots, lifecycle/cache state, and report ownership. The
+  scope-for-scope glue change leaves upstream mutex/spinlock source lines visible
+  and does not alter Linux-derived files. It is transitional: Linux uses the
+  per-interface mutex for start/stop/open/close and a short FIFO spinlock for
+  true atomic URB completion; the firmware will instead move callback state to
+  its existing owner-task queues before partitioning this common mutex.
 
 ## Haptic Status
 
@@ -131,7 +139,7 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   keeps the upstream `hid_alloc_report_buf()` enqueue snapshot; synchronous USB
   helpers borrow their blocked caller's buffer. Slot-owned snapshots are freed
   only after completion or the physical abort/drain/fence path, outside the
-  FreeRTOS critical section. The generic bridge no longer imposes its former
+  transport mutex. The generic bridge no longer imposes its former
   257-byte payload cap.
 - Interrupt IN restores upstream's `usbhid->inbuf` field and start/stop buffer
   lifecycle. TinyUSB's logical transfer remains the largest INPUT report,
@@ -217,8 +225,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - matched the active vendor allowlist against `CONFIG_HID_*`
 - checked disabled source/link status and current proxy declarations
 - `cmake --build build -j4`
-- confirmed `sizeof(hid_async_request) == 64` and
-  `sizeof(hid_async_slot) == 92` on the RP2040 ABI
+- confirmed `sizeof(hid_async_request) == 60` and
+  `sizeof(hid_async_slot) == 88` on the RP2040 ABI
 - confirmed `sizeof(usbhid_device) == 240`, the four RX metadata slots remain
   80 B total, and scratch X fell from 916 B to 660 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`

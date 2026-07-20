@@ -38,15 +38,17 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=490924`, `data=660`, and
-`bss=243332`. `__bss_end__` is `0x2003ff3c`, leaving 196 B before scratch
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=491004`, `data=660`, and
+`bss=243336`. `__bss_end__` is `0x2003ff40`, leaving 192 B before scratch
 X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
 the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
 aligned 256-byte lifecycle descriptor scratch. `hid_async_request` is 60 B and
 each of ten `hid_async_slot`s is 88 B; their metadata-only 880-byte payload
 occupies an 888-byte heap_4 block. The transport pool occupies a 2,768-byte
-block, so the two allocations total 3,656 B with no descriptor-time allocation.
+block. The explicit transport mutex is an 84-byte FreeRTOS queue object in a
+96-byte heap_4 block, so the three persistent allocations total 3,752 B with no
+descriptor-time allocation.
 
 ## Layers
 
@@ -294,7 +296,9 @@ heap_4 block). Device/string pre-probe uses the aligned 256-byte scratch inside
 the 2,756-byte lifecycle transport pool (a 2,768-byte block) and reaches TinyUSB
 through the same generic control lane as other synchronous USB calls. The
 dedicated recovery slot remains unavailable to normal traffic; moving scratch
-ownership removes 72 B of persistent heap without adding a block.
+ownership removes 72 B of persistent heap. Replacing the transport's global
+critical regions adds one separate persistent 96-byte mutex block; it is
+startup-only and does not churn during attach/report traffic.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

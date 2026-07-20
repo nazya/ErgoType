@@ -47,9 +47,11 @@ struct usbhid_device {
 	// unsigned int retry_delay;                                       /* Delay length in ms */
 	// struct work_struct reset_work;                                  /* Task context for resets */
 	// Linux URBs, DMA buffers, iofl, and work/timer primitives are not
-	// available. TinyUSB owner tasks, hid_async's physical-endpoint queues, and
-	// the bounded port state below replace them while retaining the upstream
-	// usbhid_device ownership boundary.
+	// available. TinyUSB callbacks run in host-task context in this port, so a
+	// shared transport task mutex currently replaces the upstream
+	// process mutex plus IRQ-side FIFO spinlock without masking interrupts.
+	// TinyUSB owner tasks, hid_async's physical-endpoint queues, and the bounded
+	// port state below retain the upstream usbhid_device ownership boundary.
 	wait_queue_head_t wait;                                           /* For sleeping */
 
 	/*
