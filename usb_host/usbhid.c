@@ -32,6 +32,7 @@
 
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
 #define HID_HOST_RAW_INTERFACE_MAX HID_HOST_MAX_DEVICES
+#define USBHID_ADMISSION_NOTIFY_INDEX 0u
 #define USBHID_LIFECYCLE_NOTIFY_INDEX 1u
 #define USBHID_STRING_LANGID 0x0409u
 #define USBHID_USB_DEVICE_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
@@ -1311,6 +1312,23 @@ static void usbhid_usb_device_descriptor_failed(
 	usbhid_usb_device_ack_hid_publications(entry);
 }
 
+static bool usbhid_lifecycle_wait_async_slot(TickType_t started,
+					     TickType_t timeout)
+{
+	TickType_t elapsed = xTaskGetTickCount() - started;
+
+	if (elapsed >= timeout)
+		return false;
+	/*
+	 * Previous port: vTaskDelay(1);
+	 * Linux USB core sleeps on queue/URB progress. The broker's fixed-slot
+	 * release is the equivalent wake; a retry remains the durable predicate.
+	 */
+	(void)ulTaskNotifyTakeIndexed(USBHID_ADMISSION_NOTIFY_INDEX, pdTRUE,
+				      timeout - elapsed);
+	return xTaskGetTickCount() - started < timeout;
+}
+
 static int usbhid_usb_device_get_descriptor(struct usbhid_usb_device *entry,
 					    u8 type, u8 index, u16 langid,
 					    u16 size)
@@ -1342,9 +1360,9 @@ static int usbhid_usb_device_get_descriptor(struct usbhid_usb_device *entry,
 				      USB_CTRL_GET_TIMEOUT);
 		if (ret != -EBUSY)
 			break;
-		if (xTaskGetTickCount() - admission_start >= admission_timeout)
+		if (!usbhid_lifecycle_wait_async_slot(admission_start,
+						      admission_timeout))
 			break;
-		vTaskDelay(1);
 	} while (true);
 	return ret;
 }
@@ -2608,6 +2626,25 @@ void usbhid_backend_control_gate_idle(void)
 	usbhid_lifecycle_kick();
 }
 
+void usbhid_backend_async_slot_available(void)
+{
+	TaskHandle_t task;
+
+	/*
+	 * Descriptor callers own admission retry/deadline; this is only the edge.
+	 * Index 0 is also the call-local synchronous completion channel, whose
+	 * durable done predicate tolerates unrelated slot-release wakes. The idle
+	 * lifecycle waits on index 1 and therefore is not woken by ordinary output.
+	 */
+	hid_transport_lock();
+	task = usbhid_lifecycle_task_handle;
+	hid_transport_unlock();
+	if (task)
+		/* Coalesce idle releases instead of accumulating an unbounded count. */
+		(void)xTaskNotifyIndexed(task, USBHID_ADMISSION_NOTIFY_INDEX,
+					 1u, eSetBits);
+}
+
 void usbhid_backend_host_control_idle(void)
 {
 	bool waiting;
@@ -3481,10 +3518,9 @@ static int hid_get_class_descriptor(struct usb_device *dev, int ifnum,
 				(type << 8), ifnum, buf, size,
 				USB_CTRL_GET_TIMEOUT);
 		if (result == -EBUSY) {
-			if (xTaskGetTickCount() - admission_start >=
-			    admission_timeout)
+			if (!usbhid_lifecycle_wait_async_slot(
+					admission_start, admission_timeout))
 				return result;
-			vTaskDelay(1);
 			continue;
 		}
 		retries--;

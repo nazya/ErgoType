@@ -1144,10 +1144,13 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 	u8 *owned_data = NULL;
 	TaskHandle_t waiter = NULL;
 	bool control_lane;
+	bool normal_slot;
+	bool released = false;
 
 	hid_transport_lock();
 	control_lane = !hid_async_lane_is_out(
 		(enum hid_async_lane)slot->lane);
+	normal_slot = hid_async_slot_id(slot) <= HID_ASYNC_NORMAL_SLOT_COUNT;
 	slot->accepting_completion = false;
 	slot->completion_ready = false;
 	hid_async_slot_clear_physical_locked(slot);
@@ -1165,15 +1168,20 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 
 	hid_transport_lock();
 	if (slot->state == HID_ASYNC_SLOT_COMPLETING ||
-	    slot->state == HID_ASYNC_SLOT_RELEASE_PENDING)
+	    slot->state == HID_ASYNC_SLOT_RELEASE_PENDING) {
 		owned_data = hid_async_slot_release_locked(slot, &waiter);
-	else
+		released = true;
+	} else {
 		configASSERT(slot->state == HID_ASYNC_SLOT_WAIT_PARSE);
+	}
 	hid_transport_unlock();
 	if (waiter)
 		xTaskNotifyGive(waiter);
 	/* heap_4 must not run while the transport mutex is held. */
 	kfree(owned_data);
+	/* Normal-slot release is the descriptor admission wait-queue edge. */
+	if (released && normal_slot)
+		usbhid_backend_async_slot_available();
 	/* Publish after release so a retry can reuse this exact bounded slot. */
 	if (control_lane)
 		hid_async_control_gate_publish_idle();
@@ -1301,6 +1309,7 @@ static bool hid_async_process_released(void)
 {
 	u8 *owned_data = NULL;
 	TaskHandle_t waiter = NULL;
+	bool normal_slot = false;
 	bool processed = false;
 
 	hid_transport_lock();
@@ -1310,6 +1319,7 @@ static bool hid_async_process_released(void)
 			continue;
 		owned_data = hid_async_slot_release_locked(&hid_async_slots[i],
 							      &waiter);
+		normal_slot = i < HID_ASYNC_NORMAL_SLOT_COUNT;
 		processed = true;
 		break;
 	}
@@ -1317,6 +1327,8 @@ static bool hid_async_process_released(void)
 	if (waiter)
 		xTaskNotifyGive(waiter);
 	kfree(owned_data);
+	if (processed && normal_slot)
+		usbhid_backend_async_slot_available();
 	if (processed)
 		hid_async_control_gate_publish_idle();
 	return processed;
@@ -1535,7 +1547,7 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 		return true;
 	}
 	if (ret == -EAGAIN) {
-		/* A gate raced host submission; EP0 is now parked and idle. */
+		/* The host rejected this submit without consuming the queued slot. */
 		if (control_lane)
 			hid_async_control_gate_publish_idle();
 		return true;

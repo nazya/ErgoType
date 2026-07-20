@@ -38,6 +38,8 @@ void usbhid_backend_enum_state(uint8_t rhport, uint8_t hub_addr,
 			       uint8_t hub_port, bool active, bool success);
 /* Gated EP0 progress is a wake edge; reset state remains lifecycle-owned. */
 void usbhid_backend_control_gate_idle(void);
+/* A normal broker slot became reusable for call-local descriptor admission. */
+void usbhid_backend_async_slot_available(void);
 /* TinyUSB's one physical control owner became idle in the host task. */
 void usbhid_backend_host_control_idle(void);
 usbh_class_driver_t const *usbhid_backend_app_driver_get(

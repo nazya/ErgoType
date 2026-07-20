@@ -58,6 +58,12 @@ The active implementation now has these properties:
   Known-success recovery enters the pinned `enum_new_device()` path directly
   from the host owner, avoiding a recursive send to TinyUSB's only host queue;
   exact physical and parent generations fence any raced replacement epoch.
+- Lifecycle descriptor admission uses the same condition/wake split: enqueue
+  retry is the durable predicate, and release of a normal fixed broker slot
+  wakes its call-local notification index up to the existing exact deadline.
+  Idle lifecycle waits use another index, so ordinary output releases do not
+  wake its main scan. The two former one-tick admission polls consume no wire
+  retries under local saturation.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
   descriptors are now fetched by task-side `usbhid_parse()` at their
   class-declared size through the generic asynchronous EP0 owner, up to Linux's

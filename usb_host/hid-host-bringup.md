@@ -109,7 +109,10 @@ stop/cancel wake the task immediately. HID report requests and generic control
 messages share same-device EP0 ordering; completed GET_REPORT parser storage no
 longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
 ll-driver contract, but TinyUSB callbacks never wait or run the Linux
-continuation.
+continuation. If the bounded broker is full, lifecycle descriptor callers sleep
+on normal-slot release through their call-local notification index up to the
+existing admission deadline instead of polling every tick. Idle lifecycle waits
+use another index, and recovery's reserved slot does not publish false capacity.
 
 Interrupt OUT is also submitted directly from the host owner. Each asynchronous
 `.request()` SET owns an exact enqueue-time report snapshot until completion,
