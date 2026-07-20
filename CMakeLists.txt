@@ -251,6 +251,331 @@ set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
                             INCLUDE_DIRECTORIES
                             "${PICO_TINYUSB_PATH}/src/host")
 
+# TinyUSB's HID class prefetches the report descriptor into its 512-byte
+# enumeration buffer before our Linux-shaped transport can fetch it. Generate a
+# second build-local compatibility source which leaves SET_IDLE/SET_PROTOCOL in
+# TinyUSB but hands descriptor ownership and retry semantics to the lifecycle
+# task. The installed SDK remains untouched.
+set(TINYUSB_HIDH_SOURCE
+    "${PICO_TINYUSB_PATH}/src/class/hid/hid_host.c")
+set(TINYUSB_HIDH_PORT_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-hid-host-port.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${TINYUSB_HIDH_SOURCE}")
+file(SHA256 "${TINYUSB_HIDH_SOURCE}" TINYUSB_HIDH_SHA256)
+if(NOT TINYUSB_HIDH_SHA256 STREQUAL
+   "c4f1125c2235dc870b280343df5d4c088824c6d40430ea65cd21cf56f84ddea9")
+    message(FATAL_ERROR "Pinned TinyUSB hid_host.c changed; re-audit the port")
+endif()
+file(READ "${TINYUSB_HIDH_SOURCE}" TINYUSB_HIDH_CONTENT)
+set(TINYUSB_HIDH_OPEN_UPSTREAM [=[
+bool hidh_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const* desc_itf, uint16_t max_len) {
+  (void) rhport;
+  (void) max_len;
+
+  TU_VERIFY(TUSB_CLASS_HID == desc_itf->bInterfaceClass);
+  TU_LOG_DRV("[%u] HID opening Interface %u\r\n", daddr, desc_itf->bInterfaceNumber);
+
+  // len = interface + hid + n*endpoints
+  uint16_t const drv_len = (uint16_t) (sizeof(tusb_desc_interface_t) + sizeof(tusb_hid_descriptor_hid_t) +
+                                       desc_itf->bNumEndpoints * sizeof(tusb_desc_endpoint_t));
+  TU_ASSERT(max_len >= drv_len);
+  uint8_t const* p_desc = (uint8_t const*) desc_itf;
+
+  //------------- HID descriptor -------------//
+  p_desc = tu_desc_next(p_desc);
+  tusb_hid_descriptor_hid_t const* desc_hid = (tusb_hid_descriptor_hid_t const*) p_desc;
+  TU_ASSERT(HID_DESC_TYPE_HID == desc_hid->bDescriptorType);
+
+  hidh_interface_t* p_hid = find_new_itf();
+  TU_ASSERT(p_hid); // not enough interface, try to increase CFG_TUH_HID
+  p_hid->daddr = daddr;
+
+  //------------- Endpoint Descriptors -------------//
+  p_desc = tu_desc_next(p_desc);
+  tusb_desc_endpoint_t const* desc_ep = (tusb_desc_endpoint_t const*) p_desc;
+
+  for (int i = 0; i < desc_itf->bNumEndpoints; i++) {
+    TU_ASSERT(TUSB_DESC_ENDPOINT == desc_ep->bDescriptorType);
+    TU_ASSERT(tuh_edpt_open(daddr, desc_ep));
+
+    if (tu_edpt_dir(desc_ep->bEndpointAddress) == TUSB_DIR_IN) {
+      p_hid->ep_in = desc_ep->bEndpointAddress;
+      p_hid->epin_size = tu_edpt_packet_size(desc_ep);
+    } else {
+      p_hid->ep_out = desc_ep->bEndpointAddress;
+      p_hid->epout_size = tu_edpt_packet_size(desc_ep);
+    }
+
+    p_desc = tu_desc_next(p_desc);
+    desc_ep = (tusb_desc_endpoint_t const*) p_desc;
+  }
+
+  p_hid->itf_num = desc_itf->bInterfaceNumber;
+
+  // Assume bNumDescriptors = 1
+  p_hid->report_desc_type = desc_hid->bReportType;
+  p_hid->report_desc_len = tu_unaligned_read16(&desc_hid->wReportLength);
+
+  // Per HID Specs: default is Report protocol, though we will force Boot protocol when set_config
+  p_hid->protocol_mode = _hidh_default_protocol;
+  if (HID_SUBCLASS_BOOT == desc_itf->bInterfaceSubClass) {
+    p_hid->itf_protocol = desc_itf->bInterfaceProtocol;
+  }
+
+  return true;
+}
+
+]=])
+set(TINYUSB_HIDH_OPEN_PORT [=[
+// Upstream TinyUSB hidh_open() assumes interface -> HID -> endpoint(s):
+// bool hidh_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const* desc_itf, uint16_t max_len) {
+//   (void) rhport;
+//   (void) max_len;
+//
+//   TU_VERIFY(TUSB_CLASS_HID == desc_itf->bInterfaceClass);
+//   TU_LOG_DRV("[%u] HID opening Interface %u\r\n", daddr, desc_itf->bInterfaceNumber);
+//
+//   // len = interface + hid + n*endpoints
+//   uint16_t const drv_len = (uint16_t) (sizeof(tusb_desc_interface_t) + sizeof(tusb_hid_descriptor_hid_t) +
+//                                        desc_itf->bNumEndpoints * sizeof(tusb_desc_endpoint_t));
+//   TU_ASSERT(max_len >= drv_len);
+//   uint8_t const* p_desc = (uint8_t const*) desc_itf;
+//
+//   //------------- HID descriptor -------------//
+//   p_desc = tu_desc_next(p_desc);
+//   tusb_hid_descriptor_hid_t const* desc_hid = (tusb_hid_descriptor_hid_t const*) p_desc;
+//   TU_ASSERT(HID_DESC_TYPE_HID == desc_hid->bDescriptorType);
+//
+//   hidh_interface_t* p_hid = find_new_itf();
+//   TU_ASSERT(p_hid); // not enough interface, try to increase CFG_TUH_HID
+//   p_hid->daddr = daddr;
+//
+//   //------------- Endpoint Descriptors -------------//
+//   p_desc = tu_desc_next(p_desc);
+//   tusb_desc_endpoint_t const* desc_ep = (tusb_desc_endpoint_t const*) p_desc;
+//
+//   for (int i = 0; i < desc_itf->bNumEndpoints; i++) {
+//     TU_ASSERT(TUSB_DESC_ENDPOINT == desc_ep->bDescriptorType);
+//     TU_ASSERT(tuh_edpt_open(daddr, desc_ep));
+//
+//     if (tu_edpt_dir(desc_ep->bEndpointAddress) == TUSB_DIR_IN) {
+//       p_hid->ep_in = desc_ep->bEndpointAddress;
+//       p_hid->epin_size = tu_edpt_packet_size(desc_ep);
+//     } else {
+//       p_hid->ep_out = desc_ep->bEndpointAddress;
+//       p_hid->epout_size = tu_edpt_packet_size(desc_ep);
+//     }
+//
+//     p_desc = tu_desc_next(p_desc);
+//     desc_ep = (tusb_desc_endpoint_t const*) p_desc;
+//   }
+//
+//   p_hid->itf_num = desc_itf->bInterfaceNumber;
+//
+//   // Assume bNumDescriptors = 1
+//   p_hid->report_desc_type = desc_hid->bReportType;
+//   p_hid->report_desc_len = tu_unaligned_read16(&desc_hid->wReportLength);
+//
+//   // Per HID Specs: default is Report protocol, though we will force Boot protocol when set_config
+//   p_hid->protocol_mode = _hidh_default_protocol;
+//   if (HID_SUBCLASS_BOOT == desc_itf->bInterfaceSubClass) {
+//     p_hid->itf_protocol = desc_itf->bInterfaceProtocol;
+//   }
+//
+//   return true;
+// }
+// Linux USB core accepts the HID descriptor in interface extra data or after
+// endpoint[0]. Scan the bounded current-interface stream before opening the
+// same TinyUSB endpoints, without consuming descriptors from the next interface.
+bool hidh_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const* desc_itf, uint16_t max_len) {
+  (void) rhport;
+
+  TU_VERIFY(max_len >= sizeof(tusb_desc_interface_t));
+  TU_VERIFY(desc_itf->bLength >= sizeof(tusb_desc_interface_t) && desc_itf->bLength <= max_len);
+  TU_VERIFY(TUSB_CLASS_HID == desc_itf->bInterfaceClass);
+  TU_LOG_DRV("[%u] HID opening Interface %u\r\n", daddr, desc_itf->bInterfaceNumber);
+
+  uint8_t const* const desc_end = (uint8_t const*) desc_itf + max_len;
+  uint8_t const* p_desc = (uint8_t const*) desc_itf + desc_itf->bLength;
+  tusb_hid_descriptor_hid_t const* desc_hid = NULL;
+
+  // Validate the whole current-interface stream before endpoint-open side effects.
+  while (p_desc < desc_end) {
+    uint16_t const remaining = (uint16_t) (desc_end - p_desc);
+    TU_VERIFY(remaining >= 2);
+    uint8_t const desc_len = tu_desc_len(p_desc);
+    TU_VERIFY(desc_len >= 2 && desc_len <= remaining);
+    if (TUSB_DESC_INTERFACE == tu_desc_type(p_desc)) break;
+
+    if (HID_DESC_TYPE_HID == tu_desc_type(p_desc) && !desc_hid) {
+      TU_VERIFY(desc_len >= sizeof(tusb_hid_descriptor_hid_t));
+      desc_hid = (tusb_hid_descriptor_hid_t const*) p_desc;
+    } else if (TUSB_DESC_ENDPOINT == tu_desc_type(p_desc)) {
+      TU_VERIFY(desc_len >= sizeof(tusb_desc_endpoint_t));
+    }
+    p_desc += desc_len;
+  }
+  TU_VERIFY(desc_hid);
+
+  hidh_interface_t* p_hid = find_new_itf();
+  TU_ASSERT(p_hid); // not enough interface, try to increase CFG_TUH_HID
+  tu_memclr(p_hid, sizeof(*p_hid));
+
+  // Open up to the number of endpoints advertised by this interface. Linux
+  // likewise keeps the descriptors it actually finds when fewer are present.
+  uint8_t opened_endpoints = 0;
+  uint8_t ep_in = 0;
+  uint8_t ep_out = 0;
+  uint16_t epin_size = 0;
+  uint16_t epout_size = 0;
+  p_desc = (uint8_t const*) desc_itf + desc_itf->bLength;
+  while (p_desc < desc_end && opened_endpoints < desc_itf->bNumEndpoints) {
+    uint8_t const desc_len = tu_desc_len(p_desc);
+    if (TUSB_DESC_INTERFACE == tu_desc_type(p_desc)) break;
+
+    if (TUSB_DESC_ENDPOINT == tu_desc_type(p_desc)) {
+      tusb_desc_endpoint_t const* desc_ep = (tusb_desc_endpoint_t const*) p_desc;
+      TU_ASSERT(tuh_edpt_open(daddr, desc_ep));
+
+      if (tu_edpt_dir(desc_ep->bEndpointAddress) == TUSB_DIR_IN) {
+        ep_in = desc_ep->bEndpointAddress;
+        epin_size = tu_edpt_packet_size(desc_ep);
+      } else {
+        ep_out = desc_ep->bEndpointAddress;
+        epout_size = tu_edpt_packet_size(desc_ep);
+      }
+      opened_endpoints++;
+    }
+    p_desc += desc_len;
+  }
+
+  // Publish the class slot only after every descriptor and endpoint-open step
+  // succeeded, so a failed open cannot consume a CFG_TUH_HID instance.
+  p_hid->itf_num = desc_itf->bInterfaceNumber;
+  p_hid->ep_in = ep_in;
+  p_hid->ep_out = ep_out;
+  p_hid->epin_size = epin_size;
+  p_hid->epout_size = epout_size;
+
+  // Assume bNumDescriptors = 1
+  p_hid->report_desc_type = desc_hid->bReportType;
+  p_hid->report_desc_len = tu_unaligned_read16(&desc_hid->wReportLength);
+
+  // Per HID Specs: default is Report protocol, though we will force Boot protocol when set_config
+  p_hid->protocol_mode = _hidh_default_protocol;
+  if (HID_SUBCLASS_BOOT == desc_itf->bInterfaceSubClass) {
+    p_hid->itf_protocol = desc_itf->bInterfaceProtocol;
+  }
+  p_hid->daddr = daddr;
+
+  return true;
+}
+
+]=])
+string(FIND "${TINYUSB_HIDH_CONTENT}" "${TINYUSB_HIDH_OPEN_UPSTREAM}"
+       TINYUSB_HIDH_OPEN_OFFSET)
+if(TINYUSB_HIDH_OPEN_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB HID open anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_HIDH_OPEN_UPSTREAM}" TINYUSB_HIDH_OPEN_LENGTH)
+math(EXPR TINYUSB_HIDH_OPEN_TAIL_OFFSET
+     "${TINYUSB_HIDH_OPEN_OFFSET} + ${TINYUSB_HIDH_OPEN_LENGTH}")
+string(SUBSTRING "${TINYUSB_HIDH_CONTENT}"
+       ${TINYUSB_HIDH_OPEN_TAIL_OFFSET} -1 TINYUSB_HIDH_OPEN_TAIL)
+string(FIND "${TINYUSB_HIDH_OPEN_TAIL}" "${TINYUSB_HIDH_OPEN_UPSTREAM}"
+       TINYUSB_HIDH_SECOND_OPEN)
+if(NOT TINYUSB_HIDH_SECOND_OPEN EQUAL -1)
+    message(FATAL_ERROR "TinyUSB HID open anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_HIDH_OPEN_UPSTREAM}" "${TINYUSB_HIDH_OPEN_PORT}"
+       TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_CONTENT}")
+set(TINYUSB_HIDH_REPORT_DESC_UPSTREAM [=[
+    case CONFIG_GET_REPORT_DESC:
+      // Get Report Descriptor if possible
+      // using usbh enumeration buffer since report descriptor can be very long
+      if (p_hid->report_desc_len > CFG_TUH_ENUMERATION_BUFSIZE) {
+        TU_LOG_DRV("HID Skip Report Descriptor since it is too large %u bytes\r\n", p_hid->report_desc_len);
+
+        // Driver is mounted without report descriptor
+        config_driver_mount_complete(daddr, idx, NULL, 0);
+      } else {
+        tuh_descriptor_get_hid_report(daddr, itf_num, p_hid->report_desc_type, 0,
+                                      usbh_get_enum_buf(), p_hid->report_desc_len,
+                                      process_set_config, CONFIG_COMPLETE);
+      }
+      break;
+
+]=])
+set(TINYUSB_HIDH_REPORT_DESC_PORT [=[
+    case CONFIG_GET_REPORT_DESC:
+      // Upstream TinyUSB:
+      // // Get Report Descriptor if possible
+      // // using usbh enumeration buffer since report descriptor can be very long
+      // if (p_hid->report_desc_len > CFG_TUH_ENUMERATION_BUFSIZE) {
+      //   TU_LOG_DRV("HID Skip Report Descriptor since it is too large %u bytes\r\n", p_hid->report_desc_len);
+      //
+      //   // Driver is mounted without report descriptor
+      //   config_driver_mount_complete(daddr, idx, NULL, 0);
+      // } else {
+      //   tuh_descriptor_get_hid_report(daddr, itf_num, p_hid->report_desc_type, 0,
+      //                                 usbh_get_enum_buf(), p_hid->report_desc_len,
+      //                                 process_set_config, CONFIG_COMPLETE);
+      // }
+      // Firmware lifecycle owns one exact-size, four-attempt Linux-style fetch.
+      config_driver_mount_complete(daddr, idx, NULL, 0);
+      break;
+
+]=])
+string(FIND "${TINYUSB_HIDH_PORT_CONTENT}"
+       "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
+       TINYUSB_HIDH_REPORT_DESC_OFFSET)
+if(TINYUSB_HIDH_REPORT_DESC_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB HID report-fetch anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
+       TINYUSB_HIDH_REPORT_DESC_LENGTH)
+math(EXPR TINYUSB_HIDH_REPORT_DESC_TAIL_OFFSET
+     "${TINYUSB_HIDH_REPORT_DESC_OFFSET} + ${TINYUSB_HIDH_REPORT_DESC_LENGTH}")
+string(SUBSTRING "${TINYUSB_HIDH_PORT_CONTENT}"
+       ${TINYUSB_HIDH_REPORT_DESC_TAIL_OFFSET} -1
+       TINYUSB_HIDH_REPORT_DESC_TAIL)
+string(FIND "${TINYUSB_HIDH_REPORT_DESC_TAIL}"
+       "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
+       TINYUSB_HIDH_SECOND_REPORT_DESC)
+if(NOT TINYUSB_HIDH_SECOND_REPORT_DESC EQUAL -1)
+    message(FATAL_ERROR "TinyUSB HID report-fetch anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
+       "${TINYUSB_HIDH_REPORT_DESC_PORT}"
+       TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_PORT_CONTENT}")
+file(WRITE "${TINYUSB_HIDH_PORT_SOURCE}" "${TINYUSB_HIDH_PORT_CONTENT}")
+
+get_target_property(TINYUSB_HOST_BASE_SOURCES
+                    tinyusb_host_base INTERFACE_SOURCES)
+set(TINYUSB_HIDH_SOURCE_COUNT 0)
+foreach(TINYUSB_HOST_BASE_SOURCE IN LISTS TINYUSB_HOST_BASE_SOURCES)
+    if(TINYUSB_HOST_BASE_SOURCE STREQUAL "${TINYUSB_HIDH_SOURCE}")
+        math(EXPR TINYUSB_HIDH_SOURCE_COUNT
+             "${TINYUSB_HIDH_SOURCE_COUNT} + 1")
+    endif()
+endforeach()
+if(NOT TINYUSB_HIDH_SOURCE_COUNT EQUAL 1)
+    message(FATAL_ERROR
+            "TinyUSB HID host source must occur exactly once; re-audit the port")
+endif()
+list(FIND TINYUSB_HOST_BASE_SOURCES "${TINYUSB_HIDH_SOURCE}"
+     TINYUSB_HIDH_SOURCE_INDEX)
+list(REMOVE_AT TINYUSB_HOST_BASE_SOURCES ${TINYUSB_HIDH_SOURCE_INDEX})
+set_property(TARGET tinyusb_host_base PROPERTY INTERFACE_SOURCES
+             ${TINYUSB_HOST_BASE_SOURCES})
+target_sources(tinyusb_host_base INTERFACE "${TINYUSB_HIDH_PORT_SOURCE}")
+set_source_files_properties("${TINYUSB_HIDH_PORT_SOURCE}" PROPERTIES
+                            INCLUDE_DIRECTORIES
+                            "${PICO_TINYUSB_PATH}/src/class/hid")
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})
 

@@ -603,6 +603,8 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 						int index, u32 generation)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
+	u32 revision;
+	bool reconcile = false;
 	bool park = false;
 	int ret;
 
@@ -611,7 +613,10 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 	 * lifetime. Keep that existing fence through publication: a timer callback
 	 * may otherwise be preempted by detach between dropping it and this call.
 	 */
-	ret = usbhid_backend_queue_device_reset(hid);
+	taskENTER_CRITICAL();
+	revision = usbhid->report_revision;
+	taskEXIT_CRITICAL();
+	ret = usbhid_backend_queue_device_reset(hid, revision);
 	taskENTER_CRITICAL();
 	if (index >= 0 && index < CFG_TUH_HID &&
 	    usbhid_report_rx_slots[index].owner == hid &&
@@ -620,17 +625,47 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 	    usbhid_report_recovery[index] ==
 		USBHID_REPORT_RECOVERY_DEVICE_RESET) {
 		if (ret) {
-			/* No reset owner exists; restore the old park fallback. */
 			usbhid_report_recovery[index] =
 				USBHID_REPORT_RECOVERY_NONE;
+			if (ret == -ECANCELED) {
+				/*
+				 * close cancelled publication. If a new open won
+				 * meanwhile, preserve the lifetime fence and arm
+				 * only that new report revision.
+				 */
+				reconcile = usbhid->report_wanted &&
+					    !usbhid->transport_stopping &&
+					    usbhid->report_revision != revision;
+			} else {
+				/* No reset owner exists; park this exact open. */
+				park = usbhid->report_wanted &&
+				       !usbhid->transport_stopping;
+				if (park)
+					usbhid->report_wanted = false;
+			}
+		}
+		if (!reconcile)
+			usbhid->report_host_pending = false;
+	}
+	taskEXIT_CRITICAL();
+
+	if (reconcile &&
+	    !usbhid_report_queue_reconcile(hid, generation, false)) {
+		taskENTER_CRITICAL();
+		if (index >= 0 && index < CFG_TUH_HID &&
+		    usbhid_report_rx_slots[index].owner == hid &&
+		    usbhid_report_rx_slots[index].generation == generation &&
+		    usbhid_report_recovery[index] ==
+			USBHID_REPORT_RECOVERY_NONE &&
+		    usbhid->report_host_pending) {
 			park = usbhid->report_wanted &&
 			       !usbhid->transport_stopping;
 			if (park)
 				usbhid->report_wanted = false;
+			usbhid->report_host_pending = false;
 		}
-		usbhid->report_host_pending = false;
+		taskEXIT_CRITICAL();
 	}
-	taskEXIT_CRITICAL();
 
 	if (park)
 		usbhid_backend_rx_rearm_failed();

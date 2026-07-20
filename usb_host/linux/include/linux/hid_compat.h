@@ -261,6 +261,9 @@ typedef int atomic_t;
 #define E2BIG 7
 #define EEXIST 17
 #define EMSGSIZE 90
+// #define ECANCELED 125 /* Operation Canceled */
+// Keep the upstream asm-generic errno for versioned firmware cancellation.
+#define ECANCELED 125
 
 #define BIT(n) (1u << (n))
 #define BIT_ULL(n) (1ULL << (n))

@@ -109,6 +109,13 @@ cannot survive an electrical reset. Root and hub-child paths run behind a
 global EP0 gate; the exact old cache generation is drained before a fresh mount
 may probe.
 
+The SHA-pinned TinyUSB HID class still performs its normal SET_IDLE and
+SET_PROTOCOL sequence, but no longer does a duplicate report-descriptor read
+through the shared 512-byte enumeration buffer. It mounts the class with a NULL
+descriptor pointer; after the exact global-mount fence, lifecycle performs the
+single authoritative Linux-shaped read with an exact-size owned buffer and four
+attempts. The separate configuration-descriptor limit remains 512 bytes.
+
 ## What `HID_REPORT_SKIP` Meant
 
 `ERR: HID_REPORT_SKIP` was a late receive-path symptom, not the original parser

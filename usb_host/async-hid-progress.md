@@ -73,15 +73,21 @@
   path covers hubs, for which TinyUSB does not issue the common unmount callback.
   Parent cache entries remain retired until their child subtree and HID objects
   are gone; fast reuse of the same device address starts a distinct generation.
+  Cache fields are filled under one critical section and `valid` is published
+  last. Callback HID lookups acquire an `io_pending` lease in that same section,
+  and input completion also matches the exact interface generation, so pointer
+  lifetime no longer depends on the current task affinity/priority ordering.
   Lifecycle flags and descriptor slots remain authoritative if the one-entry
   wake queue is already full.
 - Report-descriptor fetch preserves upstream `hid_get_class_descriptor()`
   behavior: one zeroed exact-size buffer, up to four reads, and acceptance of a
   final successful short read. At most one such buffer exists across devices;
   cancel and fast-replug retain it until the async generation fence completes.
-  TinyUSB still reads descriptors up to 512 bytes during enumeration, so those
-  ordinary descriptors are intentionally read a second time by lifecycle.
-  Configuration descriptors remain limited by the enumeration scratch buffer.
+  The SHA-pinned build-local TinyUSB HID class no longer performs its earlier
+  duplicate read into the 512-byte enumeration buffer: it completes class mount
+  with `NULL`, which is the only value consumed by this callback facade, and
+  lifecycle performs the single authoritative fetch. Configuration descriptors
+  remain separately limited by the enumeration scratch buffer.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -115,7 +121,11 @@
   toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
   13/26/52/104-ms delayed retry for about one second. Clear-halt transfer
   failure, exhausted protocol retry, or failure to reset the local PIO DATA0
-  state now queues the upstream device-reset fallback. The firmware lifecycle
+  state now queues the upstream device-reset fallback. Reset publication is
+  versioned with `report_revision`, matching close's upstream
+  `cancel_work_sync()` boundary: a close/reopen which wins the publication race
+  rearms only the new open instead of parking it or reviving the old reset.
+  The firmware lifecycle
   retains no HID pointer: it snapshots the physical topology, closes the exact
   old cache epoch, waits for HID/descriptor/async retirement, and performs full
   TinyUSB re-enumeration behind a global EP0 gate. Logical control work remains
@@ -136,6 +146,11 @@
   deltas: the hub mount fence, a weak generation hook, and direct root/hub
   enumeration helpers. The installed SDK is never modified and any upstream
   source drift fails configuration for an explicit re-audit.
+- The same compatibility generation pins `hid_host.c` and preserves its full
+  report-descriptor prefetch block commented beside the replacement. TinyUSB
+  still performs SET_IDLE and SET_PROTOCOL, then completes HID class mount
+  without borrowing the shared enumeration buffer; lifecycle owns the one
+  exact-size Linux-style descriptor request and its retry/error semantics.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,

@@ -246,14 +246,21 @@ static int usbhid_reset_process(void);
 static TickType_t usbhid_reset_wait_ticks(void);
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
 
+static u32 usbhid_next_generation_locked(void)
+{
+	u32 generation = ++usbhid_generation;
+
+	if (!generation)
+		generation = ++usbhid_generation;
+	return generation;
+}
+
 static u32 usbhid_next_generation(void)
 {
 	u32 generation;
 
 	taskENTER_CRITICAL();
-	generation = ++usbhid_generation;
-	if (!generation)
-		generation = ++usbhid_generation;
+	generation = usbhid_next_generation_locked();
 	taskEXIT_CRITICAL();
 	return generation;
 }
@@ -496,19 +503,27 @@ static void usbhid_usb_device_copy(struct usbhid_usb_device *entry,
 static struct usbhid_usb_device *
 usbhid_usb_device_upsert(const struct usb_device *src)
 {
-	struct usbhid_usb_device *entry;
-	struct usb_device *parent = usbhid_usb_device_parent(src);
+	struct usbhid_usb_device *entry = NULL;
+	struct usb_device *parent;
+	enum usbhid_transport_fault fault = 0;
 
+	/*
+	 * Upstream Linux USB core publishes a fully initialized usb_device under
+	 * its device-model locks. Keep the firmware cache copy and valid bit behind
+	 * one SMP publication fence; callbacks only report a fault after unlocking.
+	 */
+	taskENTER_CRITICAL();
+	parent = usbhid_usb_device_parent(src);
 	/* A child without its live hub epoch must never masquerade as root-owned. */
 	if (!parent) {
-		usbhid_transport_fault(USBHID_FAULT_TOPOLOGY);
-		return NULL;
+		fault = USBHID_FAULT_TOPOLOGY;
+		goto out;
 	}
 
 	entry = usbhid_usb_device_slot(src->dev_addr);
 	if (!entry) {
-		usbhid_transport_fault(USBHID_FAULT_DEVICE_CACHE_FULL);
-		return NULL;
+		fault = USBHID_FAULT_DEVICE_CACHE_FULL;
+		goto out;
 	}
 
 	if (!entry->valid) {
@@ -516,10 +531,15 @@ usbhid_usb_device_upsert(const struct usb_device *src)
 		device_initialize(&entry->dev.dev);
 		entry->dev.dev.type = &usb_device_type;
 		usbhid_usb_device_init_config(&entry->dev);
-		entry->generation = usbhid_next_generation();
+		entry->generation = usbhid_next_generation_locked();
 	}
-	entry->valid = true;
 	usbhid_usb_device_copy(entry, src, parent);
+	/* valid is the release publication for all fields copied above. */
+	entry->valid = true;
+out:
+	taskEXIT_CRITICAL();
+	if (fault)
+		usbhid_transport_fault(fault);
 	return entry;
 }
 
@@ -901,6 +921,7 @@ static void usbhid_raw_interface_store(uint8_t dev_addr,
 		/* The raw configuration stream may contain a malformed short endpoint. */
 		if (p[1] == USB_DT_ENDPOINT &&
 		    p[0] >= sizeof(tusb_desc_endpoint_t) &&
+		    snapshot.endpoint_count < desc->bNumEndpoints &&
 		    snapshot.endpoint_count < USB_HOST_ENDPOINT_MAX) {
 			const tusb_desc_endpoint_t *ep =
 				(const tusb_desc_endpoint_t *)p;
@@ -1016,14 +1037,18 @@ usbh_class_driver_t const *usbhid_backend_app_driver_get(uint8_t *driver_count)
 	return usbhid_raw_interface_driver;
 }
 
-static struct hid_device *usbhid_lookup(uint8_t dev_addr, uint8_t instance)
+/* Caller holds the firmware SMP critical section across lookup and pinning. */
+static struct hid_device *usbhid_lookup_locked(uint8_t dev_addr,
+					       uint8_t instance,
+					       u32 generation)
 {
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
 		struct hid_device *hid = usbhid_devices[i];
 		struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
 
 		if (usbhid && usbhid->dev_addr == dev_addr &&
-		    usbhid->instance == instance)
+		    usbhid->instance == instance &&
+		    (!generation || usbhid->generation == generation))
 			return hid;
 	}
 
@@ -2573,7 +2598,8 @@ void usbhid_backend_rx_transfer_failed(uint8_t xfer_result)
 		USBHID_FAULT_RX_STALL : USBHID_FAULT_RX_XFER);
 }
 
-int usbhid_backend_queue_device_reset(struct hid_device *hid)
+int usbhid_backend_queue_device_reset(struct hid_device *hid,
+				      uint32_t report_revision)
 {
 	struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
 	struct usb_device *dev = usbhid ? interface_to_usbdev(usbhid->intf) : NULL;
@@ -2587,9 +2613,10 @@ int usbhid_backend_queue_device_reset(struct hid_device *hid)
 
 		if (&entry->dev != dev)
 			continue;
-		/* Match cancel_delayed_work_sync(reset_work) at the close boundary. */
-		if (usbhid->transport_stopping || !usbhid->report_wanted) {
-			ret = -ENODEV;
+		/* Match cancel_work_sync(&usbhid->reset_work) at close. */
+		if (usbhid->transport_stopping || !usbhid->report_wanted ||
+		    usbhid->report_revision != report_revision) {
+			ret = -ECANCELED;
 		} else if (usbhid_reset->state != USBHID_RESET_IDLE &&
 		    usbhid_reset->generation == entry->generation) {
 			ret = 0;
@@ -2693,8 +2720,12 @@ static int usbhid_lifecycle_process_ready_probes(void)
 			return ret;
 		}
 
+		taskENTER_CRITICAL();
 		entry = usbhid_usb_device_find(token.dev_addr);
-		if (!entry || entry->generation != token.device_generation ||
+		if (entry && entry->generation != token.device_generation)
+			entry = NULL;
+		taskEXIT_CRITICAL();
+		if (!entry ||
 		    !usbhid_report_descriptor_token_current(&token) ||
 		    !tuh_hid_mounted(token.dev_addr, token.instance)) {
 			kfree(desc_report);
@@ -3011,35 +3042,49 @@ fail:
 // TinyUSB unmount callback identifies the HID interface by dev_addr + instance.
 static void usbhid_disconnect(uint8_t dev_addr, uint8_t instance)
 {
-	struct hid_device *hid = usbhid_lookup(dev_addr, instance);
-	struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+	struct hid_device *hid = NULL;
+	bool disconnect_published = false;
+	bool pinned = false;
 	int ret;
 
+	/*
+	 * Linux USB core retains intf through disconnect(). TinyUSB supplies only
+	 * an address pair, so publish disconnect and acquire the firmware HID lease
+	 * atomically before callback context may hand teardown to lifecycle.
+	 */
+	taskENTER_CRITICAL();
+	hid = usbhid_lookup_locked(dev_addr, instance, 0);
 	if (hid) {
-		taskENTER_CRITICAL();
-		if (usbhid->disconnect_queued) {
-			taskEXIT_CRITICAL();
-			return;
-		}
-		usbhid->disconnect_queued = true;
-		taskEXIT_CRITICAL();
+		struct usbhid_device *usbhid = hid->driver_data;
 
-		usbhid_report_unplug(hid);
+		if (!usbhid->disconnect_queued) {
+			usbhid->disconnect_queued = true;
+			disconnect_published = true;
+			if (!usbhid->transport_stopping) {
+				usbhid->io_pending++;
+				pinned = true;
+			}
+		}
 	}
+	taskEXIT_CRITICAL();
+
+	if (pinned)
+		usbhid_report_unplug(hid);
 
 	ret = hid_async_cancel_device(dev_addr, instance);
 
 	if (ret)
 		usbhid_transport_fault(USBHID_FAULT_ASYNC_CANCEL);
-	if (!hid)
-		return;
+	if (pinned)
+		usbhid_io_put(hid);
 	/*
 	 * Upstream Linux runs usbhid_disconnect() from USB core process
 	 * context and can call hid_destroy_device() directly. TinyUSB calls
 	 * this hook from unmount callback context, so driver remove is handed
 	 * to a firmware task before any Linux-style flush/cancel waits run.
 	 */
-	usbhid_lifecycle_kick();
+	if (disconnect_published)
+		usbhid_lifecycle_kick();
 }
 
 void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
@@ -3049,10 +3094,10 @@ void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
 	int ret;
 
 	/*
-	 * TinyUSB's enumeration buffer is ephemeral and skips report descriptors
-	 * larger than CFG_TUH_ENUMERATION_BUFSIZE. The callback therefore records
-	 * only interface metadata; the lifecycle task fetches the class-declared
-	 * size through the async EP0 owner before Linux probe begins.
+	 * The SHA-pinned build-local TinyUSB HID class deliberately skips its
+	 * duplicate enumeration-buffer report fetch and always mounts with NULL
+	 * descriptor data. This callback records only interface metadata; lifecycle
+	 * owns the exact-size, four-attempt Linux-shaped EP0 fetch before probe.
 	 */
 	(void)desc_report;
 	(void)desc_len;
@@ -3109,11 +3154,30 @@ static void usbhid_backend_device_detach(uint8_t dev_addr)
 	/* Revoke pending storage and any task-owned probe token immediately. */
 	usbhid_usb_device_drop_pending_hid(retired);
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
-		struct hid_device *hid = usbhid_devices[i];
-		struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+		struct hid_device *hid = NULL;
+		bool pinned = false;
 
-		if (usbhid && usbhid->dev_addr == dev_addr)
+		taskENTER_CRITICAL();
+		hid = usbhid_devices[i];
+		if (hid) {
+			struct usbhid_device *usbhid = hid->driver_data;
+
+			if (interface_to_usbdev(usbhid->intf) != &retired->dev) {
+				hid = NULL;
+			} else {
+				usbhid->disconnect_queued = true;
+				if (!usbhid->transport_stopping) {
+					usbhid->io_pending++;
+					pinned = true;
+				}
+			}
+		}
+		taskEXIT_CRITICAL();
+
+		if (pinned) {
 			usbhid_report_unplug(hid);
+			usbhid_io_put(hid);
+		}
 	}
 
 	ret = hid_async_cancel_dev_addr(dev_addr);
@@ -3135,14 +3199,27 @@ void usbhid_backend_report_completed(uint8_t dev_addr, uint8_t instance,
 				     uint8_t const *report, uint16_t bufsize,
 				     uint32_t len, uint8_t xfer_result)
 {
-	struct hid_device *hid = usbhid_lookup(dev_addr, instance);
-	struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+	struct hid_device *hid;
 	uint8_t protocol_mode = HID_PROTOCOL_REPORT;
 	bool parse = xfer_result == XFER_RESULT_SUCCESS;
 	int ret;
 
-	/* A fenced completion from an older TinyUSB address epoch is expected. */
-	if (!usbhid || usbhid->generation != generation)
+	/*
+	 * Pin the exact interface generation before leaving the callback lookup
+	 * fence. A stale completion must not bind to a fast-reused address/instance.
+	 */
+	taskENTER_CRITICAL();
+	hid = usbhid_lookup_locked(dev_addr, instance, generation);
+	if (hid) {
+		struct usbhid_device *usbhid = hid->driver_data;
+
+		if (usbhid->transport_stopping || usbhid->disconnect_queued)
+			hid = NULL;
+		else
+			usbhid->io_pending++;
+	}
+	taskEXIT_CRITICAL();
+	if (!hid)
 		return;
 	if (parse) {
 		protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
@@ -3154,6 +3231,7 @@ void usbhid_backend_report_completed(uint8_t dev_addr, uint8_t instance,
 
 	ret = usbhid_report_submit(hid, report, bufsize, len, xfer_result,
 				   parse);
+	usbhid_io_put(hid);
 	if (ret < 0)
 		usbhid_transport_fault(USBHID_FAULT_REPORT_DROP);
 }

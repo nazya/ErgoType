@@ -150,6 +150,11 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   parser. Cancellation keeps the exact buffer owned through the physical-device
   generation fence. Descriptors up to Linux's 4 KiB limit no longer depend on
   TinyUSB's 512-byte enumeration scratch; configuration descriptors still do.
+  A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
+  prefetch block commented beside the port replacement. SET_IDLE/SET_PROTOCOL
+  remain unchanged, then the class mounts with `NULL` so the lifecycle fetch is
+  the sole descriptor owner. The installed TinyUSB callback documentation still
+  describes stock behavior; this firmware intentionally always passes `NULL`.
 - Linux queues a device reset after clear-halt transfer failure or exhausted
   protocol retry. The adjacent upstream `usb_queue_reset_device()` lines remain
   commented; the port publishes the same terminal decision into a lifecycle
@@ -159,7 +164,10 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   or hub-port teardown/re-enumeration. This is deliberately stronger than
   Linux's successful in-place reset because pinned TinyUSB has no safe API to
   restore configured class state in place. Software-only async-pool exhaustion
-  does not take this path; it parks and reports a local rearm failure.
+  does not take this path; it parks and reports a local rearm failure. Reset
+  publication also snapshots `report_revision` and atomically rejects a
+  close-cancelled work item, preserving upstream `cancel_work_sync()` semantics
+  across a concurrent reopen.
 - Pinned TinyUSB omits its documented `tuh_mount_cb()` after hub enumeration,
   and `tuh_mounted()` becomes true before class-driver set-config completes.
   The build verifies the pinned `usbh.c` SHA and generates one build-local

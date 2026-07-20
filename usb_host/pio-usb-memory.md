@@ -38,7 +38,7 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 reset-coordinator build instead uses a 216.75 KiB heap
-(`(217 * 1024) - 256`) and links with `text=492676`, `data=660`, and
+(`(217 * 1024) - 256`) and links with `text=492652`, `data=660`, and
 `bss=243308`. `__bss_end__` remains `0x2003ff54`, leaving 172 B before scratch
 X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
 root/hub reset state did not increase static RAM: `usbhid_reset_coordinator` is
@@ -254,9 +254,10 @@ Tradeoffs:
 - `CFG_TUH_DEVICE_MAX=1`: saves roughly 250-350 B versus 4, but only one downstream physical USB device is supported.
 - `CFG_TUH_HID=3`: saves roughly 100-150 B versus 4 with current buffers. Enough for ErgoType NKRO. Use `2` only for boot keyboard+mouse. Use more for composite devices with more HID interfaces.
 - `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Larger
-  configuration descriptors can still fail enumeration. TinyUSB may skip a
-  larger HID report descriptor, but lifecycle now refetches its class-declared
-  size through async EP0 up to Linux's 4 KiB limit.
+  configuration descriptors can still fail enumeration. The build-local
+  TinyUSB HID class deliberately skips every duplicate report-descriptor
+  prefetch; lifecycle instead fetches the class-declared size once through
+  async EP0, up to Linux's 4 KiB limit.
 - `CFG_TUH_HID_EPIN_BUFSIZE=1`: direct interrupt IN uses upstream's
   per-interface `inbuf` through the endpoint API, so TinyUSB's class buffer is
   an unused placeholder. Task context sizes that backing for the parsed INPUT
