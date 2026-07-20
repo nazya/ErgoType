@@ -6,8 +6,8 @@
   slots allocated before the TinyUSB host starts. Its bounded
   application-driver ingest copies the ephemeral raw configuration stream;
   mount/unmount callbacks do not allocate, wait, log, or interpret that retained
-  snapshot. HID mount captures only TinyUSB's instance-to-interface
-  identity/protocol and wakes the lifecycle task. Global mount also consumes
+  snapshot. HID mount captures only TinyUSB's instance-to-interface identity
+  and wakes the lifecycle task. Global mount also consumes
   the already published cache epoch and leaves device/string descriptor policy
   to lifecycle. Lifecycle calls the ordinary async-backed `usb_control_msg()`
   and may sleep; the executor and TinyUSB callbacks only transport/complete the
@@ -36,13 +36,18 @@
   such as the Razer mouse interface path. The probe token now carries that
   snapshot's interface number through probe, so task-side `usbhid_probe()`
   builds its USB shims only from lifecycle-owned device/interface state instead
-  of rereading live TinyUSB VID/PID and interface tables. HID unmount rotates
-  that same token before TinyUSB clears its class slot, so probe liveness also
-  no longer polls the host-owned `tuh_hid_mounted()` table from the lifecycle
-  task. The selected boot/report mode follows that token into retained interface
-  state as well. Report completion now publishes only transfer metadata; the
-  report task applies the retained-mode parser gate under the exact interface
-  generation fence instead of rereading TinyUSB's class slot in the callback.
+  of rereading live TinyUSB VID/PID and interface tables. Mount publishes an
+  immutable identity record through a host-owned serial; lifecycle acknowledges
+  that serial after consuming its probe attempt (or a terminal shared
+  pre-probe failure). HID unmount revokes only the host serial before TinyUSB
+  clears its class slot, so an old probe can neither validate nor acknowledge a
+  fast-replug record. There is no callback/lifecycle `FREE/PENDING/ACTIVE` state
+  enum, and probe liveness no longer polls the host-owned `tuh_hid_mounted()`
+  table. Report completion publishes only transfer metadata; the report task
+  applies open/stopping/recovery policy under the exact interface-generation
+  fence instead of rereading TinyUSB's class slot in the callback. Linux relies
+  on the USB reset-default Report protocol, so selected boot/report mode is not
+  retained as port state and no generic SET_PROTOCOL request is emitted.
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
   and interrupt-output requests. TinyUSB callbacks only enqueue completions and
   never run Linux driver continuations directly. Device/string pre-probe has no
@@ -70,8 +75,9 @@
   no longer confused with failures; STALL and timeout remain distinguishable.
   Task-context `usb_control_msg()` now uses a fixed metadata-slot scheduler and
   a physical-device epoch lease. Interface requests also carry their live HID
-  owner, so interface stop cancels a blocked caller immediately instead of
-  leaving it to a physical-device timeout. SET_IDLE and upstream-shaped raw
+  owner, so interface stop cancels the exact HID's blocked caller immediately
+  instead of selecting a potentially reused address/instance or leaving it to
+  a physical-device timeout. SET_IDLE and upstream-shaped raw
   GET/SET helpers reach that generic path while retaining the synchronous
   ll-driver return contract. HID report requests and generic control messages
   now share one same-device EP0 FIFO; a completed GET_REPORT retains its parser
@@ -125,11 +131,15 @@
   Parent cache entries remain retired until their child subtree and HID objects
   are gone; fast reuse of the same device address starts a distinct generation.
   Cache fields are filled under the transport mutex and `valid` is published
-  last. Callback HID lookups acquire an `io_pending` lease in that same scope,
-  and input completion also matches the exact interface generation, so pointer
-  lifetime no longer depends on the current task affinity/priority ordering.
-  Lifecycle flags and probe slots remain authoritative if the one-entry
-  wake queue is already full.
+  last. Callback paths which still enter through a cache lookup acquire an
+  `io_pending` lease in that same scope. Direct interrupt-IN completion does no
+  second lookup: its fixed arm slot retains the exact HID, `inbuf`, device
+  generation, and open revision while ownership moves atomically from `ARMED`
+  to `QUEUED`. Pointer lifetime therefore no longer depends on current task
+  affinity or priority ordering.
+  Lifecycle flags and probe slots remain authoritative. A dedicated indexed
+  task notification carries only the coalesced wake edge, so lifecycle needs
+  no firmware event object or queue allocation.
 - Report-descriptor fetch preserves upstream `hid_get_class_descriptor()`
   behavior: one zeroed exact-size buffer, up to four reads, and acceptance of a
   final successful short read. The lifecycle task serializes probe, so at most
@@ -157,10 +167,15 @@
   through the end of parsing, so callers cannot observe a transport-complete/
   parser-pending false idle. It now registers the existing per-interface wait
   head before testing those durable predicates; owner publication or the final
-  I/O release supplies a task wake instead of one-tick polling. This adds no
-  queue, semaphore, or heap allocation. Interrupt-IN stays gated until probe
-  finishes, while returned feature fields are preserved instead of being lost
-  to lock contention. Raw GET/SET and interrupt output keep their upstream
+  I/O release supplies a task wake instead of one-tick polling. After producer
+  stop and exact-HID async cancel, teardown reuses that wait head for one
+  `usb_kill_urb()`-shaped predicate: aggregate I/O is idle, no async slot retains
+  the HID, and direct interrupt-IN has no owner, deferred host pass, or pending
+  physical-detach fence. Each final release publishes a wake after dropping the
+  transport mutex. This removes all three former teardown polling loops without
+  adding a queue, semaphore, or heap allocation. Interrupt-IN stays gated until
+  probe finishes, while returned feature fields are preserved instead of being
+  lost to lock contention. Raw GET/SET and interrupt output keep their upstream
   synchronous return contract while using the same asynchronous TinyUSB owner
   underneath.
 - The report executor reserves space for all four queued async requests plus
@@ -179,15 +194,21 @@
   including its report ID, capped at Linux's 16 KiB HID limit. Upstream's
   per-interface `inbuf` ownership is restored; task context allocates INPUT-only
   backing with one-packet minimum/tail padding required by the pinned PIO HCD.
-  Four persistent transport slots retain only lifecycle/callback metadata;
-  queued events borrow `inbuf` zero-copy, and the endpoint is rearmed only after
-  that event is consumed. Physical unplug publishes a durable detach state;
-  the report task queues one host-owner fence which completes only after
-  TinyUSB's class/HCD close pass, so no callback allocates, waits, or frees the
-  buffer. Successful payload is dropped while
+  Four fixed transport slots retain `inbuf` plus raw completion metadata. The
+  endpoint callback atomically publishes result/length and `ARMED -> QUEUED`;
+  the report task claims `QUEUED -> ACTIVE` round-robin and parses zero-copy.
+  There is no interrupt-input queue or second HID lookup, and the endpoint is
+  rearmed only after the slot returns to `STOPPED`. Every arm snapshots the
+  open revision. Close/reopen aborts an old `ARMED` transfer through the same
+  two-SOF fence as `usb_kill_urb()`; an already queued old completion is dropped
+  and the current open is freshly armed. Physical unplug publishes a durable
+  detach state. The report task queues one host-owner fence which completes only
+  after TinyUSB's class/HCD close pass. No callback allocates, waits, or frees
+  the buffer. Successful payload is dropped while
   `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
-  Non-success payload never reaches the HID parser. BOOT-mode suppression is
-  also decided here rather than in endpoint completion context. STALL queues the standard
+  Non-success payload never reaches the HID parser. There is no port-only
+  BOOT-mode gate; Linux usbhid relies on the USB reset-default Report protocol.
+  STALL queues the standard
   endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
   only successful completion lets the TinyUSB host owner reset the PIO endpoint
   toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
@@ -220,17 +241,18 @@
   The installed SDK is never modified and any upstream source drift fails
   configuration for an explicit re-audit.
 - The same compatibility generation pins `hid_host.c` and preserves its full
-  `hidh_open()` and report-descriptor prefetch blocks commented beside their
-  replacements. A bounded two-pass scanner accepts the HID descriptor in the
-  current interface extras (including after endpoint[0]), opens no more than
-  `bNumEndpoints`, and publishes the class slot only after endpoint success.
-  TinyUSB still performs SET_IDLE and SET_PROTOCOL, then mounts without
-  borrowing the shared enumeration buffer; mount publishes only its ephemeral
-  class identity. Lifecycle builds the retained interface, then upstream-shaped
-  `usbhid_parse()` validates its HID metadata and owns the one exact-size
-  descriptor request and its retry/error semantics.
-- Deferred input-report delivery, firmware workqueue, and firmware timer
-  bridges are present for the currently linked driver set.
+  `hidh_open()`, `hidh_set_config()`, and report-descriptor prefetch blocks
+  commented beside their replacements. A bounded two-pass scanner accepts the
+  HID descriptor in the current interface extras (including after endpoint[0]),
+  opens no more than `bNumEndpoints`, and publishes the class slot only after
+  endpoint success. Enumeration performs neither SET_IDLE nor SET_PROTOCOL and
+  mounts without borrowing the shared enumeration buffer; mount publishes only
+  its ephemeral class identity. Lifecycle builds the retained interface, then
+  upstream-shaped `usbhid_parse()` sends Linux's SET_IDLE and owns the one
+  exact-size descriptor request plus its retry/error semantics. TinyUSB retains
+  Report-protocol metadata only to match the reset default.
+- Fixed-slot task-side input-report delivery, the firmware workqueue, and the
+  firmware timer bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
   `hid-multitouch`, ff-core, evdev, and the firmware workqueue. Broader gaming
   FF drivers remain deferred. Hiddev remains in its bounded firmware-proxy
@@ -352,11 +374,17 @@
 - Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
   fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
   must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or
-  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap; the two report queues
-  occupy 408 B of startup heap and the reconcile table adds 32 B of static RAM.
-- Exercise SET_IDLE on a path that actually calls the ll-driver `.idle` hook;
-  enumeration-time TinyUSB SET_IDLE happens before this transport is mounted and
-  is not proof of the new request path.
+  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap. Only the ordinary-
+  control report queue remains (232 B of startup heap); removing the input queue
+  returns 176 B and one allocation block. The reconcile table adds 32 B of
+  static RAM, while four 32-byte direct-IN slots occupy 128 B in scratch X.
+- Verify task-side probe SET_IDLE with a fixture that records class requests:
+  exactly one SET_IDLE must precede the report-descriptor GET, a SET_IDLE STALL
+  must not abort probe, and no generic SET_PROTOCOL may appear. Exercise the
+  later ll-driver `.idle` hook separately through the same async-backed path.
+  On a composite with three or four HID interfaces, also record the TinyUSB
+  task watermark: set-config now follows TinyUSB's supported synchronous
+  interface-completion pattern rather than yielding through a class request.
 - Verify direct interrupt IN with keyboard and pointer traffic, then repeated
   unplug/replug. The expected normal path has no `HID_RX_STALL`,
   `HID_RX_XFER_FAIL`, `HID_RX_REARM_FAIL`, or `HID_REPORT_SKIP`. Record heap,

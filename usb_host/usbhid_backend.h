@@ -18,14 +18,10 @@ void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
 void usbhid_backend_hid_umount(uint8_t dev_addr, uint8_t instance);
 void usbhid_backend_device_mount(uint8_t dev_addr);
 void usbhid_backend_device_umount(uint8_t dev_addr);
-void usbhid_backend_report_completed(uint8_t dev_addr, uint8_t instance,
-				     uint32_t generation,
-				     const uint8_t *report, uint16_t bufsize,
-				     uint32_t len, uint8_t xfer_result);
 /* Transport fault ingress; lifecycle task performs the actual logging. */
+void usbhid_backend_rx_report_dropped(void);
 void usbhid_backend_rx_rearm_failed(void);
 void usbhid_backend_rx_transfer_failed(uint8_t xfer_result);
-void usbhid_backend_rx_protocol_boot(void);
 /* Report recovery publishes work; the lifecycle task owns reset/re-enumeration. */
 int usbhid_backend_queue_device_reset(struct hid_device *hid,
 				      uint32_t report_revision);

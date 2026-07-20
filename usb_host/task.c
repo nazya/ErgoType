@@ -83,6 +83,11 @@ void tusb_host_task(void *pvParameters)
             vTaskDelay(portMAX_DELAY);
     }
 
+    /*
+     * USB reset selects Report protocol and Linux usbhid emits no generic
+     * SET_PROTOCOL. Keep TinyUSB's class metadata aligned with that default;
+     * task-side usbhid_parse() owns the probe-time wire-level HID class setup.
+     */
     tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
     ret = tusb_init(BOARD_TUH_RHPORT, &host_init) ? 0 : -EIO;
     if (ret) {

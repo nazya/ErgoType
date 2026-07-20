@@ -38,17 +38,18 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=490892`, `data=660`, and
-`bss=243300`. `__bss_end__` is `0x2003ff1c`, leaving 228 B before scratch
-X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=489492`, `data=708`, and
+`bss=243296`. `__bss_end__` is `0x2003ff18`, leaving 232 B before scratch
+X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
 the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
 aligned 256-byte lifecycle descriptor scratch. `hid_async_request` is 60 B and
 each of ten `hid_async_slot`s is 88 B; their metadata-only 880-byte payload
 occupies an 888-byte heap_4 block. The transport pool occupies a 2,768-byte
 block. The explicit transport mutex is an 84-byte FreeRTOS queue object in a
-96-byte heap_4 block, so the three persistent allocations total 3,752 B with no
-descriptor-time allocation.
+96-byte heap_4 block, so these three core allocations total 3,752 B. The report
+executor's remaining ordinary-control queue is a separate 232-byte block; no
+persistent descriptor-time allocation is required.
 
 ## Layers
 
@@ -278,7 +279,7 @@ Tradeoffs:
 
 `CFG_TUH_MEM_SECTION` places TinyUSB's DMA-visible host transfer metadata and
 the port-owned interrupt-IN lifecycle slots in scratch X. In the current
-RP2040 link they occupy 660 B and end 1,388 B below the real core-1 stack. The
+RP2040 link they occupy 708 B and end 1,340 B below the real core-1 stack. The
 endpoint callback table remains in main SRAM. Per-interface interrupt-IN
 payload backing is ordinary PIO-visible SRAM from heap_4: normally a 72-byte
 block for 64 bytes, allocated once at start and freed after the detach fence.
@@ -300,13 +301,25 @@ ownership removes 72 B of persistent heap. Replacing the transport's global
 critical regions adds one separate persistent 96-byte mutex block; it is
 startup-only and does not churn during attach/report traffic.
 
-The report task's input queue occupies a 176-byte heap_4 block (four 20-byte
-events plus the queue object), and its ordinary-control queue occupies 232 B
-(five 28-byte events plus the queue object), for 408 B combined. Probe-owned
-GET completion bypasses that queue through a per-interface pointer into the
-existing request buffer. Removing the old global handoff saves 36 B of `.bss`,
-and shrinking the control event saves 24 B of persistent queue heap. Its
-temporary GET header is 16 B instead of 12 B and is freed after parse/cancel.
+The report task has no interrupt-input queue. Its four fixed 32-byte completion
+slots occupy 128 B in scratch X and retain the exact `hid`, `inbuf`, device
+generation, open revision, and raw giveback until task-side parsing finishes.
+Removing the former four-entry input queue returns a 176-byte heap_4 block and
+one 4-byte `.bss` handle; growing the old 20-byte slots adds 48 B to scratch X.
+Net live RAM occupancy falls by 132 B and one persistent heap allocation. The
+ordinary-control queue remains a 232-byte block (five 28-byte events plus its
+queue object). Probe-owned GET completion bypasses that queue through a per-
+interface pointer into the existing request buffer. Removing the still earlier
+global handoff saved 36 B of `.bss`, and shrinking the control event saved 24 B
+of persistent queue heap. Its temporary GET header is 16 B instead of 12 B and
+is freed after parse/cancel.
+Lifecycle state is separately durable in flags/cache slots; its sole owner now
+uses indexed task notification only as a wake edge. Removing that one-entry
+event queue saves another 96-byte persistent heap_4 block without growing any
+TCB because the second notification index was already configured.
+Removing selected-protocol state keeps persistent allocation unchanged: the
+probe slot and per-device transport object retain their aligned sizes, while
+the lifecycle-local probe token shrinks from 16 B to 12 B.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

@@ -320,8 +320,10 @@ set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
 # TinyUSB's HID class assumes interface -> HID -> endpoint layout and prefetches
 # the report descriptor into its 512-byte enumeration buffer before task-side
 # Linux `usbhid_parse()` can request it. Generate a second build-local source
-# which scans the bounded interface extras like Linux, leaves SET_IDLE/
-# SET_PROTOCOL in TinyUSB, and hands descriptor ownership/retry to that parser.
+# which scans the bounded interface extras like Linux, leaves only endpoint and
+# class-slot enumeration in TinyUSB, and hands SET_IDLE plus report-descriptor
+# ownership/retry to that parser. Linux relies on the reset-default Report
+# protocol and does not emit a generic SET_PROTOCOL request.
 # The installed SDK remains untouched.
 set(TINYUSB_HIDH_SOURCE
     "${PICO_TINYUSB_PATH}/src/class/hid/hid_host.c")
@@ -529,7 +531,8 @@ bool hidh_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const* desc_
   p_hid->report_desc_type = desc_hid->bReportType;
   p_hid->report_desc_len = tu_unaligned_read16(&desc_hid->wReportLength);
 
-  // Per HID Specs: default is Report protocol, though we will force Boot protocol when set_config
+  // USB reset selects Report protocol. Keep TinyUSB's metadata aligned without
+  // emitting the SET_PROTOCOL request which Linux usbhid does not send.
   p_hid->protocol_mode = _hidh_default_protocol;
   if (HID_SUBCLASS_BOOT == desc_itf->bInterfaceSubClass) {
     p_hid->itf_protocol = desc_itf->bInterfaceProtocol;
@@ -558,6 +561,84 @@ if(NOT TINYUSB_HIDH_SECOND_OPEN EQUAL -1)
 endif()
 string(REPLACE "${TINYUSB_HIDH_OPEN_UPSTREAM}" "${TINYUSB_HIDH_OPEN_PORT}"
        TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_CONTENT}")
+set(TINYUSB_HIDH_SET_CONFIG_UPSTREAM [=[
+bool hidh_set_config(uint8_t daddr, uint8_t itf_num) {
+  tusb_control_request_t request;
+  request.wIndex = tu_htole16((uint16_t) itf_num);
+
+  tuh_xfer_t xfer;
+  xfer.daddr = daddr;
+  xfer.result = XFER_RESULT_SUCCESS;
+  xfer.setup = &request;
+  xfer.user_data = CONFG_SET_IDLE;
+
+  // fake request to kick-off the set config process
+  process_set_config(&xfer);
+
+  return true;
+}
+
+]=])
+set(TINYUSB_HIDH_SET_CONFIG_PORT [=[
+// Upstream TinyUSB performs HID class policy during enumeration:
+// bool hidh_set_config(uint8_t daddr, uint8_t itf_num) {
+//   tusb_control_request_t request;
+//   request.wIndex = tu_htole16((uint16_t) itf_num);
+//
+//   tuh_xfer_t xfer;
+//   xfer.daddr = daddr;
+//   xfer.result = XFER_RESULT_SUCCESS;
+//   xfer.setup = &request;
+//   xfer.user_data = CONFG_SET_IDLE;
+//
+//   // fake request to kick-off the set config process
+//   process_set_config(&xfer);
+//
+//   return true;
+// }
+// Linux usbhid owns SET_IDLE in task-side parse and assumes the USB
+// reset-default Report protocol, so begin at the already ported descriptor/
+// mount state without a wire SET_IDLE or SET_PROTOCOL transaction here.
+bool hidh_set_config(uint8_t daddr, uint8_t itf_num) {
+  tusb_control_request_t request = { 0 };
+  request.wIndex = tu_htole16((uint16_t) itf_num);
+
+  tuh_xfer_t xfer = { 0 };
+  xfer.daddr = daddr;
+  xfer.result = XFER_RESULT_SUCCESS;
+  xfer.setup = &request;
+  xfer.user_data = CONFIG_GET_REPORT_DESC;
+
+  // fake request to kick-off the set config process
+  process_set_config(&xfer);
+
+  return true;
+}
+
+]=])
+string(FIND "${TINYUSB_HIDH_PORT_CONTENT}"
+       "${TINYUSB_HIDH_SET_CONFIG_UPSTREAM}"
+       TINYUSB_HIDH_SET_CONFIG_OFFSET)
+if(TINYUSB_HIDH_SET_CONFIG_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB HID set-config anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_HIDH_SET_CONFIG_UPSTREAM}"
+       TINYUSB_HIDH_SET_CONFIG_LENGTH)
+math(EXPR TINYUSB_HIDH_SET_CONFIG_TAIL_OFFSET
+     "${TINYUSB_HIDH_SET_CONFIG_OFFSET} + ${TINYUSB_HIDH_SET_CONFIG_LENGTH}")
+string(SUBSTRING "${TINYUSB_HIDH_PORT_CONTENT}"
+       ${TINYUSB_HIDH_SET_CONFIG_TAIL_OFFSET} -1
+       TINYUSB_HIDH_SET_CONFIG_TAIL)
+string(FIND "${TINYUSB_HIDH_SET_CONFIG_TAIL}"
+       "${TINYUSB_HIDH_SET_CONFIG_UPSTREAM}"
+       TINYUSB_HIDH_SECOND_SET_CONFIG)
+if(NOT TINYUSB_HIDH_SECOND_SET_CONFIG EQUAL -1)
+    message(FATAL_ERROR "TinyUSB HID set-config anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_HIDH_SET_CONFIG_UPSTREAM}"
+       "${TINYUSB_HIDH_SET_CONFIG_PORT}"
+       TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_PORT_CONTENT}")
 set(TINYUSB_HIDH_REPORT_DESC_UPSTREAM [=[
     case CONFIG_GET_REPORT_DESC:
       // Get Report Descriptor if possible

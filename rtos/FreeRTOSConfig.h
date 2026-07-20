@@ -62,7 +62,7 @@
 #define configUSE_TIME_SLICING                  1
 #define configUSE_NEWLIB_REENTRANT              0
 #define configUSE_TASK_NOTIFICATIONS            1
-/* Index 0 is used by synchronous completions; index 1 wakes HID report lanes. */
+/* HID owner tasks: index 0 is synchronous I/O; index 1 wakes owned work. */
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES   2
 // todo need this for lwip FreeRTOS sys_arch to compile
 #define configENABLE_BACKWARD_COMPATIBILITY     1

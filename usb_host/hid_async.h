@@ -86,8 +86,8 @@ bool hid_async_control_gate_idle(void);
 void hid_async_control_gate_release(u32 paused_ticks);
 int hid_async_queue_hub_port_reset(u8 hub_addr, u32 generation, u8 hub_port,
 				   hid_async_complete_t complete, void *context);
-int hid_async_cancel_device(u8 dev_addr, u8 instance);
-int hid_async_cancel_device_sync(u8 dev_addr, u8 instance);
+int hid_async_cancel_device(struct hid_device *hid);
+bool hid_async_device_idle(struct hid_device *hid);
 int hid_async_cancel_dev_addr(u8 dev_addr);
 
 #endif

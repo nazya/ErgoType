@@ -65,8 +65,6 @@ struct usbhid_device {
 	u8 hid_descriptor[sizeof(struct hid_descriptor)];
 	u8 dev_addr;
 	u8 instance;
-	/* Mount captures TinyUSB's immutable selected-mode bookkeeping. */
-	u8 protocol_mode;
 	u32 generation;
 	u32 report_revision;
 	u32 io_pending;

@@ -444,7 +444,8 @@ static bool hid_async_slot_is_head_locked(struct hid_async_slot *slot)
 	return true;
 }
 
-static u8 *hid_async_slot_release_locked(struct hid_async_slot *slot)
+static u8 *hid_async_slot_release_locked(struct hid_async_slot *slot,
+					 TaskHandle_t *waiter)
 {
 	struct hid_async_slot *previous_slot = NULL;
 	u8 *owned_data = slot->req.data_owned ? slot->req.data : NULL;
@@ -454,6 +455,13 @@ static u8 *hid_async_slot_release_locked(struct hid_async_slot *slot)
 	u8 cursor;
 	u8 id = hid_async_slot_id(slot);
 
+	/*
+	 * Upstream USB core wakes usb_kill_urb() from the final URB giveback.
+	 * This fixed-slot release is the equivalent lifetime edge: snapshot the
+	 * interface wait head before dropping the slot's last HID pointer.
+	 */
+	*waiter = slot->req.hid ?
+		((struct usbhid_device *)slot->req.hid->driver_data)->wait.task : NULL;
 	hid_async_slot_fifo_locked(slot, &head, &tail);
 	cursor = *head;
 	while (cursor && cursor != id) {
@@ -993,27 +1001,25 @@ static void hid_async_host_call_sync(struct hid_async_host_call *call)
 	} while (!done);
 }
 
-int hid_async_cancel_device(u8 dev_addr, u8 instance)
+int hid_async_cancel_device(struct hid_device *hid)
 {
 	if (!hid_async_slots)
 		return -ENODEV;
 
 	/*
-	 * A per-interface stop must never cancel physical-device control work or a
-	 * sibling interface.
-	 * Do not unlink slots or invoke continuations here: this entry is also used
-	 * by the TinyUSB unmount callback. report_unplug() has already published
-	 * usbhid->transport_stopping, so hid_async_task retires/completes each slot
-	 * in task context. The synchronous slot scan then proves that no request
-	 * retaining this HID remains before destruction.
+	 * Like usb_kill_urb() on one interface's URBs, cancel only requests owned by
+	 * this exact HID. An address/instance pair can be reused after a fast replug
+	 * and must not select work from the new interface epoch or a sibling.
+	 * Do not unlink slots or invoke continuations here: report_stop()/unplug()
+	 * already published transport_stopping, so hid_async_task retires/completes
+	 * each slot in task context and the combined teardown predicate fences its
+	 * final release before destruction.
 	 */
 	hid_transport_lock();
 	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
 		struct hid_async_slot *slot = &hid_async_slots[i];
 
-		if (slot->state != HID_ASYNC_SLOT_FREE && slot->req.hid &&
-		    slot->req.dev_addr == dev_addr &&
-		    slot->req.instance == instance)
+		if (slot->state != HID_ASYNC_SLOT_FREE && slot->req.hid == hid)
 			slot->cancel_requested = true;
 	}
 	hid_transport_unlock();
@@ -1021,40 +1027,21 @@ int hid_async_cancel_device(u8 dev_addr, u8 instance)
 	return 0;
 }
 
-int hid_async_cancel_device_sync(u8 dev_addr, u8 instance)
+bool hid_async_device_idle(struct hid_device *hid)
 {
-	bool pending;
-	int ret;
+	bool idle = true;
 
-	ret = hid_async_cancel_device(dev_addr, instance);
-	if (ret)
-		return ret;
-
-	/*
-	 * transport_stopping closes the producer side before this call. Slot state
-	 * is the durable dequeue/active/completion fence; a wake edge may coalesce.
-	 */
-	do {
-		hid_transport_lock();
-		pending = false;
-		for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
-			struct hid_async_slot *slot = &hid_async_slots[i];
-
-			if (slot->state != HID_ASYNC_SLOT_FREE &&
-			    slot->req.hid && slot->req.dev_addr == dev_addr &&
-			    slot->req.instance == instance) {
-				pending = true;
-				break;
-			}
+	/* usb_kill_urb() may return only after no executor slot retains this HID. */
+	hid_transport_lock();
+	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
+		if (hid_async_slots[i].state != HID_ASYNC_SLOT_FREE &&
+		    hid_async_slots[i].req.hid == hid) {
+			idle = false;
+			break;
 		}
-		hid_transport_unlock();
-		if (pending) {
-			hid_async_notify_task();
-			vTaskDelay(1);
-		}
-	} while (pending);
-
-	return 0;
+	}
+	hid_transport_unlock();
+	return idle;
 }
 
 int hid_async_cancel_dev_addr(u8 dev_addr)
@@ -1144,6 +1131,7 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 {
 	struct hid_async_request *req = &slot->req;
 	u8 *owned_data = NULL;
+	TaskHandle_t waiter = NULL;
 
 	hid_transport_lock();
 	slot->accepting_completion = false;
@@ -1164,10 +1152,12 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 	hid_transport_lock();
 	if (slot->state == HID_ASYNC_SLOT_COMPLETING ||
 	    slot->state == HID_ASYNC_SLOT_RELEASE_PENDING)
-		owned_data = hid_async_slot_release_locked(slot);
+		owned_data = hid_async_slot_release_locked(slot, &waiter);
 	else
 		configASSERT(slot->state == HID_ASYNC_SLOT_WAIT_PARSE);
 	hid_transport_unlock();
+	if (waiter)
+		xTaskNotifyGive(waiter);
 	/* heap_4 must not run while the transport mutex is held. */
 	kfree(owned_data);
 }
@@ -1293,6 +1283,7 @@ static int hid_async_retire_slot(struct hid_async_slot *slot)
 static bool hid_async_process_released(void)
 {
 	u8 *owned_data = NULL;
+	TaskHandle_t waiter = NULL;
 	bool processed = false;
 
 	hid_transport_lock();
@@ -1300,11 +1291,14 @@ static bool hid_async_process_released(void)
 		if (hid_async_slots[i].state !=
 				HID_ASYNC_SLOT_RELEASE_PENDING)
 			continue;
-		owned_data = hid_async_slot_release_locked(&hid_async_slots[i]);
+		owned_data = hid_async_slot_release_locked(&hid_async_slots[i],
+							      &waiter);
 		processed = true;
 		break;
 	}
 	hid_transport_unlock();
+	if (waiter)
+		xTaskNotifyGive(waiter);
 	kfree(owned_data);
 	return processed;
 }

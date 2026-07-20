@@ -86,7 +86,13 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   queue handoff without opening interrupt input on a half-built device. The
   existing per-interface wait head now carries the corresponding upstream-style
   wake edge; the broader firmware `io_pending` lease remains the durable
-  predicate, so `hid_hw_wait()` no longer needs one-tick polling.
+  predicate, so `hid_hw_wait()` no longer needs one-tick polling. After producer
+  stop, teardown cancels by exact HID owner and uses the same wait head for a
+  composite `usb_kill_urb()` predicate: no aggregate I/O, async slot,
+  interrupt-IN owner, deferred host pass, or physical-detach fence retains the
+  interface. Every last-owner transition publishes the wake after unlocking;
+  the three former teardown polling barriers are gone without another RTOS
+  object.
 - TinyUSB callbacks are task-context publishers in this port. One explicit
   transport mutex now replaces the former common FreeRTOS critical
   domain across async slots, lifecycle/cache state, and report ownership. The
@@ -95,6 +101,17 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   per-interface mutex for start/stop/open/close and a short FIFO spinlock for
   true atomic URB completion; the firmware will instead move callback state to
   its existing owner-task queues before partitioning this common mutex.
+- Linux wait queues pair a durable condition with a wake edge. The lifecycle
+  glue now follows that split directly: flags/cache slots own the condition and
+  a dedicated indexed task notification wakes their sole task owner. This
+  removes the firmware-only one-entry event queue without changing any
+  Linux-derived source.
+- TinyUSB mount owns an immutable fixed-slot publication and its nonzero host
+  serial; the sole lifecycle consumer owns only the handled serial. Unmount
+  clears the host serial, so a task-side probe in flight cannot validate or
+  acknowledge a later fast-replug publication. This replaces the mixed
+  callback/lifecycle `FREE/PENDING/ACTIVE` mini-state-machine without changing
+  the 16-byte slot or adding a queue.
 
 ## Haptic Status
 
@@ -166,12 +183,17 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   destruction. Physical publication remains authoritative before address-epoch
   cancel and `hcd_device_close()`; raw app-driver close supplies that fence for
   hubs, where TinyUSB omits its common unmount callback.
-- Interrupt completion no longer owns retained HID protocol policy. It pins the
-  exact interface generation and publishes the bounded report record; the
-  report task reads the mount-captured protocol mode under that same ownership
-  fence. The previous callback-side BOOT branch remains documented adjacent to
-  the task replacement, and invalid/failed payload still cannot enter the
-  upstream `hid_safe_input_report()` call.
+- Interrupt completion owns no HID protocol policy and performs no global HID
+  lookup. The exact arm slot already retains `hid`, `inbuf`, device generation,
+  and open revision; completion atomically publishes raw length/result and
+  `ARMED -> QUEUED`. The report task claims `QUEUED -> ACTIVE` and applies
+  open/stopping/recovery policy under that ownership fence. An old arm is
+  aborted across close/reopen, while an already queued old-revision completion
+  is discarded and followed by a fresh arm, matching `usb_kill_urb()`'s epoch
+  boundary. The previous callback-side BOOT branch remains commented adjacent
+  to the task replacement for port provenance. Linux's reset-default Report
+  assumption removes the active retained mode and generic SET_PROTOCOL path.
+  Invalid or failed payload still cannot enter `hid_safe_input_report()`.
 - Report-descriptor ingress now preserves the pinned
   `hid_get_class_descriptor()` request tuple and retry shape beside the local
   replacement: standard interface `GET_DESCRIPTOR`, exact class-declared
@@ -183,12 +205,15 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   Descriptors up to Linux's 4 KiB limit no longer depend on TinyUSB's 512-byte
   enumeration scratch; configuration descriptors still do.
   A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
-  `hidh_open()` and prefetch blocks commented beside their port replacements.
+  `hidh_open()`, `hidh_set_config()`, and prefetch blocks commented beside their
+  port replacements.
   Its two-pass current-interface scanner mirrors Linux's accepted HID-descriptor
   positions, caps opened/stored endpoints at `bNumEndpoints`, and publishes the
-  TinyUSB class slot only after endpoint success. SET_IDLE/SET_PROTOCOL remain
-  unchanged, then the class mounts with `NULL` so task-side `usbhid_parse()` is
-  the sole report-descriptor owner. Firmware-only device/string reconstruction
+  TinyUSB class slot only after endpoint success. The set-config replacement
+  skips enumeration SET_IDLE/SET_PROTOCOL and mounts with `NULL`; task-side
+  `usbhid_parse()` retains upstream's SET_IDLE line and is the sole report-
+  descriptor owner. No generic SET_PROTOCOL is added because Linux relies on
+  the reset-default Report protocol. Firmware-only device/string reconstruction
   is now wholly lifecycle-owned: adjacent upstream `usb_get_descriptor()` /
   `usb_get_string()` calls stay visible while the compact port sends their
   standard request tuples through generic async-backed `usb_control_msg()` and
@@ -235,8 +260,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `cmake --build build -j4`
 - confirmed `sizeof(hid_async_request) == 60` and
   `sizeof(hid_async_slot) == 88` on the RP2040 ABI
-- confirmed `sizeof(usbhid_device) == 240`, the four RX metadata slots remain
-  80 B total, and scratch X fell from 916 B to 660 B
+- confirmed `sizeof(usbhid_device) == 240`, the four RX ownership/completion
+  slots are 32 B each (128 B total), and scratch X is 708 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)
 - `git diff --check`
