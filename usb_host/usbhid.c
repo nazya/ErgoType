@@ -1856,25 +1856,6 @@ static bool usbhid_usb_device_has_waiting_hid(
 	return waiting;
 }
 
-static bool usbhid_usb_device_old_epoch_retiring(
-		const struct usbhid_usb_device *entry)
-{
-	bool retiring = false;
-
-	taskENTER_CRITICAL();
-	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
-		const struct usbhid_usb_device *old = &usbhid_usb_devices[i];
-
-		if (old != entry && old->retiring &&
-		    old->dev.dev_addr == entry->dev.dev_addr) {
-			retiring = true;
-			break;
-		}
-	}
-	taskEXIT_CRITICAL();
-	return retiring;
-}
-
 /* Caller holds the firmware SMP critical section while inspecting both pools. */
 static bool usbhid_usb_device_preprobe_pending_locked(
 		const struct usbhid_usb_device *entry)
@@ -3344,11 +3325,21 @@ void usbhid_backend_device_mount(uint8_t dev_addr)
 	entry->mount_complete = true;
 	taskEXIT_CRITICAL();
 
-	if (usbhid_reset_device_mounted(entry) ||
-	    usbhid_usb_device_old_epoch_retiring(entry))
-		usbhid_lifecycle_kick();
-	else if (usbhid_usb_device_has_waiting_hid(entry))
-		usbhid_usb_device_queue_descriptor(entry);
+	/*
+	 * Previous port:
+	 * if (usbhid_reset_device_mounted(entry) ||
+	 *     usbhid_usb_device_old_epoch_retiring(entry))
+	 * 	usbhid_lifecycle_kick();
+	 * else if (usbhid_usb_device_has_waiting_hid(entry))
+	 * 	usbhid_usb_device_queue_descriptor(entry);
+	 *
+	 * TinyUSB invokes this from its host callback owner. Publish the completed
+	 * mount/reset state and wake lifecycle, but do not continue pre-probe by
+	 * submitting the device-descriptor request from the callback. The existing
+	 * lifecycle retry scan owns that same guarded submission in task context.
+	 */
+	(void)usbhid_reset_device_mounted(entry);
+	usbhid_lifecycle_kick();
 }
 
 static void usbhid_backend_device_detach(uint8_t dev_addr)

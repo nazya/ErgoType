@@ -5,7 +5,9 @@
 - `usb_host/usbhid.c` owns a bounded USB-device cache and report-descriptor
   metadata slots allocated before the TinyUSB host starts. TinyUSB callbacks do
   not allocate, wait, or log; they publish interface metadata and wake the
-  lifecycle task.
+  lifecycle task. Global mount also leaves device-descriptor submission to that
+  task instead of continuing pre-probe through the async broker in callback
+  context.
 - HID interface mount no longer has to guess whether USB strings or
   `bcdDevice` are ready. After pre-probe, the lifecycle task fetches the exact
   class-declared report descriptor through the asynchronous EP0 owner and moves

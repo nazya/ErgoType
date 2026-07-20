@@ -37,7 +37,8 @@ The active path is:
 
 ```text
 TinyUSB mount
-  -> device/string descriptor pre-probe
+  -> publish mount state and wake lifecycle task
+  -> task-side device/string descriptor pre-probe
   -> exact task-side GET_DESCRIPTOR(report), capped at 4 KiB
   -> Linux HID report parse
   -> synchronous driver match and probe
