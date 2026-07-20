@@ -38,6 +38,7 @@ The active path is:
 ```text
 TinyUSB mount
   -> device/string descriptor pre-probe
+  -> exact task-side GET_DESCRIPTOR(report), capped at 4 KiB
   -> Linux HID report parse
   -> synchronous driver match and probe
   -> hidinput open, then direct TinyUSB endpoint-IN receive starts
@@ -227,12 +228,15 @@ first two use 384-word stacks and lifecycle uses 512 words; together with task
 overhead they consumed about 6.6 KiB in the measured build. Consolidating them
 is a later architecture change, not part of this bring-up fix.
 
-The callback-safe transport pool has a 4,584 B payload (plus allocator
+The callback-safe transport pool now has a 2,476 B payload (plus allocator
 overhead) in the FreeRTOS heap at startup with the current
 `CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
-`CFG_TUH_HID=4`, 512-byte descriptor configuration. It replaces callback-time
-allocation with deterministic capacity; include this cost in post-enumeration
-and haptic heap checks.
+`CFG_TUH_HID=4` configuration. Replacing four inline 512-byte descriptor slots
+with five 20-byte metadata slots shrinks the payload by 2,012 B and the aligned
+heap_4 allocation by 2,008 B. Lifecycle allocates at most one exact-size report
+descriptor transiently (up to 4 KiB), and transfers its ownership directly into
+probe. Include both the persistent pool and transient descriptor in
+post-enumeration and haptic heap checks.
 
 The report executor has ten 36-byte event slots: four interrupt completions,
 five control results (one active plus the four-entry async queue), and one
@@ -268,7 +272,8 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
 | `ERR: HID_USB_DEV_ALLOC_FAIL` | The bounded physical-device cache has no reusable slot. |
-| `ERR: HID_PROBE_DEFER_FAIL` | A report descriptor was invalid or the bounded descriptor ingress pool was full. |
+| `ERR: HID_PROBE_DEFER_FAIL` | Report-descriptor metadata was invalid or all bounded metadata slots were occupied. |
+| `ERR: HID_DESC_ALLOC_FAIL` | Lifecycle could not allocate the exact report-descriptor buffer; the pending fetch is retried. |
 | `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
 | `ERR: HID_REPORT_SKIP` | No live HID slot matched, or Linux input parsing rejected the received report. |
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |

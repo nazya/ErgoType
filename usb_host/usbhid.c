@@ -38,11 +38,14 @@
 /* One bounded spare lets a fast replug coexist with one retiring cache entry. */
 #define USBHID_USB_DEVICE_SLOTS (USBHID_USB_DEVICE_MAX + 1)
 #define USBHID_USB_MAXCHILD 31
-#define USBHID_REPORT_DESCRIPTOR_SLOTS HID_HOST_MAX_DEVICES
-#define USBHID_REPORT_DESCRIPTOR_MAX CFG_TUH_ENUMERATION_BUFSIZE
+/* A canceled old epoch may overlap all interface metadata from a fast replug. */
+#define USBHID_REPORT_DESCRIPTOR_SLOTS (HID_HOST_MAX_DEVICES + 1u)
+#define USBHID_REPORT_DESCRIPTOR_RETRIES 4u
 
 _Static_assert(HID_MAX_BUFFER_SIZE + 8u <= UINT16_MAX,
 	       "HID control buffer size must fit TinyUSB's 16-bit length");
+_Static_assert(HID_MAX_DESCRIPTOR_SIZE <= UINT16_MAX,
+	       "HID report descriptor size must fit TinyUSB's 16-bit length");
 
 static const struct hid_ll_driver usb_hid_driver;
 const struct device_type usb_device_type = {
@@ -81,6 +84,10 @@ struct usbhid_control_input {
 enum usbhid_report_descriptor_state {
 	USBHID_REPORT_DESCRIPTOR_FREE,
 	USBHID_REPORT_DESCRIPTOR_WAIT_PREPROBE,
+	USBHID_REPORT_DESCRIPTOR_FETCH_PENDING,
+	USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE,
+	USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED,
+	USBHID_REPORT_DESCRIPTOR_RELEASE_PENDING,
 	USBHID_REPORT_DESCRIPTOR_READY,
 	USBHID_REPORT_DESCRIPTOR_PROBING,
 };
@@ -89,10 +96,12 @@ struct usbhid_report_descriptor_slot {
 	enum usbhid_report_descriptor_state state;
 	u8 dev_addr;
 	u8 instance;
+	u8 ifnum;
+	u8 fetch_retries;
 	u16 len;
 	u32 generation;
 	u32 serial;
-	u8 data[USBHID_REPORT_DESCRIPTOR_MAX];
+	u8 *data;
 };
 
 struct usbhid_probe_token {
@@ -176,6 +185,8 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 static void usbhid_lifecycle_kick(void);
 static void usbhid_transport_fault(enum usbhid_transport_fault fault);
 static void usbhid_backend_device_detach(uint8_t dev_addr);
+static bool usbhid_usb_device_has_waiting_hid(
+		const struct usbhid_usb_device *entry);
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
 
 static u32 usbhid_next_generation(void)
@@ -475,6 +486,7 @@ static struct usbhid_usb_device *usbhid_usb_device_prepare(uint8_t dev_addr)
 static void usbhid_report_descriptor_free(
 		struct usbhid_report_descriptor_slot *slot)
 {
+	configASSERT(!slot->data);
 	slot->state = USBHID_REPORT_DESCRIPTOR_FREE;
 	slot->len = 0;
 }
@@ -493,24 +505,45 @@ static void usbhid_report_descriptor_invalidate(uint8_t dev_addr,
 						 bool match_generation,
 						 int instance)
 {
+	bool release_pending = false;
+
 	taskENTER_CRITICAL();
 	for (size_t i = 0; i < USBHID_REPORT_DESCRIPTOR_SLOTS; i++) {
 		struct usbhid_report_descriptor_slot *slot =
 			&usbhid_report_descriptors[i];
 
-		if (slot->dev_addr != dev_addr ||
+		if (slot->state == USBHID_REPORT_DESCRIPTOR_FREE ||
+		    slot->dev_addr != dev_addr ||
 		    (match_generation && slot->generation != generation) ||
 		    (instance >= 0 && slot->instance != (u8)instance))
 			continue;
 
 		/*
-		 * PROBING already owns a task-side copy. Rotating the serial revokes
-		 * its token while making callback ingress capacity reusable at once.
+		 * TinyUSB unmount callbacks cannot free memory. An active EP0 fetch
+		 * retains its borrowed buffer through hid_async cancellation; a READY
+		 * buffer is handed to the lifecycle task for release. PROBING already
+		 * moved ownership into that task, so rotating its token is sufficient.
 		 */
 		slot->serial = usbhid_next_report_descriptor_serial_locked();
-		usbhid_report_descriptor_free(slot);
+		if (slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE) {
+			slot->state = USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED;
+		} else if (slot->state == USBHID_REPORT_DESCRIPTOR_READY ||
+			   (slot->state ==
+				    USBHID_REPORT_DESCRIPTOR_FETCH_PENDING &&
+			    slot->data)) {
+			slot->state = USBHID_REPORT_DESCRIPTOR_RELEASE_PENDING;
+			release_pending = true;
+		} else if (slot->state !=
+			   USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED &&
+			   slot->state !=
+			   USBHID_REPORT_DESCRIPTOR_RELEASE_PENDING) {
+			usbhid_report_descriptor_free(slot);
+		}
 	}
 	taskEXIT_CRITICAL();
+
+	if (release_pending)
+		usbhid_lifecycle_kick();
 }
 
 static void usbhid_usb_device_drop_pending_hid(struct usbhid_usb_device *entry)
@@ -523,6 +556,32 @@ static void usbhid_usb_device_drop_pending_hid_instance(
 		uint8_t dev_addr, uint8_t instance)
 {
 	usbhid_report_descriptor_invalidate(dev_addr, 0, false, instance);
+}
+
+static void usbhid_report_descriptor_release_pending(void)
+{
+	for (;;) {
+		struct usbhid_report_descriptor_slot *slot = NULL;
+		u8 *data = NULL;
+
+		taskENTER_CRITICAL();
+		for (size_t i = 0; i < USBHID_REPORT_DESCRIPTOR_SLOTS; i++) {
+			if (usbhid_report_descriptors[i].state !=
+			    USBHID_REPORT_DESCRIPTOR_RELEASE_PENDING)
+				continue;
+			slot = &usbhid_report_descriptors[i];
+			data = slot->data;
+			slot->data = NULL;
+			usbhid_report_descriptor_free(slot);
+			break;
+		}
+		taskEXIT_CRITICAL();
+
+		if (!slot)
+			return;
+		/* heap_4 is task-owned; TinyUSB callbacks only publish RELEASE_PENDING. */
+		kfree(data);
+	}
 }
 
 static struct usbhid_usb_device *
@@ -655,7 +714,8 @@ static int usbhid_usb_device_release_retired(void)
 		/* TinyUSB closes a hub before its subtree; reuse cache leaves first. */
 		if (usbhid_usb_device_has_live_children(entry) ||
 		    usbhid_usb_device_has_live_hids(entry) ||
-		    usbhid_usb_device_has_live_io(entry)) {
+		    usbhid_usb_device_has_live_io(entry) ||
+		    usbhid_usb_device_has_waiting_hid(entry)) {
 			entry->retired_next = blocked;
 			blocked = entry;
 			continue;
@@ -973,18 +1033,28 @@ static void usbhid_usb_device_descriptor_complete(const struct hid_async_request
 						  int status);
 
 static int usbhid_usb_device_store_pending_probe(struct usbhid_usb_device *entry,
-						 uint8_t instance,
-						 uint8_t const *desc_report,
-						 uint16_t desc_len)
+						 uint8_t instance)
 {
 	struct usbhid_report_descriptor_slot *slot = NULL;
-	bool already_probing = false;
+	struct usbhid_raw_interface raw;
+	struct hid_descriptor hdesc;
+	tuh_itf_info_t itf_info;
+	unsigned int rsize;
+	bool already_pending = false;
 	bool stored = false;
 
-	if (!desc_report || !desc_len)
+	memset(&itf_info, 0, sizeof(itf_info));
+	if (!tuh_hid_itf_get_info(entry->dev.dev_addr, instance, &itf_info) ||
+	    !usbhid_raw_interface_copy(entry->dev.dev_addr,
+				       itf_info.desc.bInterfaceNumber, &raw))
 		return -ENODEV;
-	if (desc_len > USBHID_REPORT_DESCRIPTOR_MAX)
-		return -E2BIG;
+	memcpy(&hdesc, raw.hid_descriptor, sizeof(hdesc));
+	if (hdesc.bDescriptorType != HID_DT_HID ||
+	    hdesc.rpt_desc.bDescriptorType != HID_DT_REPORT)
+		return -EINVAL;
+	rsize = le16_to_cpu(hdesc.rpt_desc.wDescriptorLength);
+	if (!rsize || rsize > HID_MAX_DESCRIPTOR_SIZE)
+		return -EINVAL;
 
 	taskENTER_CRITICAL();
 	for (size_t i = 0; i < USBHID_REPORT_DESCRIPTOR_SLOTS; i++) {
@@ -995,40 +1065,36 @@ static int usbhid_usb_device_store_pending_probe(struct usbhid_usb_device *entry
 		    candidate->dev_addr == entry->dev.dev_addr &&
 		    candidate->instance == instance &&
 		    candidate->generation == entry->generation) {
-			if (candidate->state ==
-				    USBHID_REPORT_DESCRIPTOR_PROBING) {
-				already_probing = true;
-				break;
-			}
-			slot = candidate;
+			already_pending = true;
 			break;
 		}
 		if (candidate->state == USBHID_REPORT_DESCRIPTOR_FREE && !slot)
 			slot = candidate;
 	}
 
-	if (slot && entry->valid) {
-		slot->state = USBHID_REPORT_DESCRIPTOR_WAIT_PREPROBE;
+	if (!already_pending && slot && entry->valid) {
+		slot->state = entry->have_device_desc &&
+			      entry->preprobe_stage == USBHID_PREPROBE_DONE ?
+			      USBHID_REPORT_DESCRIPTOR_FETCH_PENDING :
+			      USBHID_REPORT_DESCRIPTOR_WAIT_PREPROBE;
 		slot->dev_addr = entry->dev.dev_addr;
 		slot->instance = instance;
-		slot->len = desc_len;
+		slot->ifnum = itf_info.desc.bInterfaceNumber;
+		slot->fetch_retries = USBHID_REPORT_DESCRIPTOR_RETRIES;
+		slot->len = (u16)rsize;
 		slot->generation = entry->generation;
 		slot->serial = usbhid_next_report_descriptor_serial_locked();
-		memcpy(slot->data, desc_report, desc_len);
+		slot->data = NULL;
 		stored = true;
-		if (entry->have_device_desc &&
-		    entry->preprobe_stage == USBHID_PREPROBE_DONE) {
-			slot->state = USBHID_REPORT_DESCRIPTOR_READY;
-		}
 	}
 	taskEXIT_CRITICAL();
 
 	/* TinyUSB does not normally repeat mount for a live interface. */
-	if (already_probing)
+	if (already_pending)
 		return 0;
 	if (!stored)
 		return -ENOMEM;
-	/* READY work and deferred pre-probe submission are both authoritative. */
+	/* Descriptor-fetch work and deferred pre-probe submission are authoritative. */
 	usbhid_lifecycle_kick();
 	return 0;
 }
@@ -1053,12 +1119,193 @@ static bool usbhid_report_descriptor_token_current(
 	return valid_token;
 }
 
+static void usbhid_report_descriptor_fetch_complete(
+		const struct hid_async_request *req, int status)
+{
+	struct usbhid_report_descriptor_slot *slot = req->context;
+	bool fault;
+	bool ready;
+	bool release;
+	bool retry;
+
+	taskENTER_CRITICAL();
+	configASSERT(slot && slot->data == req->data &&
+		     (slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE ||
+		      slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED));
+	ready = slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE &&
+		!status && (req->actual_len >= slot->len ||
+			    slot->fetch_retries == 1);
+	/* A canceled physical epoch cannot service Linux's remaining retries. */
+	retry = slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE &&
+		status != -ENODEV && !ready && slot->fetch_retries > 1;
+	fault = slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE &&
+		status != -ENODEV && !ready && !retry;
+	release = !ready && !retry;
+	if (ready) {
+		slot->state = USBHID_REPORT_DESCRIPTOR_READY;
+	} else if (retry) {
+		/* hid_get_class_descriptor() retries up to four short/error reads. */
+		slot->fetch_retries--;
+		slot->state = USBHID_REPORT_DESCRIPTOR_FETCH_PENDING;
+	} else {
+		slot->data = NULL;
+		usbhid_report_descriptor_free(slot);
+	}
+	taskEXIT_CRITICAL();
+
+	/* hid_async has completed or fenced cancellation before releasing this borrow. */
+	if (release)
+		kfree(req->data);
+	if (fault)
+		usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
+	usbhid_lifecycle_kick();
+}
+
+static int usbhid_report_descriptor_queue_fetch(void)
+{
+	struct usbhid_report_descriptor_slot *slot = NULL;
+	struct usbhid_report_descriptor_slot *empty_pending = NULL;
+	u32 descriptor_serial = 0;
+	u32 device_generation = 0;
+	u32 async_generation;
+	u16 len = 0;
+	u8 dev_addr = 0;
+	u8 ifnum = 0;
+	u8 *data = NULL;
+	u8 *release_data = NULL;
+	bool allocated = false;
+	bool buffer_busy = false;
+	bool slot_current;
+	bool cancelled;
+	int ret;
+
+	taskENTER_CRITICAL();
+	for (size_t i = 0; i < USBHID_REPORT_DESCRIPTOR_SLOTS; i++) {
+		struct usbhid_report_descriptor_slot *candidate =
+			&usbhid_report_descriptors[i];
+
+		if (candidate->state == USBHID_REPORT_DESCRIPTOR_FETCH_PENDING) {
+			if (candidate->data) {
+				if (!slot)
+					slot = candidate;
+				else
+					buffer_busy = true;
+			} else if (!empty_pending) {
+				empty_pending = candidate;
+			}
+			continue;
+		}
+		if (candidate->data)
+			buffer_busy = true;
+	}
+	if (!slot)
+		slot = empty_pending;
+	if (slot) {
+		dev_addr = slot->dev_addr;
+		ifnum = slot->ifnum;
+		len = slot->len;
+		device_generation = slot->generation;
+		descriptor_serial = slot->serial;
+		data = slot->data;
+	}
+	taskEXIT_CRITICAL();
+
+	/* One exact-size buffer bounds peak heap while the physical EP0 is serial. */
+	if (buffer_busy || !slot)
+		return 0;
+	ret = hid_async_device_epoch_snapshot(dev_addr, &async_generation);
+	if (ret)
+		goto invalidate;
+
+	if (!data) {
+		// int result, retries = 4;
+		// memset(buf, 0, size);
+		// Upstream hid_get_class_descriptor() zeroes once before four tries;
+		// the slot retains that same buffer across asynchronous attempts.
+		data = kzalloc(len, GFP_KERNEL);
+		if (!data)
+			return -ENOMEM;
+		allocated = true;
+	}
+
+	taskENTER_CRITICAL();
+	slot_current = slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_PENDING &&
+		  slot->dev_addr == dev_addr && slot->ifnum == ifnum &&
+		  slot->len == len && slot->generation == device_generation &&
+		  slot->serial == descriptor_serial &&
+		  (!slot->data || slot->data == data);
+	if (slot_current) {
+		if (!slot->data)
+			slot->data = data;
+		slot->state = USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE;
+	}
+	taskEXIT_CRITICAL();
+	if (!slot_current) {
+		if (allocated)
+			kfree(data);
+		return 1;
+	}
+
+	// ret = hid_get_class_descriptor(dev, interface->desc.bInterfaceNumber,
+	//				  HID_DT_REPORT, rdesc, rsize);
+	// do {
+	// 	result = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+	// 		USB_REQ_GET_DESCRIPTOR, USB_RECIP_INTERFACE | USB_DIR_IN,
+	// 		(type << 8), ifnum, buf, size,
+	// 		USB_CTRL_GET_TIMEOUT);
+	// 	retries--;
+	// } while (result < size && retries);
+	// Linux issues this standard interface GET_DESCRIPTOR from task context.
+	// The firmware queues the same request through its physical EP0 owner; the
+	// exact heap buffer stays borrowed until completion or generation cancel.
+	ret = hid_async_queue_usb_control_msg(NULL, dev_addr, async_generation,
+		USB_REQ_GET_DESCRIPTOR,
+		USB_RECIP_INTERFACE | USB_DIR_IN,
+		(u16)HID_DT_REPORT << 8, ifnum, data, len,
+		USB_CTRL_GET_TIMEOUT, usbhid_report_descriptor_fetch_complete,
+		slot);
+	if (!ret)
+		return 1;
+
+	taskENTER_CRITICAL();
+	slot_current = slot->data == data &&
+		  (slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_ACTIVE ||
+		   slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED);
+	cancelled = slot_current &&
+		    slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_CANCELLED;
+	if (slot_current) {
+		if (!cancelled && ret == -EBUSY) {
+			slot->state = USBHID_REPORT_DESCRIPTOR_FETCH_PENDING;
+		} else {
+			slot->data = NULL;
+			usbhid_report_descriptor_free(slot);
+			release_data = data;
+		}
+	}
+	taskEXIT_CRITICAL();
+	kfree(release_data);
+	if (!cancelled && ret != -EBUSY && ret != -ENODEV)
+		usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
+	return ret == -EBUSY && !cancelled ? -EAGAIN : 1;
+
+invalidate:
+	taskENTER_CRITICAL();
+	if (slot->state == USBHID_REPORT_DESCRIPTOR_FETCH_PENDING &&
+	    slot->dev_addr == dev_addr && slot->generation == device_generation &&
+	    slot->serial == descriptor_serial) {
+		release_data = slot->data;
+		slot->data = NULL;
+		usbhid_report_descriptor_free(slot);
+	}
+	taskEXIT_CRITICAL();
+	kfree(release_data);
+	return 1;
+}
+
 static int usbhid_report_descriptor_take_ready(
 		struct usbhid_probe_token *token, u8 **desc_report)
 {
-	struct usbhid_report_descriptor_slot *slot = NULL;
-	u8 *copy;
-	bool valid_token;
+	struct usbhid_report_descriptor_slot *slot;
 
 	memset(token, 0, sizeof(*token));
 	*desc_report = NULL;
@@ -1074,38 +1321,17 @@ static int usbhid_report_descriptor_take_ready(
 		token->len = slot->len;
 		token->device_generation = slot->generation;
 		token->descriptor_serial = slot->serial;
+		/* The lifecycle task takes the exact EP0 buffer without another copy. */
+		*desc_report = slot->data;
+		slot->data = NULL;
+		slot->state = USBHID_REPORT_DESCRIPTOR_PROBING;
+		slot->len = 0;
 		break;
 	}
 	taskEXIT_CRITICAL();
 
-	if (!slot)
+	if (!*desc_report)
 		return 0;
-
-	copy = kmalloc(token->len, GFP_KERNEL);
-	if (!copy)
-		return -ENOMEM;
-
-	taskENTER_CRITICAL();
-	slot = &usbhid_report_descriptors[token->descriptor_slot];
-	valid_token = slot->state == USBHID_REPORT_DESCRIPTOR_READY &&
-		  slot->dev_addr == token->dev_addr &&
-		  slot->instance == token->instance &&
-		  slot->generation == token->device_generation &&
-		  slot->serial == token->descriptor_serial &&
-		  slot->len == token->len;
-	if (valid_token) {
-		memcpy(copy, slot->data, token->len);
-		slot->state = USBHID_REPORT_DESCRIPTOR_PROBING;
-		slot->len = 0;
-	}
-	taskEXIT_CRITICAL();
-
-	if (!valid_token) {
-		kfree(copy);
-		return -EAGAIN;
-	}
-
-	*desc_report = copy;
 	return 1;
 }
 
@@ -1197,7 +1423,7 @@ static int usbhid_usb_device_queue_string(struct usbhid_usb_device *entry,
 
 static void usbhid_usb_device_finish_preprobe(struct usbhid_usb_device *entry)
 {
-	bool ready = false;
+	bool fetch_pending = false;
 
 	taskENTER_CRITICAL();
 	if (entry->valid) {
@@ -1211,13 +1437,13 @@ static void usbhid_usb_device_finish_preprobe(struct usbhid_usb_device *entry)
 			    slot->dev_addr != entry->dev.dev_addr ||
 			    slot->generation != entry->generation)
 				continue;
-			slot->state = USBHID_REPORT_DESCRIPTOR_READY;
-			ready = true;
+			slot->state = USBHID_REPORT_DESCRIPTOR_FETCH_PENDING;
+			fetch_pending = true;
 		}
 	}
 	taskEXIT_CRITICAL();
 
-	if (ready)
+	if (fetch_pending)
 		usbhid_lifecycle_kick();
 }
 
@@ -1664,6 +1890,7 @@ void usbhid_lifecycle_task(void *pvParameters)
 		int ret;
 
 		/* Flags/cache slots own work; queue entries are only bounded wakeups. */
+		usbhid_report_descriptor_release_pending();
 		usbhid_lifecycle_drain_disconnects();
 		if (usbhid_usb_device_release_retired()) {
 			async_msg("ERR: HID_RETIRE_SYNC_FAIL");
@@ -1671,6 +1898,15 @@ void usbhid_lifecycle_task(void *pvParameters)
 			continue;
 		}
 		usbhid_usb_device_retry_preprobes();
+		ret = usbhid_report_descriptor_queue_fetch();
+		if (ret < 0) {
+			if (ret == -ENOMEM)
+				async_msg("ERR: HID_DESC_ALLOC_FAIL");
+			vTaskDelay(1);
+			continue;
+		}
+		if (ret > 0)
+			continue;
 		ret = usbhid_lifecycle_process_ready_probes();
 		if (ret == -ENOMEM) {
 			async_msg("ERR: HID_DESC_ALLOC_FAIL");
@@ -1689,8 +1925,8 @@ void usbhid_lifecycle_task(void *pvParameters)
 }
 
 // static int usbhid_probe(struct usb_interface *intf, const struct usb_device_id *id)
-// TinyUSB mount callback provides dev_addr/instance/report descriptor instead
-// of Linux usb_interface; build the local usb_interface shim before hid_add_device().
+// TinyUSB mount identifies dev_addr/instance instead of Linux usb_interface;
+// lifecycle fetches the report descriptor and builds the shim before add.
 static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 			uint8_t instance, uint8_t *desc_report, uint16_t desc_len,
 			const struct usbhid_probe_token *token)
@@ -1738,10 +1974,10 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 
 	// ret = hid_get_class_descriptor(dev, interface->desc.bInterfaceNumber,
 	//				  HID_DT_REPORT, rdesc, rsize);
-	// The callback copied TinyUSB's ephemeral report descriptor into bounded
-	// ingress storage. The lifecycle task now passes this owned snapshot into
-	// Linux-shaped probe context, so no callback allocation or second copy is
-	// needed here.
+	// The lifecycle task fetched the class-declared size through async EP0 and
+	// moved that exact owned buffer into Linux-shaped probe context. TinyUSB's
+	// callback descriptor is ephemeral and may be omitted above
+	// CFG_TUH_ENUMERATION_BUFSIZE.
 
 	memset(&itf_info, 0, sizeof(itf_info));
 	if (!tuh_vid_pid_get(dev_addr, &vid, &pid) ||
@@ -1979,12 +2215,19 @@ void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
 	struct usbhid_usb_device *entry = usbhid_usb_device_prepare(dev_addr);
 	int ret;
 
+	/*
+	 * TinyUSB's enumeration buffer is ephemeral and skips report descriptors
+	 * larger than CFG_TUH_ENUMERATION_BUFSIZE. The callback therefore records
+	 * only interface metadata; the lifecycle task fetches the class-declared
+	 * size through the async EP0 owner before Linux probe begins.
+	 */
+	(void)desc_report;
+	(void)desc_len;
 	if (!entry) {
 		return;
 	}
 
-	ret = usbhid_usb_device_store_pending_probe(entry, instance, desc_report,
-						    desc_len);
+	ret = usbhid_usb_device_store_pending_probe(entry, instance);
 	if (ret) {
 		usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
 		return;
@@ -2464,8 +2707,8 @@ static int usbhid_parse(struct hid_device *hid)
 	struct usb_interface *intf = to_usb_interface(hid->dev.parent);
 	struct usb_host_interface *interface = intf->cur_altsetting;
 	// struct usb_device *dev = interface_to_usbdev(intf);
-	// TinyUSB already fetched the report descriptor asynchronously; no USB
-	// request is issued from this parser callback.
+	// The lifecycle task completed the upstream-shaped asynchronous descriptor
+	// request before entering this parser callback.
 	struct usbhid_device *usbhid = hid->driver_data;
 	struct hid_descriptor hdesc_storage;
 	struct hid_descriptor *hdesc;
@@ -2475,7 +2718,7 @@ static int usbhid_parse(struct hid_device *hid)
 	unsigned long transport_quirks = 0;
 	unsigned int rsize = 0;
 	// char *rdesc;
-	// The lifecycle task owns the TinyUSB report-descriptor snapshot in usbhid.
+	// The lifecycle task owns the asynchronously fetched descriptor in usbhid.
 	int ret;
 
 	quirks = hid_lookup_quirk(hid);
@@ -2553,8 +2796,8 @@ static int usbhid_parse(struct hid_device *hid)
 	}
 
 	/*
-	 * Linux USB core requests exactly the class-declared size. TinyUSB owns
-	 * that request here, so reject a callback buffer from a different
+	 * Linux USB core requests exactly the class-declared size. The lifecycle
+	 * EP0 bridge owns that request here, so reject a buffer from a different
 	 * descriptor contract before hid_parse_report() can read it.
 	 */
 	if (!usbhid->rdesc || rsize != usbhid->rsize) {
@@ -2567,9 +2810,8 @@ static int usbhid_parse(struct hid_device *hid)
 	// 	return -ENOMEM;
 	//
 	// hid_set_idle(dev, interface->desc.bInterfaceNumber, 0, 0);
-	// TinyUSB performs enumeration SET_IDLE before mount; the owned report
-	// descriptor arrives through the lifecycle task rather than a blocking
-	// parser-side USB request.
+	// TinyUSB performs enumeration SET_IDLE before mount; the lifecycle task
+	// already completed the async descriptor request before this parser call.
 	// ret = hid_get_class_descriptor(dev, interface->desc.bInterfaceNumber,
 	//				  HID_DT_REPORT, rdesc, rsize);
 	// if (ret < 0) {
@@ -2577,8 +2819,8 @@ static int usbhid_parse(struct hid_device *hid)
 	// 	kfree(rdesc);
 	// 	goto err;
 	// }
-	// TinyUSB supplies the report descriptor to tuh_hid_mount_cb(); this
-	// ll_driver consumes it here so hid_add_device() keeps upstream parse flow.
+	// The lifecycle EP0 bridge supplies the owned report descriptor here so
+	// hid_add_device() keeps the upstream parse flow.
 	ret = hid_parse_report(hid, usbhid->rdesc, rsize);
 	// kfree(rdesc);
 	// usbhid_probe() releases the task-owned descriptor after hid_add_device().

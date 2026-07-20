@@ -41,8 +41,7 @@ ownership that the port still does not provide.
 Current unsupported patterns include:
 
 - `usb_submit_urb()` and request-specific kill/resubmit ownership
-- synchronous interrupt-IN or control/interrupt transfers larger than the
-  fixed 257-byte transport buffer
+- synchronous interrupt-IN messages
 - `usb_string()` or explicit string-descriptor reads when the string is required
   beyond the pre-probe product/manufacturer/serial snapshots
 - multi-interface protocols that require a complete USB-core ownership model,
@@ -97,7 +96,7 @@ sync-over-async transport:
 
 - add request-specific URB submit/kill/resubmit ownership
 - add synchronous interrupt-IN without stealing continuous HID polling
-- extend the fixed transport buffer only for an audited linked user
+- add any request-specific transfer contract only for an audited linked user
 - retain generation-based cancellation on unmount and fast replug
 
 The Linux-shaped caller may block only in a task; TinyUSB callbacks must remain

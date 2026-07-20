@@ -123,7 +123,7 @@
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512
 
-#define CFG_TUH_ENUMERATION_BUFSIZE 512 // Host descriptor/control scratch buffer; each byte is .bss. 512->256 saves 256 B, but too small skips/fails long config or HID report descriptors.
+#define CFG_TUH_ENUMERATION_BUFSIZE 512 // Host enum scratch; long configs still fail, while lifecycle refetches skipped HID reports up to 4 KiB.
 
 #ifndef CFG_TUH_MEM_SECTION
 /* Keep DMA-visible host transfer buffers below the core-1 stack in scratch X. */

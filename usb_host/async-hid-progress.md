@@ -3,13 +3,15 @@
 ## Current Scope
 
 - `usb_host/usbhid.c` owns a bounded USB-device cache and report-descriptor
-  ingress pool allocated before the TinyUSB host starts. TinyUSB callbacks do
-  not allocate, wait, or log; they publish a snapshot and wake the lifecycle
-  task.
+  metadata slots allocated before the TinyUSB host starts. TinyUSB callbacks do
+  not allocate, wait, or log; they publish interface metadata and wake the
+  lifecycle task.
 - HID interface mount no longer has to guess whether USB strings or
-  `bcdDevice` are ready. It copies TinyUSB's ephemeral report descriptor into
-  bounded ingress storage, and `usbhid_probe()` runs in the lifecycle task only
-  after the USB device pre-probe sequence has completed.
+  `bcdDevice` are ready. After pre-probe, the lifecycle task fetches the exact
+  class-declared report descriptor through the asynchronous EP0 owner and moves
+  that buffer into `usbhid_probe()`. Report descriptors are therefore supported
+  through Linux's 4 KiB `HID_MAX_DESCRIPTOR_SIZE`, independently of TinyUSB's
+  512-byte enumeration scratch buffer.
 - The pre-probe sequence currently fetches the device descriptor, LANGID,
   product string, manufacturer string, and serial string. That makes
   `hid->version`, `hid->name`, and `hid->uniq` available before
@@ -73,6 +75,13 @@
   are gone; fast reuse of the same device address starts a distinct generation.
   Lifecycle flags and descriptor slots remain authoritative if the one-entry
   wake queue is already full.
+- Report-descriptor fetch preserves upstream `hid_get_class_descriptor()`
+  behavior: one zeroed exact-size buffer, up to four reads, and acceptance of a
+  final successful short read. At most one such buffer exists across devices;
+  cancel and fast-replug retain it until the async generation fence completes.
+  TinyUSB still reads descriptors up to 512 bytes during enumeration, so those
+  ordinary descriptors are intentionally read a second time by lifecycle.
+  Configuration descriptors remain limited by the enumeration scratch buffer.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -116,6 +125,13 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: task-side exact report-descriptor fetch checkpoint, exact UF2
+  SHA256 `eaa95df9bfe2b39d84f9d6048c8c49a84df32cbc49073f39dc83b240a131572a`,
+  clean-builds with `text=482212`, `data=660`, and `bss=243308`. It removes
+  the TinyUSB enumeration-buffer limit from HID report descriptors and recovers
+  2,008 B of persistent heap_4 allocation. This exact image was reported
+  working on hardware. The larger-than-512-byte descriptor and hub-subtree
+  cases remain separate coverage items.
 - 2026-07-20: dynamic interrupt-IN checkpoint `hid: allocate interrupt input buffers per device`, exact UF2 SHA256
   `13edb5b61ca9c57f8da59613eb65b05cb8944f78c4bfef74f6cc50357264bd37`,
   builds with `text=477972`, `data=660`, and `bss=243308`. It removes the
@@ -194,10 +210,11 @@
 
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
-- Verify the bounded ingress/hub-retirement checkpoint with normal enumeration,
-  haptic allocation, direct unplug/replug, and a hub subtree reconnect. Record
-  free heap and the TinyUSB stack watermark; inspect the lifecycle watermark
-  separately if the hardware pass exposes any stack symptom.
+- Verify exact lifecycle report-descriptor fetch with normal enumeration,
+  haptic allocation, direct unplug/replug, and a hub subtree reconnect. Also
+  exercise a report descriptor larger than 512 bytes. Record free heap and the
+  TinyUSB stack watermark; inspect the lifecycle watermark separately if the
+  hardware pass exposes any stack symptom.
 - Verify the output-routing/startup-LED checkpoint on hardware: a boot keyboard
   without interrupt OUT must receive the enumeration-time NumLock reset over
   EP0, and an OUTPUT request on an interface with interrupt OUT must use that

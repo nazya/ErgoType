@@ -141,6 +141,15 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   detach is a two-owner fence: the callback publishes slot state, the report
   task queues a coalesced host event, and only that post-`hcd_device_close()`
   acknowledgement lets lifecycle release the slot and buffer.
+- Report-descriptor ingress now preserves the pinned
+  `hid_get_class_descriptor()` request tuple and retry shape beside the local
+  replacement: standard interface `GET_DESCRIPTOR`, exact class-declared
+  length, one zeroed buffer, four attempts, and acceptance of the final positive
+  short read. The port-specific difference is scheduling those attempts through
+  the lifecycle task and async EP0 owner before entering the synchronous Linux
+  parser. Cancellation keeps the exact buffer owned through the physical-device
+  generation fence. Descriptors up to Linux's 4 KiB limit no longer depend on
+  TinyUSB's 512-byte enumeration scratch; configuration descriptors still do.
 - Linux queues a device reset after clear-halt failure or exhausted protocol
   retry. The pinned TinyUSB/PIO stack has no safe per-device reset and
   re-enumeration API; electrical root-port reset alone would leave TinyUSB's

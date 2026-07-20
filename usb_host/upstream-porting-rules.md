@@ -41,18 +41,17 @@ The wrong version hides the upstream line and the reason for the diff.
 Correct:
 
 ```c
-// ret = usbhid_parse(hid);
-// TinyUSB passes the report descriptor to this callback; usbhid_parse()
-// consumes it from hid_add_device(), matching upstream usbhid_probe() lifecycle.
-hid->ll_rdesc = desc_report;
-hid->ll_rsize = desc_len;
+// ret = hid_get_class_descriptor(dev, interface->desc.bInterfaceNumber,
+//                               HID_DT_REPORT, rdesc, rsize);
+// TinyUSB callbacks cannot block in Linux's synchronous helper. The lifecycle
+// task completes the same request through async EP0 before parser entry.
+ret = hid_parse_report(hid, usbhid->rdesc, rsize);
 ```
 
 Wrong:
 
 ```c
-hid->ll_rdesc = desc_report;
-hid->ll_rsize = desc_len;
+ret = hid_parse_report(hid, usbhid->rdesc, rsize);
 ```
 
 The wrong version loses the upstream lifecycle reference.

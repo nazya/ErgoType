@@ -246,7 +246,10 @@ Tradeoffs:
 - `CFG_TUH_HUB=0`: saves roughly 100-200 B, but external USB hubs do not work.
 - `CFG_TUH_DEVICE_MAX=1`: saves roughly 250-350 B versus 4, but only one downstream physical USB device is supported.
 - `CFG_TUH_HID=3`: saves roughly 100-150 B versus 4 with current buffers. Enough for ErgoType NKRO. Use `2` only for boot keyboard+mouse. Use more for composite devices with more HID interfaces.
-- `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Risk: devices with larger config/report descriptors can fail or be skipped during enumeration.
+- `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Larger
+  configuration descriptors can still fail enumeration. TinyUSB may skip a
+  larger HID report descriptor, but lifecycle now refetches its class-declared
+  size through async EP0 up to Linux's 4 KiB limit.
 - `CFG_TUH_HID_EPIN_BUFSIZE=1`: direct interrupt IN uses upstream's
   per-interface `inbuf` through the endpoint API, so TinyUSB's class buffer is
   an unused placeholder. Task context sizes that backing for the parsed INPUT
@@ -265,6 +268,13 @@ RP2040 link they occupy 660 B and end 1,388 B below the real core-1 stack. The
 endpoint callback table remains in main SRAM. Per-interface interrupt-IN
 payload backing is ordinary PIO-visible SRAM from heap_4: normally a 72-byte
 block for 64 bytes, allocated once at start and freed after the detach fence.
+
+The callback transport pool uses five 20-byte report-descriptor metadata slots
+instead of four inline 512-byte descriptor buffers. Its payload shrinks by
+2,012 B and the aligned heap_4 allocation by 2,008 B. Lifecycle holds at most
+one exact descriptor buffer across all devices while EP0 fetch/probe is active;
+a maximum-size descriptor consumes about 4 KiB transiently and is released
+after probe or fenced cancellation.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.
