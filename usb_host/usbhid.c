@@ -32,7 +32,6 @@
 
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
 #define HID_HOST_RAW_INTERFACE_MAX HID_HOST_MAX_DEVICES
-#define USBHID_ADMISSION_NOTIFY_INDEX 0u
 #define USBHID_LIFECYCLE_NOTIFY_INDEX 1u
 #define USBHID_STRING_LANGID 0x0409u
 #define USBHID_USB_DEVICE_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
@@ -45,7 +44,6 @@
 #define USBHID_DEVICE_DESCRIPTOR_RETRY_MS 100u
 #define USBHID_PREPROBE_BUFFER_SIZE 256u
 #define USBHID_STRING_DESCRIPTOR_SIZE 255u
-#define USBHID_PREPROBE_ADMISSION_TIMEOUT_MS 1000u
 #define USBHID_RESET_HUB_ATTEMPTS 3u
 #define USBHID_RESET_PHASE_TIMEOUT_MS 6000u
 #define USBHID_RESET_HUB_TIMEOUT_MS \
@@ -1312,59 +1310,28 @@ static void usbhid_usb_device_descriptor_failed(
 	usbhid_usb_device_ack_hid_publications(entry);
 }
 
-static bool usbhid_lifecycle_wait_async_slot(TickType_t started,
-					     TickType_t timeout)
-{
-	TickType_t elapsed = xTaskGetTickCount() - started;
-
-	if (elapsed >= timeout)
-		return false;
-	/*
-	 * Previous port: vTaskDelay(1);
-	 * Linux USB core sleeps on queue/URB progress. The broker's fixed-slot
-	 * release is the equivalent wake; a retry remains the durable predicate.
-	 */
-	(void)ulTaskNotifyTakeIndexed(USBHID_ADMISSION_NOTIFY_INDEX, pdTRUE,
-				      timeout - elapsed);
-	return xTaskGetTickCount() - started < timeout;
-}
-
 static int usbhid_usb_device_get_descriptor(struct usbhid_usb_device *entry,
 					    u8 type, u8 index, u16 langid,
 					    u16 size)
 {
-	TickType_t admission_start = xTaskGetTickCount();
-	TickType_t admission_timeout =
-		pdMS_TO_TICKS(USBHID_PREPROBE_ADMISSION_TIMEOUT_MS);
-	int ret;
-
 	/*
 	 * ret = usb_get_descriptor(&entry->dev, type, index,
 	 *                          usbhid_preprobe_buffer, size);
 	 *
-	 * Linux USB core owns that synchronous helper. The imported helper remains
-	 * disabled because its wider string stack/quirk surface is not linked here;
-	 * lifecycle issues the identical standard request through the generic
-	 * synchronous-over-async bridge and fixed pool scratch instead. Local slot
-	 * admission has its own shorter bound; it is not a USB wire attempt.
+	 * Linux USB core owns that synchronous helper. Keeping lifecycle's outer
+	 * retry/backoff, exact string language ID, and fixed scratch policy here
+	 * avoids adding usb_get_descriptor()'s separate three-attempt inner loop.
+	 * The generic synchronous-over-async bridge sleeps on local fixed-pool
+	 * admission before starting the complete wire timeout, so lifecycle needs no
+	 * firmware-only admission loop here.
 	 */
-	if (!admission_timeout)
-		admission_timeout = 1;
 	memset(usbhid_preprobe_buffer, 0, size);
-	do {
-		ret = usb_control_msg(&entry->dev,
-				      usb_rcvctrlpipe(&entry->dev, 0),
-				      USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
-				      ((u16)type << 8) | index, langid,
-				      usbhid_preprobe_buffer, size,
-				      USB_CTRL_GET_TIMEOUT);
-		if (ret != -EBUSY)
-			break;
-		if (!usbhid_lifecycle_wait_async_slot(admission_start,
-						      admission_timeout))
-			break;
-	} while (true);
-	return ret;
+	return usb_control_msg(&entry->dev,
+			       usb_rcvctrlpipe(&entry->dev, 0),
+			       USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
+			       ((u16)type << 8) | index, langid,
+			       usbhid_preprobe_buffer, size,
+			       USB_CTRL_GET_TIMEOUT);
 }
 
 static void usbhid_usb_device_defer_preprobe(
@@ -2626,25 +2593,6 @@ void usbhid_backend_control_gate_idle(void)
 	usbhid_lifecycle_kick();
 }
 
-void usbhid_backend_async_slot_available(void)
-{
-	TaskHandle_t task;
-
-	/*
-	 * Descriptor callers own admission retry/deadline; this is only the edge.
-	 * Index 0 is also the call-local synchronous completion channel, whose
-	 * durable done predicate tolerates unrelated slot-release wakes. The idle
-	 * lifecycle waits on index 1 and therefore is not woken by ordinary output.
-	 */
-	hid_transport_lock();
-	task = usbhid_lifecycle_task_handle;
-	hid_transport_unlock();
-	if (task)
-		/* Coalesce idle releases instead of accumulating an unbounded count. */
-		(void)xTaskNotifyIndexed(task, USBHID_ADMISSION_NOTIFY_INDEX,
-					 1u, eSetBits);
-}
-
 void usbhid_backend_host_control_idle(void)
 {
 	bool waiting;
@@ -3493,38 +3441,15 @@ static int hid_set_idle(struct usb_device *dev, int ifnum, int report, int idle)
 static int hid_get_class_descriptor(struct usb_device *dev, int ifnum,
 		unsigned char type, void *buf, int size)
 {
-	TickType_t admission_start = xTaskGetTickCount();
-	const TickType_t admission_timeout =
-		pdMS_TO_TICKS(USB_CTRL_GET_TIMEOUT);
 	int result, retries = 4;
 
 	memset(buf, 0, size);
 
-	// do {
-	// 	result = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-	// 			USB_REQ_GET_DESCRIPTOR,
-	// 			USB_RECIP_INTERFACE | USB_DIR_IN,
-	// 			(type << 8), ifnum, buf, size,
-	// 			USB_CTRL_GET_TIMEOUT);
-	// 	retries--;
-	// } while (result < size && retries);
-	// The bounded firmware broker may be full before a USB request exists.
-	// Wait for local admission without consuming one of Linux's four wire tries,
-	// but retain the upstream control timeout as a lifecycle liveness bound.
 	do {
 		result = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
-				USB_REQ_GET_DESCRIPTOR,
-				USB_RECIP_INTERFACE | USB_DIR_IN,
-				(type << 8), ifnum, buf, size,
-				USB_CTRL_GET_TIMEOUT);
-		if (result == -EBUSY) {
-			if (!usbhid_lifecycle_wait_async_slot(
-					admission_start, admission_timeout))
-				return result;
-			continue;
-		}
+				USB_REQ_GET_DESCRIPTOR, USB_RECIP_INTERFACE | USB_DIR_IN,
+				(type << 8), ifnum, buf, size, USB_CTRL_GET_TIMEOUT);
 		retries--;
-		admission_start = xTaskGetTickCount();
 	} while (result < size && retries);
 	return result;
 }
@@ -4294,6 +4219,33 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 		    u8 request, u8 requesttype, u16 value, u16 index,
 		    void *data, u16 size, int timeout)
 {
+	/*
+	 * Upstream Linux:
+	 * struct usb_ctrlrequest *dr;
+	 * int ret;
+	 *
+	 * dr = kmalloc_obj(struct usb_ctrlrequest, GFP_NOIO);
+	 * if (!dr)
+	 * 	return -ENOMEM;
+	 *
+	 * dr->bRequestType = requesttype;
+	 * dr->bRequest = request;
+	 * dr->wValue = cpu_to_le16(value);
+	 * dr->wIndex = cpu_to_le16(index);
+	 * dr->wLength = cpu_to_le16(size);
+	 *
+	 * ret = usb_internal_control_msg(dev, pipe, dr, data, size, timeout);
+	 *
+	 * if (dev->quirks & USB_QUIRK_DELAY_CTRL_MSG)
+	 * 	msleep(200);
+	 *
+	 * kfree(dr);
+	 * return ret;
+	 *
+	 * This port has neither generic URBs nor Linux DMA setup allocation. The
+	 * fixed request slot stores these setup fields, and the task-side bridge
+	 * preserves the same synchronous lifetime over TinyUSB's async owner.
+	 */
 	struct usbhid_sync_request sync = { 0 };
 	struct usbhid_usb_device *physical_owner;
 	struct hid_device *hid_owner;
@@ -4326,10 +4278,9 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	 * owns EP0 here while the sleeping caller keeps its direct buffer alive;
 	 * completion only wakes this task and unplug returns -ENODEV.
 	 */
-	ret = hid_async_queue_usb_control_msg(hid_owner, dev_addr, generation,
-					      request, requesttype, value,
-					      index, data, size, timeout,
-					      usbhid_sync_complete, &sync);
+	ret = hid_async_wait_queue_usb_control_msg(
+		hid_owner, dev_addr, generation, request, requesttype, value,
+		index, data, size, timeout, usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);
 	if (!ret)
 		ret = (int)sync.actual_len;
@@ -4393,10 +4344,9 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 	 * continuously owned by usbhid_report; this generic task bridge therefore
 	 * exposes only endpoint-addressed interrupt-OUT without stealing that lane.
 	 */
-	ret = hid_async_queue_usb_interrupt_out(hid_owner, dev_addr, generation,
-						ep_addr, data, (u16)len,
-						timeout, usbhid_sync_complete,
-						&sync);
+	ret = hid_async_wait_queue_usb_interrupt_out(
+		hid_owner, dev_addr, generation, ep_addr, data, (u16)len,
+		timeout, usbhid_sync_complete, &sync);
 	ret = usbhid_sync_wait(&sync, ret);
 	if (actual_length)
 		*actual_length = (int)sync.actual_len;

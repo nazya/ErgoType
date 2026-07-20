@@ -178,12 +178,16 @@
   lost to lock contention. Raw GET/SET and interrupt output keep their upstream
   synchronous return contract while using the same asynchronous TinyUSB owner
   underneath.
-- Lifecycle descriptor fetches no longer poll a full fixed-slot broker one
-  tick at a time. A normal async-slot release wakes the call-local notification
-  index; enqueue retry remains the durable admission predicate and the existing
-  local deadline remains its exact bound. The idle lifecycle uses another
-  index, so ordinary OUTPUT completion cannot create a wake storm. Recovery's
-  reserved slot is excluded and cannot advertise ordinary descriptor capacity.
+- Fixed-slot admission now belongs to the generic synchronous USB bridge rather
+  than descriptor callers. Lifecycle and `hid_workqueue_task` register bounded
+  stack-owned FIFO waiters; normal-slot release or matching teardown wakes them,
+  and enqueue retry remains the durable predicate. Existing nonblocking report
+  and CLEAR_HALT producers may use only capacity not logically reserved by a
+  waiter, while HUB_RESET retains its dedicated recovery slot. Admission has
+  its own one-second local deadline before a successfully queued request
+  receives its complete transfer interval. The two descriptor helpers contain
+  no local FreeRTOS retry loop, and `hid_get_class_descriptor()` is
+  upstream-identical.
 - The report executor reserves space for all four queued async requests plus
   the active ordinary control request. Probe-owned GETs do not occupy that
   queue; their current upstream caller issues one request and immediately waits

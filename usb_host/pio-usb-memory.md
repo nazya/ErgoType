@@ -38,7 +38,7 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=490084`, `data=708`, and
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=491156`, `data=708`, and
 `bss=243296`. `__bss_end__` is `0x2003ff18`, leaving 232 B before scratch
 X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
@@ -49,7 +49,10 @@ occupies an 888-byte heap_4 block. The transport pool occupies a 2,768-byte
 block. The explicit transport mutex is an 84-byte FreeRTOS queue object in a
 96-byte heap_4 block, so these three core allocations total 3,752 B. The report
 executor's remaining ordinary-control queue is a separate 232-byte block; no
-persistent descriptor-time allocation is required.
+persistent descriptor-time allocation is required. Generic slot-admission
+waiters add no heap or `.bss`: each blocking caller owns a 12-byte stack node,
+and the 24-byte async generation object reuses its former address-zero word as
+the FIFO head.
 
 ## Layers
 

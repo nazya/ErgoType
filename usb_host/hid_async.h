@@ -67,6 +67,7 @@ void hid_async_control_report_release(struct hid_device *hid, u32 serial);
 int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);
 void hid_async_host_task_register(void);
 bool hid_async_sync_call_allowed(void);
+/* Recovery/CLEAR_HALT callers retain a bounded nonblocking queue operation. */
 int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
 				    u32 generation,
 				    u8 request, u8 requesttype,
@@ -75,12 +76,22 @@ int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
 				    int timeout,
 				    hid_async_complete_t complete,
 				    void *context);
+/* Task-side Linux synchronous USB glue waits for fixed-pool admission. */
+int hid_async_wait_queue_usb_control_msg(
+		struct hid_device *owner, u8 dev_addr, u32 generation,
+		u8 request, u8 requesttype, u16 value, u16 index,
+		void *data, u16 size, int timeout,
+		hid_async_complete_t complete, void *context);
 int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 				      u32 generation,
 				      u8 ep_addr, void *data,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context);
+int hid_async_wait_queue_usb_interrupt_out(
+		struct hid_device *owner, u8 dev_addr, u32 generation,
+		u8 ep_addr, void *data, u16 size, int timeout,
+		hid_async_complete_t complete, void *context);
 int hid_async_control_gate_acquire(void);
 bool hid_async_control_gate_idle(void);
 void hid_async_control_gate_release(u32 paused_ticks);

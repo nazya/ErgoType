@@ -58,12 +58,14 @@ The active implementation now has these properties:
   Known-success recovery enters the pinned `enum_new_device()` path directly
   from the host owner, avoiding a recursive send to TinyUSB's only host queue;
   exact physical and parent generations fence any raced replacement epoch.
-- Lifecycle descriptor admission uses the same condition/wake split: enqueue
-  retry is the durable predicate, and release of a normal fixed broker slot
-  wakes its call-local notification index up to the existing exact deadline.
-  Idle lifecycle waits use another index, so ordinary output releases do not
-  wake its main scan. The two former one-tick admission polls consume no wire
-  retries under local saturation.
+- Generic synchronous USB admission uses the same condition/wake split: a
+  stack-owned FIFO waiter reserves normal broker capacity, enqueue retry is the
+  durable predicate, and normal-slot release or teardown supplies a coalesced
+  task wake. Both lifecycle and `hid_workqueue_task` use it; descriptor helpers
+  no longer contain FreeRTOS-specific admission loops. The recovery slot remains
+  outside this wait queue, and nonblocking report/CLEAR_HALT traffic uses only
+  unreserved surplus. The one-second local admission and transfer deadlines
+  start independently.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
   descriptors are now fetched by task-side `usbhid_parse()` at their
   class-declared size through the generic asynchronous EP0 owner, up to Linux's

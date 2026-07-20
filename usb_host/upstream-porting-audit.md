@@ -105,11 +105,14 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   glue now follows that split directly: flags/cache slots own the condition and
   a dedicated indexed task notification wakes their sole task owner. This
   removes the firmware-only one-entry event queue without changing any
-  Linux-derived source. Descriptor fetch admission now follows the same model:
-  enqueue retry is the condition, normal async-slot release wakes the existing
-  call-local notification index, and an exact deadline replaces the last two
-  one-tick lifecycle polls. Idle lifecycle uses another index, so normal output
-  completion does not trigger its main scan.
+  Linux-derived source. Fixed-slot admission now follows the same model inside
+  the generic synchronous USB bridge: lifecycle and workqueue callers register
+  stack-owned FIFO waiters, enqueue retry is the condition, and normal-slot
+  release or teardown supplies the wake up to a separate one-second local
+  bound. The reserved recovery slot is excluded
+  and nonblocking producers cannot consume waiter-reserved capacity. Descriptor
+  callers contain no FreeRTOS retry logic; `hid_get_class_descriptor()` is once
+  again line-identical to upstream.
 - TinyUSB mount owns an immutable fixed-slot publication and its nonzero host
   serial; the sole lifecycle consumer owns only the handled serial. Unmount
   clears the host serial, so a task-side probe in flight cannot validate or
