@@ -59,8 +59,9 @@ set(PICO_PIO_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/Pico-PIO-USB)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Pico SDK TinyUSB commit 86ad6e56 omits tuh_mount_cb() for hub addresses and
-# has no host-owner entry which starts enumeration without requeueing itself.
+# Pico SDK TinyUSB commit 86ad6e56 omits tuh_mount_cb() for hub addresses, has
+# no host-owner entry which starts enumeration without requeueing itself, and
+# cannot retire an exact EP0 callback owner after a lost HCD completion event.
 # Generate one build-local source with those audited compatibility deltas;
 # never mutate the installed SDK.
 set(TINYUSB_USBH_SOURCE "${PICO_TINYUSB_PATH}/src/host/usbh.c")
@@ -226,6 +227,60 @@ endif()
 string(REPLACE "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
        "${TINYUSB_USBH_REATTACH_HOOK_PORT}"
        TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
+
+# Upstream TinyUSB has no exact-owner recovery after an HCD completion event is
+# lost. Preserve its ordinary completion helper verbatim, then add a build-local
+# host-owner entry which matches daddr + callback + user_data before synthesizing
+# the same terminal TIMEOUT giveback.
+set(TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM [=[
+static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
+]=])
+set(TINYUSB_USBH_CONTROL_RECOVER_PORT [=[
+// Upstream TinyUSB: no equivalent; firmware must terminate an exact
+// callback/user_data owner after bounded PIO completion-drain failure.
+int usbh_port_control_recover_on_host(uint8_t daddr,
+                                      tuh_xfer_cb_t complete_cb,
+                                      uintptr_t user_data) {
+  if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
+    return 0;
+  }
+
+  if (_ctrl_xfer.daddr != daddr ||
+      _ctrl_xfer.complete_cb != complete_cb ||
+      _ctrl_xfer.user_data != user_data) {
+    return -1;
+  }
+
+  (void) hcd_edpt_abort_xfer(usbh_get_rhport(daddr), daddr, 0);
+  _control_xfer_complete(daddr, XFER_RESULT_TIMEOUT);
+  return 1;
+}
+
+static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
+]=])
+string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
+       "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
+       TINYUSB_USBH_CONTROL_RECOVER_OFFSET)
+if(TINYUSB_USBH_CONTROL_RECOVER_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB control-complete anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
+       TINYUSB_USBH_CONTROL_RECOVER_LENGTH)
+math(EXPR TINYUSB_USBH_CONTROL_RECOVER_TAIL_OFFSET
+     "${TINYUSB_USBH_CONTROL_RECOVER_OFFSET} + ${TINYUSB_USBH_CONTROL_RECOVER_LENGTH}")
+string(SUBSTRING "${TINYUSB_USBH_PORT_CONTENT}"
+       ${TINYUSB_USBH_CONTROL_RECOVER_TAIL_OFFSET} -1
+       TINYUSB_USBH_CONTROL_RECOVER_TAIL)
+string(FIND "${TINYUSB_USBH_CONTROL_RECOVER_TAIL}"
+       "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
+       TINYUSB_USBH_SECOND_CONTROL_RECOVER)
+if(NOT TINYUSB_USBH_SECOND_CONTROL_RECOVER EQUAL -1)
+    message(FATAL_ERROR "TinyUSB control-complete anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
+       "${TINYUSB_USBH_CONTROL_RECOVER_PORT}"
+       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
 file(WRITE "${TINYUSB_USBH_PORT_SOURCE}" "${TINYUSB_USBH_PORT_CONTENT}")
 
 get_target_property(TINYUSB_HOST_BASE_SOURCES
@@ -251,11 +306,12 @@ set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
                             INCLUDE_DIRECTORIES
                             "${PICO_TINYUSB_PATH}/src/host")
 
-# TinyUSB's HID class prefetches the report descriptor into its 512-byte
-# enumeration buffer before our Linux-shaped transport can fetch it. Generate a
-# second build-local compatibility source which leaves SET_IDLE/SET_PROTOCOL in
-# TinyUSB but hands descriptor ownership and retry semantics to the lifecycle
-# task. The installed SDK remains untouched.
+# TinyUSB's HID class assumes interface -> HID -> endpoint layout and prefetches
+# the report descriptor into its 512-byte enumeration buffer before our
+# Linux-shaped transport can fetch it. Generate a second build-local source
+# which scans the bounded interface extras like Linux, leaves SET_IDLE/
+# SET_PROTOCOL in TinyUSB, and hands descriptor ownership/retry to lifecycle.
+# The installed SDK remains untouched.
 set(TINYUSB_HIDH_SOURCE
     "${PICO_TINYUSB_PATH}/src/class/hid/hid_host.c")
 set(TINYUSB_HIDH_PORT_SOURCE

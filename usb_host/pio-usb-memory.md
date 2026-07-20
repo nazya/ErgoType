@@ -37,12 +37,15 @@ This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
-The active 2026-07-20 reset-coordinator build instead uses a 216.75 KiB heap
-(`(217 * 1024) - 256`) and links with `text=492652`, `data=660`, and
+The active 2026-07-20 descriptor-retry/EP0-recovery build instead uses a
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=493620`, `data=660`, and
 `bss=243308`. `__bss_end__` remains `0x2003ff54`, leaving 172 B before scratch
 X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
 root/hub reset state did not increase static RAM: `usbhid_reset_coordinator` is
-32 B and the complete heap-owned `usbhid_transport_pool` is 2,508 B.
+32 B and the complete heap-owned `usbhid_transport_pool` is 2,556 B. The
+separate client generation makes `hid_async_request` 64 B and each of ten
+`hid_async_slot`s 92 B; with the shared 257-byte preprobe buffer their 1,177-byte
+request occupies a 1,192-byte heap_4 block.
 
 ## Layers
 
@@ -284,11 +287,11 @@ one exact descriptor buffer across all devices while EP0 fetch/probe is active;
 a maximum-size descriptor consumes about 4 KiB transiently and is released
 after probe or fenced cancellation.
 
-Device-reset recovery reserves one additional 88-byte async slot which normal
+Device-reset recovery reserves one additional 92-byte async slot which normal
 requests cannot consume. With ten slots and the shared 257-byte descriptor
-scratch, async startup requests 1,137 B (a 1,152-byte heap_4 block). The
-2,508-byte transport pool occupies a 2,520-byte heap_4 block. Together these
-recovery changes cost about 120 B of persistent heap versus the preceding
+scratch, async startup requests 1,177 B (a 1,192-byte heap_4 block). The
+2,556-byte transport pool occupies a 2,568-byte heap_4 block. Together these
+recovery changes cost about 208 B of persistent heap versus the preceding
 exact-descriptor checkpoint; the coordinator's root pending flag fits its
 existing 32-byte layout.
 

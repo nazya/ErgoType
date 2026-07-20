@@ -151,10 +151,16 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   generation fence. Descriptors up to Linux's 4 KiB limit no longer depend on
   TinyUSB's 512-byte enumeration scratch; configuration descriptors still do.
   A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
-  prefetch block commented beside the port replacement. SET_IDLE/SET_PROTOCOL
-  remain unchanged, then the class mounts with `NULL` so the lifecycle fetch is
-  the sole descriptor owner. The installed TinyUSB callback documentation still
-  describes stock behavior; this firmware intentionally always passes `NULL`.
+  `hidh_open()` and prefetch blocks commented beside their port replacements.
+  Its two-pass current-interface scanner mirrors Linux's accepted HID-descriptor
+  positions, caps opened/stored endpoints at `bNumEndpoints`, and publishes the
+  TinyUSB class slot only after endpoint success. SET_IDLE/SET_PROTOCOL remain
+  unchanged, then the class mounts with `NULL` so lifecycle is the sole report-
+  descriptor owner. The firmware-only full device-descriptor refetch carries a
+  separate cache/client generation beside TinyUSB's address generation and uses
+  four accepted attempts with 100-ms deadline wakeups; detach cannot restamp an
+  old preprobe as the new address epoch. The installed callback documentation
+  still describes stock behavior; this firmware intentionally passes `NULL`.
 - Linux queues a device reset after clear-halt transfer failure or exhausted
   protocol retry. The adjacent upstream `usb_queue_reset_device()` lines remain
   commented; the port publishes the same terminal decision into a lifecycle
@@ -171,12 +177,15 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - Pinned TinyUSB omits its documented `tuh_mount_cb()` after hub enumeration,
   and `tuh_mounted()` becomes true before class-driver set-config completes.
   The build verifies the pinned `usbh.c` SHA and generates one build-local
-  source with three audited deltas: a hub post-`enum_full_complete()` mount
-  fence, a weak generation-authorization hook, and direct host-owner root/hub
-  enumeration helpers. The helpers preserve `enum_new_device()` and avoid a
-  blocking send back into TinyUSB's sole host queue from its own consumer.
-  Exact unique CMake anchors preserve the replaced upstream mount block beside
-  the port and reject source drift. The SDK installation remains untouched.
+  source with four audited deltas: a hub post-`enum_full_complete()` mount
+  fence, a weak generation-authorization hook, direct host-owner root/hub
+  enumeration helpers, and exact daddr/callback/user-data recovery for a lost
+  EP0 completion. The helpers preserve `enum_new_device()` and avoid a blocking
+  send back into TinyUSB's sole host queue from its own consumer. EP0 retirement
+  permits three SETUP/DATA/ACK drain fences before the exact old owner receives
+  TinyUSB's normal terminal TIMEOUT callback; a replacement serial is untouched.
+  Exact unique CMake anchors preserve replaced upstream blocks beside the port
+  and reject source drift. The SDK installation remains untouched.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 
@@ -186,8 +195,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - matched the active vendor allowlist against `CONFIG_HID_*`
 - checked disabled source/link status and current proxy declarations
 - `cmake --build build -j4`
-- confirmed `sizeof(hid_async_request) == 60` and
-  `sizeof(hid_async_slot) == 88` on the RP2040 ABI
+- confirmed `sizeof(hid_async_request) == 64` and
+  `sizeof(hid_async_slot) == 92` on the RP2040 ABI
 - confirmed `sizeof(usbhid_device) == 248`, the four RX metadata slots remain
   80 B total, and scratch X fell from 916 B to 660 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`

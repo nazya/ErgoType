@@ -61,10 +61,12 @@
   queued request, matching upstream's enqueue-time value semantics. Generic
   synchronous control and interrupt-OUT requests instead borrow the blocked
   caller's buffer through physical completion or fenced cancellation. Removing
-  the nine 257-byte inline payloads shrinks `hid_async_request` from 312 B to
-  60 B and its slot from 340 B to 88 B; one 257-byte shared pre-probe scratch
-  remains in the startup allocation. Generic control uses USB's native 16-bit
-  length, while HID `.request()` remains bounded by `HID_MAX_BUFFER_SIZE`.
+  the old 257-byte inline payloads shrinks `hid_async_request` from 312 B to
+  64 B and its slot from 340 B to 92 B; one 257-byte shared pre-probe scratch
+  remains in the ten-slot startup allocation. The extra generation word is the
+  caller/cache epoch, deliberately distinct from TinyUSB's address epoch.
+  Generic control uses USB's native 16-bit length, while HID `.request()`
+  remains bounded by `HID_MAX_BUFFER_SIZE`.
 - `usbhid_start()` now clears the NumLock output field on boot keyboards and
   submits the whole output report through that same `.request()` route,
   matching upstream startup behavior.
@@ -87,7 +89,11 @@
   duplicate read into the 512-byte enumeration buffer: it completes class mount
   with `NULL`, which is the only value consumed by this callback facade, and
   lifecycle performs the single authoritative fetch. Configuration descriptors
-  remain separately limited by the enumeration scratch buffer.
+  remain separately limited by the enumeration scratch buffer. The firmware-
+  only full device-descriptor refetch now retains pending HID metadata across
+  three transient failures, with four accepted attempts and 100-ms lifecycle
+  deadlines. Its request carries both the physical-cache generation and the
+  TinyUSB address generation, so detach/reuse cannot retarget a retry.
 - `hid_hw_request()` now matches the upstream queue-and-return contract.
   Successful GET_REPORT completion enters the report queue, and `hid_hw_wait()`
   drains through the end of parsing, so callers cannot observe
@@ -101,7 +107,11 @@
   the active request, so a second fast control GET is no longer discarded while
   an earlier result waits for parser ownership. Interrupt-IN close is reconciled
   in the TinyUSB owner: abort completion is drained for two SOFs before a raced
-  reopen may arm a new receive.
+  reopen may arm a new receive. EP0 retirement is also bounded: three two-SOF
+  host-owner fences cover SETUP/DATA/ACK, after which a SHA-pinned TinyUSB helper
+  matches daddr + callback + serial and synthesizes the old owner's TIMEOUT
+  giveback if the PIO completion event was lost. It cannot abort a replacement
+  EP0 owner after address reuse.
 - Interrupt IN now uses the first interrupt-IN endpoint directly, matching
   upstream endpoint selection and preserving TinyUSB's exact transfer result
   and actual length. The request length is the largest parsed INPUT report,
@@ -142,15 +152,19 @@
 - Pico SDK 2.1.1's pinned TinyUSB does not issue `tuh_mount_cb()` for hubs and
   exposes no exact post-`enum_full_complete()` fence or non-recursive
   host-owner enumeration entry. CMake verifies the pinned `usbh.c` SHA and
-  exact unique anchors, then generates a build-local copy with three audited
-  deltas: the hub mount fence, a weak generation hook, and direct root/hub
-  enumeration helpers. The installed SDK is never modified and any upstream
-  source drift fails configuration for an explicit re-audit.
+  exact unique anchors, then generates a build-local copy with four audited
+  deltas: the hub mount fence, a weak generation hook, direct root/hub
+  enumeration helpers, and exact-owner recovery for a lost EP0 completion.
+  The installed SDK is never modified and any upstream source drift fails
+  configuration for an explicit re-audit.
 - The same compatibility generation pins `hid_host.c` and preserves its full
-  report-descriptor prefetch block commented beside the replacement. TinyUSB
-  still performs SET_IDLE and SET_PROTOCOL, then completes HID class mount
-  without borrowing the shared enumeration buffer; lifecycle owns the one
-  exact-size Linux-style descriptor request and its retry/error semantics.
+  `hidh_open()` and report-descriptor prefetch blocks commented beside their
+  replacements. A bounded two-pass scanner accepts the HID descriptor in the
+  current interface extras (including after endpoint[0]), opens no more than
+  `bNumEndpoints`, and publishes the class slot only after endpoint success.
+  TinyUSB still performs SET_IDLE and SET_PROTOCOL, then mounts without
+  borrowing the shared enumeration buffer; lifecycle owns the one exact-size
+  Linux-style descriptor request and its retry/error semantics.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -160,6 +174,11 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: SHA-pinned HID-open/report-ownership image, exact UF2 SHA256
+  `c0a58d7adf6d1bb8fac1d94d713f53443271235254dbe4cdd7ed5c8e923e6df2`,
+  was reported working for normal boot, enumeration, emulator input, and mouse
+  movement. This does not cover malformed interface extras, transient device-
+  descriptor reads, or dropped EP0 completion injection.
 - 2026-07-20: direct host-owner re-enumeration checkpoint, exact UF2 SHA256
   `bea0614236dd6de396f1a74678243f7f3b056d46e1261b58198fd1f06a01e94b`,
   builds with `text=492676`, `data=660`, and `bss=243308`. Normal boot,

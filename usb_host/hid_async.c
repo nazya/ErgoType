@@ -31,6 +31,8 @@
 #define HID_ASYNC_XFER_TIMEOUT_TICKS pdMS_TO_TICKS(USB_CTRL_SET_TIMEOUT)
 /* PIO-USB can publish an aborted completion at the end of a later SOF. */
 #define HID_ASYNC_ABORT_DRAIN_FRAMES 2u
+/* TinyUSB control transfers contain SETUP, optional DATA, then ACK. */
+#define HID_ASYNC_EP0_DRAIN_MAX 3u
 #define HID_ASYNC_DEVICE_ADDR_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
 #define HID_ASYNC_NORMAL_SLOT_COUNT \
 	(HID_ASYNC_REQUEST_QUEUE_LEN + 1u + CFG_TUH_HID)
@@ -50,6 +52,7 @@ enum hid_async_host_action {
 	HID_ASYNC_HOST_FENCE,
 	HID_ASYNC_HOST_SUBMIT,
 	HID_ASYNC_HOST_ABORT,
+	HID_ASYNC_HOST_RECOVER_EP0,
 };
 
 struct hid_async_host_call {
@@ -126,6 +129,11 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer);
 static void hid_async_host_call_sync(struct hid_async_host_call *call);
 static void hid_async_notify_task(void);
 
+/* SHA-pinned TinyUSB host-owner extension generated in the build directory. */
+int usbh_port_control_recover_on_host(uint8_t daddr,
+				      tuh_xfer_cb_t complete_cb,
+				      uintptr_t user_data);
+
 static bool hid_async_lane_is_out(enum hid_async_lane lane)
 {
 	return lane == HID_ASYNC_LANE_DEVICE_OUT;
@@ -194,7 +202,8 @@ static void hid_async_call_on_host(void *data)
 				     (!slot->req.hid ||
 				      !((struct usbhid_device *)
 					slot->req.hid->driver_data)->transport_stopping);
-		else if (call->action == HID_ASYNC_HOST_ABORT)
+		else if (call->action == HID_ASYNC_HOST_ABORT ||
+			 call->action == HID_ASYNC_HOST_RECOVER_EP0)
 			is_current = slot->state == HID_ASYNC_SLOT_RETIRING &&
 				     !slot->completion_ready;
 		if (is_current && call->action == HID_ASYNC_HOST_SUBMIT)
@@ -202,13 +211,14 @@ static void hid_async_call_on_host(void *data)
 	}
 	taskEXIT_CRITICAL();
 
-	call->status = 0;
+	call->status = call->action == HID_ASYNC_HOST_FENCE ? 0 : -ENODEV;
 	if (call->action == HID_ASYNC_HOST_SUBMIT) {
 		/* A gate which raced the defer parks this request for release. */
 		call->status = gated ? -EAGAIN :
 			       is_current ? hid_async_submit(call->request) :
 					    -ENODEV;
 	} else if (call->action == HID_ASYNC_HOST_ABORT && is_current) {
+		call->status = 0;
 		if (call->ep_addr) {
 			(void)tuh_edpt_abort_xfer(call->dev_addr, call->ep_addr);
 		} else {
@@ -232,6 +242,10 @@ static void hid_async_call_on_host(void *data)
 				(void)logical_aborted;
 			}
 		}
+	} else if (call->action == HID_ASYNC_HOST_RECOVER_EP0 && is_current) {
+		call->status = usbh_port_control_recover_on_host(
+			call->dev_addr, hid_async_xfer_complete,
+			(uintptr_t)call->serial);
 	}
 	taskENTER_CRITICAL();
 	call->done = true;
@@ -546,22 +560,6 @@ static int hid_async_queue_hid_request(struct hid_async_request *req)
 	return ret;
 }
 
-static int hid_async_queue_preprobe_request(struct hid_async_request *req)
-{
-	int ret = 0;
-
-	if (!hid_async_slots || req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX)
-		return -ENODEV;
-
-	taskENTER_CRITICAL();
-	req->generation = hid_async_device_generation[req->dev_addr];
-	ret = hid_async_slot_queue_locked(req, HID_ASYNC_LANE_PREPROBE);
-	taskEXIT_CRITICAL();
-	if (!ret)
-		hid_async_notify_task();
-	return ret;
-}
-
 static int hid_async_queue_preprobe_continuation(
 		struct hid_async_request *req)
 {
@@ -572,9 +570,9 @@ static int hid_async_queue_preprobe_continuation(
 		return -ENODEV;
 
 	/*
-	 * A descriptor continuation belongs to the epoch of the request which
-	 * produced it. Never restamp an old chain with the generation of a device
-	 * which has already reused the same USB address.
+	 * Every preprobe request carries the address epoch captured by its cache
+	 * owner (or by the preceding descriptor completion). Never restamp an old
+	 * chain with the generation of a device which reused the same USB address.
 	 */
 	taskENTER_CRITICAL();
 	if (req->generation != hid_async_device_generation[req->dev_addr])
@@ -703,7 +701,8 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	return 0;
 }
 
-int hid_async_queue_device_descriptor(u8 dev_addr,
+int hid_async_queue_device_descriptor(u8 dev_addr, u32 generation,
+				      u32 client_generation,
 				      hid_async_complete_t complete,
 				      void *context)
 {
@@ -715,16 +714,18 @@ int hid_async_queue_device_descriptor(u8 dev_addr,
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR;
 	req.dev_addr = dev_addr;
+	req.generation = generation;
+	req.client_generation = client_generation;
 	req.len = sizeof(tusb_desc_device_t);
 	req.data = hid_async_preprobe_buffer;
 	req.complete = complete;
 	req.context = context;
 
-	return hid_async_queue_preprobe_request(&req);
+	return hid_async_queue_preprobe_continuation(&req);
 }
 
 int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
-				      u32 generation,
+				      u32 generation, u32 client_generation,
 				      hid_async_complete_t complete,
 				      void *context)
 {
@@ -738,6 +739,7 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 	req.dev_addr = dev_addr;
 	req.string_index = index;
 	req.string_langid = langid;
+	req.client_generation = client_generation;
 	req.generation = generation;
 	req.len = HID_ASYNC_PREPROBE_BUFFER_SIZE;
 	req.data = hid_async_preprobe_buffer;
@@ -1409,14 +1411,27 @@ static int hid_async_retire_slot(struct hid_async_slot *slot)
 		/*
 		 * A PIO completion which wins the abort race may advance one old
 		 * TinyUSB control stage. Leave the global EP0 occupied, drain that
-		 * FIFO event, and retry the newly active stage. SETUP/DATA/ACK are
-		 * finite; a NAKing stage remains active and is canceled directly.
+		 * FIFO event, and retry the newly active stage. Three host-owner
+		 * fences cover TinyUSB's finite SETUP/DATA/ACK chain. If the exact
+		 * callback still did not arrive, the HCD event was lost; synthesize
+		 * TinyUSB's terminal TIMEOUT giveback for that serial only.
 		 */
-		do {
+		for (u8 drain = 0; drain < HID_ASYNC_EP0_DRAIN_MAX; drain++) {
 			hid_async_host_call_sync(&call);
-			if (call.status == -EAGAIN)
-				hid_async_drain_abort_frames();
-		} while (call.status == -EAGAIN);
+			if (call.status != -EAGAIN)
+				break;
+			hid_async_drain_abort_frames();
+		}
+		if (call.status == -EAGAIN) {
+			call.action = HID_ASYNC_HOST_RECOVER_EP0;
+			hid_async_host_call_sync(&call);
+			if (call.status > 0)
+				async_msg("ERR: HID_EP0_EVENT_LOST");
+			else if (!call.status)
+				async_msg("ERR: HID_EP0_CALLBACK_LOST");
+			else if (call.status != -ENODEV)
+				async_msg("ERR: HID_EP0_OWNER_MISMATCH");
+		}
 	} else {
 		hid_async_host_call_sync(&call);
 		hid_async_drain_abort_frames();

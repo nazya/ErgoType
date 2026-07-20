@@ -48,6 +48,8 @@ struct hid_async_request {
 	u16 control_value;
 	u16 control_index;
 	u32 timeout_ticks;
+	/* Caller lifecycle epoch; independent from TinyUSB's address epoch below. */
+	u32 client_generation;
 	u32 generation;
 	u32 serial;
 	u8 xfer_result;
@@ -68,11 +70,12 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   hid_async_complete_t complete, void *context);
 int hid_async_control_report_hold(const struct hid_async_request *req);
 void hid_async_control_report_release(struct hid_device *hid, u32 serial);
-int hid_async_queue_device_descriptor(u8 dev_addr,
+int hid_async_queue_device_descriptor(u8 dev_addr, u32 generation,
+				      u32 client_generation,
 				      hid_async_complete_t complete,
 				      void *context);
 int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
-				      u32 generation,
+				      u32 generation, u32 client_generation,
 				      hid_async_complete_t complete,
 				      void *context);
 int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);

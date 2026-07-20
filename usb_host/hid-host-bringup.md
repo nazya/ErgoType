@@ -109,12 +109,24 @@ cannot survive an electrical reset. Root and hub-child paths run behind a
 global EP0 gate; the exact old cache generation is drained before a fresh mount
 may probe.
 
-The SHA-pinned TinyUSB HID class still performs its normal SET_IDLE and
-SET_PROTOCOL sequence, but no longer does a duplicate report-descriptor read
-through the shared 512-byte enumeration buffer. It mounts the class with a NULL
-descriptor pointer; after the exact global-mount fence, lifecycle performs the
-single authoritative Linux-shaped read with an exact-size owned buffer and four
-attempts. The separate configuration-descriptor limit remains 512 bytes.
+The SHA-pinned TinyUSB HID class now scans the bounded current-interface extras
+instead of assuming strict interface -> HID -> endpoint order. Like Linux's USB
+HID transport, it accepts the HID descriptor after endpoint[0], opens no more
+than the interface's advertised endpoint count, and publishes its class slot
+only after endpoint success. It still performs normal SET_IDLE/SET_PROTOCOL,
+but no longer does a duplicate report-descriptor read through the shared
+512-byte enumeration buffer. It mounts with a NULL descriptor pointer; after
+the exact global-mount fence, lifecycle performs the single authoritative
+Linux-shaped report-descriptor read with an exact-size owned buffer and four
+attempts. The firmware-only full device-descriptor refetch separately gets four
+accepted attempts with 100-ms backoff and carries both cache and TinyUSB address
+epochs across the string chain. The configuration-descriptor limit remains
+512 bytes.
+
+EP0 cancellation cannot wait forever for a PIO completion event. The executor
+allows three two-SOF/FIFO fences for TinyUSB's SETUP/DATA/ACK stages. If the
+exact old daddr + callback + serial still owns EP0, a SHA-pinned host helper
+finishes it with a synthetic TIMEOUT; a replacement owner is never touched.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -238,7 +250,7 @@ first two use 384-word stacks and lifecycle uses 512 words; together with task
 overhead they consumed about 6.6 KiB in the measured build. Consolidating them
 is a later architecture change, not part of this bring-up fix.
 
-The callback-safe transport pool now has a 2,476 B payload (plus allocator
+The callback-safe transport pool now has a 2,556 B payload (plus allocator
 overhead) in the FreeRTOS heap at startup with the current
 `CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
 `CFG_TUH_HID=4` configuration. Replacing four inline 512-byte descriptor slots
@@ -253,9 +265,9 @@ five control results (one active plus the four-entry async queue), and one
 close/reopen fence. Zero-copy interrupt events reduce queue payload by 440 B
 versus the former ten 80-byte events; the static control handoff is 44 B
 smaller too. Its coalesced reconcile table costs 32 B of static RAM. The async
-request is now 60 B and its slot is 88 B. Nine metadata slots plus the shared
-257-byte pre-probe scratch request 1,049 B from heap_4 and occupy a 1,064 B
-block, versus the former 3,072 B inline-buffer block: 2,008 B of persistent heap
+request is now 64 B and its slot is 92 B. Ten metadata slots plus the shared
+257-byte pre-probe scratch request 1,177 B from heap_4 and occupy a 1,192 B
+block, versus the former 3,072 B inline-buffer block: 1,880 B of persistent heap
 is recovered. Exact endpoint callbacks add 1,280 B of TinyUSB device state.
 Direct IN/OUT leave one-byte class placeholders. The four 20-byte direct-IN
 metadata slots remain in scratch X, while each attached HID interface owns one
@@ -296,6 +308,10 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
+| `ERR: HID_DEV_DESC_SUB` / `HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` | One full device-descriptor refetch attempt failed. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
+| `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |
+| `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
+| `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |

@@ -41,6 +41,8 @@
 /* A canceled old epoch may overlap all interface metadata from a fast replug. */
 #define USBHID_REPORT_DESCRIPTOR_SLOTS (HID_HOST_MAX_DEVICES + 1u)
 #define USBHID_REPORT_DESCRIPTOR_RETRIES 4u
+#define USBHID_DEVICE_DESCRIPTOR_ATTEMPTS 4u
+#define USBHID_DEVICE_DESCRIPTOR_RETRY_MS 100u
 #define USBHID_RESET_HUB_ATTEMPTS 3u
 #define USBHID_RESET_PHASE_TIMEOUT_MS 6000u
 #define USBHID_RESET_HUB_TIMEOUT_MS \
@@ -193,7 +195,9 @@ struct usbhid_usb_device {
 	u32 generation;
 	u32 io_pending;
 	u32 interface_mask;
+	TickType_t device_desc_retry_at;
 	enum usbhid_preprobe_stage preprobe_stage;
+	u8 device_desc_attempts_left;
 	/* These flags share the enum-alignment byte in the physical cache. */
 	bool reset_requested : 1;
 	bool mount_complete : 1;
@@ -253,6 +257,12 @@ static u32 usbhid_next_generation_locked(void)
 	if (!generation)
 		generation = ++usbhid_generation;
 	return generation;
+}
+
+static bool usbhid_tick_reached(TickType_t now, TickType_t deadline)
+{
+	/* RP2040 FreeRTOS ticks are 32-bit; signed subtraction is wrap-safe here. */
+	return (int32_t)(now - deadline) >= 0;
 }
 
 static u32 usbhid_next_generation(void)
@@ -532,6 +542,9 @@ usbhid_usb_device_upsert(const struct usb_device *src)
 		entry->dev.dev.type = &usb_device_type;
 		usbhid_usb_device_init_config(&entry->dev);
 		entry->generation = usbhid_next_generation_locked();
+		entry->device_desc_attempts_left =
+			USBHID_DEVICE_DESCRIPTOR_ATTEMPTS;
+		entry->device_desc_retry_at = xTaskGetTickCount();
 	}
 	usbhid_usb_device_copy(entry, src, parent);
 	/* valid is the release publication for all fields copied above. */
@@ -1495,10 +1508,12 @@ static int usb_string_decode(const u8 *desc, uint16_t actual,
 }
 
 static int usbhid_usb_device_queue_string(struct usbhid_usb_device *entry,
-					  uint8_t index, u32 generation)
+					  uint8_t index, u32 generation,
+					  u32 device_generation)
 {
 	return hid_async_queue_string_descriptor(entry->dev.dev_addr, index,
 						 entry->string_langid, generation,
+						 device_generation,
 						 usbhid_usb_device_descriptor_complete,
 						 entry);
 }
@@ -1530,7 +1545,8 @@ static void usbhid_usb_device_finish_preprobe(struct usbhid_usb_device *entry)
 }
 
 static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
-						u32 generation)
+						u32 generation,
+						u32 device_generation)
 {
 	int ret;
 
@@ -1543,6 +1559,7 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
 			}
 			ret = hid_async_queue_string_descriptor(entry->dev.dev_addr,
 							       0, 0, generation,
+							       device_generation,
 							       usbhid_usb_device_descriptor_complete,
 							       entry);
 			break;
@@ -1553,7 +1570,8 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
 			}
 			ret = usbhid_usb_device_queue_string(entry,
 							     entry->dev.descriptor.iProduct,
-							     generation);
+							     generation,
+							     device_generation);
 			break;
 		case USBHID_PREPROBE_MANUFACTURER:
 			if (!entry->dev.descriptor.iManufacturer) {
@@ -1562,7 +1580,8 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
 			}
 			ret = usbhid_usb_device_queue_string(entry,
 							     entry->dev.descriptor.iManufacturer,
-							     generation);
+							     generation,
+							     device_generation);
 			break;
 		case USBHID_PREPROBE_SERIAL:
 			if (!entry->dev.descriptor.iSerialNumber) {
@@ -1571,7 +1590,8 @@ static void usbhid_usb_device_queue_next_string(struct usbhid_usb_device *entry,
 			}
 			ret = usbhid_usb_device_queue_string(entry,
 							     entry->dev.descriptor.iSerialNumber,
-							     generation);
+							     generation,
+							     device_generation);
 			break;
 		default:
 			usbhid_usb_device_finish_preprobe(entry);
@@ -1650,13 +1670,63 @@ static void usbhid_log_device_desc_error(const char *reason,
 	_async_msg(msg);
 }
 
+static void usbhid_usb_device_descriptor_failed(
+		struct usbhid_usb_device *entry,
+		const struct hid_async_request *req, const char *reason)
+{
+	TickType_t retry_delay =
+		pdMS_TO_TICKS(USBHID_DEVICE_DESCRIPTOR_RETRY_MS);
+	bool is_current = false;
+	bool retry = false;
+
+	if (!retry_delay)
+		retry_delay = 1;
+	taskENTER_CRITICAL();
+	if (entry->valid && entry->generation == req->client_generation &&
+	    entry->dev.dev_addr == req->dev_addr &&
+	    entry->device_desc_requested) {
+		entry->device_desc_requested = false;
+		is_current = true;
+		if (entry->device_desc_attempts_left) {
+			entry->device_desc_retry_at =
+				xTaskGetTickCount() + retry_delay;
+			retry = true;
+		}
+	}
+	taskEXIT_CRITICAL();
+	if (!is_current)
+		return;
+
+	usbhid_log_device_desc_error(reason, req);
+	if (retry) {
+		/*
+		 * Linux USB core already owns a stable device descriptor here. This
+		 * firmware-only refetch fills the compact usb_device shim, so retain
+		 * every mounted HID across a bounded transient EP0 failure.
+		 */
+		usbhid_lifecycle_kick();
+		return;
+	}
+
+	usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
+	usbhid_usb_device_drop_pending_hid(entry);
+}
+
 static void usbhid_usb_device_descriptor_complete(const struct hid_async_request *req,
 						  int status)
 {
 	struct usbhid_usb_device *entry = req->context;
 	tusb_desc_device_t descriptor;
+	bool is_current;
 
-	if (!entry || !entry->valid || req->dev_addr != entry->dev.dev_addr)
+	if (!entry)
+		return;
+	taskENTER_CRITICAL();
+	is_current = entry->valid &&
+		     entry->generation == req->client_generation &&
+		     req->dev_addr == entry->dev.dev_addr;
+	taskEXIT_CRITICAL();
+	if (!is_current)
 		return;
 
 	if (req->kind == HID_ASYNC_REQUEST_STRING_DESCRIPTOR) {
@@ -1665,34 +1735,27 @@ static void usbhid_usb_device_descriptor_complete(const struct hid_async_request
 			usbhid_usb_device_finish_preprobe(entry);
 			return;
 		}
-		usbhid_usb_device_queue_next_string(entry, req->generation);
+		usbhid_usb_device_queue_next_string(entry, req->generation,
+						    req->client_generation);
 		return;
 	}
 
 	if (status < 0) {
-		taskENTER_CRITICAL();
-		entry->device_desc_requested = false;
-		taskEXIT_CRITICAL();
-		if (req->xfer_result == XFER_RESULT_INVALID)
-			usbhid_log_device_desc_error("SUB", req);
-		else
-			usbhid_log_device_desc_error("XFER", req);
-		usbhid_usb_device_drop_pending_hid(entry);
+		usbhid_usb_device_descriptor_failed(
+			entry, req, req->xfer_result == XFER_RESULT_INVALID ?
+				    "SUB" : "XFER");
 		return;
 	}
 
 	if (req->actual_len < sizeof(descriptor)) {
-		taskENTER_CRITICAL();
-		entry->device_desc_requested = false;
-		taskEXIT_CRITICAL();
-		usbhid_log_device_desc_error("SHORT", req);
-		usbhid_usb_device_drop_pending_hid(entry);
+		usbhid_usb_device_descriptor_failed(entry, req, "SHORT");
 		return;
 	}
 
 	memcpy(&descriptor, req->data, sizeof(descriptor));
 	taskENTER_CRITICAL();
-	if (!entry->valid || req->dev_addr != entry->dev.dev_addr) {
+	if (!entry->valid || entry->generation != req->client_generation ||
+	    req->dev_addr != entry->dev.dev_addr) {
 		taskEXIT_CRITICAL();
 		return;
 	}
@@ -1705,32 +1768,66 @@ static void usbhid_usb_device_descriptor_complete(const struct hid_async_request
 	entry->dev.descriptor.iSerialNumber = descriptor.iSerialNumber;
 	entry->have_device_desc = true;
 	entry->device_desc_requested = false;
+	entry->device_desc_attempts_left = 0;
 	entry->string_langid = USBHID_STRING_LANGID;
 	entry->preprobe_stage = USBHID_PREPROBE_LANGID;
 	taskEXIT_CRITICAL();
-	usbhid_usb_device_queue_next_string(entry, req->generation);
+	usbhid_usb_device_queue_next_string(entry, req->generation,
+						    req->client_generation);
 }
 
 static void usbhid_usb_device_queue_descriptor(struct usbhid_usb_device *entry)
 {
+	TickType_t retry_delay =
+		pdMS_TO_TICKS(USBHID_DEVICE_DESCRIPTOR_RETRY_MS);
+	TickType_t now = xTaskGetTickCount();
+	u32 async_generation;
+	u32 generation;
+	u8 dev_addr;
 	int ret;
 
+	if (!retry_delay)
+		retry_delay = 1;
+	/* Global mount is the exact fence after every TinyUSB config driver. */
 	taskENTER_CRITICAL();
-	if (!entry->valid || entry->have_device_desc ||
-	    entry->device_desc_requested) {
+	if (!entry->valid || !entry->mount_complete || entry->have_device_desc ||
+	    entry->device_desc_requested || !entry->device_desc_attempts_left ||
+	    !usbhid_tick_reached(now, entry->device_desc_retry_at)) {
 		taskEXIT_CRITICAL();
 		return;
 	}
 
+	/*
+	 * The cache publication and TinyUSB address-epoch snapshot share the same
+	 * firmware critical section. The broker then verifies this expected epoch
+	 * again while enqueuing, so detach cannot restamp old cache work as new.
+	 */
+	dev_addr = entry->dev.dev_addr;
+	ret = hid_async_device_epoch_snapshot(dev_addr, &async_generation);
+	if (ret) {
+		taskEXIT_CRITICAL();
+		usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
+		return;
+	}
+	generation = entry->generation;
 	entry->preprobe_stage = USBHID_PREPROBE_DEVICE_DESC;
 	entry->device_desc_requested = true;
+	entry->device_desc_attempts_left--;
 	taskEXIT_CRITICAL();
-	ret = hid_async_queue_device_descriptor(entry->dev.dev_addr,
+	ret = hid_async_queue_device_descriptor(dev_addr, async_generation,
+						generation,
 						usbhid_usb_device_descriptor_complete,
 						entry);
 	if (ret) {
 		taskENTER_CRITICAL();
-		entry->device_desc_requested = false;
+		if (entry->valid && entry->generation == generation &&
+		    entry->device_desc_requested) {
+			entry->device_desc_requested = false;
+			if (entry->device_desc_attempts_left <
+			    USBHID_DEVICE_DESCRIPTOR_ATTEMPTS)
+				entry->device_desc_attempts_left++;
+			entry->device_desc_retry_at = now + retry_delay;
+		}
 		taskEXIT_CRITICAL();
 		usbhid_transport_fault(USBHID_FAULT_REPORT_DESCRIPTOR);
 		return;
@@ -1777,17 +1874,55 @@ static bool usbhid_usb_device_old_epoch_retiring(
 	return retiring;
 }
 
+/* Caller holds the firmware SMP critical section while inspecting both pools. */
+static bool usbhid_usb_device_preprobe_pending_locked(
+		const struct usbhid_usb_device *entry)
+{
+	bool waiting = false;
+
+	if (!entry->valid || !entry->mount_complete || entry->have_device_desc ||
+	    entry->device_desc_requested || !entry->device_desc_attempts_left)
+		return false;
+
+	for (size_t i = 0; i < USBHID_REPORT_DESCRIPTOR_SLOTS; i++) {
+		const struct usbhid_report_descriptor_slot *slot =
+			&usbhid_report_descriptors[i];
+
+		if (slot->state != USBHID_REPORT_DESCRIPTOR_FREE &&
+		    slot->dev_addr == entry->dev.dev_addr &&
+		    slot->generation == entry->generation) {
+			waiting = true;
+			break;
+		}
+	}
+	if (!waiting)
+		return false;
+
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		const struct usbhid_usb_device *old = &usbhid_usb_devices[i];
+
+		if (old != entry && old->retiring &&
+		    old->dev.dev_addr == entry->dev.dev_addr)
+			return false;
+	}
+
+	return true;
+}
+
 static void usbhid_usb_device_retry_preprobes(void)
 {
+	TickType_t now = xTaskGetTickCount();
+
 	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
 		struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+		bool due;
 
-		if (!entry->valid || entry->have_device_desc ||
-		    entry->device_desc_requested ||
-		    !usbhid_usb_device_has_waiting_hid(entry) ||
-		    usbhid_usb_device_old_epoch_retiring(entry))
-			continue;
-		usbhid_usb_device_queue_descriptor(entry);
+		taskENTER_CRITICAL();
+		due = usbhid_usb_device_preprobe_pending_locked(entry) &&
+		      usbhid_tick_reached(now, entry->device_desc_retry_at);
+		taskEXIT_CRITICAL();
+		if (due)
+			usbhid_usb_device_queue_descriptor(entry);
 	}
 }
 
@@ -1795,8 +1930,7 @@ static void usbhid_usb_device_retry_preprobes(void)
 static bool usbhid_reset_deadline_expired(TickType_t now,
 					   TickType_t deadline)
 {
-	/* RP2040 FreeRTOS ticks are 32-bit; signed subtraction is wrap-safe here. */
-	return (int32_t)(now - deadline) >= 0;
+	return usbhid_tick_reached(now, deadline);
 }
 
 static bool usbhid_reset_parent_live_locked(void)
@@ -2530,6 +2664,40 @@ static TickType_t usbhid_reset_wait_ticks(void)
 	return state == USBHID_RESET_IDLE ? portMAX_DELAY : poll;
 }
 
+static TickType_t usbhid_preprobe_wait_ticks(void)
+{
+	TickType_t now = xTaskGetTickCount();
+	TickType_t wait = portMAX_DELAY;
+
+	taskENTER_CRITICAL();
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		const struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+		TickType_t candidate;
+
+		if (!usbhid_usb_device_preprobe_pending_locked(entry))
+			continue;
+		if (usbhid_tick_reached(now, entry->device_desc_retry_at)) {
+			wait = 0;
+			break;
+		}
+		candidate = entry->device_desc_retry_at - now;
+		if (wait == portMAX_DELAY || candidate < wait)
+			wait = candidate;
+	}
+	taskEXIT_CRITICAL();
+	return wait;
+}
+
+static TickType_t usbhid_lifecycle_wait_ticks(void)
+{
+	TickType_t reset_wait = usbhid_reset_wait_ticks();
+
+	/* Preprobe is deliberately parked while reset owns the global EP0 gate. */
+	if (reset_wait != portMAX_DELAY)
+		return reset_wait;
+	return usbhid_preprobe_wait_ticks();
+}
+
 int usbhid_lifecycle_init(void)
 {
 	usbhid_transport_pool = kzalloc(sizeof(*usbhid_transport_pool), GFP_KERNEL);
@@ -2780,7 +2948,7 @@ void usbhid_lifecycle_task(void *pvParameters)
 		usbhid_lifecycle_log_transport_faults();
 
 		if (xQueueReceive(usbhid_lifecycle_queue, &event,
-				  usbhid_reset_wait_ticks()) == pdPASS) {
+				  usbhid_lifecycle_wait_ticks()) == pdPASS) {
 			taskENTER_CRITICAL();
 			usbhid_lifecycle_wake_pending = false;
 			taskEXIT_CRITICAL();
