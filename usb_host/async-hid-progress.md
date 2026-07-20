@@ -65,9 +65,27 @@
   steps move callback publications into the async, report, and lifecycle task
   queues so this shared lock can be partitioned rather than becoming permanent
   design.
-  The separate task-only timer/workqueue bridges still contain 19 old critical
-  regions and remain a later synchronization domain; they are not mixed into
-  this transport mutex.
+  The task-only workqueue bridge is now a separate execution domain with its
+  own priority-inheritance mutex. Durable FIFO/flags are the condition, direct
+  task notifications are wake edges, and stack-owned waiters preserve
+  `flush_work()`, `cancel_work_sync()`, and `destroy_workqueue()` without the
+  former 15 critical regions or one-tick polling. The timer bridge is now a
+  second task-only execution domain with its own priority-inheritance mutex.
+  TinyUSB unmount publishes stopping and wakes the report task; that owner
+  claims and synchronously cancels an I/O-retry timer under an `io_pending`
+  lifetime lease. Direct notifications replace the timer's one-entry wake
+  queue, and stack-owned waiters replace `timer_delete_sync()` polling. Neither
+  domain is mixed into the transport mutex or masks scheduler-wide interrupts.
+  The live workqueue parents are KeyD, the dedicated HID timer/lifecycle tasks,
+  and the worker itself; TinyUSB callbacks only publish state to those owners.
+  FreeRTOS calls and invariant predicates are evaluated before any
+  `configASSERT()`, so Release builds cannot erase a mutex operation with the
+  assert expression. Rare task-side invariant failures use fixed-size async
+  diagnostics before asserting an already computed boolean; diagnostics found
+  under the workqueue/timer mutex are emitted only after it is released.
+  The same no-expression assertion rule is now enforced across the async
+  executor, USB HID lifecycle, interrupt-report owner, and transport mutex:
+  every active `configASSERT()` there receives one precomputed identifier.
 - HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
   `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
   transfer carries the request serial in `user_data`, and completion preserves
@@ -292,6 +310,12 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: edge-driven CLEAR_HALT checkpoint `usb: make clear-halt admission edge driven`, exact UF2 SHA256
+  `312a456a981ac2dcbe057ce8fe247673952106f6dcbb520b26e32f0c7a92beaa`,
+  clean-builds with `text=492388`, `data=708`, and `bss=243312`. The requested
+  normal boot/enumeration and emulator input regression pass was reported
+  working on hardware. This does not force CLEAR_HALT pool saturation or the
+  terminal device-reset path.
 - 2026-07-20: generic synchronous-request admission checkpoint `usb: make synchronous request admission waitable`,
   exact UF2 SHA256
   `b58404971ae20b6de376f8dc22ae9912a429a1d8b56086dfd852c8555cf87a64`,

@@ -123,6 +123,7 @@ enum usbhid_transport_fault {
 	USBHID_FAULT_TOPOLOGY = 1u << 6,
 	USBHID_FAULT_RX_STALL = 1u << 7,
 	USBHID_FAULT_RX_XFER = 1u << 8,
+	USBHID_FAULT_IO_ACCOUNTING = 1u << 9,
 };
 
 enum usbhid_preprobe_stage {
@@ -355,10 +356,17 @@ static int usbhid_usb_device_io_get(struct usb_device *dev,
 
 static void usbhid_usb_device_io_put(struct usbhid_usb_device *entry)
 {
+	bool io_owned;
 	bool wake_lifecycle;
 
 	hid_transport_lock();
-	configASSERT(entry && entry->io_pending);
+	io_owned = entry && entry->io_pending;
+	if (!io_owned) {
+		hid_transport_unlock();
+		async_msg("ERR: HID_USB_IO_PUT");
+		configASSERT(io_owned);
+		return;
+	}
 	entry->io_pending--;
 	wake_lifecycle = entry->retiring && !entry->io_pending;
 	hid_transport_unlock();
@@ -2195,6 +2203,7 @@ static bool usbhid_reset_queue_hub(void)
 	struct usbhid_usb_device *fresh;
 	enum usbhid_reset_state waiting_state;
 	u32 async_generation;
+	bool request_pending;
 	bool mounted;
 	bool retry;
 	int ret;
@@ -2298,8 +2307,15 @@ static bool usbhid_reset_queue_hub(void)
 
 	/* Queue rejection cannot race a completion because no slot was published. */
 	hid_transport_lock();
-	configASSERT(usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE &&
-		     usbhid_reset->hub_io_pending);
+	request_pending =
+		usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE &&
+		usbhid_reset->hub_io_pending;
+	if (!request_pending) {
+		hid_transport_unlock();
+		async_msg("ERR: HID_RESET_OWNER");
+		configASSERT(request_pending);
+		return true;
+	}
 	usbhid_reset->hub_io_pending = false;
 	usbhid_reset->attempts--;
 	if (ret == -ENODEV) {
@@ -2675,6 +2691,8 @@ static void usbhid_lifecycle_log_transport_faults(void)
 		async_msg("ERR: HID_RX_STALL");
 	if (faults & USBHID_FAULT_RX_XFER)
 		async_msg("ERR: HID_RX_XFER_FAIL");
+	if (faults & USBHID_FAULT_IO_ACCOUNTING)
+		async_msg("ERR: HID_IO_ACCOUNTING");
 }
 
 static void usbhid_disconnect(struct usb_interface *intf);
@@ -2736,11 +2754,20 @@ static int usbhid_lifecycle_process_ready_probes(void)
 
 void usbhid_lifecycle_task(void *pvParameters)
 {
+	bool owner_available;
+
 	(void)pvParameters;
 
 	/* A pre-registration kick is safe: the first loop scans all durable state. */
 	hid_transport_lock();
-	configASSERT(!usbhid_lifecycle_task_handle);
+	owner_available = !usbhid_lifecycle_task_handle;
+	if (!owner_available) {
+		hid_transport_unlock();
+		async_msg("ERR: HID_LIFE_OWNER");
+		configASSERT(owner_available);
+		vTaskDelete(NULL);
+		return;
+	}
 	usbhid_lifecycle_task_handle = xTaskGetCurrentTaskHandle();
 	hid_transport_unlock();
 
@@ -3793,9 +3820,21 @@ void usbhid_io_put(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
 	TaskHandle_t waiter = NULL;
+	bool io_owned;
 
 	hid_transport_lock();
-	configASSERT(usbhid->io_pending);
+	io_owned = usbhid->io_pending != 0;
+	if (!io_owned) {
+		hid_transport_unlock();
+		/*
+		 * HID/device unmount reaches this release from TinyUSB's host
+		 * callback owner. Defer its diagnostic to lifecycle rather than
+		 * invoking the CDC logger from that callback boundary.
+		 */
+		usbhid_transport_fault(USBHID_FAULT_IO_ACCOUNTING);
+		configASSERT(io_owned);
+		return;
+	}
 	usbhid->io_pending--;
 	// wake_up(&usbhid->wait);
 	// The port's aggregate io_pending replaces upstream CTRL/OUT running bits;
@@ -3922,6 +3961,7 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 				    int status)
 {
 	struct usbhid_control_input *input = req->context;
+	bool context_valid;
 	u16 len;
 	int ret;
 
@@ -3934,12 +3974,22 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	}
 
 	if (req->reqtype != HID_REQ_GET_REPORT) {
-		configASSERT(!input);
+		context_valid = input == NULL;
+		if (!context_valid) {
+			async_msg("ERR: HID_REQ_CONTEXT");
+			configASSERT(context_valid);
+		}
 		usbhid_io_put(req->hid);
 		return;
 	}
 
-	configASSERT(input);
+	context_valid = input != NULL;
+	if (!context_valid) {
+		async_msg("ERR: HID_REQ_CONTEXT");
+		configASSERT(context_valid);
+		usbhid_io_put(req->hid);
+		return;
+	}
 	len = min_t(u16, req->actual_len, input->bufsize);
 	/*
 	 * TinyUSB adapter: the completion-owned input buffer is also the direct EP0
@@ -3979,6 +4029,7 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 	struct usbhid_device *usbhid = hid->driver_data;
 	struct usbhid_control_input *input = NULL;
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	bool input_lock_owned;
 	bool process = false;
 
 	hid_transport_lock();
@@ -3992,7 +4043,13 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 	if (!input)
 		return false;
 
-	configASSERT(sema_owned_by_current(&hid->driver_input_lock));
+	input_lock_owned = sema_owned_by_current(&hid->driver_input_lock);
+	if (!input_lock_owned) {
+		async_msg("ERR: HID_INPUT_OWNER");
+		configASSERT(input_lock_owned);
+		usbhid_control_report_done(hid, input, -EIO);
+		return true;
+	}
 	usbhid_control_report_done(
 		hid, input,
 		process ? hid_safe_input_report_locked(
@@ -4132,10 +4189,18 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+	bool wait_owner_available;
+	bool wait_owner_matches;
 
 	/* Linked probe/teardown callers serialize this exact-interface wait head. */
 	hid_transport_lock();
-	configASSERT(!usbhid->wait.task || usbhid->wait.task == task);
+	wait_owner_available = !usbhid->wait.task || usbhid->wait.task == task;
+	if (!wait_owner_available) {
+		hid_transport_unlock();
+		async_msg("ERR: HID_WAIT_BUSY");
+		configASSERT(wait_owner_available);
+		return -EBUSY;
+	}
 	usbhid->wait.task = task;
 	hid_transport_unlock();
 
@@ -4146,7 +4211,13 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 	}
 
 	hid_transport_lock();
-	configASSERT(usbhid->wait.task == task);
+	wait_owner_matches = usbhid->wait.task == task;
+	if (!wait_owner_matches) {
+		hid_transport_unlock();
+		async_msg("ERR: HID_WAIT_OWNER");
+		configASSERT(wait_owner_matches);
+		return -EIO;
+	}
 	usbhid->wait.task = NULL;
 	hid_transport_unlock();
 	return usbhid_report_is_stopping(hid) ? -ENODEV : 0;

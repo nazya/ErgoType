@@ -101,6 +101,30 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   per-interface mutex for start/stop/open/close and a short FIFO spinlock for
   true atomic URB completion; the firmware will instead move callback state to
   its existing owner-task queues before partitioning this common mutex.
+- Linux workqueue emulation now has its own priority-inheritance mutex rather
+  than sharing either that transport domain or FreeRTOS's scheduler-wide
+  critical section. Its FIFO and pending/running flags are durable conditions;
+  direct task notifications wake the sole worker, while stack-owned waiters
+  make `flush_work()`, `cancel_work_sync()`, and `destroy_workqueue()` block on
+  exact state transitions instead of polling every tick. No mutex scope crosses
+  a work callback, timer API, heap operation, or wait. All live entries are from
+  KeyD, HID timer/lifecycle, or workqueue tasks; TinyUSB callbacks do not invoke
+  this API. Firmware evaluates FreeRTOS calls and lock predicates outside
+  `configASSERT()`, then diagnoses task-side failures and asserts only the
+  captured boolean. This keeps the operations present in the `NDEBUG` build.
+  That assertion rule also covers `hid_async.c`, `usbhid.c`,
+  `usbhid_report.c`, and the transport mutex; imported Linux/FreeRTOS sources
+  remain untouched.
+- Linux's timer wheel must accept IRQ/softirq callers, but every active timer
+  parent in this firmware is now task-owned. TinyUSB unmount no longer calls
+  even non-waiting `timer_delete()`; it publishes stopping, and the report task
+  immediately retires pre-wire clear-halt state or claims I/O-retry cancellation
+  under an `io_pending` interface lease. The timer bridge therefore uses its
+  own priority-inheritance mutex, a direct worker notification, and stack-owned
+  condition waiters for `timer_delete_sync()`. Timer callbacks run outside the
+  mutex, and no transport/workqueue lock is held across the synchronous wait.
+  This removes the four remaining glue critical regions and their one-tick
+  running-callback poll without changing Linux-derived timer call sites.
 - Linux wait queues pair a durable condition with a wake edge. The lifecycle
   glue now follows that split directly: flags/cache slots own the condition and
   a dedicated indexed task notification wakes their sole task owner. This

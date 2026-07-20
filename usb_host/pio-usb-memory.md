@@ -38,8 +38,8 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=492388`, `data=708`, and
-`bss=243312`. `__bss_end__` is `0x2003ff28`, leaving 216 B before scratch
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=495748`, `data=708`, and
+`bss=243320`. `__bss_end__` is `0x2003ff30`, leaving 208 B before scratch
 X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
 the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
@@ -306,6 +306,14 @@ dedicated recovery slot remains unavailable to normal traffic; moving scratch
 ownership removes 72 B of persistent heap. Replacing the transport's global
 critical regions adds one separate persistent 96-byte mutex block; it is
 startup-only and does not churn during attach/report traffic.
+The firmware workqueue uses the same memory-neutral exchange in its own domain:
+its former 96-byte one-entry wake queue becomes a 96-byte mutex block, while a
+task handle and stack-waiter head add 8 B of `.bss`. Direct notifications wake
+the worker, and synchronous flush/cancel/destroy waiters add only caller-stack
+state rather than persistent heap objects.
+The timer bridge likewise exchanges its 96-byte wake queue for one 96-byte
+mutex. Its task handle and stack-waiter head add 8 B of `.bss`; synchronous
+timer deletion keeps waiter state on the caller stack and adds no heap churn.
 
 The report task has no interrupt-input queue. Its four fixed 32-byte completion
 slots occupy 128 B in scratch X and retain the exact `hid`, `inbuf`, device

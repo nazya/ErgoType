@@ -48,8 +48,10 @@ static void stdio_tusb_cdc_kick_cb(void *);
 
 void _async_msg(const char *s)
 {
-	if (async_msg_pending)
+	if (async_msg_pending) {
+		ui_notify_warn();
 		return;
+	}
 
 	snprintf(async_msgbuf, sizeof(async_msgbuf) - 1u, "%s", s);
 	async_msg_len = strlen(async_msgbuf);

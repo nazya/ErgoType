@@ -322,6 +322,23 @@ The workqueue, timer, and HID lifecycle split still costs three tasks. The
 first two use 384-word stacks and lifecycle uses 512 words; together with task
 overhead they consumed about 6.6 KiB in the measured build. Consolidating them
 is a later architecture change, not part of this bring-up fix.
+The workqueue task now owns a notification wake rather than a one-entry queue;
+its producers and synchronous cancellation paths share a dedicated
+priority-inheritance mutex and wait on durable conditions without masking
+interrupts or polling. The timer task is a parallel task-only synchronization
+domain with its own mutex and notification wake. TinyUSB unmount publishes only
+stopping; the report task claims retry cancellation under an `io_pending` lease
+and waits for the running timer callback outside every transport lock.
+Current workqueue entry owners are the KeyD, HID timer/lifecycle, and
+workqueue tasks. TinyUSB callbacks only publish disconnect/report state to
+those owners. Workqueue invariant checks execute their FreeRTOS operation
+before testing a captured result; `configASSERT()` never contains the
+operation itself. Fixed-size `async_msg()` diagnostics are used because the
+normal logger's roughly 2 KiB local frame does not fit the 384-word workqueue
+and timer stacks.
+The transport-wide invariant audit also leaves no function call or predicate
+inside an active `configASSERT()`. A collision in the one-slot async diagnostic
+path increments the UI warning counter before dropping the newer text.
 
 The callback-safe lifecycle transport pool now has a 2,756 B payload (plus
 allocator overhead) in the FreeRTOS heap at startup with the current
@@ -356,6 +373,11 @@ transport allocations therefore use 3,752 B. The remaining 232-byte control
 queue is additional. All are startup allocations and do not churn during
 attach/report traffic. Lifecycle's indexed notification removes its former
 96-byte queue block. Exact endpoint callbacks add 1,280 B of TinyUSB state.
+The workqueue similarly replaces its former 96-byte one-entry wake queue with
+one 96-byte mutex block, so runtime heap use is unchanged; its task handle and
+stack-waiter head add 8 B of `.bss`. The timer makes the same 96-byte
+queue-to-mutex exchange; its task handle and stack-waiter head add another 8 B
+of `.bss` without changing persistent heap use.
 Direct IN/OUT leave one-byte class placeholders. Each attached HID interface
 owns one task-allocated receive buffer of
 `max(64, round_up(input_size, wMaxPacketSize))` bytes. A normal 64-byte backing
@@ -364,8 +386,8 @@ can cost up to a 16,456-byte block. There is no allocation or free per report.
 Host transfer storage now occupies 708 B in scratch X and ends 1,340 B below
 the core-1 stack. Removing transitional descriptor ownership shrinks
 `struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
-248 B per attached HID. The linked image reports 243,312 B of `.bss` and keeps
-216 B of main-SRAM link headroom.
+248 B per attached HID. The linked image reports 243,320 B of `.bss` and keeps
+208 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.
@@ -400,6 +422,9 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |
 | `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
 | `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |
+| `ERR: HID_WQ_NOT_READY` / `HID_WQ_LOCK_FAIL` / `HID_WQ_UNLOCK_FAIL` | A task-side workqueue mutex invariant failed. The checked FreeRTOS call was evaluated before the following assert. |
+| `ERR: HID_WQ_WAITER_BAD` / `HID_WQ_WAITER_LOST` / `HID_WQ_SELF_WAIT` | A synchronous workqueue waiter invariant failed outside TinyUSB callback context. |
+| `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
