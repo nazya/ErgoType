@@ -9,8 +9,6 @@
  * blocking USB request machinery those call sites would normally use.
  */
 
-#define HID_ASYNC_REPORT_MAX 257u
-#define HID_ASYNC_DATA_MAX USB_HOST_SYNC_MSG_MAX
 /* Bounded queued-work budget; B4 stores it in pool slots, not a FreeRTOS queue. */
 #define HID_ASYNC_REQUEST_QUEUE_LEN 4u
 
@@ -32,6 +30,7 @@ struct hid_async_request {
 	enum hid_async_request_kind kind;
 	struct hid_device *hid;
 	struct hid_report *report;
+	u8 *data;
 	enum hid_class_request reqtype;
 	u8 dev_addr;
 	u8 instance;
@@ -50,7 +49,8 @@ struct hid_async_request {
 	u32 generation;
 	u32 serial;
 	u8 xfer_result;
-	u8 data[HID_ASYNC_DATA_MAX];
+	/* SET_REPORT snapshots are slot-owned; all other buffers are borrowed. */
+	bool data_owned;
 	bool complete_on_cancel;
 	hid_async_complete_t complete;
 	void *context;
@@ -60,6 +60,7 @@ int hid_async_init(void);
 void hid_async_task(void *pvParameters);
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
+			   u8 *data, u16 data_size,
 			   hid_async_complete_t complete, void *context);
 int hid_async_control_report_hold(const struct hid_async_request *req);
 void hid_async_control_report_release(struct hid_device *hid, u32 serial);
@@ -77,13 +78,13 @@ int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
 				    u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
-				    const void *data, u16 size,
+				    void *data, u16 size,
 				    int timeout,
 				    hid_async_complete_t complete,
 				    void *context);
 int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 				      u32 generation,
-				      u8 ep_addr, const void *data,
+				      u8 ep_addr, void *data,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context);

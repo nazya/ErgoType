@@ -172,37 +172,22 @@ static u32 usbhid_report_next_serial_locked(void)
 	return usbhid_report_serial;
 }
 
-/*
- * Traverse the supplied list of reports and find the longest
- */
-static void hid_find_max_report(struct hid_device *hid, unsigned int type,
-		unsigned int *max)
-{
-	struct hid_report *report;
-	unsigned int size;
-
-	list_for_each_entry(report, &hid->report_enum[type].report_list, list) {
-		size = ((report->size - 1) >> 3) + 1 + hid->report_enum[type].numbered;
-		if (*max < size)
-			*max = size;
-	}
-}
-
 static int usbhid_report_prepare(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
-	unsigned int insize = 0;
+	unsigned int insize = usbhid->report_bufsize;
 	int slot = -1;
 
 	if (!usbhid->usb_altsetting.has_interrupt_in)
 		return -ENODEV;
 
-	/* Match upstream usbhid's interrupt URB length, including report ID. */
-	hid_find_max_report(hid, HID_INPUT_REPORT, &insize);
+	/* usbhid_start() computed upstream's interrupt URB length, including ID. */
 	if (!insize)
 		return -ENODEV;
 	// if (insize > HID_MAX_BUFFER_SIZE)
 	// 	insize = HID_MAX_BUFFER_SIZE;
+	// The exact upstream cap is applied in usbhid_start() before this transport
+	// adapter reserves its fixed PIO/TinyUSB receive slot.
 	// PIO/TinyUSB owns fixed 64-byte RX slots, so reject instead of allocating
 	// and clamping to Linux's 16 KiB maximum.
 	if (insize > USBHID_INTERRUPT_REPORT_MAX)

@@ -41,6 +41,9 @@
 #define USBHID_REPORT_DESCRIPTOR_SLOTS HID_HOST_MAX_DEVICES
 #define USBHID_REPORT_DESCRIPTOR_MAX CFG_TUH_ENUMERATION_BUFSIZE
 
+_Static_assert(HID_MAX_BUFFER_SIZE + 8u <= UINT16_MAX,
+	       "HID control buffer size must fit TinyUSB's 16-bit length");
+
 static const struct hid_ll_driver usb_hid_driver;
 const struct device_type usb_device_type = {
 	.name = "usb_device",
@@ -61,14 +64,12 @@ struct usbhid_lifecycle_event {
 
 struct usbhid_sync_request {
 	TaskHandle_t task;
-	u8 *buf;
-	size_t bufsize;
 	size_t actual_len;
 	int status;
 	volatile bool done;
 };
 
-/* Padded GET buffer owned from .request enqueue through parser completion. */
+/* EP0-rounded GET buffer owned from .request enqueue through parser completion. */
 struct usbhid_control_input {
 	TaskHandle_t parser_owner;
 	/* Stable async slot identity held until parser completion. */
@@ -2112,18 +2113,49 @@ static void usbhid_set_leds(struct hid_device *hid)
 	}
 }
 
+/*
+ * Traverse the supplied list of reports and find the longest
+ */
+static void hid_find_max_report(struct hid_device *hid, unsigned int type,
+		unsigned int *max)
+{
+	struct hid_report *report;
+	unsigned int size;
+
+	list_for_each_entry(report, &hid->report_enum[type].report_list, list) {
+		size = ((report->size - 1) >> 3) + 1 + hid->report_enum[type].numbered;
+		if (*max < size)
+			*max = size;
+	}
+}
+
 static int usbhid_start(struct hid_device *hid)
 {
 	struct usb_interface *intf = to_usb_interface(hid->dev.parent);
 	struct usb_host_interface *interface = intf->cur_altsetting;
 	// struct usb_device *dev = interface_to_usbdev(intf);
-	// struct usbhid_device *usbhid = hid->driver_data;
-	// TinyUSB owns the endpoint objects; this reduced start path only needs the
-	// upstream interface descriptor view before arming the async transport.
+	// TinyUSB owns the endpoint objects; keep the upstream per-device buffer
+	// policy even though the port allocates exact request buffers on demand.
+	struct usbhid_device *usbhid = hid->driver_data;
+	unsigned int insize = 0;
 	int ret = 0;
 
 	if (usbhid_report_is_stopping(hid))
 		return -ENODEV;
+
+	usbhid->bufsize = HID_MIN_BUFFER_SIZE;
+	hid_find_max_report(hid, HID_INPUT_REPORT, &usbhid->bufsize);
+	hid_find_max_report(hid, HID_OUTPUT_REPORT, &usbhid->bufsize);
+	hid_find_max_report(hid, HID_FEATURE_REPORT, &usbhid->bufsize);
+
+	if (usbhid->bufsize > HID_MAX_BUFFER_SIZE)
+		usbhid->bufsize = HID_MAX_BUFFER_SIZE;
+
+	hid_find_max_report(hid, HID_INPUT_REPORT, &insize);
+
+	if (insize > HID_MAX_BUFFER_SIZE)
+		insize = HID_MAX_BUFFER_SIZE;
+	usbhid->report_bufsize = (u16)insize;
 
 	/*
 	 * Firmware allocates no Linux URBs here. TinyUSB interrupt IN starts here
@@ -2473,12 +2505,8 @@ static void usbhid_sync_complete(const struct hid_async_request *req, int status
 	struct usbhid_sync_request *sync = req->context;
 	TaskHandle_t waiter = sync->task;
 
-	if (status >= 0 && sync->buf) {
-		sync->actual_len = min_t(size_t, req->actual_len, sync->bufsize);
-		memcpy(sync->buf, req->data, sync->actual_len);
-	} else {
-		sync->actual_len = req->actual_len;
-	}
+	/* The blocked caller keeps the direct TinyUSB buffer alive through retire. */
+	sync->actual_len = req->actual_len;
 	sync->status = status;
 	taskENTER_CRITICAL();
 	sync->done = true;
@@ -2620,10 +2648,10 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 
 	configASSERT(input);
 	len = min_t(u16, req->actual_len, input->bufsize);
-	memcpy(input->data, req->data, len);
 	/*
-	 * TinyUSB adapter: upstream urbctrl storage remains owned through hid_ctrl().
-	 * Pin this executor slot before publishing its payload to the parser lane.
+	 * TinyUSB adapter: the completion-owned input buffer is also the direct EP0
+	 * destination and remains owned through hid_ctrl(). Pin this executor slot
+	 * before publishing its payload to the parser lane.
 	 */
 	ret = hid_async_control_report_hold(req);
 	if (ret) {
@@ -2666,15 +2694,21 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 static int usbhid_queue_report(struct hid_device *hid,
 			       struct hid_report *report,
 			       enum hid_class_request reqtype,
+			       u8 *data, u16 data_size,
 			       hid_async_complete_t complete, void *context)
 {
-	return hid_async_queue_report(hid, report, reqtype, complete, context);
+	return hid_async_queue_report(hid, report, reqtype, data, data_size,
+				      complete, context);
 }
 
 static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype)
 {
 	struct usbhid_control_input *input = NULL;
+	struct usbhid_device *usbhid;
+	struct usb_device *dev;
+	u32 maxpacket;
+	u32 transfer_size;
 	u32 bufsize;
 	int ret;
 
@@ -2682,14 +2716,24 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 		return;
 	if (!usbhid_io_get(hid))
 		return;
+	usbhid = hid->driver_data;
 	if (reqtype == HID_REQ_GET_REPORT) {
 		bufsize = hid_report_len(report);
-		if (bufsize > HID_ASYNC_REPORT_MAX) {
-			async_msg("ERR: HID_REPORT_TOO_LONG");
-			usbhid_io_put(hid);
-			return;
-		}
+		// len += (len == 0); /* Don't allow 0-length reports */
+		// len = round_up(len, maxpacket);
+		// if (len > usbhid->bufsize)
+		// 	len = usbhid->bufsize;
+		// The port allocates each GET buffer to its exact rounded transfer instead
+		// of a persistent ctrlbuf; retain Linux's per-device usbhid->bufsize cap.
+		dev = hid_to_usb_dev(hid);
+		maxpacket = dev->descriptor.bMaxPacketSize0;
+		if (!maxpacket)
+			maxpacket = 8;
+		transfer_size = bufsize + !bufsize;
+		transfer_size = DIV_ROUND_UP(transfer_size, maxpacket) * maxpacket;
+		transfer_size = min_t(u32, transfer_size, usbhid->bufsize);
 		bufsize += 7 + (report->id == 0);
+		bufsize = max(bufsize, transfer_size);
 		input = kzalloc(sizeof(*input) + bufsize, GFP_KERNEL);
 		if (!input) {
 			async_msg("ERR: HID_REPORT_NOMEM");
@@ -2716,6 +2760,8 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	 * hid_hw_wait() cannot observe a false-idle transport/parser handoff.
 	 */
 	ret = usbhid_queue_report(hid, report, reqtype,
+				  input ? input->data : NULL,
+				  input ? input->bufsize : 0,
 				  usbhid_request_complete, input);
 	if (ret) {
 		async_msg("ERR: HID_ASYNC_REQ_FAIL");
@@ -2851,8 +2897,6 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	    !!usb_pipein(pipe) != !!(requesttype & USB_DIR_IN) ||
 	    (size && !data))
 		return -EINVAL;
-	if (size > HID_ASYNC_DATA_MAX)
-		return -EMSGSIZE;
 	if (!hid_async_sync_call_allowed())
 		return -EAGAIN;
 	sync.task = xTaskGetCurrentTaskHandle();
@@ -2865,14 +2909,10 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 						 &hid_owner);
 	if (ret)
 		goto out_physical;
-	if (requesttype & USB_DIR_IN) {
-		sync.buf = data;
-		sync.bufsize = size;
-	}
-
 	/*
-	 * usb_control_msg() blocks in Linux USB core. The fixed-slot executor owns
-	 * EP0 here; completion only wakes this task and unplug returns -ENODEV.
+	 * usb_control_msg() blocks in Linux USB core. The metadata-slot executor
+	 * owns EP0 here while the sleeping caller keeps its direct buffer alive;
+	 * completion only wakes this task and unplug returns -ENODEV.
 	 */
 	ret = hid_async_queue_usb_control_msg(hid_owner, dev_addr, generation,
 					      request, requesttype, value,
@@ -2900,7 +2940,7 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 	int ret;
 
 	// return usb_bulk_msg(usb_dev, pipe, data, len, actual_length, timeout);
-	// Linux bulk/URB core is not ported. This fixed-slot bridge implements the
+	// Linux bulk/URB core is not ported. This metadata-slot bridge implements the
 	// audited HID interrupt-OUT subset while preserving the synchronous result.
 	if (actual_length)
 		*actual_length = 0;
@@ -2913,7 +2953,7 @@ int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,
 		return -EINVAL;
 	if (usb_pipein(pipe))
 		return -ENOSYS;
-	if (len > (int)HID_ASYNC_DATA_MAX)
+	if ((unsigned int)len > UINT16_MAX)
 		return -EMSGSIZE;
 	ep_addr = (u8)usb_pipeendpoint(pipe);
 	if (!ep_addr)

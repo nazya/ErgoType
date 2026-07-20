@@ -38,8 +38,6 @@
 #define USB_CTRL_GET_TIMEOUT 5000
 #define USB_CTRL_SET_TIMEOUT 5000
 #define USB_MAX_SYNCHRONOUS_TIMEOUT 60000
-/* Fixed inline payload owned by the firmware's synchronous USB bridge. */
-#define USB_HOST_SYNC_MSG_MAX 257u
 #define USB_HOST_ENDPOINT_MAX 4
 #define USB_DT_ENDPOINT TUSB_DESC_ENDPOINT
 #define USB_ENDPOINT_XFER_INT TUSB_XFER_INTERRUPT
@@ -318,34 +316,30 @@ extern int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 extern int usb_interrupt_msg(struct usb_device *usb_dev, unsigned int pipe,
 	void *data, int len, int *actual_length, int timeout);
 
+/*
+ * Upstream implements these wrappers in drivers/usb/core/message.c. The
+ * compact port keeps the same bodies inline because no USB core library owns
+ * them here.
+ */
 static inline int usb_control_msg_send(struct usb_device *dev, u8 endpoint,
 				       u8 request, u8 requesttype,
 				       u16 value, u16 index,
 				       const void *driver_data,
 				       u16 size, int timeout, gfp_t memflags)
 {
+	unsigned int pipe = usb_sndctrlpipe(dev, endpoint);
 	int ret;
+	u8 *data = NULL;
 
-	/* Linux USB core accepts larger DMA buffers; this port has fixed slots. */
-	if (size > USB_HOST_SYNC_MSG_MAX)
-		return -EMSGSIZE;
+	if (size) {
+		data = kmemdup(driver_data, size, memflags);
+		if (!data)
+			return -ENOMEM;
+	}
 
-	// u8 *data = NULL;
-	//
-	// if (size) {
-	// 	data = kmemdup(driver_data, size, memflags);
-	// 	if (!data)
-	// 		return -ENOMEM;
-	// }
-	// The fixed async slot copies OUT data before enqueue returns, so no
-	// temporary DMA allocation is needed at this firmware boundary.
-	u8 *data = (u8 *)driver_data;
-	(void)memflags;
-
-	ret = usb_control_msg(dev, usb_sndctrlpipe(dev, endpoint), request,
-			      requesttype, value, index, data, size, timeout);
-	// kfree(data);
-	// The slot owns its copy; driver_data remains caller-owned.
+	ret = usb_control_msg(dev, pipe, request, requesttype, value, index,
+			      data, size, timeout);
+	kfree(data);
 	if (ret < 0)
 		return ret;
 
@@ -357,21 +351,19 @@ static inline int usb_control_msg_recv(struct usb_device *dev, u8 endpoint,
 				       u16 value, u16 index, void *driver_data,
 				       u16 size, int timeout, gfp_t memflags)
 {
-	u8 *data;
+	unsigned int pipe = usb_rcvctrlpipe(dev, endpoint);
 	int ret;
+	u8 *data;
 
 	if (!size || !driver_data)
 		return -EINVAL;
-	/* Reject outside the fixed bridge before the upstream temporary copy. */
-	if (size > USB_HOST_SYNC_MSG_MAX)
-		return -EMSGSIZE;
 
 	data = kmalloc(size, memflags);
 	if (!data)
 		return -ENOMEM;
 
-	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, endpoint), request,
-			      requesttype, value, index, data, size, timeout);
+	ret = usb_control_msg(dev, pipe, request, requesttype, value, index,
+			      data, size, timeout);
 	if (ret < 0)
 		goto exit;
 

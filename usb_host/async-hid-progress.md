@@ -26,7 +26,7 @@
   transfer carries the request serial in `user_data`, and completion preserves
   TinyUSB's real result and actual data length. Successful short transfers are
   no longer confused with failures; STALL and timeout remain distinguishable.
-  Task-context `usb_control_msg()` now uses a fixed device-level async lane and
+  Task-context `usb_control_msg()` now uses a fixed metadata-slot scheduler and
   a physical-device epoch lease. Interface requests also carry their live HID
   owner, so interface stop cancels a blocked caller immediately instead of
   leaving it to a physical-device timeout. SET_IDLE and upstream-shaped raw
@@ -35,8 +35,11 @@
   now share one same-device EP0 FIFO; a completed GET_REPORT retains its parser
   slot without continuing to occupy the physical wire queue.
 - Normal GET_REPORT receive lengths follow upstream `hid_submit_ctrl()`: they
-  are rounded to EP0 max-packet size and capped by the fixed transport buffer,
-  while raw GET_REPORT keeps its caller-supplied length. Raw report-ID zero
+  are rounded to EP0 max-packet size and capped by the per-device
+  `usbhid->bufsize` computed from all parsed INPUT, OUTPUT, and FEATURE reports
+  (itself capped at Linux's 16 KiB HID limit). The completion-owned buffer is
+  sized for that transfer and passed directly to the parser; raw GET_REPORT
+  keeps its caller-supplied length. Raw report-ID zero
   offset/count behavior is again the upstream `usbhid_get_raw_report()` and
   `usbhid_set_raw_report()` code rather than a parallel request builder. Only
   the actual bytes reported by TinyUSB are handed to the Linux HID parser.
@@ -52,6 +55,14 @@
   together with `.request()` output on that endpoint, not behind unrelated
   devices in one global FIFO. As upstream does, the first interrupt OUT
   endpoint is selected and a successful short transfer remains successful.
+- Async SET_REPORT retains one exact `hid_alloc_report_buf()` snapshot per
+  queued request, matching upstream's enqueue-time value semantics. Generic
+  synchronous control and interrupt-OUT requests instead borrow the blocked
+  caller's buffer through physical completion or fenced cancellation. Removing
+  the nine 257-byte inline payloads shrinks `hid_async_request` from 312 B to
+  60 B and its slot from 340 B to 88 B; one 257-byte shared pre-probe scratch
+  remains in the startup allocation. Generic control uses USB's native 16-bit
+  length, while HID `.request()` remains bounded by `HID_MAX_BUFFER_SIZE`.
 - `usbhid_start()` now clears the NumLock output field on boot keyboards and
   submits the whole output report through that same `.request()` route,
   matching upstream startup behavior.
@@ -100,10 +111,19 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: uncommitted buffer-ownership checkpoint, exact UF2 SHA256
+  `290ed22778c8905c49d2006bcb719ada1c3e8147cca4e4c41c8744025bde14e8`,
+  builds with `text=477444`, `data=916`, and `bss=243308`. It has not yet been
+  tested on hardware; do not commit it before that pass.
+- 2026-07-20: physical-endpoint scheduling / generic clear-halt checkpoint
+  `hid: serialize requests by physical USB lane`, exact UF2 SHA256
+  `8c21c80630bcc857e381fff4d466eb9defc392f7c9e67a58e8743401986ff235`,
+  was reported working on hardware. The buffer-ownership checkpoint above is
+  the next uncommitted hardware candidate.
 - 2026-07-20: upstream raw/output helper checkpoint `hid: route synchronous usbhid helpers through generic bridge`, exact UF2
   SHA256 `8e8402604678195e07980c211f541d87157a64a57d5e16f323d9d749c2560e8c`,
-  was reported working on hardware. The following physical-endpoint lane and
-  generic clear-halt consolidation is a new, not-yet-tested checkpoint.
+  was reported working on hardware and is the baseline immediately before the
+  now-tested physical-endpoint lane / generic clear-halt consolidation.
 - 2026-07-20: generic USB-message checkpoint `hid: add generic asynchronous USB message bridge`, exact UF2 SHA256
   `739e0d119cd2e5dd7e64051b75181dca5d7c90c411c7cc924c64e3ceac791e6d`,
   was reported working on hardware and is the baseline immediately before the
@@ -155,8 +175,9 @@
   firmware queue still rejects overload instead of attempting Linux's much
   larger control/output FIFOs.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
-  transfers larger than the fixed bridge buffer, broad Linux subsystem state,
-  or unaudited callback behavior stay out of `CMakeLists.txt`.
+  HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
+  broad Linux subsystem state, or unaudited callback behavior stay out of
+  `CMakeLists.txt`.
 - `usb_host/deferred-hid-drivers.md` records the current deferred boundary and
   examples.
 
@@ -193,4 +214,5 @@
   bad-packet injector. The deliberate remaining deviation is endpoint parking
   after retry exhaustion instead of Linux `usb_queue_reset_device()`.
 - Extend the serialized transport explicitly before importing drivers that need
-  URBs, interrupt-IN synchronous messages, or larger request/response protocols.
+  URBs, interrupt-IN synchronous messages, or request/response protocols beyond
+  the native HID/USB length contracts.

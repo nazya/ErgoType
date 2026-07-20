@@ -33,6 +33,8 @@
 #define HID_ASYNC_SLOT_COUNT \
 	(HID_ASYNC_REQUEST_QUEUE_LEN + 1u + CFG_TUH_HID)
 #define HID_ASYNC_NOTIFY_INDEX 1u
+/* USB string descriptors carry an eight-bit bLength; retain the old margin. */
+#define HID_ASYNC_PREPROBE_BUFFER_SIZE 257u
 
 _Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES > HID_ASYNC_NOTIFY_INDEX,
 	       "HID async executor needs notification index 1");
@@ -92,12 +94,13 @@ struct hid_async_slot {
 };
 
 static struct hid_async_slot *hid_async_slots;
+static u8 *hid_async_preprobe_buffer;
 static SemaphoreHandle_t hid_async_epoch_mutex;
 static TaskHandle_t hid_async_task_handle;
 static TaskHandle_t hid_async_host_task_handle;
 static u8 hid_async_preprobe_head;
 static u8 hid_async_preprobe_tail;
-/* Bounded device-level lanes avoid adding full wire buffers to every cache. */
+/* Bounded device-level lanes avoid per-device transport queues. */
 static u8 hid_async_device_ctrl_head;
 static u8 hid_async_device_ctrl_tail;
 static u8 hid_async_device_out_head;
@@ -397,9 +400,10 @@ static bool hid_async_slot_is_head_locked(struct hid_async_slot *slot)
 	return true;
 }
 
-static void hid_async_slot_release_locked(struct hid_async_slot *slot)
+static u8 *hid_async_slot_release_locked(struct hid_async_slot *slot)
 {
 	struct hid_async_slot *previous_slot = NULL;
+	u8 *owned_data = slot->req.data_owned ? slot->req.data : NULL;
 	u8 *head;
 	u8 *tail;
 	u8 previous = 0;
@@ -423,25 +427,32 @@ static void hid_async_slot_release_locked(struct hid_async_slot *slot)
 		*tail = previous;
 	configASSERT(!!*head == !!*tail);
 	memset(slot, 0, sizeof(*slot));
+	return owned_data;
 }
 
 int hid_async_init(void)
 {
+	size_t slots_size = sizeof(*hid_async_slots) * HID_ASYNC_SLOT_COUNT;
+	size_t allocation_size = slots_size + HID_ASYNC_PREPROBE_BUFFER_SIZE;
+
 	hid_async_epoch_mutex = xSemaphoreCreateMutex();
 	if (!hid_async_epoch_mutex)
 		return -ENOMEM;
 
 	/*
 	 * Linux USB core orders transfers by physical endpoint. One shared fixed
-	 * pool owns the wire buffers; its control and OUT storage lists use
-	 * per-device/per-endpoint head scans without allocating at runtime.
+	 * pool owns request metadata and the globally serialized pre-probe EP0
+	 * scratch. Its control and OUT lists use per-device/per-endpoint head scans;
+	 * queued SET_REPORT payloads retain exact upstream-style snapshots.
 	 */
-	hid_async_slots = pvPortMalloc(sizeof(*hid_async_slots) *
-					 HID_ASYNC_SLOT_COUNT);
-	if (!hid_async_slots)
+	hid_async_slots = pvPortMalloc(allocation_size);
+	if (!hid_async_slots) {
+		vSemaphoreDelete(hid_async_epoch_mutex);
+		hid_async_epoch_mutex = NULL;
 		return -ENOMEM;
-	memset(hid_async_slots, 0,
-	       sizeof(*hid_async_slots) * HID_ASYNC_SLOT_COUNT);
+	}
+	memset(hid_async_slots, 0, allocation_size);
+	hid_async_preprobe_buffer = (u8 *)hid_async_slots + slots_size;
 	hid_async_schedule_cursor = HID_ASYNC_SLOT_COUNT - 1u;
 
 	return 0;
@@ -560,6 +571,7 @@ static void hid_async_complete_preprobe_current(
 
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
+			   u8 *data, u16 data_size,
 			   hid_async_complete_t complete, void *context)
 {
 	struct usb_device *dev;
@@ -579,8 +591,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 		return -ENOSYS;
 
 	len = hid_report_len(report);
-	if (len > HID_ASYNC_REPORT_MAX)
-		return -EIO;
 	dev = hid_to_usb_dev(hid);
 	usbhid = hid->driver_data;
 	if (reqtype == HID_REQ_GET_REPORT) {
@@ -590,7 +600,9 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			maxpacket = 8;
 		len += !len;
 		len = DIV_ROUND_UP(len, maxpacket) * maxpacket;
-		len = min_t(u32, len, HID_ASYNC_REPORT_MAX);
+		len = min_t(u32, len, usbhid->bufsize);
+		if (len > data_size || (len && !data))
+			return -EMSGSIZE;
 	}
 
 	memset(&req, 0, sizeof(req));
@@ -603,6 +615,7 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	req.report_id = report->id;
 	req.report_type = hid_async_tinyusb_report_type(report->type);
 	req.len = (u16)len;
+	req.data = data;
 	req.complete = complete;
 	req.context = context;
 
@@ -612,6 +625,17 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			usbhid->usb_altsetting.interrupt_out_endpoint;
 
 	if (reqtype == HID_REQ_SET_REPORT) {
+		/*
+		 * usbhid->ctrl/out[].raw_report = hid_alloc_report_buf(report,
+		 *                                                    GFP_ATOMIC);
+		 * hid_output_report(report, usbhid->ctrl/out[].raw_report);
+		 * TinyUSB has no Linux URB FIFO entry. Its durable slot owns the same
+		 * exact enqueue-time snapshot until completion or fenced cancellation.
+		 */
+		req.data = hid_alloc_report_buf(report, GFP_ATOMIC);
+		if (!req.data)
+			return -ENOMEM;
+		req.data_owned = true;
 		hid_output_report(report, req.data);
 		if (interrupt_out) {
 			/* hid_output_report() already produced the endpoint wire image. */
@@ -622,8 +646,11 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	}
 
 	ret = hid_async_queue_hid_request(&req);
-	if (ret)
+	if (ret) {
+		if (req.data_owned)
+			kfree(req.data);
 		return ret;
+	}
 
 	if (reqtype == HID_REQ_SET_REPORT)
 		async_msg(interrupt_out ? "DBG: HID_REPORT_OUT_Q" :
@@ -644,6 +671,7 @@ int hid_async_queue_device_descriptor(u8 dev_addr,
 	req.kind = HID_ASYNC_REQUEST_DEVICE_DESCRIPTOR;
 	req.dev_addr = dev_addr;
 	req.len = sizeof(tusb_desc_device_t);
+	req.data = hid_async_preprobe_buffer;
 	req.complete = complete;
 	req.context = context;
 
@@ -666,7 +694,8 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 	req.string_index = index;
 	req.string_langid = langid;
 	req.generation = generation;
-	req.len = HID_ASYNC_DATA_MAX;
+	req.len = HID_ASYNC_PREPROBE_BUFFER_SIZE;
+	req.data = hid_async_preprobe_buffer;
 	req.complete = complete;
 	req.context = context;
 
@@ -676,8 +705,9 @@ int hid_async_queue_string_descriptor(u8 dev_addr, u8 index, u16 langid,
 /*
  * Upstream Linux USB core owns control and per-endpoint queues while task
  * callers sleep. The firmware captures the address epoch before enqueue,
- * stores wire data in the fixed slot, and wakes the caller after task-context
- * completion; neither TinyUSB callbacks nor the executor itself may wait here.
+ * retains the caller-owned buffer pointer, and wakes the caller after
+ * task-context completion; neither TinyUSB callbacks nor the executor itself
+ * may wait here.
  * A matching HID owner is non-owning slot metadata. Synchronous callers hold
  * an io_pending lease; report recovery uses its report-lifecycle barrier.
  * Teardown publishes transport_stopping and drains every owned slot before
@@ -729,15 +759,13 @@ int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
 				    u32 generation,
 				    u8 request, u8 requesttype,
 				    u16 value, u16 index,
-				    const void *data, u16 size,
+				    void *data, u16 size,
 				    int timeout,
 				    hid_async_complete_t complete,
 				    void *context)
 {
 	struct hid_async_request req;
 
-	if (size > HID_ASYNC_DATA_MAX)
-		return -EMSGSIZE;
 	if (size && !data)
 		return -EINVAL;
 	if (timeout <= 0)
@@ -752,20 +780,18 @@ int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
 	req.control_value = value;
 	req.control_index = index;
 	req.len = size;
+	req.data = data;
 	req.timeout_ticks = hid_async_timeout_from_ms(timeout);
 	req.complete_on_cancel = true;
 	req.complete = complete;
 	req.context = context;
-	if (size && !(requesttype & TUSB_DIR_IN_MASK))
-		memcpy(req.data, data, size);
-
 	return hid_async_queue_usb_request(&req, generation,
 					   HID_ASYNC_LANE_DEVICE_CTRL);
 }
 
 int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 				      u32 generation,
-				      u8 ep_addr, const void *data,
+				      u8 ep_addr, void *data,
 				      u16 size, int timeout,
 				      hid_async_complete_t complete,
 				      void *context)
@@ -774,8 +800,6 @@ int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 
 	if (!ep_addr || (ep_addr & TUSB_DIR_IN_MASK))
 		return -EINVAL;
-	if (size > HID_ASYNC_DATA_MAX)
-		return -EMSGSIZE;
 	if (size && !data)
 		return -EINVAL;
 	if (timeout <= 0)
@@ -787,13 +811,11 @@ int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
 	req.dev_addr = dev_addr;
 	req.ep_addr = ep_addr;
 	req.len = size;
+	req.data = data;
 	req.timeout_ticks = hid_async_timeout_from_ms(timeout);
 	req.complete_on_cancel = true;
 	req.complete = complete;
 	req.context = context;
-	if (size)
-		memcpy(req.data, data, size);
-
 	return hid_async_queue_usb_request(&req, generation,
 					   HID_ASYNC_LANE_DEVICE_OUT);
 }
@@ -1124,6 +1146,7 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 				  bool canceled, bool submit_failure)
 {
 	struct hid_async_request *req = &slot->req;
+	u8 *owned_data = NULL;
 	bool preprobe = hid_async_request_is_preprobe(req);
 
 	taskENTER_CRITICAL();
@@ -1150,10 +1173,12 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 	taskENTER_CRITICAL();
 	if (slot->state == HID_ASYNC_SLOT_COMPLETING ||
 	    slot->state == HID_ASYNC_SLOT_RELEASE_PENDING)
-		hid_async_slot_release_locked(slot);
+		owned_data = hid_async_slot_release_locked(slot);
 	else
 		configASSERT(slot->state == HID_ASYNC_SLOT_WAIT_PARSE);
 	taskEXIT_CRITICAL();
+	/* heap_4 must not run while the scheduler-wide critical section is held. */
+	kfree(owned_data);
 }
 
 int hid_async_control_report_hold(const struct hid_async_request *req)
@@ -1259,6 +1284,7 @@ static bool hid_async_retire_slot(struct hid_async_slot *slot)
 
 static bool hid_async_process_released(void)
 {
+	u8 *owned_data = NULL;
 	bool processed = false;
 
 	taskENTER_CRITICAL();
@@ -1266,11 +1292,12 @@ static bool hid_async_process_released(void)
 		if (hid_async_slots[i].state !=
 				HID_ASYNC_SLOT_RELEASE_PENDING)
 			continue;
-		hid_async_slot_release_locked(&hid_async_slots[i]);
+		owned_data = hid_async_slot_release_locked(&hid_async_slots[i]);
 		processed = true;
 		break;
 	}
 	taskEXIT_CRITICAL();
+	kfree(owned_data);
 	return processed;
 }
 

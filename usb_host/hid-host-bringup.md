@@ -74,13 +74,15 @@ longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
 ll-driver contract, but TinyUSB callbacks never wait or run the Linux
 continuation.
 
-Interrupt OUT is also submitted directly from the host owner. The request owns
-the complete endpoint wire image until completion, and TinyUSB returns the real
-transfer result, actual length, and request serial. `.output_report()` uses the
-upstream synchronous helper over that generic bridge, whose fixed storage is
-ordered with `.request()` output per device endpoint instead of globally or by
-ll-driver hook. The old report-sent facade, which could only manufacture
-success for whichever request happened to be active, is not part of this path.
+Interrupt OUT is also submitted directly from the host owner. Each asynchronous
+`.request()` SET owns an exact enqueue-time report snapshot until completion,
+matching upstream's FIFO semantics. `.output_report()` uses the upstream
+synchronous helper over the generic bridge and keeps its caller buffer alive
+while blocked. Both sources are ordered per device endpoint instead of globally
+or by ll-driver hook, and TinyUSB preserves the real transfer result, actual
+length, and request serial. The old report-sent facade, which could only
+manufacture success for whichever request happened to be active, is not part
+of this path.
 
 Interrupt IN follows the same exact-completion boundary without entering the
 serialized control/OUT broker: every HID interface may have one independent IN
@@ -231,12 +233,22 @@ five control results (one active plus the four-entry async queue), and one
 close/reopen fence. Zero-copy interrupt events reduce queue payload by 440 B
 versus the former ten 80-byte events; the static control handoff is 44 B
 smaller too. Its coalesced reconcile table costs 32 B of static RAM. The async
-request object remains 304 B. Exact endpoint callbacks add 1,280 B of TinyUSB
-device state. Direct IN/OUT leave one-byte class placeholders, while four
+request is now 60 B and its slot is 88 B. Nine metadata slots plus the shared
+257-byte pre-probe scratch request 1,049 B from heap_4 and occupy a 1,064 B
+block, versus the former 3,072 B inline-buffer block: 2,008 B of persistent heap
+is recovered. Exact endpoint callbacks add 1,280 B of TinyUSB device state.
+Direct IN/OUT leave one-byte class placeholders, while four
 64-byte IN buffers and their lifecycle metadata live in scratch X. The host
 transfer storage now occupies 916 B there and ends 1,132 B below the core-1
-stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,304 B of
-`.bss` and keeps 176 B of main-SRAM link headroom in this checkpoint.
+stack. With the 216.75 KiB FreeRTOS heap, the linked image reports 243,308 B of
+`.bss` and keeps 172 B of main-SRAM link headroom in this checkpoint.
+
+Queued asynchronous SET reports now allocate their upstream-style snapshot at
+the exact report size and release it after completion or fenced cancellation.
+heap_4 coalesces adjacent frees, so repeated equal-size LED/haptic traffic must
+not produce a falling `free` value. Mixed report sizes interleaved with
+persistent device allocations can still leave temporary holes: `largest` may
+fall even after total `free` returns, which is fragmentation rather than a leak.
 
 ## Log Reference
 

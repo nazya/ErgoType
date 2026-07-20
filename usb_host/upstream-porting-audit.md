@@ -125,6 +125,14 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   in the TinyUSB host owner. FAILED/TIMEOUT uses upstream's bounded delayed
   retry. Generic URBs, synchronous interrupt-IN, unaudited hooks,
   hidraw/hiddev runtime, and PIDFF remain deferred.
+- `usbhid_start()` again computes the exact upstream per-device `bufsize` from
+  INPUT, OUTPUT, and FEATURE reports. GET_REPORT uses that rounded EP0 limit and
+  writes directly into completion-owned parser storage. Every asynchronous SET
+  keeps the upstream `hid_alloc_report_buf()` enqueue snapshot; synchronous USB
+  helpers borrow their blocked caller's buffer. Slot-owned snapshots are freed
+  only after completion or the physical abort/drain/fence path, outside the
+  FreeRTOS critical section. The generic bridge no longer imposes its former
+  257-byte payload cap.
 - Linux queues a device reset after clear-halt failure or exhausted protocol
   retry. The pinned TinyUSB/PIO stack has no safe per-device reset and
   re-enumeration API; electrical root-port reset alone would leave TinyUSB's
@@ -138,7 +146,9 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - compared the active HID/input files with Linux `83f14548`
 - matched the active vendor allowlist against `CONFIG_HID_*`
 - checked disabled source/link status and current proxy declarations
-- `cmake --build build --parallel 1`
+- `cmake --build build -j4`
+- confirmed `sizeof(hid_async_request) == 60` and
+  `sizeof(hid_async_slot) == 88` on the RP2040 ABI
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)
 - `git diff --check`
