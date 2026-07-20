@@ -37,6 +37,13 @@ This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
+The active 2026-07-20 reset-coordinator build instead uses a 216.75 KiB heap
+(`(217 * 1024) - 256`) and links with `text=492676`, `data=660`, and
+`bss=243308`. `__bss_end__` remains `0x2003ff54`, leaving 172 B before scratch
+X; scratch X remains 660 B and ends 1,388 B below the core-1 stack. The new
+root/hub reset state did not increase static RAM: `usbhid_reset_coordinator` is
+32 B and the complete heap-owned `usbhid_transport_pool` is 2,508 B.
+
 ## Layers
 
 TinyUSB host state and Pico-PIO-USB state are separate layers.
@@ -275,6 +282,14 @@ instead of four inline 512-byte descriptor buffers. Its payload shrinks by
 one exact descriptor buffer across all devices while EP0 fetch/probe is active;
 a maximum-size descriptor consumes about 4 KiB transiently and is released
 after probe or fenced cancellation.
+
+Device-reset recovery reserves one additional 88-byte async slot which normal
+requests cannot consume. With ten slots and the shared 257-byte descriptor
+scratch, async startup requests 1,137 B (a 1,152-byte heap_4 block). The
+2,508-byte transport pool occupies a 2,520-byte heap_4 block. Together these
+recovery changes cost about 120 B of persistent heap versus the preceding
+exact-descriptor checkpoint; the coordinator's root pending flag fits its
+existing 32-byte layout.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

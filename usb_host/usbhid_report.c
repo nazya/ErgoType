@@ -606,11 +606,12 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 	bool park = false;
 	int ret;
 
+	/*
+	 * report_host_pending is the firmware replacement for reset_work's hid
+	 * lifetime. Keep that existing fence through publication: a timer callback
+	 * may otherwise be preempted by detach between dropping it and this call.
+	 */
 	ret = usbhid_backend_queue_device_reset(hid);
-	if (!ret)
-		return;
-
-	/* Queue rejection leaves no reset owner, so restore the old park fallback. */
 	taskENTER_CRITICAL();
 	if (index >= 0 && index < CFG_TUH_HID &&
 	    usbhid_report_rx_slots[index].owner == hid &&
@@ -618,10 +619,16 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 	    usbhid->generation == generation &&
 	    usbhid_report_recovery[index] ==
 		USBHID_REPORT_RECOVERY_DEVICE_RESET) {
-		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
-		usbhid->report_wanted = false;
+		if (ret) {
+			/* No reset owner exists; restore the old park fallback. */
+			usbhid_report_recovery[index] =
+				USBHID_REPORT_RECOVERY_NONE;
+			park = usbhid->report_wanted &&
+			       !usbhid->transport_stopping;
+			if (park)
+				usbhid->report_wanted = false;
+		}
 		usbhid->report_host_pending = false;
-		park = true;
 	}
 	taskEXIT_CRITICAL();
 
@@ -709,7 +716,6 @@ static void hid_io_error(struct hid_device *hid)
 	if (time_after(now, retry->stop_retry)) {
 		usbhid_report_recovery[index] =
 			USBHID_REPORT_RECOVERY_DEVICE_RESET;
-		usbhid->report_host_pending = false;
 		generation = usbhid->generation;
 		device_reset = true;
 	} else {
@@ -745,7 +751,7 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 	u32 generation;
 	u8 ep_addr;
 	bool retry_queue = false;
-	bool device_reset = false;
+	bool park = false;
 	int index;
 	int ret;
 
@@ -809,11 +815,17 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 			retry_queue = true;
 		} else {
 			usbhid_report_rx_slots[index].clear_halt_queue_retries = 0;
-			device_reset = ret != -ENODEV && usbhid->report_wanted &&
-				!usbhid->transport_stopping;
-			usbhid_report_recovery[index] = device_reset ?
-				USBHID_REPORT_RECOVERY_DEVICE_RESET :
+			/*
+			 * usb_clear_halt() has not reached the wire. Local broker
+			 * saturation is not the upstream transfer failure which queues
+			 * usb_reset_device(), so park instead of resetting healthy USB.
+			 */
+			park = ret != -ENODEV && usbhid->report_wanted &&
+			       !usbhid->transport_stopping;
+			usbhid_report_recovery[index] =
 				USBHID_REPORT_RECOVERY_NONE;
+			if (park)
+				usbhid->report_wanted = false;
 			usbhid->report_host_pending = false;
 		}
 	}
@@ -824,16 +836,8 @@ static void usbhid_report_try_clear_halt(struct hid_device *hid)
 			USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT,
 			jiffies +
 			msecs_to_jiffies(USBHID_CLEAR_HALT_QUEUE_RETRY_MS));
-	} else if (device_reset) {
-		// if (test_bit(HID_RESET_PENDING, &usbhid->iofl)) {
-		// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");
-		// 	usb_queue_reset_device(usbhid->intf);
-		// }
-		// Linux reaches this reset after usb_clear_halt() fails. Firmware
-		// queues asynchronous full teardown/re-enumeration after the same
-		// terminal enqueue failure or starvation.
-		usbhid_report_request_device_reset(hid, index, generation);
-	}
+	} else if (park)
+		usbhid_backend_rx_rearm_failed();
 }
 
 static void usbhid_report_clear_halt_complete(
@@ -844,6 +848,7 @@ static void usbhid_report_clear_halt_complete(
 	u32 generation = 0;
 	bool queue_reconcile = false;
 	bool device_reset = false;
+	bool park = false;
 	int index;
 
 	taskENTER_CRITICAL();
@@ -855,19 +860,28 @@ static void usbhid_report_clear_halt_complete(
 		usbhid_report_rx_slots[index].clear_halt_queue_retries = 0;
 		generation = usbhid_report_rx_slots[index].generation;
 		if (!status && generation == usbhid->generation &&
-		    !usbhid->transport_stopping) {
+		    usbhid->report_wanted && !usbhid->transport_stopping) {
 			usbhid_report_recovery[index] =
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE;
 			queue_reconcile = true;
 		} else {
+			park = status && status != -ENODEV &&
+				!req->wire_started &&
+				generation == usbhid->generation &&
+				usbhid->report_wanted &&
+				!usbhid->transport_stopping;
 			device_reset = status && status != -ENODEV &&
+				req->wire_started &&
 				generation == usbhid->generation &&
 				usbhid->report_wanted &&
 				!usbhid->transport_stopping;
 			usbhid_report_recovery[index] = device_reset ?
 				USBHID_REPORT_RECOVERY_DEVICE_RESET :
 				USBHID_REPORT_RECOVERY_NONE;
-			usbhid->report_host_pending = false;
+			if (park)
+				usbhid->report_wanted = false;
+			if (!device_reset)
+				usbhid->report_host_pending = false;
 		}
 	}
 	taskEXIT_CRITICAL();
@@ -879,9 +893,12 @@ static void usbhid_report_clear_halt_complete(
 			// 	usb_queue_reset_device(usbhid->intf);
 			// }
 			// Linux turns usb_clear_halt() failure into a queued device reset.
-			// Firmware queues the equivalent asynchronous full teardown and
-			// re-enumeration after the EP0 completion reports failure.
+			// TinyUSB lacks usbcore's in-place owner, so firmware uses the
+			// stronger asynchronous full teardown/re-enumeration fallback.
 			usbhid_report_request_device_reset(hid, index, generation);
+		} else if (park) {
+			/* Local submit starvation never reached usb_clear_halt()'s wire. */
+			usbhid_backend_rx_rearm_failed();
 		}
 		return;
 	}
@@ -1287,6 +1304,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 			usbhid->report_owner = USBHID_REPORT_STOPPED;
 			action = USBHID_REPORT_HOST_ABORT;
 		} else if (!usbhid->transport_stopping &&
+			   usbhid->report_wanted &&
 			   usbhid->report_owner == USBHID_REPORT_STOPPED &&
 			   recovery ==
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE) {
@@ -1301,7 +1319,8 @@ static void usbhid_report_reconcile_on_host(void *data)
 			action = USBHID_REPORT_HOST_NONE;
 		}
 		if (action == USBHID_REPORT_HOST_NONE) {
-			if (usbhid->transport_stopping && index >= 0 &&
+			if ((usbhid->transport_stopping ||
+			     !usbhid->report_wanted) && index >= 0 &&
 			    index < CFG_TUH_HID &&
 			    usbhid_report_recovery[index] ==
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE)
@@ -1351,7 +1370,8 @@ static void usbhid_report_reconcile_on_host(void *data)
 			    usbhid_report_rx_slots[index].generation == generation &&
 			    usbhid_report_recovery[index] ==
 				USBHID_REPORT_RECOVERY_RESET_DATA_TOGGLE) {
-				if (!ok && !usbhid->transport_stopping) {
+				if (!ok && usbhid->report_wanted &&
+				    !usbhid->transport_stopping) {
 					usbhid_report_recovery[index] =
 						USBHID_REPORT_RECOVERY_DEVICE_RESET;
 					device_reset = true;
@@ -1365,7 +1385,8 @@ static void usbhid_report_reconcile_on_host(void *data)
 				taskEXIT_CRITICAL();
 				continue;
 			}
-			usbhid->report_host_pending = false;
+			if (!device_reset)
+				usbhid->report_host_pending = false;
 			taskEXIT_CRITICAL();
 			// if (test_bit(HID_RESET_PENDING, &usbhid->iofl)) {
 			// 	dev_dbg(&usbhid->intf->dev, "resetting device\n");

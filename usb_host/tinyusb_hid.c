@@ -31,6 +31,14 @@ void tuh_umount_cb(uint8_t dev_addr)
 	usbhid_backend_device_umount(dev_addr);
 }
 
+/* Direct host-owner re-enumeration reached its exact generation fence. */
+bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr,
+			      uint8_t hub_port)
+{
+	return usbhid_backend_hub_reenumerate_begin(rhport, hub_addr,
+						    hub_port);
+}
+
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 				uint8_t const *report, uint16_t len)
 {

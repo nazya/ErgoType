@@ -31,7 +31,13 @@ The active implementation now has these properties:
 - Interrupt-IN STALL recovery queues endpoint `CLEAR_FEATURE(HALT)` on that
   same per-device EP0 lane, then resets the local PIO toggle to DATA0 and rearms
   from the TinyUSB host owner. Protocol failure uses the upstream delayed retry
-  cadence; only the final USB-core device-reset fallback remains unavailable.
+  cadence. Terminal transfer/retry failure now publishes the final USB-core
+  reset fallback to the lifecycle task, which performs full TinyUSB
+  teardown/re-enumeration without retaining a HID pointer. A global EP0 gate
+  parks normal logical requests while root or hub-port reset owns enumeration.
+  Known-success recovery enters the pinned `enum_new_device()` path directly
+  from the host owner, avoiding a recursive send to TinyUSB's only host queue;
+  exact physical and parent generations fence any raced replacement epoch.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
   descriptors are now fetched by the lifecycle task at their class-declared
   size through the generic asynchronous EP0 owner, up to Linux's 4 KiB limit;

@@ -113,9 +113,29 @@
   endpoint `CLEAR_FEATURE(HALT)` request on the generic per-device EP0 lane;
   only successful completion lets the TinyUSB host owner reset the PIO endpoint
   toggle to DATA0 and rearm. FAILED/TIMEOUT follows upstream's
-  13/26/52/104-ms delayed retry for about one second. Clear-halt failure or
-  exhausted retry still parks the endpoint because this TinyUSB/PIO stack has
-  no safe coordinated per-device reset/re-enumeration API.
+  13/26/52/104-ms delayed retry for about one second. Clear-halt transfer
+  failure, exhausted protocol retry, or failure to reset the local PIO DATA0
+  state now queues the upstream device-reset fallback. The firmware lifecycle
+  retains no HID pointer: it snapshots the physical topology, closes the exact
+  old cache epoch, waits for HID/descriptor/async retirement, and performs full
+  TinyUSB re-enumeration behind a global EP0 gate. Logical control work remains
+  accepted in bounded parked slots and has its timeout shifted when the gate
+  opens; one additional async slot is reserved for hub-port recovery so normal
+  traffic cannot starve it. Root attach is serialized in the TinyUSB host owner;
+  a hub child makes up to three pinned `hub_port_reset()` attempts. An exact
+  fully mounted native replacement may win only before the first wire reset is
+  published. Once reset outcome can be ambiguous, raced mounts are exclusions:
+  failure/timeout retries without enumeration, while known wire success closes
+  the raced epoch and enters `enum_new_device()` directly in the host owner.
+  Persistent local async-pool exhaustion is a firmware scheduling failure and
+  parks the endpoint instead of falsely resetting a healthy USB device.
+- Pico SDK 2.1.1's pinned TinyUSB does not issue `tuh_mount_cb()` for hubs and
+  exposes no exact post-`enum_full_complete()` fence or non-recursive
+  host-owner enumeration entry. CMake verifies the pinned `usbh.c` SHA and
+  exact unique anchors, then generates a build-local copy with three audited
+  deltas: the hub mount fence, a weak generation hook, and direct root/hub
+  enumeration helpers. The installed SDK is never modified and any upstream
+  source drift fails configuration for an explicit re-audit.
 - Deferred input-report delivery, firmware workqueue, and firmware timer
   bridges are present for the currently linked driver set.
 - The standard HID Haptics path is linked through `hid-haptic`,
@@ -125,6 +145,16 @@
 
 ## Manual Test Notes
 
+- 2026-07-20: direct host-owner re-enumeration checkpoint, exact UF2 SHA256
+  `bea0614236dd6de396f1a74678243f7f3b056d46e1261b58198fd1f06a01e94b`,
+  builds with `text=492676`, `data=660`, and `bss=243308`. Normal boot,
+  enumeration, and input were reported working on hardware. This does not
+  exercise injected endpoint failure or root/hub reset recovery.
+- 2026-07-20: asynchronous device-reset checkpoint `hid: recover failed devices asynchronously`, exact UF2
+  SHA256 `fe3d0c717171499c1ad40a69d5d30cb1d5d6a8cc1525435fb1aa7566ceb362fb`,
+  was reported working on hardware for normal boot, enumeration, and input.
+  This is not fault-injection coverage of terminal retry, root reset, hub-port
+  reset, or native re-enumeration races; those remain explicit checks below.
 - 2026-07-20: task-side exact report-descriptor fetch checkpoint, exact UF2
   SHA256 `eaa95df9bfe2b39d84f9d6048c8c49a84df32cbc49073f39dc83b240a131572a`,
   clean-builds with `text=482212`, `data=660`, and `bss=243308`. It removes
@@ -237,8 +267,11 @@
   `HID_RX_STALL`, then `HID_CLEAR_HALT_OK`, followed by resumed input. Replug
   repeatedly and unplug while clear-halt is active. A normal TinyUSB NAK does
   not prove FAILED/TIMEOUT retry; that path needs a lower-level no-response or
-  bad-packet injector. The deliberate remaining deviation is endpoint parking
-  after retry exhaustion instead of Linux `usb_queue_reset_device()`.
+  bad-packet injector. Also force terminal clear-halt/protocol failure for both
+  a root device and a hub child: expect `HID_RESET_Q`, complete old-epoch
+  teardown/re-enumeration, then `HID_RESET_OK` and resumed input. Exercise
+  unplug, parent-hub removal, address reuse, and a native same-port replug in
+  each reset phase. The reset paths themselves are not yet hardware-verified.
 - Extend the serialized transport explicitly before importing drivers that need
   URBs, interrupt-IN synchronous messages, or request/response protocols beyond
   the native HID/USB length contracts.

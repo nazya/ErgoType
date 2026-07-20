@@ -1641,6 +1641,7 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 	now = xTaskGetTickCount();
 	taskENTER_CRITICAL();
 	if (!ret) {
+		req->wire_started = true;
 		if (slot->state == HID_ASYNC_SLOT_SUBMIT_PENDING) {
 			slot->state = HID_ASYNC_SLOT_ACTIVE;
 			slot->xfer_start = now;

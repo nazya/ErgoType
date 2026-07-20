@@ -52,6 +52,15 @@ _Static_assert(HID_MAX_BUFFER_SIZE + 8u <= UINT16_MAX,
 _Static_assert(HID_MAX_DESCRIPTOR_SIZE <= UINT16_MAX,
 	       "HID report descriptor size must fit TinyUSB's 16-bit length");
 
+/*
+ * SHA-pinned build-local TinyUSB host-owner extensions. They enter the same
+ * enum_new_device() path without recursively sending to the host queue.
+ */
+bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr,
+			      uint8_t hub_port);
+bool usbh_port_reenumerate_on_host(uint8_t rhport, uint8_t hub_addr,
+				   uint8_t hub_port);
+
 static const struct hid_ll_driver usb_hid_driver;
 const struct device_type usb_device_type = {
 	.name = "usb_device",
@@ -142,14 +151,17 @@ enum usbhid_preprobe_stage {
 
 /*
  * Upstream Linux queues usb_reset_device() from error recovery and lets USB
- * core serialize it. Firmware owns the corresponding full teardown/reprobe in
- * this lifecycle state machine because TinyUSB has one global enumeration EP0.
+ * core serialize it. Firmware uses the stronger full teardown/reprobe fallback
+ * in this lifecycle state machine because TinyUSB has one global enumeration
+ * EP0 and no usbcore in-place reset owner.
  */
 enum usbhid_reset_state {
 	USBHID_RESET_IDLE,
 	USBHID_RESET_WAIT_RETIRE,
 	USBHID_RESET_WAIT_CONTROL_IDLE,
+	USBHID_RESET_ROOT_ATTACH_ACTIVE,
 	USBHID_RESET_HUB_IO_ACTIVE,
+	USBHID_RESET_HUB_RETRY_WAIT,
 	USBHID_RESET_WAIT_REENUM,
 	USBHID_RESET_COMPLETE,
 	USBHID_RESET_FAILED,
@@ -170,6 +182,7 @@ struct usbhid_reset_coordinator {
 	u8 attempts;
 	bool gate_held;
 	bool hub_io_pending;
+	bool root_io_pending;
 };
 
 struct usbhid_usb_device {
@@ -181,8 +194,9 @@ struct usbhid_usb_device {
 	u32 io_pending;
 	u32 interface_mask;
 	enum usbhid_preprobe_stage preprobe_stage;
-	/* Uses the enum-alignment hole; lifecycle coalesces physical resets. */
-	bool reset_requested;
+	/* These flags share the enum-alignment byte in the physical cache. */
+	bool reset_requested : 1;
+	bool mount_complete : 1;
 	uint16_t string_langid;
 	struct usb_device dev;
 	struct usbhid_usb_device *retired_next;
@@ -1836,12 +1850,33 @@ static bool usbhid_reset_replacement_valid_locked(void)
 	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
 		const struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
 
-		if (entry->generation == usbhid_reset->replacement_generation &&
+		if (entry->mount_complete &&
+		    entry->generation == usbhid_reset->replacement_generation &&
 		    usbhid_reset_topology_matches_locked(entry))
 			return true;
 	}
 
 	return false;
+}
+
+static struct usbhid_usb_device *usbhid_reset_fresh_epoch_locked(void)
+{
+	struct usbhid_usb_device *provisional = NULL;
+
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+
+		if (entry->generation == usbhid_reset->generation ||
+		    !usbhid_reset_topology_matches_locked(entry))
+			continue;
+		/* Prefer the exact post-enumeration epoch if a transient pair exists. */
+		if (entry->mount_complete)
+			return entry;
+		if (!provisional)
+			provisional = entry;
+	}
+
+	return provisional;
 }
 
 static bool usbhid_reset_topology_retiring(void)
@@ -1962,20 +1997,20 @@ static void usbhid_reset_hub_complete(const struct hid_async_request *req,
 	TickType_t now = xTaskGetTickCount();
 	bool matched = false;
 
+	/*
+	 * A failed/timeout completion is wire-ambiguous. Never enumerate from that
+	 * port state: retry SET_FEATURE(PORT_RESET) until one completion is known
+	 * successful, then the host callback below enters ATTACH directly.
+	 */
+	(void)status;
 	taskENTER_CRITICAL();
 	if (req->context == usbhid_reset && usbhid_reset->hub_io_pending &&
 	    req->dev_addr == usbhid_reset->hub_addr &&
 	    req->hub_port == usbhid_reset->hub_port) {
 		usbhid_reset->hub_io_pending = false;
 		matched = true;
-
-		if (status < 0 &&
-		    usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE) {
-			if (usbhid_reset_replacement_valid_locked()) {
-				/* Native re-enumeration won while PORT_RESET did not. */
-				usbhid_reset->state = USBHID_RESET_COMPLETE;
-			} else if (status == -ENODEV ||
-				   !usbhid_reset_parent_live_locked()) {
+		if (usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE) {
+			if (!usbhid_reset_parent_live_locked()) {
 				usbhid_reset->state = USBHID_RESET_CANCELLED;
 			} else if (usbhid_reset->attempts >=
 					USBHID_RESET_HUB_ATTEMPTS ||
@@ -1983,14 +2018,8 @@ static void usbhid_reset_hub_complete(const struct hid_async_request *req,
 					   now, usbhid_reset->deadline)) {
 				usbhid_reset->state = USBHID_RESET_FAILED;
 			} else {
-				usbhid_reset->state =
-					USBHID_RESET_WAIT_CONTROL_IDLE;
+				usbhid_reset->state = USBHID_RESET_HUB_RETRY_WAIT;
 			}
-		} else if (!status &&
-			   usbhid_reset->state ==
-				   USBHID_RESET_HUB_IO_ACTIVE) {
-			/* The host callback rejected a stale parent before attach. */
-			usbhid_reset->state = USBHID_RESET_CANCELLED;
 		}
 	}
 	taskEXIT_CRITICAL();
@@ -2003,85 +2032,273 @@ void usbhid_backend_hub_reset_host_complete(uint8_t hub_addr,
 					    uint8_t hub_port,
 					    void *context, int status)
 {
-	TickType_t now = xTaskGetTickCount();
-	bool attach = false;
-	bool replace_existing = false;
+	bool matched = false;
 	u8 rhport = 0;
 
 	/*
-	 * This deliberately mirrors TinyUSB hub.c:connection_port_reset_complete().
-	 * Publishing ATTACH later from lifecycle lets the hub status endpoint clear
-	 * C_PORT_RESET first and can wedge TinyUSB's ENUM_HUB_CLEAR_RESET_1 state.
+	 * On known success TinyUSB has already made EP0 idle, and the host owner is
+	 * still ahead of hub-status events. Enter enum_new_device() directly: a
+	 * recursive host-queue send could block its only consumer.
 	 */
+	if (status)
+		return;
 	taskENTER_CRITICAL();
 	if (context == usbhid_reset && usbhid_reset->hub_io_pending &&
 	    usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE &&
-	    hub_addr == usbhid_reset->hub_addr &&
-	    hub_port == usbhid_reset->hub_port) {
-		if (!status && usbhid_reset_parent_live_locked()) {
-			replace_existing =
-				usbhid_reset_replacement_valid_locked();
-			if (!replace_existing)
-				usbhid_reset->replacement_generation = 0;
+	    usbhid_reset->hub_addr == hub_addr &&
+	    usbhid_reset->hub_port == hub_port) {
+		rhport = usbhid_reset->rhport;
+		matched = true;
+	}
+	taskEXIT_CRITICAL();
+
+	if (matched)
+		(void)usbh_port_reenumerate_on_host(rhport, hub_addr,
+						     hub_port);
+}
+
+bool usbhid_backend_hub_reenumerate_begin(uint8_t rhport,
+					  uint8_t hub_addr,
+					  uint8_t hub_port)
+{
+	bool allow = false;
+	bool progress = false;
+	TickType_t now = xTaskGetTickCount();
+
+	/*
+	 * Authorize the generated direct continuation before it touches topology.
+	 * Host ownership makes WAIT_REENUM -> remove -> ATTACH indivisible with
+	 * respect to mount callbacks, while exact parent generation rejects reuse.
+	 */
+	taskENTER_CRITICAL();
+	if (usbhid_transport_pool && usbhid_reset->gate_held &&
+	    usbhid_reset->state == USBHID_RESET_HUB_IO_ACTIVE &&
+	    usbhid_reset->hub_io_pending &&
+	    usbhid_reset->rhport == rhport &&
+	    usbhid_reset->hub_addr == hub_addr &&
+	    usbhid_reset->hub_port == hub_port) {
+		if (!usbhid_reset_parent_live_locked())
+			usbhid_reset->state = USBHID_RESET_CANCELLED;
+		else {
+			struct usbhid_usb_device *fresh =
+				usbhid_reset_fresh_epoch_locked();
+
+			/* The successful wire reset invalidates every raced cache epoch. */
+			usbhid_reset->replacement_generation =
+				fresh ? fresh->generation : 0;
 			usbhid_reset->state = USBHID_RESET_WAIT_REENUM;
+			allow = true;
+		}
+		usbhid_reset->deadline = now +
+			pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
+		progress = true;
+	}
+	taskEXIT_CRITICAL();
+
+	if (progress)
+		usbhid_lifecycle_kick();
+	return allow;
+}
+
+static void usbhid_reset_root_attach_on_host(void *context)
+{
+	struct usbhid_usb_device *fresh;
+	TickType_t now = xTaskGetTickCount();
+	u32 generation = (u32)(uintptr_t)context;
+	bool attach = false;
+	bool started;
+	u8 rhport = 0;
+
+	/*
+	 * Run the final native-replacement check in TinyUSB's host owner. If a
+	 * mount callback is already in progress, its event necessarily precedes
+	 * this deferred continuation and prevents a duplicate root attach.
+	 */
+	taskENTER_CRITICAL();
+	if (usbhid_reset->root_io_pending &&
+	    usbhid_reset->generation == generation) {
+		usbhid_reset->root_io_pending = false;
+		if (usbhid_reset->state == USBHID_RESET_ROOT_ATTACH_ACTIVE) {
+			fresh = usbhid_reset_fresh_epoch_locked();
+			if (usbhid_reset_replacement_valid_locked()) {
+				usbhid_reset->state = USBHID_RESET_COMPLETE;
+			} else if (fresh && fresh->mount_complete) {
+				usbhid_reset->replacement_generation =
+					fresh->generation;
+				usbhid_reset->state = USBHID_RESET_COMPLETE;
+			} else if (fresh) {
+				/* Raw config parsing is ahead of the exact mount fence. */
+				usbhid_reset->state =
+					USBHID_RESET_WAIT_CONTROL_IDLE;
+			} else {
+				usbhid_reset->replacement_generation = 0;
+				usbhid_reset->state = USBHID_RESET_WAIT_REENUM;
+				rhport = usbhid_reset->rhport;
+				attach = true;
+			}
 			usbhid_reset->deadline = now +
 				pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
-			rhport = usbhid_reset->rhport;
-			attach = true;
-		} else if (!status) {
-			usbhid_reset->state = USBHID_RESET_CANCELLED;
 		}
 	}
 	taskEXIT_CRITICAL();
 
 	if (attach) {
-		hcd_event_t event = {
-			.rhport = rhport,
-			.event_id = HCD_EVENT_DEVICE_ATTACH,
-			.connection = {
-				.hub_addr = hub_addr,
-				.hub_port = hub_port,
-			},
-		};
-
-		/*
-		 * A native attach can finish while the reset request waits behind its
-		 * EP0 enumeration. If the wire reset then wins, close that configured
-		 * epoch before the immediate attach; both events retain host FIFO order.
-		 */
-		if (replace_existing) {
-			event.event_id = HCD_EVENT_DEVICE_REMOVE;
-			hcd_event_handler(&event, false);
-			event.event_id = HCD_EVENT_DEVICE_ATTACH;
+		started = usbh_port_attach_on_host(rhport, 0, 0);
+		if (!started) {
+			/* Another enumeration won the final host-owner idle check. */
+			taskENTER_CRITICAL();
+			if (usbhid_reset->generation == generation &&
+			    usbhid_reset->state == USBHID_RESET_WAIT_REENUM &&
+			    !usbhid_reset->replacement_generation) {
+				usbhid_reset->state =
+					USBHID_RESET_WAIT_CONTROL_IDLE;
+				usbhid_reset->deadline = xTaskGetTickCount() +
+					pdMS_TO_TICKS(
+						USBHID_RESET_PHASE_TIMEOUT_MS);
+			}
+			taskEXIT_CRITICAL();
 		}
-		/* Same host-owner reset-to-attach handoff used by TinyUSB hub.c. */
-		hcd_event_handler(&event, false);
 	}
+	usbhid_lifecycle_kick();
+}
+
+static bool usbhid_reset_queue_root(void)
+{
+	struct usbhid_usb_device *fresh;
+	TickType_t now = xTaskGetTickCount();
+	u32 generation;
+	bool mounted;
+
+	taskENTER_CRITICAL();
+	if (usbhid_reset->state != USBHID_RESET_WAIT_CONTROL_IDLE) {
+		taskEXIT_CRITICAL();
+		return true;
+	}
+	if (usbhid_reset_replacement_valid_locked()) {
+		usbhid_reset->state = USBHID_RESET_COMPLETE;
+		taskEXIT_CRITICAL();
+		return true;
+	}
+	fresh = usbhid_reset_fresh_epoch_locked();
+	if (fresh) {
+		mounted = fresh->mount_complete;
+		if (mounted) {
+			usbhid_reset->replacement_generation = fresh->generation;
+			usbhid_reset->state = USBHID_RESET_COMPLETE;
+		}
+		taskEXIT_CRITICAL();
+		return mounted;
+	}
+	usbhid_reset->state = USBHID_RESET_ROOT_ATTACH_ACTIVE;
+	usbhid_reset->root_io_pending = true;
+	usbhid_reset->deadline = now +
+		pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
+	generation = usbhid_reset->generation;
+	taskEXIT_CRITICAL();
+
+	/*
+	 * TinyUSB's bounded host queue carries only this tokenized function call.
+	 * The callback enters enumeration directly, so the host consumer never
+	 * recursively sends ATTACH to its own potentially full queue.
+	 */
+	usbh_defer_func(usbhid_reset_root_attach_on_host,
+			(void *)(uintptr_t)generation, false);
+	return true;
 }
 
 static bool usbhid_reset_queue_hub(void)
 {
+	struct usbhid_usb_device *fresh;
+	enum usbhid_reset_state waiting_state;
 	u32 async_generation;
+	bool mounted;
+	bool retry;
 	int ret;
 
 	taskENTER_CRITICAL();
+	waiting_state = usbhid_reset->state;
+	retry = waiting_state == USBHID_RESET_HUB_RETRY_WAIT;
+	if (!retry && waiting_state != USBHID_RESET_WAIT_CONTROL_IDLE) {
+		taskEXIT_CRITICAL();
+		return true;
+	}
 	if (!usbhid_reset_parent_live_locked()) {
 		usbhid_reset->state = USBHID_RESET_CANCELLED;
 		taskEXIT_CRITICAL();
 		return true;
+	}
+	if (!retry) {
+		fresh = usbhid_reset_fresh_epoch_locked();
+		if (fresh) {
+			mounted = fresh->mount_complete;
+			if (mounted) {
+				usbhid_reset->replacement_generation =
+					fresh->generation;
+				usbhid_reset->state = USBHID_RESET_COMPLETE;
+			}
+			taskEXIT_CRITICAL();
+			return mounted;
+		}
 	}
 	taskEXIT_CRITICAL();
 
 	ret = hid_async_device_epoch_snapshot(usbhid_reset->hub_addr,
 					      &async_generation);
 	if (ret) {
+		bool done;
+
 		taskENTER_CRITICAL();
+		if (usbhid_reset->state != waiting_state) {
+			taskEXIT_CRITICAL();
+			return true;
+		}
+		if (retry) {
+			usbhid_reset->state = USBHID_RESET_CANCELLED;
+			taskEXIT_CRITICAL();
+			return true;
+		}
+		fresh = usbhid_reset_fresh_epoch_locked();
+		mounted = fresh && fresh->mount_complete;
+		if (mounted) {
+			usbhid_reset->replacement_generation = fresh->generation;
+			usbhid_reset->state = USBHID_RESET_COMPLETE;
+		} else if (!fresh) {
+			usbhid_reset->state = USBHID_RESET_CANCELLED;
+		}
+		done = mounted || !fresh;
+		taskEXIT_CRITICAL();
+		return done;
+	}
+
+	taskENTER_CRITICAL();
+	/* Revalidate the exact parent epoch after the async address snapshot. */
+	if (usbhid_reset->state != waiting_state) {
+		taskEXIT_CRITICAL();
+		return true;
+	}
+	if (!retry) {
+		if (usbhid_reset_replacement_valid_locked()) {
+			usbhid_reset->state = USBHID_RESET_COMPLETE;
+			taskEXIT_CRITICAL();
+			return true;
+		}
+		fresh = usbhid_reset_fresh_epoch_locked();
+		if (fresh) {
+			mounted = fresh->mount_complete;
+			if (mounted) {
+				usbhid_reset->replacement_generation =
+					fresh->generation;
+				usbhid_reset->state = USBHID_RESET_COMPLETE;
+			}
+			taskEXIT_CRITICAL();
+			return mounted;
+		}
+	}
+	if (!usbhid_reset_parent_live_locked()) {
 		usbhid_reset->state = USBHID_RESET_CANCELLED;
 		taskEXIT_CRITICAL();
 		return true;
 	}
-
-	taskENTER_CRITICAL();
 	usbhid_reset->state = USBHID_RESET_HUB_IO_ACTIVE;
 	usbhid_reset->hub_io_pending = true;
 	usbhid_reset->attempts++;
@@ -2104,74 +2321,74 @@ static bool usbhid_reset_queue_hub(void)
 	if (ret == -ENODEV)
 		usbhid_reset->state = USBHID_RESET_CANCELLED;
 	else
-		usbhid_reset->state = USBHID_RESET_WAIT_CONTROL_IDLE;
+		usbhid_reset->state = waiting_state;
 	taskEXIT_CRITICAL();
 	return false;
+}
+
+static bool usbhid_reset_record_mounted_locked(
+		const struct usbhid_usb_device *entry, TickType_t now)
+{
+	if (!usbhid_reset_topology_matches_locked(entry) ||
+	    entry->generation == usbhid_reset->generation)
+		return false;
+
+	switch (usbhid_reset->state) {
+	case USBHID_RESET_WAIT_RETIRE:
+		/* Native re-enumeration may finish before the old epoch retires. */
+		if (usbhid_reset->replacement_generation == entry->generation)
+			return false;
+		usbhid_reset->replacement_generation = entry->generation;
+		return true;
+	case USBHID_RESET_WAIT_CONTROL_IDLE:
+		/* A fully mounted native replacement already performed the recovery. */
+		usbhid_reset->replacement_generation = entry->generation;
+		usbhid_reset->state = USBHID_RESET_COMPLETE;
+		usbhid_reset->deadline = now +
+			pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
+		return true;
+	case USBHID_RESET_ROOT_ATTACH_ACTIVE:
+	case USBHID_RESET_HUB_IO_ACTIVE:
+	case USBHID_RESET_HUB_RETRY_WAIT:
+		/* The host-owner continuation decides whether its I/O invalidated it. */
+		if (usbhid_reset->replacement_generation == entry->generation)
+			return false;
+		usbhid_reset->replacement_generation = entry->generation;
+		return true;
+	case USBHID_RESET_WAIT_REENUM:
+		/* Direct host-owner attach accepts only its new post-reset epoch. */
+		if (usbhid_reset->replacement_generation == entry->generation)
+			return false;
+		usbhid_reset->replacement_generation = entry->generation;
+		usbhid_reset->state = USBHID_RESET_COMPLETE;
+		usbhid_reset->deadline = now +
+			pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
+		return true;
+	default:
+		return false;
+	}
 }
 
 static bool usbhid_reset_device_mounted(
 		const struct usbhid_usb_device *entry)
 {
-	bool complete = false;
 	bool defer_preprobe;
+	bool progress = false;
 	TickType_t now = xTaskGetTickCount();
 
-	taskENTER_CRITICAL();
-	defer_preprobe = usbhid_transport_pool && usbhid_reset->gate_held;
-	if (defer_preprobe &&
-	    usbhid_reset->state == USBHID_RESET_WAIT_REENUM &&
-	    usbhid_reset_topology_matches_locked(entry)) {
-		usbhid_reset->state = USBHID_RESET_COMPLETE;
-		usbhid_reset->deadline = now +
-			pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
-		complete = true;
-	}
-	taskEXIT_CRITICAL();
-
-	if (complete)
-		usbhid_lifecycle_kick();
-	return defer_preprobe;
-}
-
-static bool usbhid_reset_poll_mounted(void)
-{
-	struct usbhid_usb_device *candidate = NULL;
-	u32 generation = 0;
-	u8 dev_addr = 0;
-	bool complete = false;
-
 	/*
-	 * TinyUSB omits tuh_mount_cb() for hubs. A composite hub may still own a
-	 * HID interface, so use its public configured-state query as the full-mount
-	 * fence after finding the same fresh topology epoch in our cache.
+	 * tuh_mount_cb is the exact post-enum_full_complete fence for every address;
+	 * the build's pinned TinyUSB compatibility patch now emits it for hubs too.
 	 */
 	taskENTER_CRITICAL();
-	if (usbhid_reset->state == USBHID_RESET_WAIT_REENUM) {
-		for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
-			struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
-
-			if (!usbhid_reset_topology_matches_locked(entry))
-				continue;
-			candidate = entry;
-			generation = entry->generation;
-			dev_addr = entry->dev.dev_addr;
-			break;
-		}
-	}
+	defer_preprobe = usbhid_transport_pool && usbhid_reset->gate_held;
+	if (defer_preprobe)
+		progress = usbhid_reset_record_mounted_locked(entry, now);
 	taskEXIT_CRITICAL();
-	if (!candidate || !tuh_mounted(dev_addr))
-		return false;
 
-	taskENTER_CRITICAL();
-	if (usbhid_reset->state == USBHID_RESET_WAIT_REENUM &&
-	    candidate->valid && candidate->generation == generation &&
-	    candidate->dev.dev_addr == dev_addr &&
-	    usbhid_reset_topology_matches_locked(candidate)) {
-		usbhid_reset->state = USBHID_RESET_COMPLETE;
-		complete = true;
-	}
-	taskEXIT_CRITICAL();
-	return complete;
+	if (progress)
+		usbhid_lifecycle_kick();
+	return defer_preprobe;
 }
 
 static int usbhid_reset_finish(void)
@@ -2193,6 +2410,10 @@ static int usbhid_reset_finish(void)
 	paused_ticks = (u32)(xTaskGetTickCount() -
 			     usbhid_reset->gate_started);
 	taskEXIT_CRITICAL();
+	/* REMOVE and its retiring cache epoch must finish before the gate opens. */
+	if (state == USBHID_RESET_COMPLETE &&
+	    usbhid_reset_topology_retiring())
+		return -EAGAIN;
 
 	/* Keep firmware's gate flag visible until the broker is physically open. */
 	if (gate_held)
@@ -2220,6 +2441,9 @@ static int usbhid_reset_process(void)
 	    state != USBHID_RESET_COMPLETE &&
 	    state != USBHID_RESET_FAILED &&
 	    state != USBHID_RESET_CANCELLED &&
+	    /* Published REMOVE is an uncancellable lifetime fence. */
+	    state != USBHID_RESET_WAIT_RETIRE &&
+	    !usbhid_reset->hub_io_pending &&
 	    usbhid_reset_deadline_expired(now, usbhid_reset->deadline)) {
 		usbhid_reset->state = USBHID_RESET_FAILED;
 		state = USBHID_RESET_FAILED;
@@ -2237,7 +2461,13 @@ static int usbhid_reset_process(void)
 		if (usbhid_reset_target_epoch_present())
 			return -EAGAIN;
 		taskENTER_CRITICAL();
-		usbhid_reset->state = USBHID_RESET_WAIT_CONTROL_IDLE;
+		if (usbhid_reset_replacement_valid_locked())
+			usbhid_reset->state = USBHID_RESET_COMPLETE;
+		else {
+			usbhid_reset->replacement_generation = 0;
+			usbhid_reset->state =
+				USBHID_RESET_WAIT_CONTROL_IDLE;
+		}
 		usbhid_reset->deadline = now + pdMS_TO_TICKS(
 			usbhid_reset->hub_addr ? USBHID_RESET_HUB_TIMEOUT_MS :
 			USBHID_RESET_PHASE_TIMEOUT_MS);
@@ -2245,24 +2475,19 @@ static int usbhid_reset_process(void)
 		return 1;
 	}
 
-	if (state == USBHID_RESET_WAIT_CONTROL_IDLE) {
+	if (state == USBHID_RESET_WAIT_CONTROL_IDLE ||
+	    state == USBHID_RESET_HUB_RETRY_WAIT) {
 		if (!hid_async_control_gate_idle())
 			return -EAGAIN;
 
 		if (usbhid_reset->hub_addr)
 			return usbhid_reset_queue_hub() ? 1 : -EAGAIN;
+		if (state != USBHID_RESET_WAIT_CONTROL_IDLE)
+			return -EAGAIN;
 
-		/* Root attach enters TinyUSB's ordinary reset/debounce/enumeration. */
-		taskENTER_CRITICAL();
-		usbhid_reset->state = USBHID_RESET_WAIT_REENUM;
-		usbhid_reset->deadline = now +
-			pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
-		taskEXIT_CRITICAL();
-		hcd_event_device_attach(usbhid_reset->rhport, false);
-		return 1;
+		/* Root attach is serialized with native mount callbacks by host owner. */
+		return usbhid_reset_queue_root() ? 1 : -EAGAIN;
 	}
-	if (state == USBHID_RESET_WAIT_REENUM && usbhid_reset_poll_mounted())
-		return 1;
 
 	return -EAGAIN;
 }
@@ -2362,7 +2587,10 @@ int usbhid_backend_queue_device_reset(struct hid_device *hid)
 
 		if (&entry->dev != dev)
 			continue;
-		if (usbhid_reset->state != USBHID_RESET_IDLE &&
+		/* Match cancel_delayed_work_sync(reset_work) at the close boundary. */
+		if (usbhid->transport_stopping || !usbhid->report_wanted) {
+			ret = -ENODEV;
+		} else if (usbhid_reset->state != USBHID_RESET_IDLE &&
 		    usbhid_reset->generation == entry->generation) {
 			ret = 0;
 		} else if (entry->valid) {
@@ -2853,10 +3081,19 @@ void usbhid_backend_device_mount(uint8_t dev_addr)
 		return;
 	}
 
+	/*
+	 * tuh_mount_cb is the exact enum_full_complete fence. Publish it under the
+	 * same SMP critical section as reset_requested because both are bitfields
+	 * in one cache byte.
+	 */
+	taskENTER_CRITICAL();
+	entry->mount_complete = true;
+	taskEXIT_CRITICAL();
+
 	if (usbhid_reset_device_mounted(entry) ||
 	    usbhid_usb_device_old_epoch_retiring(entry))
 		usbhid_lifecycle_kick();
-	else
+	else if (usbhid_usb_device_has_waiting_hid(entry))
 		usbhid_usb_device_queue_descriptor(entry);
 }
 

@@ -54,6 +54,8 @@ struct hid_async_request {
 	/* SET_REPORT snapshots are slot-owned; all other buffers are borrowed. */
 	bool data_owned;
 	bool complete_on_cancel;
+	/* True only after TinyUSB accepted the physical transfer submission. */
+	bool wire_started;
 	hid_async_complete_t complete;
 	void *context;
 };

@@ -150,11 +150,25 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   parser. Cancellation keeps the exact buffer owned through the physical-device
   generation fence. Descriptors up to Linux's 4 KiB limit no longer depend on
   TinyUSB's 512-byte enumeration scratch; configuration descriptors still do.
-- Linux queues a device reset after clear-halt failure or exhausted protocol
-  retry. The pinned TinyUSB/PIO stack has no safe per-device reset and
-  re-enumeration API; electrical root-port reset alone would leave TinyUSB's
-  configured-device state stale. The adjacent upstream
-  `usb_queue_reset_device()` lines remain commented and the endpoint parks.
+- Linux queues a device reset after clear-halt transfer failure or exhausted
+  protocol retry. The adjacent upstream `usb_queue_reset_device()` lines remain
+  commented; the port publishes the same terminal decision into a lifecycle
+  coordinator because TinyUSB callbacks cannot wait for TinyUSB progress.
+  The coordinator snapshots only the physical cache epoch/topology, closes and
+  drains the old HID graph, gates global EP0 work, then runs full TinyUSB root
+  or hub-port teardown/re-enumeration. This is deliberately stronger than
+  Linux's successful in-place reset because pinned TinyUSB has no safe API to
+  restore configured class state in place. Software-only async-pool exhaustion
+  does not take this path; it parks and reports a local rearm failure.
+- Pinned TinyUSB omits its documented `tuh_mount_cb()` after hub enumeration,
+  and `tuh_mounted()` becomes true before class-driver set-config completes.
+  The build verifies the pinned `usbh.c` SHA and generates one build-local
+  source with three audited deltas: a hub post-`enum_full_complete()` mount
+  fence, a weak generation-authorization hook, and direct host-owner root/hub
+  enumeration helpers. The helpers preserve `enum_new_device()` and avoid a
+  blocking send back into TinyUSB's sole host queue from its own consumer.
+  Exact unique CMake anchors preserve the replaced upstream mount block beside
+  the port and reject source drift. The SDK installation remains untouched.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 

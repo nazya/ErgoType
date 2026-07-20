@@ -1,6 +1,7 @@
 #ifndef USB_HOST_USBHID_BACKEND_H
 #define USB_HOST_USBHID_BACKEND_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "host/usbh_pvt.h"
@@ -30,6 +31,10 @@ int usbhid_backend_queue_device_reset(struct hid_device *hid);
 void usbhid_backend_hub_reset_host_complete(uint8_t hub_addr,
 					    uint8_t hub_port,
 					    void *context, int status);
+/* Exact generation fence for SHA-pinned direct host-owner re-enumeration. */
+bool usbhid_backend_hub_reenumerate_begin(uint8_t rhport,
+					  uint8_t hub_addr,
+					  uint8_t hub_port);
 usbh_class_driver_t const *usbhid_backend_app_driver_get(
 	uint8_t *driver_count);
 

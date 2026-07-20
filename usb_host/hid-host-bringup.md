@@ -101,10 +101,13 @@ and host tasks until TinyUSB has completed class/HCD close; only then may task
 teardown free `inbuf`. STALL queues the standard endpoint clear-halt request
 through the generic per-device EP0 lane. After remote success the TinyUSB host
 owner resets the PIO endpoint toggle to DATA0 and rearms.
-Protocol errors use upstream's bounded delayed retry. The only missing tail is
-Linux `usb_queue_reset_device()` after recovery exhaustion; a root-port reset
-would desynchronize TinyUSB's configured-device state, so this port parks the
-endpoint until a coordinated reset/re-enumeration owner exists.
+Protocol errors use upstream's bounded delayed retry. The remaining difference
+from Linux is the implementation behind `usb_queue_reset_device()`. After
+recovery exhaustion this port makes the same reset decision, but its lifecycle
+owner performs full TinyUSB teardown/re-enumeration so configured class state
+cannot survive an electrical reset. Root and hub-child paths run behind a
+global EP0 gate; the exact old cache generation is drained before a fresh mount
+may probe.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -279,8 +282,11 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `ERR: HID_RX_REARM_FAIL` | Receive could not be armed again after a report callback. |
 | `ERR: HID_RX_STALL` | Interrupt IN stalled. Payload was discarded and asynchronous endpoint clear-halt recovery started. |
 | `DBG: HID_CLEAR_HALT_OK` | Remote endpoint halt was cleared; the host owner may now reset the local PIO toggle to DATA0 and rearm. |
-| `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt failed; polling is parked because coordinated TinyUSB device reset is not available. |
+| `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt transfer failed; terminal recovery queues coordinated device teardown/re-enumeration. |
 | `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. |
+| `DBG: HID_RESET_Q` | Terminal report recovery published an exact physical-device reset to lifecycle. |
+| `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
+| `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request could not acquire the serialized transport within one second, or an active transfer exceeded the upstream-style five-second watchdog. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |

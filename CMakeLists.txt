@@ -59,6 +59,198 @@ set(PICO_PIO_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/Pico-PIO-USB)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+# Pico SDK TinyUSB commit 86ad6e56 omits tuh_mount_cb() for hub addresses and
+# has no host-owner entry which starts enumeration without requeueing itself.
+# Generate one build-local source with those audited compatibility deltas;
+# never mutate the installed SDK.
+set(TINYUSB_USBH_SOURCE "${PICO_TINYUSB_PATH}/src/host/usbh.c")
+set(TINYUSB_USBH_PORT_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-usbh-port.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${TINYUSB_USBH_SOURCE}")
+file(SHA256 "${TINYUSB_USBH_SOURCE}" TINYUSB_USBH_SHA256)
+if(NOT TINYUSB_USBH_SHA256 STREQUAL
+   "eeb692225f34e3ea9fbd195e0b4b80a5fb5f1d36b092a42a78d6b88a37574ec0")
+    message(FATAL_ERROR "Pinned TinyUSB usbh.c changed; re-audit the port")
+endif()
+file(READ "${TINYUSB_USBH_SOURCE}" TINYUSB_USBH_CONTENT)
+set(TINYUSB_USBH_HUB_MOUNT_UPSTREAM [=[
+    if (is_hub_addr(dev_addr)) {
+      TU_LOG_USBH("HUB address = %u is mounted\r\n", dev_addr);
+    }else {
+      // Invoke callback if available
+      if (tuh_mount_cb) tuh_mount_cb(dev_addr);
+    }
+]=])
+set(TINYUSB_USBH_HUB_MOUNT_PORT [=[
+    // Upstream TinyUSB:
+    // if (is_hub_addr(dev_addr)) {
+    //   TU_LOG_USBH("HUB address = %u is mounted\r\n", dev_addr);
+    // }else {
+    //   // Invoke callback if available
+    //   if (tuh_mount_cb) tuh_mount_cb(dev_addr);
+    // }
+    // Firmware also needs the exact post-enumeration fence for hub lifecycle.
+    if (is_hub_addr(dev_addr)) {
+      TU_LOG_USBH("HUB address = %u is mounted\r\n", dev_addr);
+    }
+    if (tuh_mount_cb) tuh_mount_cb(dev_addr);
+]=])
+string(FIND "${TINYUSB_USBH_CONTENT}"
+       "${TINYUSB_USBH_HUB_MOUNT_UPSTREAM}" TINYUSB_USBH_HOOK_OFFSET)
+if(TINYUSB_USBH_HOOK_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB usbh.c hub mount anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_USBH_HUB_MOUNT_UPSTREAM}"
+       TINYUSB_USBH_HOOK_LENGTH)
+math(EXPR TINYUSB_USBH_HOOK_TAIL_OFFSET
+     "${TINYUSB_USBH_HOOK_OFFSET} + ${TINYUSB_USBH_HOOK_LENGTH}")
+string(SUBSTRING "${TINYUSB_USBH_CONTENT}"
+       ${TINYUSB_USBH_HOOK_TAIL_OFFSET} -1 TINYUSB_USBH_HOOK_TAIL)
+string(FIND "${TINYUSB_USBH_HOOK_TAIL}"
+       "${TINYUSB_USBH_HUB_MOUNT_UPSTREAM}" TINYUSB_USBH_SECOND_HOOK)
+if(NOT TINYUSB_USBH_SECOND_HOOK EQUAL -1)
+    message(FATAL_ERROR "TinyUSB hub mount anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_USBH_HUB_MOUNT_UPSTREAM}"
+       "${TINYUSB_USBH_HUB_MOUNT_PORT}"
+       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_CONTENT}")
+
+# Upstream TinyUSB: no equivalent. Recovery is already in the host owner when
+# hub reset completes, so enter the same enum_new_device() path directly. A
+# blocking queue send here could deadlock TinyUSB's only host consumer.
+set(TINYUSB_USBH_REATTACH_UPSTREAM [=[
+  return true;
+}
+
+static uint8_t get_new_address(bool is_hub) {
+]=])
+set(TINYUSB_USBH_REATTACH_PORT [=[
+  return true;
+}
+
+// Upstream TinyUSB: no equivalent; host-owner attach without queue recursion.
+bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
+  TU_VERIFY(!_dev0.enumerating && _ctrl_xfer.stage == CONTROL_STAGE_IDLE);
+
+  hcd_event_t event = {
+    .rhport = rhport,
+    .event_id = HCD_EVENT_DEVICE_ATTACH,
+    .connection = {
+      .hub_addr = hub_addr,
+      .hub_port = hub_port
+    }
+  };
+
+  _dev0.enumerating = 1;
+  return enum_new_device(&event);
+}
+
+// Upstream TinyUSB: no equivalent; atomic raced-epoch close and direct attach.
+bool usbh_port_reenumerate_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
+  TU_VERIFY(!_dev0.enumerating && _ctrl_xfer.stage == CONTROL_STAGE_IDLE);
+  TU_VERIFY(tuh_reenumerate_begin_cb(rhport, hub_addr, hub_port));
+
+  process_removing_device(rhport, hub_addr, hub_port);
+  return usbh_port_attach_on_host(rhport, hub_addr, hub_port);
+}
+
+static uint8_t get_new_address(bool is_hub) {
+]=])
+string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
+       "${TINYUSB_USBH_REATTACH_UPSTREAM}" TINYUSB_USBH_REATTACH_OFFSET)
+if(TINYUSB_USBH_REATTACH_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB enum helper anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_USBH_REATTACH_UPSTREAM}"
+       TINYUSB_USBH_REATTACH_LENGTH)
+math(EXPR TINYUSB_USBH_REATTACH_TAIL_OFFSET
+     "${TINYUSB_USBH_REATTACH_OFFSET} + ${TINYUSB_USBH_REATTACH_LENGTH}")
+string(SUBSTRING "${TINYUSB_USBH_PORT_CONTENT}"
+       ${TINYUSB_USBH_REATTACH_TAIL_OFFSET} -1 TINYUSB_USBH_REATTACH_TAIL)
+string(FIND "${TINYUSB_USBH_REATTACH_TAIL}"
+       "${TINYUSB_USBH_REATTACH_UPSTREAM}" TINYUSB_USBH_SECOND_REATTACH)
+if(NOT TINYUSB_USBH_SECOND_REATTACH EQUAL -1)
+    message(FATAL_ERROR "TinyUSB enum helper anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_USBH_REATTACH_UPSTREAM}"
+       "${TINYUSB_USBH_REATTACH_PORT}"
+       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
+
+# Upstream TinyUSB: no equivalent. This weak hook authorizes the direct
+# re-enumeration helper above; the transport provides the strong callback.
+set(TINYUSB_USBH_REATTACH_HOOK_UPSTREAM [=[
+TU_ATTR_WEAK void tuh_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
+  (void) rhport;
+  (void) eventid;
+  (void) in_isr;
+}
+]=])
+set(TINYUSB_USBH_REATTACH_HOOK_PORT [=[
+TU_ATTR_WEAK void tuh_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
+  (void) rhport;
+  (void) eventid;
+  (void) in_isr;
+}
+
+// Upstream TinyUSB: no equivalent; firmware's direct reattach generation fence.
+TU_ATTR_WEAK bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
+  (void) rhport;
+  (void) hub_addr;
+  (void) hub_port;
+  return false;
+}
+]=])
+string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
+       "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
+       TINYUSB_USBH_REATTACH_HOOK_OFFSET)
+if(TINYUSB_USBH_REATTACH_HOOK_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB usbh.c weak-hook anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
+       TINYUSB_USBH_REATTACH_HOOK_LENGTH)
+math(EXPR TINYUSB_USBH_REATTACH_HOOK_TAIL_OFFSET
+     "${TINYUSB_USBH_REATTACH_HOOK_OFFSET} + ${TINYUSB_USBH_REATTACH_HOOK_LENGTH}")
+string(SUBSTRING "${TINYUSB_USBH_PORT_CONTENT}"
+       ${TINYUSB_USBH_REATTACH_HOOK_TAIL_OFFSET} -1
+       TINYUSB_USBH_REATTACH_HOOK_TAIL)
+string(FIND "${TINYUSB_USBH_REATTACH_HOOK_TAIL}"
+       "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
+       TINYUSB_USBH_SECOND_REATTACH_HOOK)
+if(NOT TINYUSB_USBH_SECOND_REATTACH_HOOK EQUAL -1)
+    message(FATAL_ERROR "TinyUSB weak-hook anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
+       "${TINYUSB_USBH_REATTACH_HOOK_PORT}"
+       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
+file(WRITE "${TINYUSB_USBH_PORT_SOURCE}" "${TINYUSB_USBH_PORT_CONTENT}")
+
+get_target_property(TINYUSB_HOST_BASE_SOURCES
+                    tinyusb_host_base INTERFACE_SOURCES)
+set(TINYUSB_USBH_SOURCE_COUNT 0)
+foreach(TINYUSB_HOST_BASE_SOURCE IN LISTS TINYUSB_HOST_BASE_SOURCES)
+    if(TINYUSB_HOST_BASE_SOURCE STREQUAL "${TINYUSB_USBH_SOURCE}")
+        math(EXPR TINYUSB_USBH_SOURCE_COUNT
+             "${TINYUSB_USBH_SOURCE_COUNT} + 1")
+    endif()
+endforeach()
+if(NOT TINYUSB_USBH_SOURCE_COUNT EQUAL 1)
+    message(FATAL_ERROR
+            "TinyUSB host source must occur exactly once; re-audit the port")
+endif()
+list(FIND TINYUSB_HOST_BASE_SOURCES "${TINYUSB_USBH_SOURCE}"
+     TINYUSB_USBH_SOURCE_INDEX)
+list(REMOVE_AT TINYUSB_HOST_BASE_SOURCES ${TINYUSB_USBH_SOURCE_INDEX})
+set_property(TARGET tinyusb_host_base PROPERTY INTERFACE_SOURCES
+             ${TINYUSB_HOST_BASE_SOURCES})
+target_sources(tinyusb_host_base INTERFACE "${TINYUSB_USBH_PORT_SOURCE}")
+set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
+                            INCLUDE_DIRECTORIES
+                            "${PICO_TINYUSB_PATH}/src/host")
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})
 
