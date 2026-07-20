@@ -38,7 +38,7 @@ allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
 The active 2026-07-20 task-side-parser/EP0-recovery build instead uses a
-216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=489492`, `data=708`, and
+216.75 KiB heap (`(217 * 1024) - 256`) and links with `text=489956`, `data=708`, and
 `bss=243296`. `__bss_end__` is `0x2003ff18`, leaving 232 B before scratch
 X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and

@@ -234,17 +234,28 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   Linux's successful in-place reset because pinned TinyUSB has no safe API to
   restore configured class state in place. Software-only async-pool exhaustion
   does not take this path; it parks and reports a local rearm failure. Reset
-  publication also snapshots `report_revision` and atomically rejects a
+  progression is wait-queue shaped rather than polled: exact retirement,
+  mount/enumeration, async-slot-release, and host-global-control-IDLE
+  publications wake lifecycle, and only the phase deadline supplies a timed
+  wake. Async EP0 idle is published after slot release so a hub retry cannot
+  race its reserved slot's completion callback. The central TinyUSB control
+  transition additionally covers native hub housekeeping, abort, remove, and
+  watchdog release.
+  Root attach admission is atomic with the matching `enum_active` predicate;
+  rejected host admission parks until global control idle or the one TinyUSB
+  enum terminal instead of sustaining a lifecycle-to-host defer loop.
+  Reset publication also snapshots `report_revision` and atomically rejects a
   close-cancelled work item, preserving upstream `cancel_work_sync()` semantics
   across a concurrent reopen.
 - Pinned TinyUSB omits its documented `tuh_mount_cb()` after hub enumeration,
   and `tuh_mounted()` becomes true before class-driver set-config completes.
   The build verifies the pinned `usbh.c` SHA and generates one build-local
-  source with four audited deltas: a hub post-`enum_full_complete()` mount
+  source with five audited deltas: a hub post-`enum_full_complete()` mount
   fence, a weak generation-authorization hook, direct host-owner root/hub
   enumeration helpers, and exact daddr/callback/user-data recovery for a lost
-  EP0 completion. The helpers preserve `enum_new_device()` and avoid a blocking
-  send back into TinyUSB's sole host queue from its own consumer. EP0 retirement
+  EP0 completion, plus a global control-IDLE wake. The helpers preserve
+  `enum_new_device()` and avoid a blocking send back into TinyUSB's sole host
+  queue from its own consumer. EP0 retirement
   permits three SETUP/DATA/ACK drain fences before the exact old owner receives
   TinyUSB's normal terminal TIMEOUT callback; a replacement serial is untouched.
   Exact unique CMake anchors preserve replaced upstream blocks beside the port

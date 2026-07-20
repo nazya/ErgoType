@@ -48,6 +48,13 @@ The active implementation now has these properties:
   reset fallback to the lifecycle task, which performs full TinyUSB
   teardown/re-enumeration without retaining a HID pointer. A global EP0 gate
   parks normal logical requests while root or hub-port reset owns enumeration.
+  Lifecycle sleeps on exact reset publications/deadlines rather than a periodic
+  poll; the async owner publishes gated-EP0 idle only after its control slot is
+  reusable, preserving hub-reset retry admission. Matching active enumeration
+  is another durable admission predicate. TinyUSB also publishes its physical
+  global control-IDLE transition for native hub requests and teardown. Root
+  recovery therefore parks on exact idle/terminal edges instead of bouncing
+  rejected attach calls through the host queue.
   Known-success recovery enters the pinned `enum_new_device()` path directly
   from the host owner, avoiding a recursive send to TinyUSB's only host queue;
   exact physical and parent generations fence any raced replacement epoch.

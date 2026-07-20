@@ -724,6 +724,17 @@ bool hid_async_control_gate_idle(void)
 	return idle;
 }
 
+static void hid_async_control_gate_publish_idle(void)
+{
+	/*
+	 * Upstream usbcore wakes reset work when the owned URB/EP0 lane retires.
+	 * The firmware gate predicate stays in this executor; publish only its
+	 * coalesced idle edge to the lifecycle owner.
+	 */
+	if (hid_async_control_gate_idle())
+		usbhid_backend_control_gate_idle();
+}
+
 void hid_async_control_gate_release(u32 paused_ticks)
 {
 	TickType_t now = xTaskGetTickCount();
@@ -1132,8 +1143,11 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 	struct hid_async_request *req = &slot->req;
 	u8 *owned_data = NULL;
 	TaskHandle_t waiter = NULL;
+	bool control_lane;
 
 	hid_transport_lock();
+	control_lane = !hid_async_lane_is_out(
+		(enum hid_async_lane)slot->lane);
 	slot->accepting_completion = false;
 	slot->completion_ready = false;
 	hid_async_slot_clear_physical_locked(slot);
@@ -1160,6 +1174,9 @@ static void hid_async_finish_slot(struct hid_async_slot *slot, int status,
 		xTaskNotifyGive(waiter);
 	/* heap_4 must not run while the transport mutex is held. */
 	kfree(owned_data);
+	/* Publish after release so a retry can reuse this exact bounded slot. */
+	if (control_lane)
+		hid_async_control_gate_publish_idle();
 }
 
 int hid_async_control_report_hold(const struct hid_async_request *req)
@@ -1300,6 +1317,8 @@ static bool hid_async_process_released(void)
 	if (waiter)
 		xTaskNotifyGive(waiter);
 	kfree(owned_data);
+	if (processed)
+		hid_async_control_gate_publish_idle();
 	return processed;
 }
 
@@ -1439,11 +1458,14 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 		(TickType_t)req->timeout_ticks :
 		HID_ASYNC_SUBMIT_TIMEOUT_TICKS;
 	bool canceled;
+	bool control_lane;
 	bool gated;
 	bool timed_out;
 	int ret;
 
 	hid_transport_lock();
+	control_lane = !hid_async_lane_is_out(
+		(enum hid_async_lane)slot->lane);
 	canceled = hid_async_slot_invalid_locked(slot);
 	gated = hid_async_slot_parked_by_control_gate(slot);
 	if (!gated && !slot->submit_started) {
@@ -1512,8 +1534,12 @@ static bool hid_async_start_slot(struct hid_async_slot *slot, TickType_t now)
 	if (!ret) {
 		return true;
 	}
-	if (ret == -EAGAIN)
+	if (ret == -EAGAIN) {
+		/* A gate raced host submission; EP0 is now parked and idle. */
+		if (control_lane)
+			hid_async_control_gate_publish_idle();
 		return true;
+	}
 
 	hid_async_finish_slot(slot, canceled ? -ENODEV : ret,
 				 canceled, true);

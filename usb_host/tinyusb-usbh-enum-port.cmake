@@ -51,9 +51,43 @@ TU_ATTR_WEAK void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
   (void) active;
   (void) success;
 }
+
+// Upstream TinyUSB: no global control-owner idle publication. Firmware reset
+// work uses this edge exactly like USB-core completion wakes a waiting reset.
+TU_ATTR_WEAK void tuh_port_control_idle_cb(void) {
+}
 ]=])
 ergotype_tinyusb_usbh_replace_unique("enumeration state hook"
     TINYUSB_USBH_ENUM_HOOK_UPSTREAM TINYUSB_USBH_ENUM_HOOK_PORT)
+
+set(TINYUSB_USBH_CONTROL_IDLE_UPSTREAM [=[
+TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage) {
+  (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
+  _ctrl_xfer.stage = stage;
+  (void) osal_mutex_unlock(_usbh_mutex);
+}
+]=])
+set(TINYUSB_USBH_CONTROL_IDLE_PORT [=[
+TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage) {
+  // Upstream TinyUSB:
+  // (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
+  // _ctrl_xfer.stage = stage;
+  // (void) osal_mutex_unlock(_usbh_mutex);
+  // Reset work cannot inspect TinyUSB's private global owner; publish only the
+  // non-IDLE -> IDLE edge after dropping TinyUSB's mutex.
+  bool publish_idle;
+
+  (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
+  publish_idle = stage == CONTROL_STAGE_IDLE &&
+                 _ctrl_xfer.stage != CONTROL_STAGE_IDLE;
+  _ctrl_xfer.stage = stage;
+  (void) osal_mutex_unlock(_usbh_mutex);
+
+  if (publish_idle) tuh_port_control_idle_cb();
+}
+]=])
+ergotype_tinyusb_usbh_replace_unique("global control idle publication"
+    TINYUSB_USBH_CONTROL_IDLE_UPSTREAM TINYUSB_USBH_CONTROL_IDLE_PORT)
 
 set(TINYUSB_USBH_ENUM_STATE_UPSTREAM [=[
 static usbh_dev0_t _dev0;

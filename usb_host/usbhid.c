@@ -49,7 +49,6 @@
 #define USBHID_RESET_PHASE_TIMEOUT_MS 6000u
 #define USBHID_RESET_HUB_TIMEOUT_MS \
 	(USB_CTRL_SET_TIMEOUT * USBHID_RESET_HUB_ATTEMPTS + 1000u)
-#define USBHID_RESET_POLL_MS 10u
 
 _Static_assert(HID_MAX_BUFFER_SIZE + 8u <= UINT16_MAX,
 	       "HID control buffer size must fit TinyUSB's 16-bit length");
@@ -235,7 +234,7 @@ static void usbhid_backend_device_detach(uint8_t dev_addr);
 static bool usbhid_usb_device_has_published_hid(
 		const struct usbhid_usb_device *entry);
 static int usbhid_reset_process(void);
-static TickType_t usbhid_reset_wait_ticks(void);
+static TickType_t usbhid_reset_wait_ticks(bool *active);
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
 
 static u32 usbhid_next_generation_locked(void)
@@ -2051,32 +2050,37 @@ void usbhid_backend_enum_state(uint8_t rhport, uint8_t hub_addr,
 {
 	TickType_t now = xTaskGetTickCount();
 	bool progress = false;
+	bool terminal = false;
 
 	hid_transport_lock();
-	if (usbhid_transport_pool && usbhid_reset->gate_held &&
-	    usbhid_reset->rhport == rhport &&
-	    usbhid_reset->hub_addr == hub_addr &&
-	    usbhid_reset->hub_port == hub_port) {
-		if (active) {
-			usbhid_reset->enum_active = true;
-			usbhid_reset->deadline = now +
-				pdMS_TO_TICKS(USBHID_RESET_PHASE_TIMEOUT_MS);
-			progress = true;
-		} else if (usbhid_reset->enum_active) {
-			usbhid_reset->enum_active = false;
-			if (!success &&
-			    usbhid_reset->state == USBHID_RESET_WAIT_REENUM)
-				usbhid_reset->state = USBHID_RESET_FAILED;
-			else
+	if (usbhid_transport_pool && usbhid_reset->gate_held) {
+		terminal = !active;
+		if (usbhid_reset->rhport == rhport &&
+		    usbhid_reset->hub_addr == hub_addr &&
+		    usbhid_reset->hub_port == hub_port) {
+			if (active) {
+				usbhid_reset->enum_active = true;
 				usbhid_reset->deadline = now +
 					pdMS_TO_TICKS(
 						USBHID_RESET_PHASE_TIMEOUT_MS);
-			progress = true;
+				progress = true;
+			} else if (usbhid_reset->enum_active) {
+				usbhid_reset->enum_active = false;
+				if (!success &&
+				    usbhid_reset->state == USBHID_RESET_WAIT_REENUM)
+					usbhid_reset->state = USBHID_RESET_FAILED;
+				else
+					usbhid_reset->deadline = now +
+						pdMS_TO_TICKS(
+							USBHID_RESET_PHASE_TIMEOUT_MS);
+				progress = true;
+			}
 		}
 	}
 	hid_transport_unlock();
 
-	if (progress)
+	/* TinyUSB has one enum owner, so even a foreign terminal frees admission. */
+	if (progress || terminal)
 		usbhid_lifecycle_kick();
 }
 
@@ -2086,7 +2090,9 @@ static void usbhid_reset_root_attach_on_host(void *context)
 	TickType_t now = xTaskGetTickCount();
 	u32 generation = (u32)(uintptr_t)context;
 	bool attach = false;
-	bool started;
+	bool parked = false;
+	bool progress = false;
+	bool started = false;
 	u8 rhport = 0;
 
 	/*
@@ -2099,6 +2105,7 @@ static void usbhid_reset_root_attach_on_host(void *context)
 	    usbhid_reset->generation == generation) {
 		usbhid_reset->root_io_pending = false;
 		if (usbhid_reset->state == USBHID_RESET_ROOT_ATTACH_ACTIVE) {
+			progress = true;
 			fresh = usbhid_reset_fresh_epoch_locked();
 			if (usbhid_reset_replacement_valid_locked()) {
 				usbhid_reset->state = USBHID_RESET_COMPLETE;
@@ -2125,7 +2132,7 @@ static void usbhid_reset_root_attach_on_host(void *context)
 	if (attach) {
 		started = usbh_port_attach_on_host(rhport, 0, 0);
 		if (!started) {
-			/* Another enumeration won the final host-owner idle check. */
+			/* A global enum/control owner won final host admission. */
 			hid_transport_lock();
 			if (usbhid_reset->generation == generation &&
 			    usbhid_reset->state == USBHID_RESET_WAIT_REENUM &&
@@ -2135,11 +2142,14 @@ static void usbhid_reset_root_attach_on_host(void *context)
 				usbhid_reset->deadline = xTaskGetTickCount() +
 					pdMS_TO_TICKS(
 						USBHID_RESET_PHASE_TIMEOUT_MS);
+				parked = true;
 			}
 			hid_transport_unlock();
 		}
 	}
-	usbhid_lifecycle_kick();
+	/* Busy rollback waits for enum-terminal or physical-EP0-idle publication. */
+	if (progress && !parked)
+		usbhid_lifecycle_kick();
 }
 
 static bool usbhid_reset_queue_root(void)
@@ -2168,6 +2178,15 @@ static bool usbhid_reset_queue_root(void)
 		}
 		hid_transport_unlock();
 		return mounted;
+	}
+	/*
+	 * Upstream USB core serializes reset and enumeration under the same device
+	 * lock. TinyUSB has one global enum owner; wait for this matching owner's
+	 * terminal publication instead of repeatedly deferring a rejected attach.
+	 */
+	if (usbhid_reset->enum_active) {
+		hid_transport_unlock();
+		return false;
 	}
 	usbhid_reset->state = USBHID_RESET_ROOT_ATTACH_ACTIVE;
 	usbhid_reset->root_io_pending = true;
@@ -2298,12 +2317,14 @@ static bool usbhid_reset_queue_hub(void)
 		     usbhid_reset->hub_io_pending);
 	usbhid_reset->hub_io_pending = false;
 	usbhid_reset->attempts--;
-	if (ret == -ENODEV)
+	if (ret == -ENODEV) {
 		usbhid_reset->state = USBHID_RESET_CANCELLED;
-	else
+	} else {
 		usbhid_reset->state = waiting_state;
+	}
 	hid_transport_unlock();
-	return false;
+	/* A terminal transition is progress; do not enter the event wait. */
+	return ret == -ENODEV;
 }
 
 static bool usbhid_reset_record_mounted_locked(
@@ -2464,17 +2485,34 @@ static int usbhid_reset_process(void)
 	return -EAGAIN;
 }
 
-static TickType_t usbhid_reset_wait_ticks(void)
+static TickType_t usbhid_reset_wait_ticks(bool *active)
 {
-	TickType_t poll = pdMS_TO_TICKS(USBHID_RESET_POLL_MS);
+	TickType_t deadline;
+	TickType_t now = xTaskGetTickCount();
 	enum usbhid_reset_state state;
+	bool callback_owned;
 
-	if (!poll)
-		poll = 1;
 	hid_transport_lock();
 	state = usbhid_reset->state;
+	deadline = usbhid_reset->deadline;
+	callback_owned = usbhid_reset->hub_io_pending ||
+			 usbhid_reset->enum_active;
+	*active = state != USBHID_RESET_IDLE;
 	hid_transport_unlock();
-	return state == USBHID_RESET_IDLE ? portMAX_DELAY : poll;
+
+	/*
+	 * Upstream reset work sleeps on USB-core completion and exact timers. Every
+	 * callback-owned firmware phase now publishes the same wake edge. WAIT_RETIRE
+	 * and terminal retirement are uncancellable lifetime fences whose final
+	 * owner also wakes lifecycle, so none of these states needs periodic polling.
+	 */
+	if (!*active || state == USBHID_RESET_WAIT_RETIRE || callback_owned ||
+	    state == USBHID_RESET_COMPLETE || state == USBHID_RESET_FAILED ||
+	    state == USBHID_RESET_CANCELLED)
+		return portMAX_DELAY;
+	if (usbhid_tick_reached(now, deadline))
+		return 0;
+	return deadline - now;
 }
 
 static TickType_t usbhid_preprobe_wait_ticks(void)
@@ -2503,10 +2541,11 @@ static TickType_t usbhid_preprobe_wait_ticks(void)
 
 static TickType_t usbhid_lifecycle_wait_ticks(void)
 {
-	TickType_t reset_wait = usbhid_reset_wait_ticks();
+	bool reset_active;
+	TickType_t reset_wait = usbhid_reset_wait_ticks(&reset_active);
 
 	/* Preprobe is deliberately parked while reset owns the global EP0 gate. */
-	if (reset_wait != portMAX_DELAY)
+	if (reset_active)
 		return reset_wait;
 	return usbhid_preprobe_wait_ticks();
 }
@@ -2561,6 +2600,26 @@ void usbhid_backend_rx_transfer_failed(uint8_t xfer_result)
 {
 	usbhid_transport_fault(xfer_result == XFER_RESULT_STALLED ?
 		USBHID_FAULT_RX_STALL : USBHID_FAULT_RX_XFER);
+}
+
+void usbhid_backend_control_gate_idle(void)
+{
+	/* hid_async owns the predicate; lifecycle owns every reset transition. */
+	usbhid_lifecycle_kick();
+}
+
+void usbhid_backend_host_control_idle(void)
+{
+	bool waiting;
+
+	/* Publish only for the root admission which consumes global EP0 idle. */
+	hid_transport_lock();
+	waiting = usbhid_transport_pool && usbhid_reset->gate_held &&
+		  !usbhid_reset->hub_addr &&
+		  usbhid_reset->state == USBHID_RESET_WAIT_CONTROL_IDLE;
+	hid_transport_unlock();
+	if (waiting)
+		usbhid_lifecycle_kick();
 }
 
 int usbhid_backend_queue_device_reset(struct hid_device *hid,

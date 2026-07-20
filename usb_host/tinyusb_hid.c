@@ -46,6 +46,12 @@ void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
 	usbhid_backend_enum_state(rhport, hub_addr, hub_port, active, success);
 }
 
+/* The host core released its global physical EP0 owner. */
+void tuh_port_control_idle_cb(void)
+{
+	usbhid_backend_host_control_idle();
+}
+
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
 				uint8_t const *report, uint16_t len)
 {

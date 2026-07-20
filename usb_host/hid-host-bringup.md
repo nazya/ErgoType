@@ -148,7 +148,14 @@ recovery exhaustion this port makes the same reset decision, but its lifecycle
 owner performs full TinyUSB teardown/re-enumeration so configured class state
 cannot survive an electrical reset. Root and hub-child paths run behind a
 global EP0 gate; the exact old cache generation is drained before a fresh mount
-may probe.
+may probe. The reset owner waits on durable retire/mount/enumeration and EP0-idle
+publications instead of polling every 10 ms. Its only timed waits are exact
+phase deadlines; hub retry is woken again after the reserved control slot has
+actually been released. TinyUSB's central control-stage transition publishes
+global idle for native hub housekeeping and every abort/remove release too.
+Root admission waits for matching enumeration, global control idle, or the one
+enum terminal instead of repeatedly deferring an attach which the single host
+owner must reject.
 
 The SHA-pinned TinyUSB HID class now scans the bounded current-interface extras
 instead of assuming strict interface -> HID -> endpoint order. Like Linux's USB

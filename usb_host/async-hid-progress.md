@@ -224,7 +224,16 @@
   TinyUSB re-enumeration behind a global EP0 gate. Logical control work remains
   accepted in bounded parked slots and has its timeout shifted when the gate
   opens; one additional async slot is reserved for hub-port recovery so normal
-  traffic cannot starve it. Root attach is serialized in the TinyUSB host owner;
+  traffic cannot starve it. Lifecycle no longer polls reset state every 10 ms:
+  retirement, mount, enumeration terminal, async-slot release, and TinyUSB's
+  global control-IDLE transition publish wake edges, while phases without an
+  external owner sleep to their exact deadline. The async edge is published
+  after the completed slot is released, so a hub retry sees the reserved
+  recovery slot as reusable. The host-core edge also covers native hub
+  GET_STATUS/CLEAR_FEATURE chains, abort, remove, and watchdog release. A
+  rejected root attach parks until that edge or the one global enum terminal;
+  it never self-kicks. A matching enumeration is checked atomically at root
+  admission. Root attach is serialized in the TinyUSB host owner;
   a hub child makes up to three pinned `hub_port_reset()` attempts. An exact
   fully mounted native replacement may win only before the first wire reset is
   published. Once reset outcome can be ambiguous, raced mounts are exclusions:
@@ -235,9 +244,10 @@
 - Pico SDK 2.1.1's pinned TinyUSB does not issue `tuh_mount_cb()` for hubs and
   exposes no exact post-`enum_full_complete()` fence or non-recursive
   host-owner enumeration entry. CMake verifies the pinned `usbh.c` SHA and
-  exact unique anchors, then generates a build-local copy with four audited
+  exact unique anchors, then generates a build-local copy with five audited
   deltas: the hub mount fence, a weak generation hook, direct root/hub
-  enumeration helpers, and exact-owner recovery for a lost EP0 completion.
+  enumeration helpers, exact-owner recovery for a lost EP0 completion, and the
+  host-global control-IDLE publication.
   The installed SDK is never modified and any upstream source drift fails
   configuration for an explicit re-audit.
 - The same compatibility generation pins `hid_host.c` and preserves its full
