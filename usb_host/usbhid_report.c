@@ -81,6 +81,8 @@ enum usbhid_report_detach_state {
 	USBHID_REPORT_DETACH_PENDING,
 	USBHID_REPORT_DETACH_QUEUED,
 	USBHID_REPORT_DETACH_DONE,
+	/* A callback tuple with no live registry owner must never be reused. */
+	USBHID_REPORT_DETACH_QUARANTINED,
 };
 
 struct usbhid_input_report_event {
@@ -91,6 +93,7 @@ struct usbhid_input_report_event {
 	u32 len;
 	u16 bufsize;
 	u8 xfer_result;
+	bool opened_at_completion;
 };
 
 struct usbhid_control_report_event {
@@ -120,6 +123,8 @@ struct usbhid_report_rx_slot {
 	u8 dev_addr;
 	u8 ep_addr;
 	u8 xfer_result;
+	/* Snapshot upstream HID_OPENED/RESUME_RUNNING at completion. */
+	bool opened_at_completion;
 	/* Capacity may change while CLEAR_HALT is outside the transport mutex. */
 	bool clear_halt_capacity_edge;
 	/* TinyUSB closes the HCD endpoint after its application unmount hooks. */
@@ -223,11 +228,34 @@ static bool usbhid_report_idle_locked(struct hid_device *hid)
 	       !usbhid->report_host_pending && !detach_pending;
 }
 
+/*
+ * Non-ALWAYS close mirrors usb_kill_urb(usbhid->urbin), not full teardown.
+ * Recovery which has already published a device reset no longer owns this HID;
+ * report_host_pending is the active-work predicate throughout that handoff.
+ */
+static bool usbhid_report_close_idle_locked(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	bool transfer_released = true;
+	int slot = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
+
+	if (slot >= 0 && slot < CFG_TUH_HID &&
+	    usbhid_report_rx_slots[slot].owner == hid)
+		transfer_released = !usbhid_report_rx_slots[slot].serial;
+
+	return !usbhid->report_wanted &&
+	       usbhid->report_owner == USBHID_REPORT_STOPPED &&
+	       !usbhid->report_host_pending && transfer_released;
+}
+
 /* Snapshot the waiter in the same publication scope which reaches idle. */
 static TaskHandle_t usbhid_report_idle_waiter_locked(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
 
+	/* Intermediate edges may wake close; its loop rechecks the durable state. */
+	if (usbhid->report_close_waiter)
+		return usbhid->report_close_waiter;
 	return usbhid_report_idle_locked(hid) ? usbhid->wait.task : NULL;
 }
 
@@ -279,7 +307,9 @@ static int usbhid_report_prepare(struct hid_device *hid)
 			slot = -1;
 	} else {
 		for (int i = 0; i < CFG_TUH_HID; i++) {
-			if (!usbhid_report_rx_slots[i].owner) {
+			if (!usbhid_report_rx_slots[i].owner &&
+			    usbhid_report_rx_slots[i].detach_state ==
+				USBHID_REPORT_DETACH_NONE) {
 				slot = i;
 				break;
 			}
@@ -331,8 +361,7 @@ static bool usbhid_report_arm_on_host(struct hid_device *hid, u32 generation)
 	inbuf_ready = usbhid->inbuf != NULL;
 	if (!inbuf_ready) {
 		hid_transport_unlock();
-		async_msg("ERR: HID_RX_BUF_MISSING");
-		configASSERT(inbuf_ready);
+		/* Host callback returns failure; report task publishes RX_REARM. */
 		return false;
 	}
 	serial = usbhid_report_next_serial_locked();
@@ -401,14 +430,9 @@ static void usbhid_report_abort_on_host(struct hid_device *hid)
  */
 static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 {
+	TaskHandle_t waiter = NULL;
 	bool published = false;
-	bool owner_present = true;
-	bool driver_present = true;
-	bool owner_armed = true;
-	bool generation_current = true;
-	bool buffer_current = true;
-	bool size_current = true;
-	bool pointer_invalid = false;
+	bool invalid = false;
 	u32 serial;
 
 	if (!xfer || !(serial = (u32)xfer->user_data))
@@ -418,62 +442,91 @@ static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 	for (int i = 0; i < CFG_TUH_HID; i++) {
 		struct usbhid_report_rx_slot *slot =
 			&usbhid_report_rx_slots[i];
-		struct usbhid_device *usbhid;
+		struct hid_device *hid;
+		struct usbhid_device *usbhid = NULL;
+		bool payload_owned;
+		bool tuple_valid;
 
-		if (slot->serial != serial || slot->dev_addr != xfer->daddr ||
-		    slot->ep_addr != xfer->ep_addr)
+		/* The arm serial is unique; address/endpoint belong to validation. */
+		if (slot->serial != serial)
 			continue;
-		owner_present = slot->owner != NULL;
-		if (!owner_present) {
-			pointer_invalid = true;
-			break;
-		}
-		usbhid = slot->owner->driver_data;
-		driver_present = usbhid != NULL;
-		if (!driver_present) {
-			pointer_invalid = true;
-			break;
-		}
+		hid = usbhid_report_owner_lookup_locked((unsigned int)i);
+		if (hid)
+			usbhid = hid->driver_data;
 		/*
 		 * Pinned TinyUSB gives endpoint completions back only from its USBH
 		 * owner task, serialized with reconcile_on_host(). If that boundary
-		 * ever becomes ISR/direct-reentrant, this invariant must be replaced
-		 * by an atomic owner transition instead of weakening the assertion.
+		 * ever becomes ISR/direct-reentrant, this validation must be replaced
+		 * by an atomic owner transition rather than publishing a stale tuple.
 		 */
-		owner_armed = usbhid->report_owner == USBHID_REPORT_ARMED;
-		generation_current = slot->generation == usbhid->generation;
-		buffer_current = slot->buffer == (u8 *)usbhid->inbuf;
-		size_current = slot->bufsize == usbhid->report_bufsize;
+		tuple_valid = usbhid && slot->owner == hid &&
+			usbhid->report_slot == (u8)(i + 1) &&
+			slot->dev_addr == xfer->daddr &&
+			slot->ep_addr == xfer->ep_addr &&
+			usbhid->dev_addr == xfer->daddr &&
+			usbhid->usb_altsetting.interrupt_in_endpoint == xfer->ep_addr &&
+			usbhid->report_owner == USBHID_REPORT_ARMED &&
+			slot->generation == usbhid->generation &&
+			slot->buffer == (u8 *)usbhid->inbuf &&
+			slot->bufsize == usbhid->report_bufsize;
+		slot->serial = 0;
+		if (!tuple_valid) {
+			invalid = true;
+			slot->opened_at_completion = false;
+			if (!usbhid) {
+				/* No pointer may escape; permanently retire the orphan slot. */
+				slot->owner = NULL;
+				slot->buffer = NULL;
+				slot->generation = 0;
+				slot->revision = 0;
+				slot->actual_len = 0;
+				slot->bufsize = 0;
+				slot->dev_addr = 0;
+				slot->ep_addr = 0;
+				slot->xfer_result = XFER_RESULT_INVALID;
+				slot->detach_state =
+					USBHID_REPORT_DETACH_QUARANTINED;
+				usbhid_report_recovery[i] =
+					USBHID_REPORT_RECOVERY_NONE;
+				break;
+			}
+
+			/* Restore the registry-owned back-reference before task teardown. */
+			slot->owner = hid;
+			usbhid->report_wanted = false;
+			usbhid->report_revision++;
+			payload_owned =
+				usbhid->report_owner == USBHID_REPORT_QUEUED ||
+				usbhid->report_owner == USBHID_REPORT_ACTIVE;
+			if (usbhid->report_owner == USBHID_REPORT_ARMED ||
+			    usbhid->report_owner > USBHID_REPORT_ACTIVE)
+				usbhid->report_owner = USBHID_REPORT_STOPPED;
+			if (!payload_owned) {
+				slot->actual_len = 0;
+				slot->xfer_result = XFER_RESULT_INVALID;
+			}
+			waiter = usbhid_report_idle_waiter_locked(hid);
+			break;
+		}
+
 		slot->actual_len = xfer->actual_len;
 		slot->xfer_result = (u8)xfer->result;
-		slot->serial = 0;
+		slot->opened_at_completion =
+			usbhid->report_open_state == USBHID_REPORT_OPEN;
 		usbhid->report_owner = USBHID_REPORT_QUEUED;
 		published = true;
 		break;
 	}
 	hid_transport_unlock();
 
-	/* TinyUSB invokes this callback from its USBH owner task, never an ISR. */
-	if (!owner_present)
-		async_msg("ERR: HID_RX_OWNER_MISSING");
-	configASSERT(owner_present);
-	if (!driver_present)
-		async_msg("ERR: HID_RX_DRIVER_MISSING");
-	configASSERT(driver_present);
-	if (pointer_invalid)
+	if (waiter)
+		xTaskNotifyGive(waiter);
+	if (invalid) {
+		/* Callback publishes one bit; lifecycle owns diagnostics. */
+		usbhid_report_notify_task();
+		usbhid_backend_rx_invariant_failed();
 		return;
-	if (!owner_armed)
-		async_msg("ERR: HID_RX_OWNER_STATE");
-	configASSERT(owner_armed);
-	if (!generation_current)
-		async_msg("ERR: HID_RX_EPOCH_MISMATCH");
-	configASSERT(generation_current);
-	if (!buffer_current)
-		async_msg("ERR: HID_RX_BUFFER_MISMATCH");
-	configASSERT(buffer_current);
-	if (!size_current)
-		async_msg("ERR: HID_RX_SIZE_MISMATCH");
-	configASSERT(size_current);
+	}
 
 	// case -ECONNRESET:	/* unlink */
 	// case -ENOENT:
@@ -653,7 +706,10 @@ static bool usbhid_report_cancel_recovery(struct hid_device *hid)
 			}
 		}
 	}
+	waiter = usbhid_report_idle_waiter_locked(hid);
 	hid_transport_unlock();
+	if (waiter)
+		xTaskNotifyGive(waiter);
 	/* Release through the common wait-head wake edge after timer state settles. */
 	usbhid_io_put(hid);
 	return reconcile;
@@ -1339,13 +1395,27 @@ int usbhid_report_start(struct hid_device *hid)
 void usbhid_report_close(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid;
+	TaskHandle_t task;
+	TaskHandle_t waiter;
+	bool always_poll;
+	bool close_idle;
 	bool defer = false;
 
 	if (!hid)
 		return;
 	usbhid = hid->driver_data;
+	task = xTaskGetCurrentTaskHandle();
+	always_poll = hid->quirks & HID_QUIRK_ALWAYS_POLL;
 
 	hid_transport_lock();
+	/* Mirrors upstream's atomic HID_OPENED/HID_IN_POLLING close transition. */
+	usbhid->report_open_state = USBHID_REPORT_CLOSED;
+	if (always_poll) {
+		hid_transport_unlock();
+		return;
+	}
+	/* usbhid->mutex serializes the sole close waiter before this publication. */
+	usbhid->report_close_waiter = task;
 	usbhid->report_wanted = false;
 	usbhid->report_revision++;
 	if (usbhid->report_owner == USBHID_REPORT_ARMED &&
@@ -1353,11 +1423,28 @@ void usbhid_report_close(struct hid_device *hid)
 		usbhid->report_host_pending = true;
 		defer = true;
 	}
+	close_idle = usbhid_report_close_idle_locked(hid);
 	hid_transport_unlock();
 	defer |= usbhid_report_cancel_recovery(hid);
 
 	if (defer)
 		usbh_defer_func(usbhid_report_reconcile_on_host, hid, false);
+
+	/* usb_kill_urb() does not return while giveback/parser still owns IN. */
+	while (!close_idle) {
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		hid_transport_lock();
+		close_idle = usbhid_report_close_idle_locked(hid);
+		hid_transport_unlock();
+	}
+
+	/* Relay an idle edge hidden from the broader teardown/hid_hw_wait waiter. */
+	hid_transport_lock();
+	usbhid->report_close_waiter = NULL;
+	waiter = usbhid_report_idle_locked(hid) ? usbhid->wait.task : NULL;
+	hid_transport_unlock();
+	if (waiter && waiter != task)
+		xTaskNotifyGive(waiter);
 }
 
 static bool usbhid_input_report_take(struct usbhid_input_report_event *event)
@@ -1381,6 +1468,7 @@ static bool usbhid_input_report_take(struct usbhid_input_report_event *event)
 		event->len = slot->actual_len;
 		event->bufsize = slot->bufsize;
 		event->xfer_result = slot->xfer_result;
+		event->opened_at_completion = slot->opened_at_completion;
 		usbhid->report_owner = USBHID_REPORT_ACTIVE;
 		usbhid_input_report_cursor = (u8)((index + 1) % CFG_TUH_HID);
 		found = true;
@@ -1446,6 +1534,7 @@ void usbhid_report_stop(struct hid_device *hid)
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
 	usbhid->report_wanted = false;
+	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;
 	if (usbhid->report_owner == USBHID_REPORT_ARMED &&
 	    !usbhid->report_host_pending) {
@@ -1472,6 +1561,7 @@ void usbhid_report_unplug(struct hid_device *hid)
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
 	usbhid->report_wanted = false;
+	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;
 	/* TinyUSB closes the physical endpoint around its unmount callback. */
 	if (usbhid->report_owner == USBHID_REPORT_ARMED)
@@ -2042,9 +2132,9 @@ void usbhid_report_task(void *pvParameters)
 			usbhid_report_retries[index].retry_delay = 0;
 		// 	if (!test_bit(HID_OPENED, &usbhid->iofl))
 		// 		break;
-		// Generic HID core's ll_open_count is the port's HID_OPENED state.
-		// ALWAYS_POLL keeps the transfer alive while closed, but drops payload.
-		if (!event.hid->ll_open_count)
+		// The completion snapshot mirrors upstream's HID_OPENED and
+		// HID_RESUME_RUNNING tests without racing deferred parsing against open.
+		if (!event.opened_at_completion)
 			process = false;
 		// 	usbhid_mark_busy(usbhid);
 		// Runtime-PM busy tracking is absent at this firmware boundary.
@@ -2054,8 +2144,8 @@ void usbhid_report_task(void *pvParameters)
 		// 		hid_safe_input_report(urb->context, HID_INPUT_REPORT,
 		// 			      urb->transfer_buffer, urb->transfer_buffer_length,
 		// 			      urb->actual_length, 1);
-		// TinyUSB supplies the stable slot and exact actual length. Resume-time
-		// suppression is not wired yet; normal open/ALWAYS_POLL parsing is here.
+		// TinyUSB supplies the stable slot and exact actual length. RESUMING
+		// completions were snapshotted closed above, preserving this suppression.
 		/* usbcore guarantees this bound; validate the pinned PIO giveback. */
 		if (status_current && event.xfer_result == XFER_RESULT_SUCCESS &&
 		    !payload_valid)

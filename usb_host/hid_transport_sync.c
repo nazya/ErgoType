@@ -13,8 +13,9 @@ bool hid_transport_sync_init(void)
 
 	/*
 	 * The migrated scopes do not nest. Use a normal priority-inheritance mutex
-	 * so an accidental recursive acquisition is exposed instead of hidden;
-	 * owner queues will partition this common lock further.
+	 * so an accidental recursive acquisition is exposed instead of hidden. The
+	 * common state domain couples generation/lifetime and recovery admission;
+	 * fixed-slot callback handoff itself is already task-owned and asynchronous.
 	 */
 	uninitialized = hid_transport_mutex == NULL;
 	if (!uninitialized) {

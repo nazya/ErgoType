@@ -11,12 +11,12 @@
 
 #include "hid_async.h"
 #include "hid_transport_sync.h"
-#include "rtos/freertos_hook.h"
 #include "usbhid.h"
 #include "usbhid_backend.h"
 #include "usbhid_private.h"
 #include "usbhid_report.h"
 #include "stdio_tusb_cdc.h"
+#include "linux/include/linux/delay.h"
 #include "linux/include/linux/hiddev.h"
 #include "linux/include/linux/usb.h"
 
@@ -124,6 +124,8 @@ enum usbhid_transport_fault {
 	USBHID_FAULT_RX_STALL = 1u << 7,
 	USBHID_FAULT_RX_XFER = 1u << 8,
 	USBHID_FAULT_IO_ACCOUNTING = 1u << 9,
+	USBHID_FAULT_RX_INVARIANT = 1u << 10,
+	USBHID_FAULT_ASYNC_INVARIANT = 1u << 11,
 };
 
 enum usbhid_preprobe_stage {
@@ -1001,6 +1003,30 @@ static struct hid_device *usbhid_lookup_locked(uint8_t dev_addr,
 	}
 
 	return NULL;
+}
+
+struct hid_device *usbhid_report_owner_lookup_locked(unsigned int slot_index)
+{
+	struct hid_device *owner = NULL;
+
+	/*
+	 * Linux's URB retains its hid context until giveback. This port instead
+	 * resolves the fixed report slot through the lifecycle registry while the
+	 * common transport lock keeps removal and report ownership atomic.
+	 */
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+
+		if (!usbhid || usbhid->report_slot != slot_index + 1u)
+			continue;
+		/* Duplicate slot ownership is an invariant failure, not a choice. */
+		if (owner)
+			return NULL;
+		owner = hid;
+	}
+
+	return owner;
 }
 
 static int usbhid_insert(struct hid_device *hid)
@@ -2603,6 +2629,16 @@ void usbhid_backend_rx_transfer_failed(uint8_t xfer_result)
 		USBHID_FAULT_RX_STALL : USBHID_FAULT_RX_XFER);
 }
 
+void usbhid_backend_rx_invariant_failed(void)
+{
+	usbhid_transport_fault(USBHID_FAULT_RX_INVARIANT);
+}
+
+void usbhid_backend_async_invariant_failed(void)
+{
+	usbhid_transport_fault(USBHID_FAULT_ASYNC_INVARIANT);
+}
+
 void usbhid_backend_control_gate_idle(void)
 {
 	/* hid_async owns the predicate; lifecycle owns every reset transition. */
@@ -2693,6 +2729,10 @@ static void usbhid_lifecycle_log_transport_faults(void)
 		async_msg("ERR: HID_RX_XFER_FAIL");
 	if (faults & USBHID_FAULT_IO_ACCOUNTING)
 		async_msg("ERR: HID_IO_ACCOUNTING");
+	if (faults & USBHID_FAULT_RX_INVARIANT)
+		async_msg("ERR: HID_RX_INVARIANT");
+	if (faults & USBHID_FAULT_ASYNC_INVARIANT)
+		async_msg("ERR: HID_ASYNC_INVARIANT");
 }
 
 static void usbhid_disconnect(struct usb_interface *intf);
@@ -2810,7 +2850,6 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 	struct usbhid_raw_interface raw_snapshot;
 	const struct usbhid_raw_interface *raw;
 	size_t len;
-	u32 malloc_failures_before;
 	int ret;
 
 	hid = hid_allocate_device();
@@ -2928,6 +2967,13 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 	hid->hiddev_report_event = hiddev_report_event;
 #endif
 	init_waitqueue_head(&usbhid->wait);
+	mutex_init(&usbhid->mutex);
+	/* Linux embeds this mutex; FreeRTOS allocates it from the bounded heap. */
+	if (!mutex_initialized(&usbhid->mutex)) {
+		async_msg("ERR: HID_ALLOC_FAIL");
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 	hid->bus = BUS_USB;
 	hid->vendor = le16_to_cpu(dev->descriptor.idVendor);
@@ -2976,15 +3022,7 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 		goto fail;
 	}
 
-	malloc_failures_before = freertos_malloc_failure_count();
 	ret = hid_add_device(hid);
-	/*
-	 * Linux normally reports deep probe allocation failures through errno.
-	 * Some HID parser paths intentionally omit a field on allocation failure;
-	 * surface that firmware constraint here without logging from the heap hook.
-	 */
-	if (freertos_malloc_failure_count() != malloc_failures_before)
-		async_msg("ERR: HID_PROBE_NOMEM");
 	if (ret < 0) {
 		usbhid_report_stop(hid);
 		if (hid_async_cancel_device(hid))
@@ -2994,7 +3032,11 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 		usbhid_report_release(hid);
 		hid_free_buffers(hid_to_usb_dev(hid), hid);
 		usbhid_remove_slot(hid);
-		async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" : "ERR: HID_ADD_FAIL");
+		if (ret == -ENOMEM)
+			async_msg("ERR: HID_PROBE_NOMEM");
+		else
+			async_msg(ret == -ENODEV ? "WARN: HID_IGNORED" :
+				  "ERR: HID_ADD_FAIL");
 		goto fail;
 	}
 
@@ -3012,6 +3054,8 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 
 fail:
 	hid_destroy_device(hid);
+	/* hid_destroy_device() may run .close()/.stop(), so destroy this last. */
+	mutex_destroy(&usbhid->mutex);
 	kfree(usbhid);
 	return ret;
 }
@@ -3039,6 +3083,8 @@ static void usbhid_disconnect(struct usb_interface *intf)
 	usbhid_teardown_wait(hid);
 	usbhid_remove_slot(hid);
 	hid_destroy_device(hid);
+	/* Linux embeds this mutex; the FreeRTOS compatibility object owns a queue. */
+	mutex_destroy(&usbhid->mutex);
 	kfree(usbhid);
 }
 
@@ -3381,8 +3427,12 @@ static int usbhid_start(struct hid_device *hid)
 	unsigned int insize = 0;
 	int ret = 0;
 
-	if (usbhid_report_is_stopping(hid))
-		return -ENODEV;
+	mutex_lock(&usbhid->mutex);
+
+	if (usbhid_report_is_stopping(hid)) {
+		ret = -ENODEV;
+		goto fail;
+	}
 
 	usbhid->bufsize = HID_MIN_BUFFER_SIZE;
 	hid_find_max_report(hid, HID_INPUT_REPORT, &usbhid->bufsize);
@@ -3423,6 +3473,7 @@ static int usbhid_start(struct hid_device *hid)
 		// Firmware has no Linux PM wakeup policy at this transport boundary.
 	}
 
+	mutex_unlock(&usbhid->mutex);
 	return 0;
 
 fail:
@@ -3434,13 +3485,15 @@ fail:
 	// usbhid->urbctrl = NULL;
 	// TinyUSB owns endpoint objects rather than allocating Linux URBs.
 	hid_free_buffers(dev, hid);
+	mutex_unlock(&usbhid->mutex);
 	return ret;
 }
 
 static void usbhid_stop(struct hid_device *hid)
 {
-	// struct usbhid_device *usbhid = hid->driver_data;
-	// Fixed-slot cancellation and its exact-interface wait address hid directly.
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	mutex_lock(&usbhid->mutex);
 
 	// usb_kill_urb(usbhid->urbin);
 	// usb_kill_urb(usbhid->urbout);
@@ -3462,6 +3515,7 @@ static void usbhid_stop(struct hid_device *hid)
 	// usbhid->urbout = NULL;
 	// TinyUSB endpoint ownership was synchronously revoked above.
 	hid_free_buffers(hid_to_usb_dev(hid), hid);
+	mutex_unlock(&usbhid->mutex);
 }
 
 static int hid_set_idle(struct usb_device *dev, int ifnum, int report, int idle)
@@ -3489,8 +3543,25 @@ static int hid_get_class_descriptor(struct usb_device *dev, int ifnum,
 
 static int usbhid_open(struct hid_device *hid)
 {
-	if (usbhid_report_is_stopping(hid))
-		return -ENODEV;
+	struct usbhid_device *usbhid = hid->driver_data;
+	int ret;
+
+	mutex_lock(&usbhid->mutex);
+
+	// set_bit(HID_OPENED, &usbhid->iofl);
+	// TinyUSB transport state uses an explicit gate under its task mutex. The
+	// non-ALWAYS path starts in RESUMING to retain upstream's initial drain.
+	hid_transport_lock();
+	if (usbhid->transport_stopping) {
+		ret = -ENODEV;
+	} else {
+		usbhid->report_open_state = hid->quirks & HID_QUIRK_ALWAYS_POLL ?
+			USBHID_REPORT_OPEN : USBHID_REPORT_RESUMING;
+		ret = 0;
+	}
+	hid_transport_unlock();
+	if (ret)
+		goto done;
 
 	/*
 	 * Upstream usbhid_open() calls hid_start_in() after hidinput opens the
@@ -3498,22 +3569,81 @@ static int usbhid_open(struct hid_device *hid)
 	 * or ignored devices do not feed reports into hid_input_report().
 	 */
 	if (hid->quirks & HID_QUIRK_ALWAYS_POLL)
-		return 0;
+		goto done;
 
-	return usbhid_report_start(hid);
+	// res = usb_autopm_get_interface(usbhid->intf);
+	// Firmware has no runtime-PM owner; the interface is already active here.
+	// usbhid->intf->needs_remote_wakeup = 1;
+	// Firmware has no Linux remote-wakeup policy at this boundary.
+	// set_bit(HID_RESUME_RUNNING, &usbhid->iofl);
+	// The RESUMING state published above gates task-side parser delivery.
+	// set_bit(HID_IN_POLLING, &usbhid->iofl);
+	// report_start() publishes the corresponding wanted/revision transition.
+	// res = hid_start_in(hid);
+	// TinyUSB interrupt-IN ownership is asynchronous and task-owned.
+	ret = usbhid_report_start(hid);
+	if (ret) {
+		hid_transport_lock();
+		usbhid->report_open_state = USBHID_REPORT_CLOSED;
+		hid_transport_unlock();
+		goto done;
+	}
+
+	// usb_autopm_put_interface(usbhid->intf);
+	// No runtime-PM reference was acquired above.
+	/*
+	 * In case events are generated while nobody was listening,
+	 * some are released when the device is re-opened.
+	 * Wait 50 msec for the queue to empty before allowing events
+	 * to go through hid.
+	 */
+	// if (res == 0)
+	// 	msleep(50);
+	// This port names the same result variable ret.
+	if (ret == 0)
+		msleep(50);
+
+	// clear_bit(HID_RESUME_RUNNING, &usbhid->iofl);
+	// Unplug/stop may have closed the interface while the lifecycle task slept.
+	hid_transport_lock();
+	if (usbhid->report_open_state == USBHID_REPORT_RESUMING)
+		usbhid->report_open_state = USBHID_REPORT_OPEN;
+	hid_transport_unlock();
+
+done:
+	mutex_unlock(&usbhid->mutex);
+	return ret;
 }
 
 static void usbhid_close(struct hid_device *hid)
 {
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	mutex_lock(&usbhid->mutex);
+
+	/*
+	 * Make sure we don't restart data acquisition due to
+	 * a resumption we no longer care about by avoiding racing
+	 * with hid_start_in().
+	 */
+	// spin_lock_irq(&usbhid->lock);
+	// clear_bit(HID_OPENED, &usbhid->iofl);
+	// if (!(hid->quirks & HID_QUIRK_ALWAYS_POLL))
+	// 	clear_bit(HID_IN_POLLING, &usbhid->iofl);
+	// spin_unlock_irq(&usbhid->lock);
+	// report_close() publishes the equivalent OPENED/POLLING transition in one
+	// transport-mutex scope, without masking interrupts.
+	usbhid_report_close(hid);
+
 	// if (!(hid->quirks & HID_QUIRK_ALWAYS_POLL)) {
 	// 	hid_cancel_delayed_stuff(usbhid);
 	// 	usb_kill_urb(usbhid->urbin);
 	// 	usbhid->intf->needs_remote_wakeup = 0;
 	// }
-	// There is no Linux PM wake flag. report_close() cancels the retry timer and
-	// fences an armed TinyUSB transfer; concurrent reopen is serialized there.
-	if (!(hid->quirks & HID_QUIRK_ALWAYS_POLL))
-		usbhid_report_close(hid);
+	// There is no Linux PM wake flag. The non-ALWAYS report_close() path cancels
+	// retry state and fences an armed TinyUSB transfer before returning.
+
+	mutex_unlock(&usbhid->mutex);
 }
 
 static int usbhid_get_raw_report(struct hid_device *hid,
@@ -3828,11 +3958,10 @@ void usbhid_io_put(struct hid_device *hid)
 		hid_transport_unlock();
 		/*
 		 * HID/device unmount reaches this release from TinyUSB's host
-		 * callback owner. Defer its diagnostic to lifecycle rather than
-		 * invoking the CDC logger from that callback boundary.
+		 * callback owner. Defer its diagnostic to lifecycle and stop before
+		 * underflow rather than asserting in the host callback boundary.
 		 */
 		usbhid_transport_fault(USBHID_FAULT_IO_ACCOUNTING);
-		configASSERT(io_owned);
 		return;
 	}
 	usbhid->io_pending--;

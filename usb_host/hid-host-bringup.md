@@ -149,8 +149,11 @@ retains the real HCD result, and keeps failed or stalled payload out of Linux
 HID and KeyD. On unplug, callback-published state is fenced through the report
 and host tasks until TinyUSB has completed class/HCD close; only then may task
 teardown free `inbuf`. The completion callback does not select HID parser
-policy; the report task applies only open/stopping/recovery policy under the
-same exact-generation fence. Linux relies on the USB reset-default Report
+policy; it snapshots the byte-sized `CLOSED/RESUMING/OPEN` transport state.
+For non-`ALWAYS_POLL` input the report task drops the initial completions during
+Linux's 50-ms `HID_RESUME_RUNNING` drain, then enables parser delivery. It also
+applies stopping/recovery policy under the same exact-generation fence. Linux
+relies on the USB reset-default Report
 protocol, so there is no retained mode or port-only BOOT suppression. STALL
 queues the standard endpoint clear-halt request
 through the generic per-device EP0 lane. After remote success the TinyUSB host
@@ -223,28 +226,29 @@ On the current RP2040 ABI:
 
 ```text
 sizeof(struct hid_field) = 100 B
-each retained usage      = 40 B
-field allocation         = 100 + usage_count * 40 B
+ordinary field           = 100 + usage_count * 40 B
+INPUT ARRAY field        = 100 + usage_count * 32 B
+                              + report_count * 8 B
 ```
 
 Examples:
 
 | Usages | Requested persistent allocation | Relevant descriptor |
 | ---: | ---: | --- |
-| 675 | 27,100 B (26.5 KiB) | Current bounded field |
-| 1,024 | 41,060 B (40.1 KiB) | ErgoType Consumer range `0x000..0x3ff` before the cap |
-| 12,288 | 491,620 B (480.1 KiB) | Holtek fixed range `0x000..0x2fff` before the cap |
+| 675 | 21,748 B (21.2 KiB) | Current six-slot Consumer array |
+| 1,024 | 32,916 B (32.1 KiB) | Six-slot ErgoType Consumer range `0x000..0x3ff` before the cap |
+| 12,288 | 393,324 B (384.1 KiB) | One-slot Holtek fixed range `0x000..0x2fff` before the cap |
 
 The parser also keeps three temporary arrays costing 9 B per local usage. At
 675 entries they require 6,075 B and are freed after parsing. With the former
 12,288 limit a one-shot reserve would require 110,592 B before the persistent
-field could even request 491,620 B. The older incremental 2,048-to-4,096 growth
+field could even request 393,324 B. The older incremental 2,048-to-4,096 growth
 temporarily needed both allocations at once, or 55,296 B.
 
-These are allocation requests. If a persistent field allocation fails, the
-current `hid_add_field()` path can omit that field without returning `-ENOMEM`.
-Missing reports under heap pressure therefore do not necessarily come with a
-direct allocation error.
+These are allocation requests. If a persistent report or field allocation
+fails, the port now propagates `-ENOMEM` through parser and driver-core cleanup;
+the lifecycle task rejects and destroys the whole interface instead of binding
+a partial report graph. Upstream's non-OOM `HID_MAX_FIELDS` truncation remains.
 
 Consequently, merely moving these objects to flash is not possible: report
 descriptors determine their contents at runtime. A static generated mapping or
@@ -356,7 +360,8 @@ post-enumeration and haptic heap checks.
 The report executor now has one persistent queue. Five 28-byte ordinary-control
 results plus the 84-byte FreeRTOS queue object request 224 B and occupy a
 232-byte heap_4 block. Direct interrupt-IN completion instead uses four fixed
-32-byte slots (128 B in scratch X), with no queue allocation or HID lookup.
+32-byte slots (128 B in scratch X), with no queue allocation or address-based
+HID lookup. Completion validates the slot through its one live registry owner.
 Removing the former four-entry input queue returns its 176-byte heap_4 block
 and removes one 4-byte queue handle from `.bss`; expanding the old 20-byte slots
 adds 48 B to scratch X. Net live RAM occupancy falls by 132 B and one persistent
@@ -375,6 +380,13 @@ transport allocations therefore use 3,752 B. The remaining 232-byte control
 queue is additional. All are startup allocations and do not churn during
 attach/report traffic. Lifecycle's indexed notification removes its former
 96-byte queue block. Exact endpoint callbacks add 1,280 B of TinyUSB state.
+Each attached HID interface also owns the two priority-inheritance mutexes
+present in upstream's lifecycle: generic HID's `ll_open_lock` and
+`usbhid->mutex`, 96 B each in FreeRTOS. Restoring the latter's 4-byte handle
+also rounds its heap_4 object up by 8 B, for a total lifecycle cost of 200 B per
+interface (600 B for a three-interface emulator). These objects are allocated
+once at probe and destroyed after the complete disconnect fence; attach/report
+traffic does not churn them.
 The workqueue similarly replaces its former 96-byte one-entry wake queue with
 one 96-byte mutex block, so runtime heap use is unchanged; its task handle and
 stack-waiter head add 8 B of `.bss`. The timer makes the same 96-byte
@@ -386,10 +398,11 @@ owns one task-allocated receive buffer of
 costs a 72-byte heap_4 block; the 16 KiB logical limit plus worst packet tail
 can cost up to a 16,456-byte block. There is no allocation or free per report.
 Host transfer storage now occupies 708 B in scratch X and ends 1,340 B below
-the core-1 stack. Removing transitional descriptor ownership shrinks
-`struct usbhid_device` from 248 B to 240 B and its heap_4 block from 256 B to
-248 B per attached HID. The linked image reports 243,320 B of `.bss` and keeps
-208 B of main-SRAM link headroom.
+the core-1 stack. Removing transitional descriptor ownership first shrank
+`struct usbhid_device` from 248 B to 240 B. Restoring upstream's lifecycle
+mutex handle and the stack-owned close-fence waiter makes it 248 B and returns
+its heap_4 block from 248 B to 256 B per attached HID. The linked image reports
+243,136 B of `.bss` and keeps 200 B of main-SRAM link headroom.
 
 Queued asynchronous SET reports now allocate their upstream-style snapshot at
 the exact report size and release it after completion or fenced cancellation.
@@ -414,6 +427,8 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `DBG: HID_CLEAR_HALT_OK` | Remote endpoint halt was cleared; the host owner may now reset the local PIO toggle to DATA0 and rearm. |
 | `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt transfer failed; terminal recovery queues coordinated device teardown/re-enumeration. |
 | `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. |
+| `ERR: HID_RX_INVARIANT` | Interrupt-IN completion did not match its live owner/epoch/buffer tuple. The callback parked it before parser publication. |
+| `ERR: HID_ASYNC_INVARIANT` | A deferred host call, EP0 abort, broker completion, or pinned hub-reset completion violated its owner/transfer tuple; the existing task-side `-EIO` retirement path ran. |
 | `DBG: HID_RESET_Q` | Terminal report recovery published an exact physical-device reset to lifecycle. |
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |

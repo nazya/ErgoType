@@ -419,7 +419,9 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 				     parser->global.report_id, application);
 	if (!report) {
 		hid_err(parser->device, "hid_register_report failed\n");
-		return -1;
+		// return -1;
+		// REPORT_ID was validated above; NULL here is an allocation failure.
+		return -ENOMEM;
 	}
 
 	/* Handle both signed and unsigned cases properly */
@@ -460,8 +462,12 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 		      !(flags & HID_MAIN_ITEM_VARIABLE) ?
 		      parser->global.report_count : usages;
 	field = hid_register_field(report, usages, value_count);
+	// if (!field)
+	// 	return 0;
+	// Firmware cannot bind a partially parsed HID device after allocation
+	// failure; preserve upstream's HID_MAX_FIELDS truncation, but propagate OOM.
 	if (!field)
-		return 0;
+		return report->maxfield == HID_MAX_FIELDS ? 0 : -ENOMEM;
 
 	field->physical = hid_lookup_collection(parser, HID_COLLECTION_PHYSICAL);
 	field->logical = hid_lookup_collection(parser, HID_COLLECTION_LOGICAL);
@@ -919,6 +925,8 @@ void hiddev_free(struct kref *ref)
 	hid_close_report(hid);
 	hid_free_bpf_rdesc(hid);
 	kfree(hid->dev_rdesc);
+	/* Linux mutexes are embedded; the FreeRTOS compatibility mutex owns a queue. */
+	mutex_destroy(&hid->ll_open_lock);
 	sema_destroy(&hid->driver_input_lock);
 	kfree(hid);
 }
@@ -1465,7 +1473,12 @@ static int hid_parse_collections(struct hid_device *device)
 			goto out;
 		}
 
-		if (dispatch_type[item.type](parser, &item)) {
+		// if (dispatch_type[item.type](parser, &item)) {
+		// Firmware must preserve field-allocation failure through hid_parse().
+		int item_ret = dispatch_type[item.type](parser, &item);
+		if (item_ret) {
+			if (item_ret == -ENOMEM)
+				ret = -ENOMEM;
 			hid_err(device, "item %u %u %u %u parsing failed\n",
 				item.format,
 				(unsigned int)item.size,
@@ -2703,31 +2716,22 @@ EXPORT_SYMBOL_GPL(hid_hw_stop);
  */
 int hid_hw_open(struct hid_device *hdev)
 {
-	// int ret;
-	// Port removed ll_open_lock assignment below; already-open HID inputs must
-	// still return success instead of an uninitialized stack value.
-	int ret = 0;
+	int ret;
 
-	// ret = mutex_lock_killable(&hdev->ll_open_lock);
-	// if (ret)
-	// 	return ret;
-	// TinyUSB callback-driven slice has no competing open/close worker; do not block.
+	ret = mutex_lock_killable(&hdev->ll_open_lock);
+	if (ret)
+		return ret;
 
 	if (!hdev->ll_open_count++) {
 		ret = hdev->ll_driver->open(hdev);
 		if (ret)
 			hdev->ll_open_count--;
 
-		// if (hdev->driver->on_hid_hw_open)
-		// 	hdev->driver->on_hid_hw_open(hdev);
-		// No Linux mutex is held in this port; call the same driver hook
-		// after the nonblocking TinyUSB open transition.
 		if (hdev->driver->on_hid_hw_open)
 			hdev->driver->on_hid_hw_open(hdev);
 	}
 
-	// mutex_unlock(&hdev->ll_open_lock);
-	// See nonblocking callback-driven note above.
+	mutex_unlock(&hdev->ll_open_lock);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(hid_hw_open);
@@ -2743,20 +2747,14 @@ EXPORT_SYMBOL_GPL(hid_hw_open);
  */
 void hid_hw_close(struct hid_device *hdev)
 {
-	// mutex_lock(&hdev->ll_open_lock);
-	// TinyUSB callback-driven slice has no competing open/close worker; do not block.
+	mutex_lock(&hdev->ll_open_lock);
 	if (!--hdev->ll_open_count) {
 		hdev->ll_driver->close(hdev);
 
-		// if (hdev->driver->on_hid_hw_close)
-		// 	hdev->driver->on_hid_hw_close(hdev);
-		// No Linux mutex is held in this port; call the same driver hook
-		// after the nonblocking TinyUSB close transition.
 		if (hdev->driver->on_hid_hw_close)
 			hdev->driver->on_hid_hw_close(hdev);
 	}
-	// mutex_unlock(&hdev->ll_open_lock);
-	// See nonblocking callback-driven note above.
+	mutex_unlock(&hdev->ll_open_lock);
 }
 EXPORT_SYMBOL_GPL(hid_hw_close);
 
@@ -3372,8 +3370,12 @@ struct hid_device *hid_allocate_device(void)
 	INIT_LIST_HEAD(&hdev->debug_list);
 	spin_lock_init(&hdev->debug_list_lock);
 	sema_init(&hdev->driver_input_lock, 1);
-	// mutex_init(&hdev->ll_open_lock);
-	// The port does not use the Linux ll_open_lock path.
+	/* Linux primitives are infallible; FreeRTOS allocates their queue objects. */
+	if (!sema_initialized(&hdev->driver_input_lock))
+		goto out_sync_err;
+	mutex_init(&hdev->ll_open_lock);
+	if (!mutex_initialized(&hdev->ll_open_lock))
+		goto out_sync_err;
 	kref_init(&hdev->ref);
 
 	// #ifdef CONFIG_HID_BATTERY_STRENGTH
@@ -3389,6 +3391,12 @@ struct hid_device *hid_allocate_device(void)
 
 out_err:
 	hid_destroy_device(hdev);
+	return ERR_PTR(ret);
+
+out_sync_err:
+	mutex_destroy(&hdev->ll_open_lock);
+	sema_destroy(&hdev->driver_input_lock);
+	kfree(hdev);
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(hid_allocate_device);

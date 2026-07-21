@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-20
+Updated: 2026-07-21
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -94,13 +94,44 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   the three former teardown polling barriers are gone without another RTOS
   object.
 - TinyUSB callbacks are task-context publishers in this port. One explicit
-  transport mutex now replaces the former common FreeRTOS critical
-  domain across async slots, lifecycle/cache state, and report ownership. The
-  scope-for-scope glue change leaves upstream mutex/spinlock source lines visible
-  and does not alter Linux-derived files. It is transitional: Linux uses the
-  per-interface mutex for start/stop/open/close and a short FIFO spinlock for
-  true atomic URB completion; the firmware will instead move callback state to
-  its existing owner-task queues before partitioning this common mutex.
+  transport mutex replaces the former common FreeRTOS critical domain across
+  async slots, lifecycle/cache state, and report ownership. It replaces only
+  upstream's short IRQ-side state lock: generic HID's `ll_open_lock` again owns
+  `ll_open_count` and its first/last-client transition, while the restored
+  per-interface `usbhid->mutex` serializes complete start/stop/open/close
+  operations as in Linux. The report task never reads `ll_open_count` across a
+  foreign lock; TinyUSB completion snapshots the byte-sized transport
+  `CLOSED/RESUMING/OPEN` state under the transport mutex. This mirrors both
+  upstream's `HID_OPENED` test and its 50-ms `HID_RESUME_RUNNING` drain before
+  deferred parser delivery. Callbacks take neither lifecycle mutex. FreeRTOS
+  allocates both restored mutex objects dynamically, so the
+  port checks construction as ordinary control flow and explicitly destroys
+  them only after their Linux-owned objects are no longer reachable.
+- The exact interrupt callback resolves its stable context through the live
+  registry slot before dereferencing it, validates the full arm tuple, and only
+  then publishes `QUEUED`. Invalid owner/epoch/buffer state clears the completed
+  physical serial and parks that interface; an orphan slot is quarantined from
+  reuse. Diagnostics are a bit in the existing lifecycle fault word, so the
+  TinyUSB callback neither logs nor asserts after mutating report ownership.
+  Recoverable host-owner, EP0-abort, and pinned hub-reset completion invariants
+  use their existing task-side `-EIO` retirement path with the same
+  lifecycle-owned diagnostic boundary. The hub callback always releases a
+  slot it still owns from `HOST_COMPLETING`, so a diagnostic cannot pin the
+  global EP0 lane.
+  The common EP0/interrupt-OUT broker likewise selects completion by its unique
+  request serial, validates the callback-provided address/endpoint, setup,
+  buffer, and actual length before publication, and retires an invalid physical
+  giveback as task-side `-EIO`. TinyUSB intentionally omits buffer identity from
+  non-control callbacks, so interrupt OUT validates only the fields it exposes.
+- Non-`ALWAYS_POLL` close now retains upstream `usb_kill_urb()` semantics: it
+  clears polling/revision state, cancels retry recovery, then waits only for
+  the direct interrupt-IN owner, deferred host pass, and any active parser to
+  release the interface. A stack-owned per-interface waiter keeps this narrow
+  close fence independent of the broader `hid_hw_wait()`/teardown wait head;
+  its durable predicate is tested only under the transport mutex, and the
+  final broad-idle edge is relayed after unlocking. `ALWAYS_POLL` still leaves
+  receive and recovery running and only clears the completion-time open gate,
+  exactly as upstream.
 - Linux workqueue emulation now has its own priority-inheritance mutex rather
   than sharing either that transport domain or FreeRTOS's scheduler-wide
   critical section. Its FIFO and pending/running flags are durable conditions;
@@ -222,10 +253,12 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   destruction. Physical publication remains authoritative before address-epoch
   cancel and `hcd_device_close()`; raw app-driver close supplies that fence for
   hubs, where TinyUSB omits its common unmount callback.
-- Interrupt completion owns no HID protocol policy and performs no global HID
-  lookup. The exact arm slot already retains `hid`, `inbuf`, device generation,
-  and open revision; completion atomically publishes raw length/result and
-  `ARMED -> QUEUED`. The report task claims `QUEUED -> ACTIVE` and applies
+- Interrupt completion owns no HID protocol policy and performs no address-based
+  HID lookup. Under the transport mutex it resolves the fixed slot's one live
+  registry owner, then validates that owner against the retained `hid`, `inbuf`,
+  device generation, endpoint, size, and open revision. Only that accepted tuple
+  publishes raw length/result and `ARMED -> QUEUED`. The report task claims
+  `QUEUED -> ACTIVE` and applies
   open/stopping/recovery policy under that ownership fence. An old arm is
   aborted across close/reopen, while an already queued old-revision completion
   is discarded and followed by a fresh arm, matching `usb_kill_urb()`'s epoch
@@ -308,6 +341,12 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   runtime paths index report slots, while selector-to-usage translation still
   keeps all usages. The original signature, allocation, pointer arithmetic,
   and call remain commented beside the RP2040 memory-bounded replacement.
+- Parser allocation failure is no longer converted into a missing field and a
+  partially bound HID graph. The adjacent port path preserves upstream's
+  `HID_MAX_FIELDS` truncation but propagates real `-ENOMEM` through the reduced
+  driver-core shim to task-side `usbhid_probe()`, which destroys the complete
+  interface. The global heap-failure counter remains diagnostic only and is no
+  longer used to attribute another task's allocation failure to this probe.
 - `hid_report_enum` retains upstream's `report_list` and complete report-ID
   semantics but omits the dense 256-pointer `report_id_hash`. Exact-ID lookup
   scans the already-owned sparse list, normally one to three entries. The
@@ -327,7 +366,7 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - `cmake --build build -j4`
 - confirmed `sizeof(hid_async_request) == 60` and
   `sizeof(hid_async_slot) == 88` on the RP2040 ABI
-- confirmed `sizeof(usbhid_device) == 240`, the four RX ownership/completion
+- confirmed `sizeof(usbhid_device) == 248`, the four RX ownership/completion
   slots are 32 B each (128 B total), and scratch X is 708 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
 - built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)

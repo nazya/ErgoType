@@ -6,6 +6,13 @@
 
 struct usbhid_control_input;
 
+/* TinyUSB replacement for upstream HID_OPENED + HID_RESUME_RUNNING bits. */
+enum usbhid_report_open_state {
+	USBHID_REPORT_CLOSED,
+	USBHID_REPORT_RESUMING,
+	USBHID_REPORT_OPEN,
+};
+
 /*
  * USB-specific HID struct, to be pointed to
  * from struct hid_device->driver_data
@@ -41,7 +48,7 @@ struct usbhid_device {
 	// dma_addr_t outbuf_dma;                                          /* Output buffer dma */
 	// unsigned long last_out;                                         /* record of last output for timeouts */
 	//
-	// struct mutex mutex;                                             /* start/stop/open/close */
+	struct mutex mutex;                                                /* start/stop/open/close */
 	// spinlock_t lock;                                                 /* fifo spinlock */
 	// unsigned long iofl;                                             /* I/O flags (CTRL_RUNNING, OUT_RUNNING) */
 	// struct timer_list io_retry;                                     /* Retry timer */
@@ -49,9 +56,9 @@ struct usbhid_device {
 	// unsigned int retry_delay;                                       /* Delay length in ms */
 	// struct work_struct reset_work;                                  /* Task context for resets */
 	// Linux URBs, DMA buffers, iofl, and work/timer primitives are not
-	// available. TinyUSB callbacks run in host-task context in this port, so a
-	// shared transport task mutex currently replaces the upstream
-	// process mutex plus IRQ-side FIFO spinlock without masking interrupts.
+	// available. The upstream lifecycle mutex remains above; TinyUSB callbacks
+	// and task continuations use the shared transport mutex in place of the
+	// IRQ-side FIFO spinlock without masking interrupts.
 	// TinyUSB owner tasks, hid_async's physical-endpoint queues, and the bounded
 	// port state below retain the upstream usbhid_device ownership boundary.
 	wait_queue_head_t wait;                                           /* For sleeping */
@@ -70,10 +77,14 @@ struct usbhid_device {
 	u32 io_pending;
 	/* Upstream Linux: no equivalent; direct probe-GET completion for .wait(). */
 	struct usbhid_control_input *owned_control_input;
+	/* Stack-owned waiter for non-ALWAYS usb_kill_urb() close semantics. */
+	TaskHandle_t report_close_waiter;
 	u16 report_bufsize;
 	u8 report_owner;
 	u8 report_slot;
 	bool report_wanted;
+	/* Keep the enum byte-sized: this object is allocated once per interface. */
+	u8 report_open_state;
 	bool report_host_pending;
 	/* Cross-interface readers may enter only after hid_add_device() succeeds. */
 	bool driver_ready;
@@ -91,5 +102,7 @@ struct usbhid_device {
 
 /* Upstream Linux: no equivalent; shared TinyUSB/FreeRTOS transport lease. */
 void usbhid_io_put(struct hid_device *hid);
+/* Caller holds hid_transport_lock(); the returned registry owner is lock-bound. */
+struct hid_device *usbhid_report_owner_lookup_locked(unsigned int slot_index);
 
 #endif

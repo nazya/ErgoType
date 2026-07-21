@@ -49,7 +49,7 @@
   on the USB reset-default Report protocol, so selected boot/report mode is not
   retained as port state and no generic SET_PROTOCOL request is emitted.
 - `usb_host/hid_async.c` owns serialized TinyUSB host submits for HID control
-  and interrupt-output requests. TinyUSB callbacks only enqueue completions and
+  and interrupt-output requests. TinyUSB callbacks only publish completions and
   never run Linux driver continuations directly. Device/string pre-probe has no
   private request kind, FIFO, scratch, or completion continuation in this layer;
   it uses the same generic device-control path as task-side Linux USB calls.
@@ -61,10 +61,11 @@
   FreeRTOS's scheduler-wide SMP lock with local IRQs masked. No mutex scope
   crosses a TinyUSB/HCD call, host-task handoff, parser, blocking wait, logging,
   or heap operation. The migrated scopes do not nest, so a normal
-  priority-inheritance mutex exposes accidental recursion. The next ownership
-  steps move callback publications into the async, report, and lifecycle task
-  queues so this shared lock can be partitioned rather than becoming permanent
-  design.
+  priority-inheritance mutex exposes accidental recursion. Fixed callback
+  slots and durable predicates already hand work to the async, report, and
+  lifecycle tasks. The remaining common domain couples generation/lifetime
+  with recovery admission; splitting it requires a complete owner and lock-order
+  design rather than more heap-backed mutexes.
   The task-only workqueue bridge is now a separate execution domain with its
   own priority-inheritance mutex. Durable FIFO/flags are the condition, direct
   task notifications are wake edges, and stack-owned waiters preserve
@@ -86,6 +87,16 @@
   The same no-expression assertion rule is now enforced across the async
   executor, USB HID lifecycle, interrupt-report owner, and transport mutex:
   every active `configASSERT()` there receives one precomputed identifier.
+  Interrupt-IN tuple failures no longer assert after publishing a bad
+  completion. Host-owner, EP0-abort, and pinned hub-reset completion failures
+  likewise take their existing task-side `-EIO` retirement path; lifecycle
+  emits both diagnostics. A failed hub identity check cannot leave the reserved
+  recovery slot in `HOST_COMPLETING` or retain the global EP0 lane.
+  The shared EP0/interrupt-OUT completion also validates the unique serial's
+  callback tuple before publishing it: EP0 checks its reconstructed setup,
+  buffer, and bounded actual length, while non-control TinyUSB callbacks expose
+  only address/endpoint and length. Invalid giveback metadata completes as
+  task-side `-EIO` rather than reaching a parser or blocked synchronous caller.
 - HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
   `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
   transfer carries the request serial in `user_data`, and completion preserves
@@ -151,10 +162,11 @@
   Cache fields are filled under the transport mutex and `valid` is published
   last. Callback paths which still enter through a cache lookup acquire an
   `io_pending` lease in that same scope. Direct interrupt-IN completion does no
-  second lookup: its fixed arm slot retains the exact HID, `inbuf`, device
-  generation, and open revision while ownership moves atomically from `ARMED`
-  to `QUEUED`. Pointer lifetime therefore no longer depends on current task
-  affinity or priority ordering.
+  address/instance lookup: under the transport mutex it resolves the fixed
+  slot's one live registry owner and validates that owner against the retained
+  HID, `inbuf`, device generation, endpoint, size, and open revision before
+  ownership moves atomically from `ARMED` to `QUEUED`. Pointer lifetime
+  therefore no longer depends on current task affinity or priority ordering.
   Lifecycle flags and probe slots remain authoritative. A dedicated indexed
   task notification carries only the coalesced wake edge, so lifecycle needs
   no firmware event object or queue allocation.
@@ -231,17 +243,29 @@
   per-interface `inbuf` ownership is restored; task context allocates INPUT-only
   backing with one-packet minimum/tail padding required by the pinned PIO HCD.
   Four fixed transport slots retain `inbuf` plus raw completion metadata. The
-  endpoint callback atomically publishes result/length and `ARMED -> QUEUED`;
-  the report task claims `QUEUED -> ACTIVE` round-robin and parses zero-copy.
-  There is no interrupt-input queue or second HID lookup, and the endpoint is
-  rearmed only after the slot returns to `STOPPED`. Every arm snapshots the
+  endpoint callback first resolves the slot through the live HID registry and
+  validates owner, address/endpoint, generation, buffer, and size. Only that
+  accepted tuple publishes result/length and `ARMED -> QUEUED`; the report task
+  claims `QUEUED -> ACTIVE` round-robin and parses zero-copy. A failed invariant
+  clears the physical serial, parks the interface, wakes its existing waiters,
+  and publishes one lifecycle fault without parsing or logging in the callback.
+  There is no interrupt-input queue or address-based HID lookup; the bounded
+  registry scan validates only the fixed slot owner. The endpoint is rearmed
+  only after the slot returns to `STOPPED`. Every arm snapshots the
   open revision. Close/reopen aborts an old `ARMED` transfer through the same
   two-SOF fence as `usb_kill_urb()`; an already queued old completion is dropped
-  and the current open is freshly armed. Physical unplug publishes a durable
+  and the current open is freshly armed. Non-`ALWAYS_POLL` close waits for that
+  report-only owner/parser fence before returning; it does not wait unrelated
+  control I/O or physical-detach state. Physical unplug publishes a durable
   detach state. The report task queues one host-owner fence which completes only
   after TinyUSB's class/HCD close pass. No callback allocates, waits, or frees
-  the buffer. Successful payload is dropped while
-  `ll_open_count` is zero, including `HID_QUIRK_ALWAYS_POLL`, as in upstream.
+  the buffer. Completion snapshots the byte-sized transport open state;
+  successful payload is dropped for both `CLOSED` and `RESUMING`, including
+  `HID_QUIRK_ALWAYS_POLL` while its client is closed. Non-`ALWAYS_POLL` open
+  retains upstream's `HID_RESUME_RUNNING` 50-ms drain before changing to
+  `OPEN`. This matches upstream's `HID_OPENED`/resume tests even when parsing
+  is deferred across close/reopen, without reading generic HID's separately
+  locked `ll_open_count`.
   Non-success payload never reaches the HID parser. There is no port-only
   BOOT-mode gate; Linux usbhid relies on the USB reset-default Report protocol.
   STALL queues the standard

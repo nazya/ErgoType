@@ -742,26 +742,40 @@ static inline int device_probe(struct device *dev)
 	const struct bus_type *bus = dev->bus;
 	struct bus_type *b = (struct bus_type *)bus;
 	struct device_driver *drv;
+	// Linux driver core returns the probe error to its caller. Keep parser OOM
+	// visible through this local shim so lifecycle rejects the partial HID.
+	int error = -ENODEV;
 
 	list_for_each_entry(drv, &b->drivers, bus_node) {
 		if (bus->match && !bus->match(dev, drv))
 			continue;
 
 		dev->driver = drv;
-		if (!bus->probe || bus->probe(dev) == 0) {
+		// if (!bus->probe || bus->probe(dev) == 0) {
+		// Call probe once and retain ENOMEM if no matching driver binds.
+		int probe_ret = bus->probe ? bus->probe(dev) : 0;
+		if (!probe_ret) {
 			int ret = device_sysfs_create_groups(dev, drv->dev_groups);
 
 			if (!ret) {
 				kobject_uevent(&dev->kobj, KOBJ_BIND);
 				return 0;
 			}
+			// Linux driver core propagates post-probe sysfs allocation errors.
+			// Retain OOM in this reduced shim before trying another HID driver.
+			if (ret == -ENOMEM)
+				error = -ENOMEM;
 			if (bus->remove)
 				bus->remove(dev);
 		}
+		if (probe_ret == -ENOMEM)
+			error = -ENOMEM;
 		dev->driver = NULL;
 	}
 
-	return -ENODEV;
+	// return -ENODEV;
+	// Preserve parser OOM for hid_add_device() and task-side usbhid_probe().
+	return error;
 }
 
 static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group * const *groups)
@@ -1784,6 +1798,12 @@ static inline void mutex_init(struct mutex *mutex)
 	mutex->handle = xSemaphoreCreateMutex();
 }
 
+/* FreeRTOS mutex construction can fail; Linux's embedded mutex cannot. */
+static inline bool mutex_initialized(const struct mutex *mutex)
+{
+	return mutex->handle != NULL;
+}
+
 static inline int mutex_lock_killable(struct mutex *mutex)
 {
 	xSemaphoreTake(mutex->handle, portMAX_DELAY);
@@ -1802,8 +1822,11 @@ static inline void mutex_unlock(struct mutex *mutex)
 
 static inline void mutex_destroy(struct mutex *mutex)
 {
-	vSemaphoreDelete(mutex->handle);
+	SemaphoreHandle_t handle = mutex->handle;
+
 	mutex->handle = NULL;
+	if (handle)
+		vSemaphoreDelete(handle);
 }
 
 static inline bool mutex_is_locked(struct mutex *mutex)
@@ -1851,6 +1874,12 @@ static inline void sema_init(struct semaphore *sem, int val)
 {
 	sem->handle = xSemaphoreCreateCounting((UBaseType_t)val, (UBaseType_t)val);
 	sem->owner = NULL;
+}
+
+/* FreeRTOS semaphore construction can fail; expose it to port constructors. */
+static inline bool sema_initialized(const struct semaphore *sem)
+{
+	return sem->handle != NULL;
 }
 
 static inline void sema_destroy(struct semaphore *sem)

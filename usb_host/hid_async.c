@@ -24,7 +24,8 @@
  * device control/OUT lanes in one executor task and resumes task-side ported
  * call sites through explicit completions.
  * TinyUSB invokes this file's transfer/deferred callbacks from the host owner
- * task, not an ISR; those callback paths must retain the fixed async logger.
+ * task, not an ISR. Recoverable callback invariant failures publish a bounded
+ * lifecycle fault instead of entering a logger or stopping the host owner.
  */
 
 #define HID_ASYNC_SUBMIT_TIMEOUT_TICKS pdMS_TO_TICKS(1000)
@@ -225,10 +226,9 @@ static void hid_async_call_on_host(void *data)
 	if (host_owner_valid)
 		hid_async_host_task_handle = host_task;
 	hid_transport_unlock();
-	if (!host_owner_valid)
-		async_msg("ERR: HID_HOST_CALL_OWNER");
-	configASSERT(host_owner_valid);
 	if (!host_owner_valid) {
+		/* Host callback publishes diagnostics; lifecycle performs logging. */
+		usbhid_backend_async_invariant_failed();
 		call->status = -EIO;
 		goto complete;
 	}
@@ -291,11 +291,10 @@ static void hid_async_call_on_host(void *data)
 			} else {
 				logical_aborted = tuh_edpt_abort_xfer(call->dev_addr, 0);
 				/* The validated old owner must still be the global EP0. */
-				if (!logical_aborted)
-					async_msg("ERR: HID_EP0_ABORT_OWNER");
-				configASSERT(logical_aborted);
-				if (!logical_aborted)
+				if (!logical_aborted) {
+					usbhid_backend_async_invariant_failed();
 					call->status = -EIO;
+				}
 			}
 		}
 	} else if (call->action == HID_ASYNC_HOST_RECOVER_EP0 && is_current) {
@@ -1350,6 +1349,65 @@ static int hid_async_xfer_status(u8 result)
 	}
 }
 
+/*
+ * Upstream usbcore gives an URB completion the same setup/buffer contract that
+ * was submitted. TinyUSB reconstructs that metadata for EP0, but endpoint
+ * callbacks deliberately omit their buffer pointer. Validate every field the
+ * callback actually provides before publishing the fixed slot to task context.
+ */
+static bool hid_async_completion_payload_valid_locked(
+		const struct hid_async_slot *slot, const tuh_xfer_t *xfer)
+{
+	const struct hid_async_request *req = &slot->req;
+	const tusb_control_request_t *setup;
+	struct usbhid_device *usbhid;
+
+	if (xfer->actual_len > req->len)
+		return false;
+	if (hid_async_lane_is_out((enum hid_async_lane)slot->lane))
+		return req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT ||
+		       req->kind == HID_ASYNC_REQUEST_USB_INTERRUPT;
+
+	setup = xfer->setup;
+	if (!setup || xfer->buffer != (req->len ? req->data : NULL))
+		return false;
+
+	switch (req->kind) {
+	case HID_ASYNC_REQUEST_REPORT:
+		if (!req->hid || !req->hid->driver_data)
+			return false;
+		usbhid = req->hid->driver_data;
+		return setup->bmRequestType_bit.recipient ==
+				TUSB_REQ_RCPT_INTERFACE &&
+		       setup->bmRequestType_bit.type == TUSB_REQ_TYPE_CLASS &&
+		       setup->bmRequestType_bit.direction ==
+				(req->reqtype == HID_REQ_GET_REPORT ?
+				 TUSB_DIR_IN : TUSB_DIR_OUT) &&
+		       setup->bRequest == (u8)req->reqtype &&
+		       tu_le16toh(setup->wValue) ==
+				TU_U16(req->report_type, req->report_id) &&
+		       tu_le16toh(setup->wIndex) ==
+				usbhid->usb_altsetting.desc.bInterfaceNumber &&
+		       tu_le16toh(setup->wLength) == req->len;
+	case HID_ASYNC_REQUEST_USB_CONTROL:
+		return setup->bmRequestType == req->control_requesttype &&
+		       setup->bRequest == req->control_request &&
+		       tu_le16toh(setup->wValue) == req->control_value &&
+		       tu_le16toh(setup->wIndex) == req->control_index &&
+		       tu_le16toh(setup->wLength) == req->len;
+	case HID_ASYNC_REQUEST_HUB_RESET:
+		return setup->bmRequestType_bit.recipient == TUSB_REQ_RCPT_OTHER &&
+		       setup->bmRequestType_bit.type == TUSB_REQ_TYPE_CLASS &&
+		       setup->bmRequestType_bit.direction == TUSB_DIR_OUT &&
+		       setup->bRequest == HUB_REQUEST_SET_FEATURE &&
+		       tu_le16toh(setup->wValue) == HUB_FEATURE_PORT_RESET &&
+		       tu_le16toh(setup->wIndex) == req->hub_port &&
+		       tu_le16toh(setup->wLength) == 0;
+	default:
+		return false;
+	}
+}
+
 static void hid_async_host_call_sync(struct hid_async_host_call *call)
 {
 	bool done;
@@ -2027,44 +2085,51 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 	struct hid_async_slot *slot = NULL;
 	void *host_context = NULL;
 	u32 serial = (u32)xfer->user_data;
-	u32 actual = min_t(u32, xfer->actual_len, UINT16_MAX);
 	u8 hub_addr = 0;
 	u8 hub_port = 0;
 	int host_status = 0;
 	bool completed = false;
 	bool host_complete = false;
+	bool hub_slot_owned = false;
 	bool hub_slot_valid = true;
+	bool invariant_failed = false;
 
 	hid_transport_lock();
 	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
 		struct hid_async_slot *candidate = &hid_async_slots[i];
 		struct hid_async_request *req = &candidate->req;
 
+		/* Serial selects the stable request; the remaining tuple validates it. */
 		if (!serial || req->serial != serial ||
 		    (candidate->state != HID_ASYNC_SLOT_ACTIVE &&
 		     candidate->state != HID_ASYNC_SLOT_SUBMIT_PENDING &&
 		     candidate->state != HID_ASYNC_SLOT_RETIRING) ||
-		    !candidate->accepting_completion ||
-		    req->dev_addr != xfer->daddr ||
-		    !req->dev_addr ||
-		    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX ||
-		    req->generation !=
-			hid_async_device_generation_locked(req->dev_addr))
-			continue;
-		if ((hid_async_lane_is_out(
-			(enum hid_async_lane)candidate->lane) &&
-		     xfer->ep_addr != req->ep_addr) ||
-		    (!hid_async_lane_is_out(
-			(enum hid_async_lane)candidate->lane) && xfer->ep_addr))
+		    !candidate->accepting_completion)
 			continue;
 
 		slot = candidate;
-		if (!xfer->ep_addr && !req->len)
-			actual = 0;
-		req->actual_len = (u16)actual;
+		slot->accepting_completion = false;
+		if (req->dev_addr != xfer->daddr || !req->dev_addr ||
+		    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX ||
+		    req->generation !=
+			hid_async_device_generation_locked(req->dev_addr) ||
+		    (hid_async_lane_is_out(
+			(enum hid_async_lane)candidate->lane) ?
+			xfer->ep_addr != req->ep_addr : xfer->ep_addr != 0) ||
+		    !hid_async_completion_payload_valid_locked(candidate, xfer)) {
+			/* Physical giveback is terminal; task context retires the bad tuple. */
+			req->actual_len = 0;
+			req->xfer_result = XFER_RESULT_INVALID;
+			slot->completion_status = -EIO;
+			slot->completion_ready = true;
+			completed = true;
+			invariant_failed = true;
+			break;
+		}
+
+		req->actual_len = (u16)xfer->actual_len;
 		req->xfer_result = xfer->result;
 		slot->completion_status = hid_async_xfer_status(xfer->result);
-		slot->accepting_completion = false;
 		if (req->kind == HID_ASYNC_REQUEST_HUB_RESET) {
 			/* Pin this stable slot until the immediate host handoff returns. */
 			slot->state = HID_ASYNC_SLOT_HOST_COMPLETING;
@@ -2087,24 +2152,30 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 						       host_context, host_status);
 
 		hid_transport_lock();
-		/* HOST_COMPLETING prevents SMP teardown from recycling this serial. */
-		hub_slot_valid = slot &&
-			slot->state == HID_ASYNC_SLOT_HOST_COMPLETING &&
+		/* HOST_COMPLETING prevents SMP teardown from recycling this slot. */
+		hub_slot_owned = slot &&
+			slot->state == HID_ASYNC_SLOT_HOST_COMPLETING;
+		hub_slot_valid = hub_slot_owned &&
 			slot->req.serial == serial &&
 			slot->req.kind == HID_ASYNC_REQUEST_HUB_RESET;
-		if (hub_slot_valid) {
+		if (hub_slot_owned) {
+			/*
+			 * The host handoff has returned, so never strand its pinned slot.
+			 * A bad identity retires through the ordinary task completion path;
+			 * callback context publishes only the diagnostic bit below.
+			 */
+			if (!hub_slot_valid)
+				slot->completion_status = -EIO;
 			slot->state = HID_ASYNC_SLOT_ACTIVE;
 			slot->completion_ready = true;
 			completed = true;
 		}
 		hid_transport_unlock();
-		/* TinyUSB invokes this completion in its callback owner task. */
 		if (!hub_slot_valid)
-			async_msg("ERR: HID_HUB_SLOT");
-		configASSERT(hub_slot_valid);
-		if (!hub_slot_valid)
-			return;
+			invariant_failed = true;
 	}
+	if (invariant_failed)
+		usbhid_backend_async_invariant_failed();
 	if (completed)
 		hid_async_notify_task();
 }
