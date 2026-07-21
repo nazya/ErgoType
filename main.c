@@ -28,8 +28,9 @@
 #include "log.h"
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
-#define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
+#define TUD_STACK_SIZE 3072 // flash_fat_write requires 4096 bytes
 #define TUH_STACK_SIZE 4096
+#define KEYD_STACK_SIZE 5120
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -298,7 +299,9 @@ static void app_task(void *pvParameters)
                 pointing_motion_irq_init(pointing_task_handle, config.pmw3389[i].irq, (uint8_t)(MAX_PMW3360 + i));
         }
 
-        xTaskCreateAffinitySet(keyd_task, NULL, 7168, NULL, IDLE_PRIORITY + 4, CORE0, NULL); // empirically: min free watermark was 3408 words
+        // The multitouch lifecycle stress test left 658 words free at this depth.
+        xTaskCreateAffinitySet(keyd_task, NULL, KEYD_STACK_SIZE, NULL,
+                               IDLE_PRIORITY + 4, CORE0, NULL);
     }
 
     vTaskDelete(NULL);

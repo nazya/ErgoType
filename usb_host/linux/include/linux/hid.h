@@ -481,7 +481,10 @@ struct hid_report {
 struct hid_report_enum {
 	unsigned numbered;
 	struct list_head report_list;
-	struct hid_report *report_id_hash[HID_MAX_IDS];
+	// struct hid_report *report_id_hash[HID_MAX_IDS];
+	// RP2040 devices expose only a few reports per type. Keep the full 8-bit
+	// report-ID domain, but use report_list as its sparse index instead of
+	// embedding 256 mostly-NULL pointers in every report enum.
 };
 
 struct hid_control_fifo {

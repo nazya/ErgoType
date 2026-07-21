@@ -23,6 +23,10 @@ target_include_directories(${PROJECT_NAME}
   ${CMAKE_CURRENT_LIST_DIR}
   # Allow this support library to reuse ErgoType's logging macros (log.h).
   ${CMAKE_CURRENT_LIST_DIR}/..
+  PRIVATE
+  ${CMAKE_CURRENT_LIST_DIR}/../rtos
+  ${CMAKE_CURRENT_LIST_DIR}/../FreeRTOS-Kernel/include
+  ${CMAKE_CURRENT_LIST_DIR}/../FreeRTOS-Kernel/portable/ThirdParty/GCC/RP2040/include
 )
 target_link_libraries(${PROJECT_NAME}
   PRIVATE

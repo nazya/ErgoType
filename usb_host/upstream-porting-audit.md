@@ -96,6 +96,29 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 - Host keyboard LEDs use the virtual `devmon` path and synchronous evdev writer;
   the laptop/remapper/fixture loop passed on hardware.
 
+## Memory Budget
+
+- KeyD uses a 5120-word stack: the multitouch lifecycle stress test left 658
+  words free while returning 8 KiB to the shared heap.
+- The TinyUSB device task uses 3072 words (12 KiB). Static analysis estimates
+  about 5.5 KiB for the flash/WebHID write path; correcting the former
+  byte-versus-word over-allocation returns another 4 KiB to the heap.
+- The immutable 2-KiB FAT12 format image stays in flash. Formatting makes a
+  temporary FreeRTOS-heap copy because XIP is unavailable during programming;
+  the image no longer permanently occupies SRAM.
+- `hid_report_enum` retains the full 8-bit report-ID range through its existing
+  sparse `report_list` instead of three embedded 256-pointer hashes. Original
+  upstream declarations/lookups remain adjacent; this saves 3072 bytes per
+  attached HID interface.
+- INPUT ARRAY fields retain every selector usage and priority, but allocate
+  runtime `value`/`new_value` storage by physical `report_count`; all non-array
+  field layouts remain upstream-sized.
+- Plain compatibility `kobject_uevent()` calls retain lifecycle counters without
+  allocating the 2324-byte Linux userspace environment, for which firmware has
+  no sink. `kobject_uevent_env()` remains available for callers needing it.
+- The 4096-word TinyUSB host stack is unchanged: this branch still parses input
+  reports in the host callback, unlike the separate asynchronous report task.
+
 ## Haptic Status
 
 - `evdev_connect()` only registers the input handle. After synchronous

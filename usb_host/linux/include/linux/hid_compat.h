@@ -1253,7 +1253,16 @@ static inline int kobject_uevent_env(struct kobject *kobj, enum kobject_action a
 
 static inline int kobject_uevent(struct kobject *kobj, enum kobject_action action)
 {
-	return kobject_uevent_env(kobj, action, NULL);
+	// return kobject_uevent_env(kobj, action, NULL);
+	// Linux builds the environment for a userspace/netlink consumer. Firmware
+	// has no such sink, so avoid allocating and immediately discarding 2.3 KiB.
+	struct device *dev = kobj_to_dev(kobj);
+
+	if (dev) {
+		dev->uevent_count++;
+		dev->last_uevent_action = action;
+	}
+	return 0;
 }
 
 static inline void dev_set_name(struct device *dev, const char *fmt, ...)
