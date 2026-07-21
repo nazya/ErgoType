@@ -327,10 +327,24 @@
   semantic patch groups, and SDK upgrade procedure are recorded in
   [`tinyusb-host-port.md`](tinyusb-host-port.md). The pinned TinyUSB input is
   never modified and drift in that selected source fails configuration for an
-  explicit re-audit.
+  explicit re-audit. Its former 50-ms root-reset, 450-ms root/hub debounce, and
+  2-ms post-address waits are now host-owned deadlines and continuations, so the
+  sole TinyUSB event pump keeps processing REMOVE and duplicate ATTACH while an
+  enumeration delay is active. A foreign ATTACH is deduplicated in a compact
+  host-owned topology FIFO instead of being sent with an infinite wait back into
+  that pump's own queue; REMOVE prunes stale entries and the next host-service
+  iteration after terminal/mount unwind starts the oldest survivor directly.
+  The public host loop is again exactly `while (1) tuh_task();`. Inside the
+  generated TinyUSB core, an armed continuation, no-progress watchdog, or
+  physical-drain fence shortens only the next private queue wait to its exact
+  deadline; HCD/deferred events wake that wait earlier. With nothing armed the
+  queue wait is indefinite, and there is no fixed periodic wake. The remaining
+  100-ms control retry is error-only
+  and needs a durable semantic reissue before it can safely leave callback-local
+  transfer storage.
 - The same compatibility generation pins `hid_host.c` and preserves its full
-  `hidh_open()`, `hidh_set_config()`, and report-descriptor prefetch blocks
-  commented beside their replacements. A bounded two-pass scanner accepts the
+  `hidh_open()` and `hidh_set_config()` blocks commented beside their two
+  replacements. A bounded two-pass scanner accepts the
   HID descriptor in the current interface extras (including after endpoint[0]),
   opens no more than `bNumEndpoints`, and publishes the class slot only after
   endpoint success. Enumeration performs neither SET_IDLE nor SET_PROTOCOL and
@@ -338,7 +352,9 @@
   its ephemeral class identity. Lifecycle builds the retained interface, then
   upstream-shaped `usbhid_parse()` sends Linux's SET_IDLE and owns the one
   exact-size descriptor request plus its retry/error semantics. TinyUSB retains
-  Report-protocol metadata only to match the reset default.
+  Report-protocol metadata only to match the reset default. Its upstream
+  report-descriptor prefetch branch remains unchanged but unreachable because
+  the replacement set-config path directly completes the class mount.
 - A third, single-anchor compatibility source pins TinyUSB's PIO HCD. Its
   upstream `hcd_edpt_clear_stall()` is a no-op; the generated implementation
   maps `rhport` through the HCD's own `RHPORT_PIO()` macro and resets the local

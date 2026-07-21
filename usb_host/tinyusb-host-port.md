@@ -91,29 +91,29 @@ calls Pico-PIO-USB directly. Remove the HCD replacement only when upstream's
 active PIO HCD implements equivalent clear-stall semantics, and gate that
 change with the STALL recovery hardware test below.
 
-At the current checkpoint the port has 44 exact replacement anchors:
+At the current checkpoint the port has 40 exact replacement anchors:
 
-- four host-core replacements in `CMakeLists.txt`;
-- 36 enumeration/lifecycle replacements in
+- three host-core replacements in `CMakeLists.txt`;
+- 34 enumeration/lifecycle replacements in
   `usb_host/tinyusb-usbh-enum-port.cmake`;
-- three HID-class replacements in `CMakeLists.txt`;
+- two HID-class replacements in `CMakeLists.txt`;
 - one PIO-HCD replacement in `CMakeLists.txt`.
 
-The 36 enumeration/lifecycle anchors currently divide into five owner/hook
+The 34 enumeration/lifecycle anchors currently divide into four owner/hook
 primitives, four EP0 submission/progress fixes, eight attach/remove/event-loop
-fences, three terminal/retry/watchdog pieces, and 16 guarded enumeration-state
+fences, three terminal/retry/watchdog pieces, and 15 guarded enumeration-state
 transitions. These counts are an audit index, not a stable API; update them when
 an anchor is added or removed.
 
-For scale, the generated host-core source grows from 1,780 to 2,513 lines and
-its review diff is 821 insertions and 88 deletions. The generated HID-class
-source grows from 764 to 874 lines and its review diff is 156 insertions and 46
+For scale, the generated host-core source grows from 1,780 to 2,759 lines and
+its review diff is 1,107 insertions and 128 deletions. The generated HID-class
+source grows from 764 to 862 lines and its review diff is 140 insertions and 42
 deletions. The generated PIO-HCD source grows from 210 to 215 lines and its
 review diff is 10 insertions and five deletions. Much of the insertion count is
 the required adjacent copy of replaced upstream code and comments, but this is
 still a real internal TinyUSB port with a real upgrade cost.
 
-Not all 44 anchors are required merely to call the Linux HID parser. The three
+Not all 40 anchors are required merely to call the Linux HID parser. The two
 HID-class replacements and the hub post-enumeration publication are the direct
 HID/lifecycle adapter. Most host-core replacements implement reset,
 re-enumeration, failure terminals, and lost-completion recovery discovered while
@@ -127,8 +127,9 @@ completion callback, while TinyUSB's null-callback synchronous descriptor
 wrappers are discarded by `--gc-sections`. The upstream null-callback branch
 still exists inside the live `tuh_control_xfer()` function; adding any TinyUSB
 `*_sync()` caller requires a fresh audit because SETUP rejection there does not
-restore the global control owner. The callback-backed SETUP rollback remains
-active because it is on the real asynchronous path.
+restore the global control owner and its nested `tuh_task()` would also invalidate
+the current shallow-entry logging guarantee. The callback-backed SETUP rollback
+remains active because it is on the real asynchronous path.
 
 The inactive `tuh_deinit()` owner reset is also left upstream-exact because the
 firmware never calls or links that function. Two SET_ADDRESS-path replacements
@@ -141,12 +142,13 @@ The two second-reset hub states are likewise upstream-exact: their sole producer
 is TinyUSB's existing `ENUM_RESET_2` block under `#if 0`, so neither state is
 reachable in this pinned build.
 
-Enumeration-state and global-control-IDLE weak hooks are emitted directly by
-the same upstream weak-hook anchor as re-enumeration authorization. An earlier
-version inserted the authorization hook and then used that local insertion as
-the anchor for another transformation. Removing that patch-on-patch step leaves
-the generated TinyUSB source unchanged and makes every remaining macro
-replacement refer directly to pinned upstream text.
+`tuh_reenumerate_begin_cb()`, `tuh_port_enum_state_cb()`,
+`tuh_port_control_idle_cb()`, and `tuh_port_enum_event_cb()` are mandatory
+strong firmware boundary functions.
+The generated core declares them but provides no weak fallback, so missing glue
+fails at link time. TinyUSB's unrelated upstream weak `tuh_event_hook_cb()`
+remains untouched. This also removes a former patch-on-patch anchor: every
+remaining macro replacement now refers directly to pinned upstream text.
 
 ## How Generation Fails Closed
 
@@ -228,9 +230,9 @@ configuration may still be running.
 Reset recovery already runs in TinyUSB's host task. Sending another attach event
 to the same task and waiting for it would recurse through, or block, its sole
 event consumer. The port adds direct attach/re-enumerate entries which call the
-existing `enum_new_device()` path while the host owner is current. A weak
-generation hook lets firmware reject a stale physical epoch before removing the
-old device graph.
+existing `enum_new_device()` path while the host owner is current. A mandatory
+generation callback lets firmware reject a stale physical epoch before removing
+the old device graph.
 
 ### Exact EP0 owner recovery
 
@@ -243,19 +245,21 @@ a replacement request after address reuse.
 ### Observable global control and enumeration state
 
 Task-side reset/re-enumeration must wait for durable conditions, not poll or
-read TinyUSB private fields from another core. Weak publications expose only
-the required edges: global EP0 becoming idle, enumeration becoming active, and
-the exact success/failure terminal. Private TinyUSB structures remain owned by
-the host task.
+read TinyUSB private fields from another core. Mandatory publications expose
+only the required edges: global EP0 becoming idle, enumeration becoming active,
+and the exact success/failure terminal. Private TinyUSB structures remain owned
+by the host task.
 
 ### Bounded enumeration and cleanup
 
 The enumeration patch turns TinyUSB's single `_dev0`/global-control state into
 an explicitly bounded host-owner lifecycle. Its anchors cover:
 
-- owner initialization and provisional USB address tracking;
+- per-epoch owner reset and provisional USB address tracking;
 - SETUP, DATA, and ACK submission failure and progress accounting;
 - root and hub reset/status/descriptor/configuration retries;
+- non-blocking root reset, root/hub connection debounce, and address recovery;
+- bounded deferred-attach ownership outside the sole host event queue;
 - duplicate attach, remove, retired-event, and address-reuse fences;
 - a finite host-event budget and dequeue-generation fence;
 - class set-config ownership and topology publication;
@@ -266,25 +270,67 @@ device in its host task. The additions make its one active enumeration epoch
 observable and guaranteed to reach a terminal so the external lifecycle owner
 cannot wait forever or start a competing epoch.
 
+The pinned core's 50-ms root reset, 450-ms root/hub connection debounce, and
+2-ms post-SET_ADDRESS recovery waits used to block that sole host event pump.
+The port now records the exact continuation and deadline, returns to the pump,
+and resumes the corresponding upstream tail from the host-owner service. The
+firmware loop remains literally `while (1) tuh_task();`. At shallow entry,
+generated `tuh_task_ext()` services due state and reduces its caller-supplied
+queue timeout to the nearest host-owned deadline. HCD/deferred work wakes the
+same queue earlier; with no deadline the ordinary `tuh_task()` wait remains
+indefinite. This follows current TinyUSB's internal call-after model without an
+external timer, extra queue, finite periodic tick, or firmware-visible
+`wait_ms`. Root reset is ended
+exactly once on normal continuation or terminal cancellation. REMOVE, duplicate
+ATTACH, timeout, and terminal cleanup therefore remain observable during every
+normal enumeration delay. The one remaining blocking delay is the 100-ms
+failed-control-transfer retry. It is reachable only on an error and has
+no circular dependency on TinyUSB progress; converting it safely requires a
+durable semantic retry because its current transfer/setup objects live on the
+callback stack.
+
+Pinned TinyUSB also deferred a foreign ATTACH by sending it back into its main
+queue with an infinite task wait. Because the sender is that queue's sole
+consumer, an ISR refill could leave it blocked on itself. The port instead keeps
+one deduplicated `{rhport, hub_addr, hub_port}` record per possible device in a
+compact host-owned FIFO. REMOVE prunes the matching topology and descendants
+before TinyUSB clears their parent links; the next host-service iteration after
+enumeration terminal and mount-callback unwind starts the oldest surviving
+topology directly. No extra RTOS queue or heap allocation is involved.
+Exhaustion drops the excess event and publishes
+`ERR: HID_ATTACH_OVERFLOW` through the ordinary asynchronous diagnostic path.
+
+One newer-upstream behavior is deliberately still pending: current TinyUSB
+removes an already mounted device at the same topology before accepting every
+new ATTACH. The pinned path handles a duplicate during active enumeration but
+still assumes that an idle mounted topology receives REMOVE before a later
+ATTACH. Porting the newer rule requires coordination with the firmware's
+asynchronous lifecycle retirement; calling `process_removing_device()` and
+immediately reusing the address would reintroduce the lifetime race this layer
+exists to prevent.
+
 The deliberately small host-core interface consumed by firmware is:
 
 - `usbh_port_attach_on_host()` and `usbh_port_reenumerate_on_host()`;
 - `usbh_port_control_recover_on_host()`;
-- `usbh_port_enum_watchdog_on_host()`;
 - `tuh_reenumerate_begin_cb()`;
-- `tuh_port_enum_state_cb()` and `tuh_port_control_idle_cb()`.
+- `tuh_port_enum_state_cb()` and `tuh_port_control_idle_cb()`;
+- `tuh_port_enum_event_cb()`.
 
 The `*_on_host()` entries may be called only by the registered TinyUSB host
-owner. Callbacks publish bounded identity/result state and wake edges only;
-they do not allocate, log, parse, run Linux driver policy, or wait for USB,
-lifecycle, queue, or parser progress. Publication may briefly take the shared
+owner. USB/timer callbacks publish bounded identity/result state and wake edges
+only; they do not allocate, log, parse, run Linux driver policy, or wait for
+USB, lifecycle, queue, or parser progress. `tuh_port_enum_event_cb()` is not a
+USB callback: in the current linked call graph it runs at shallow `tuh_task()`
+entry after the previous callback unwound, and may therefore publish an
+`async_msg()` diagnostic. Publication may briefly take the shared
 priority-inheritance transport mutex. That mutex is never held across a
 TinyUSB/HCD call, host-task handoff, parser, heap operation, logger, or
 condition wait, so its release never depends on further TinyUSB progress.
 
 ## HID-Class Change Groups
 
-The three `hid_host.c` replacements preserve TinyUSB's complete upstream blocks
+The two `hid_host.c` replacements preserve TinyUSB's complete upstream blocks
 beside the local implementation.
 
 ### Interface descriptor scan
@@ -315,7 +361,10 @@ early report-descriptor read. The port mounts the class with a `NULL` report
 descriptor. Later, task-side `usbhid_parse()` validates the retained HID class
 descriptor and reads the exact report length, capped at Linux's 4 KiB HID
 descriptor limit, through the asynchronous EP0 bridge with four wire attempts.
-This removes both the 512-byte limit and the duplicate read.
+This removes both the 512-byte limit and the duplicate read. The upstream
+`CONFIG_GET_REPORT_DESC` switch branch remains byte-identical in the generated
+source but is unreachable because the replacement `hidh_set_config()` completes
+the class mount directly and never produces that state.
 
 ## PIO-HCD Change Group
 
@@ -332,6 +381,33 @@ does not send the remote request. The report task still sends standard
 `CLEAR_FEATURE(HALT)`, and only its successful completion schedules the host-
 owner call to the generic `hcd_edpt_clear_stall()` API. The endpoint is idle at
 that point and interrupt-IN is rearmed only after this call succeeds.
+
+## Low-Priority HCD Follow-up
+
+This is future robustness work, not part of the current async-lifecycle
+checkpoint. TinyUSB's fixed host-event queue can reject an ISR publication
+when it is full, while the pinned PIO HCD clears the corresponding endpoint or
+topology source after its void event call. Exact-owner EP0 watchdog/drain
+recovery prevents that case from permanently occupying the global control
+lane, but a genuinely saturated queue can still lose a non-EP0 completion.
+The present eight-endpoint PIO pool, 16-entry TinyUSB queue, and high-priority
+host owner make this unlikely during normal HID traffic; they are not a formal
+completion-durability contract.
+
+Do not restore discarded change `hid: retain PIO events under host
+backpressure`. Its retained-event ring, complete IRQ rewrite, and
+`pio_usb_host_frame()` producer fence turned queue backpressure into a stop of
+PIO SOF and endpoint scheduling. It also depended on the already-rejected
+topology-ordering changes in `hid: order asynchronous host event ingress` and `hid: preserve asynchronous topology ordering`.
+
+Before changing the HCD, reproduce the condition with isolated fault injection
+and verify continued input, output, detach/replug, heap, and stack watermarks.
+If the remaining risk is worth closing, prefer a small acceptance/retry
+contract: clear a PIO source only after the TinyUSB host queue durably accepts
+its event, or fail closed through a controlled host reset. Do not add a second
+event ring, stop SOF, add periodic polling, or introduce Pico timer APIs. Keep
+the contract backend-capable so a future ESP HCD can provide its own
+cancel/giveback semantics without inheriting PIO-specific drain behavior.
 
 ## What Must Stay Outside This Port
 

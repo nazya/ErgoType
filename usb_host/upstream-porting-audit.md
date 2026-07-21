@@ -78,7 +78,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
    early-return/scoped-block line.
 
 7. Reduced `input.c`, queue-backed `evdev.c`, and port-only `task.c` are
-   deliberate non-line-preserving areas; `task.c` lacks a provenance note.
+   deliberate non-line-preserving areas; `task.c` now carries an explicit
+   TinyUSB/Linux provenance note.
 
 ## Fixed Runtime Boundary
 
@@ -329,15 +330,17 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   Descriptors up to Linux's 4 KiB limit no longer depend on TinyUSB's 512-byte
   enumeration scratch; configuration descriptors still do.
   A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
-  `hidh_open()`, `hidh_set_config()`, and prefetch blocks commented beside their
-  port replacements.
+  `hidh_open()` and `hidh_set_config()` blocks commented beside their two port
+  replacements.
   Its two-pass current-interface scanner mirrors Linux's accepted HID-descriptor
   positions, caps opened/stored endpoints at `bNumEndpoints`, and publishes the
   TinyUSB class slot only after endpoint success. The set-config replacement
   skips enumeration SET_IDLE/SET_PROTOCOL and mounts with `NULL`; task-side
   `usbhid_parse()` retains upstream's SET_IDLE line and is the sole report-
   descriptor owner. No generic SET_PROTOCOL is added because Linux relies on
-  the reset-default Report protocol. Firmware-only device/string reconstruction
+  the reset-default Report protocol. TinyUSB's upstream prefetch switch branch
+  remains unchanged but unreachable because the replacement set-config path
+  directly completes the class mount. Firmware-only device/string reconstruction
   is now wholly lifecycle-owned: adjacent upstream `usb_get_descriptor()` /
   `usb_get_string()` calls stay visible while the compact port sends their
   standard request tuples through generic async-backed `usb_control_msg()` and
@@ -379,8 +382,17 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   global-control deltas. The complete active source inventory and grouped
   maintenance contract are recorded in
   [`tinyusb-host-port.md`](tinyusb-host-port.md). The helpers preserve
-  `enum_new_device()` and avoid a blocking send back into TinyUSB's sole host
-  queue from its own consumer. EP0 retirement
+  `enum_new_device()`'s root/hub continuation semantics while replacing its
+  blocking 50-ms root reset, 450-ms connection settle, and 2-ms address recovery
+  with host-owned deadlines. The sole TinyUSB event pump therefore remains
+  runnable. Its public loop is the upstream-shaped `while (1) tuh_task();`.
+  Inside generated `tuh_task_ext()`, the nearest armed deadline shortens the
+  private queue wait while real HCD/deferred events wake it earlier; an idle
+  host waits indefinitely, with no fixed periodic timeout. Foreign
+  ATTACH events are deduplicated in bounded topology storage, pruned by REMOVE,
+  and started by the next host-service iteration after terminal/mount unwind
+  instead of being sent back into the sole consumer's queue with an infinite
+  wait. EP0 retirement
   permits three SETUP/DATA/ACK drain fences before the exact old owner receives
   TinyUSB's normal terminal TIMEOUT callback; a replacement serial is untouched.
   Exact unique CMake anchors preserve replaced upstream blocks beside the port

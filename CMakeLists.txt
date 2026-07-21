@@ -190,71 +190,6 @@ string(REPLACE "${TINYUSB_USBH_REATTACH_UPSTREAM}"
        "${TINYUSB_USBH_REATTACH_PORT}"
        TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
 
-# Upstream TinyUSB: no equivalent. This weak hook authorizes the direct
-# re-enumeration helper above; the transport provides the strong callback.
-set(TINYUSB_USBH_REATTACH_HOOK_UPSTREAM [=[
-TU_ATTR_WEAK void tuh_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
-  (void) rhport;
-  (void) eventid;
-  (void) in_isr;
-}
-]=])
-set(TINYUSB_USBH_REATTACH_HOOK_PORT [=[
-TU_ATTR_WEAK void tuh_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr) {
-  (void) rhport;
-  (void) eventid;
-  (void) in_isr;
-}
-
-// Upstream TinyUSB: no equivalent; firmware's direct reattach generation fence.
-TU_ATTR_WEAK bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
-  (void) rhport;
-  (void) hub_addr;
-  (void) hub_port;
-  return false;
-}
-
-// Upstream TinyUSB: no enumeration-progress notification. Firmware's reset
-// coordinator keeps its global EP0 gate closed through the exact terminal.
-TU_ATTR_WEAK void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
-                                         uint8_t hub_port, bool active,
-                                         bool success) {
-  (void) rhport;
-  (void) hub_addr;
-  (void) hub_port;
-  (void) active;
-  (void) success;
-}
-
-// Upstream TinyUSB: no global control-owner idle publication. Firmware reset
-// work uses this edge exactly like USB-core completion wakes a waiting reset.
-TU_ATTR_WEAK void tuh_port_control_idle_cb(void) {
-}
-]=])
-string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
-       "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
-       TINYUSB_USBH_REATTACH_HOOK_OFFSET)
-if(TINYUSB_USBH_REATTACH_HOOK_OFFSET EQUAL -1)
-    message(FATAL_ERROR
-            "Pinned TinyUSB usbh.c weak-hook anchor changed; re-audit the port")
-endif()
-string(LENGTH "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
-       TINYUSB_USBH_REATTACH_HOOK_LENGTH)
-math(EXPR TINYUSB_USBH_REATTACH_HOOK_TAIL_OFFSET
-     "${TINYUSB_USBH_REATTACH_HOOK_OFFSET} + ${TINYUSB_USBH_REATTACH_HOOK_LENGTH}")
-string(SUBSTRING "${TINYUSB_USBH_PORT_CONTENT}"
-       ${TINYUSB_USBH_REATTACH_HOOK_TAIL_OFFSET} -1
-       TINYUSB_USBH_REATTACH_HOOK_TAIL)
-string(FIND "${TINYUSB_USBH_REATTACH_HOOK_TAIL}"
-       "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
-       TINYUSB_USBH_SECOND_REATTACH_HOOK)
-if(NOT TINYUSB_USBH_SECOND_REATTACH_HOOK EQUAL -1)
-    message(FATAL_ERROR "TinyUSB weak-hook anchor is not unique")
-endif()
-string(REPLACE "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
-       "${TINYUSB_USBH_REATTACH_HOOK_PORT}"
-       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
-
 # Upstream TinyUSB has no exact-owner recovery after an HCD completion event is
 # lost. Preserve its ordinary completion helper verbatim, then add a build-local
 # host-owner entry which matches daddr + callback + user_data before synthesizing
@@ -615,20 +550,11 @@ set(TINYUSB_HIDH_SET_CONFIG_PORT [=[
 //   return true;
 // }
 // Linux usbhid owns SET_IDLE in task-side parse and assumes the USB
-// reset-default Report protocol, so begin at the already ported descriptor/
-// mount state without a wire SET_IDLE or SET_PROTOCOL transaction here.
+// reset-default Report protocol. Complete only TinyUSB's class-slot mount;
+// lifecycle performs the authoritative report-descriptor request later.
 bool hidh_set_config(uint8_t daddr, uint8_t itf_num) {
-  tusb_control_request_t request = { 0 };
-  request.wIndex = tu_htole16((uint16_t) itf_num);
-
-  tuh_xfer_t xfer = { 0 };
-  xfer.daddr = daddr;
-  xfer.result = XFER_RESULT_SUCCESS;
-  xfer.setup = &request;
-  xfer.user_data = CONFIG_GET_REPORT_DESC;
-
-  // fake request to kick-off the set config process
-  process_set_config(&xfer);
+  uint8_t const idx = tuh_hid_itf_get_index(daddr, itf_num);
+  config_driver_mount_complete(daddr, idx, NULL, 0);
 
   return true;
 }
@@ -656,66 +582,6 @@ if(NOT TINYUSB_HIDH_SECOND_SET_CONFIG EQUAL -1)
 endif()
 string(REPLACE "${TINYUSB_HIDH_SET_CONFIG_UPSTREAM}"
        "${TINYUSB_HIDH_SET_CONFIG_PORT}"
-       TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_PORT_CONTENT}")
-set(TINYUSB_HIDH_REPORT_DESC_UPSTREAM [=[
-    case CONFIG_GET_REPORT_DESC:
-      // Get Report Descriptor if possible
-      // using usbh enumeration buffer since report descriptor can be very long
-      if (p_hid->report_desc_len > CFG_TUH_ENUMERATION_BUFSIZE) {
-        TU_LOG_DRV("HID Skip Report Descriptor since it is too large %u bytes\r\n", p_hid->report_desc_len);
-
-        // Driver is mounted without report descriptor
-        config_driver_mount_complete(daddr, idx, NULL, 0);
-      } else {
-        tuh_descriptor_get_hid_report(daddr, itf_num, p_hid->report_desc_type, 0,
-                                      usbh_get_enum_buf(), p_hid->report_desc_len,
-                                      process_set_config, CONFIG_COMPLETE);
-      }
-      break;
-
-]=])
-set(TINYUSB_HIDH_REPORT_DESC_PORT [=[
-    case CONFIG_GET_REPORT_DESC:
-      // Upstream TinyUSB:
-      // // Get Report Descriptor if possible
-      // // using usbh enumeration buffer since report descriptor can be very long
-      // if (p_hid->report_desc_len > CFG_TUH_ENUMERATION_BUFSIZE) {
-      //   TU_LOG_DRV("HID Skip Report Descriptor since it is too large %u bytes\r\n", p_hid->report_desc_len);
-      //
-      //   // Driver is mounted without report descriptor
-      //   config_driver_mount_complete(daddr, idx, NULL, 0);
-      // } else {
-      //   tuh_descriptor_get_hid_report(daddr, itf_num, p_hid->report_desc_type, 0,
-      //                                 usbh_get_enum_buf(), p_hid->report_desc_len,
-      //                                 process_set_config, CONFIG_COMPLETE);
-      // }
-      // Firmware usbhid_parse() owns one exact-size, four-attempt Linux fetch.
-      config_driver_mount_complete(daddr, idx, NULL, 0);
-      break;
-
-]=])
-string(FIND "${TINYUSB_HIDH_PORT_CONTENT}"
-       "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
-       TINYUSB_HIDH_REPORT_DESC_OFFSET)
-if(TINYUSB_HIDH_REPORT_DESC_OFFSET EQUAL -1)
-    message(FATAL_ERROR
-            "Pinned TinyUSB HID report-fetch anchor changed; re-audit the port")
-endif()
-string(LENGTH "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
-       TINYUSB_HIDH_REPORT_DESC_LENGTH)
-math(EXPR TINYUSB_HIDH_REPORT_DESC_TAIL_OFFSET
-     "${TINYUSB_HIDH_REPORT_DESC_OFFSET} + ${TINYUSB_HIDH_REPORT_DESC_LENGTH}")
-string(SUBSTRING "${TINYUSB_HIDH_PORT_CONTENT}"
-       ${TINYUSB_HIDH_REPORT_DESC_TAIL_OFFSET} -1
-       TINYUSB_HIDH_REPORT_DESC_TAIL)
-string(FIND "${TINYUSB_HIDH_REPORT_DESC_TAIL}"
-       "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
-       TINYUSB_HIDH_SECOND_REPORT_DESC)
-if(NOT TINYUSB_HIDH_SECOND_REPORT_DESC EQUAL -1)
-    message(FATAL_ERROR "TinyUSB HID report-fetch anchor is not unique")
-endif()
-string(REPLACE "${TINYUSB_HIDH_REPORT_DESC_UPSTREAM}"
-       "${TINYUSB_HIDH_REPORT_DESC_PORT}"
        TINYUSB_HIDH_PORT_CONTENT "${TINYUSB_HIDH_PORT_CONTENT}")
 file(WRITE "${TINYUSB_HIDH_PORT_SOURCE}" "${TINYUSB_HIDH_PORT_CONTENT}")
 

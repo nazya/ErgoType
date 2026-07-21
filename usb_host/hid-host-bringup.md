@@ -87,6 +87,13 @@ lifecycle task
   -> hid_destroy_device() and free the USB-HID transport object
 ```
 
+The TinyUSB host task is the ordinary `while (1) tuh_task();` loop and has no
+fixed polling interval. Inside the generated host core, `tuh_task_ext()` first
+services due enum continuations and shortens its private queue wait to the
+nearest remaining deadline. HCD/deferred work wakes that same wait earlier; an
+idle host with no deadline waits indefinitely. No timer object or wake queue is
+added outside TinyUSB.
+
 The physical publication is intentionally earlier than HID class close: it is
 the producer fence for both ordinary devices and hubs. TinyUSB omits the common
 unmount callback for hubs, so the raw application-driver close remains the
@@ -471,6 +478,7 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |
 | `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
 | `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |
+| `ERR: HID_ATTACH_OVERFLOW` | More distinct topologies arrived during one enumeration than the bounded device table can retain. The excess ATTACH was dropped instead of blocking TinyUSB on its own queue. |
 | `ERR: HID_WQ_NOT_READY` / `HID_WQ_LOCK_FAIL` / `HID_WQ_UNLOCK_FAIL` | A task-side workqueue mutex invariant failed. The checked FreeRTOS call was evaluated before the following assert. |
 | `ERR: HID_WQ_WAITER_BAD` / `HID_WQ_WAITER_LOST` / `HID_WQ_SELF_WAIT` | A synchronous workqueue waiter invariant failed outside TinyUSB callback context. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
