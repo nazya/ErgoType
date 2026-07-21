@@ -4,8 +4,8 @@
 #include "queue.h"
 #include "task.h"
 #include "tusb.h"
+#include "host/hcd.h"
 #include "host/usbh_pvt.h"
-#include "pio_usb.h"
 #include "stdio_tusb_cdc.h"
 
 #include "linux/include/linux/hid.h"
@@ -50,10 +50,11 @@ enum usbhid_report_owner {
 
 static void usbhid_report_drain_abort_frames(void)
 {
-	u32 start = pio_usb_host_get_frame_number();
+	/* Keep abort fencing at the TinyUSB HCD boundary, independent of PIO. */
+	u32 start = hcd_frame_number(BOARD_TUH_RHPORT);
 
-	/* FreeRTOS ticks and the independent PIO SOF timer need not share phase. */
-	while (pio_usb_host_get_frame_number() - start <
+	/* FreeRTOS ticks and the independent USB SOF timer need not share phase. */
+	while (hcd_frame_number(BOARD_TUH_RHPORT) - start <
 	       USBHID_REPORT_ABORT_DRAIN_FRAMES)
 		vTaskDelay(1);
 }
@@ -1873,13 +1874,13 @@ static void usbhid_report_reconcile_on_host(void *data)
 
 		if (action == USBHID_REPORT_HOST_RESET_DATA_TOGGLE) {
 			/*
-			 * The pinned PIO HCD maps TinyUSB rhport N to PIO root N-1,
-			 * but its hcd_edpt_clear_stall() is a no-op. Remote clear-halt
-			 * has completed; reset the idle local endpoint to DATA0 here.
+			 * usb_clear_halt() resets the host toggle after the remote request.
+			 * The SHA-pinned PIO HCD now owns that controller-specific step.
 			 */
 			ok = tuh_hid_mounted(usbhid->dev_addr, usbhid->instance) &&
-			     pio_usb_host_endpoint_reset_data_toggle(
-				BOARD_TUH_RHPORT - 1u, usbhid->dev_addr, ep_addr);
+			     hcd_edpt_clear_stall(
+				usbh_get_rhport(usbhid->dev_addr),
+				usbhid->dev_addr, ep_addr);
 
 			hid_transport_lock();
 			device_reset = false;

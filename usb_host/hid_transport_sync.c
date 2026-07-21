@@ -1,8 +1,10 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
+#include "tusb.h"
 
 #include "hid_transport_sync.h"
+#include "usbhid_backend.h"
 #include "stdio_tusb_cdc.h"
 
 static SemaphoreHandle_t hid_transport_mutex;
@@ -40,14 +42,17 @@ void hid_transport_lock(void)
 		return;
 	ready = hid_transport_mutex != NULL;
 	if (!ready) {
-		async_msg("ERR: HID_LOCK_NOT_READY");
+		/* This helper is also called from TinyUSB host callbacks. */
+		usbhid_backend_transport_lock_failed(
+			USBHID_TRANSPORT_LOCK_NOT_READY);
 		configASSERT(ready);
 		return;
 	}
 	ret = xSemaphoreTake(hid_transport_mutex, portMAX_DELAY);
 	locked = ret == pdPASS;
 	if (!locked)
-		async_msg("ERR: HID_LOCK_TAKE_FAIL");
+		usbhid_backend_transport_lock_failed(
+			USBHID_TRANSPORT_LOCK_TAKE_FAILED);
 	configASSERT(locked);
 }
 
@@ -64,13 +69,16 @@ void hid_transport_unlock(void)
 		return;
 	ready = hid_transport_mutex != NULL;
 	if (!ready) {
-		async_msg("ERR: HID_LOCK_NOT_READY");
+		/* This helper is also called from TinyUSB host callbacks. */
+		usbhid_backend_transport_lock_failed(
+			USBHID_TRANSPORT_LOCK_NOT_READY);
 		configASSERT(ready);
 		return;
 	}
 	ret = xSemaphoreGive(hid_transport_mutex);
 	unlocked = ret == pdPASS;
 	if (!unlocked)
-		async_msg("ERR: HID_LOCK_GIVE_FAIL");
+		usbhid_backend_transport_lock_failed(
+			USBHID_TRANSPORT_LOCK_GIVE_FAILED);
 	configASSERT(unlocked);
 }

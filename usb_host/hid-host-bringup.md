@@ -90,7 +90,9 @@ lifecycle task
 The physical publication is intentionally earlier than HID class close: it is
 the producer fence for both ordinary devices and hubs. TinyUSB omits the common
 unmount callback for hubs, so the raw application-driver close remains the
-device-level fallback. No callback waits or frees Linux-owned state.
+device-level fallback. No callback waits for USB/lifecycle progress or frees
+Linux-owned state; bounded publication may briefly take the shared transport
+mutex, whose holder never depends on further TinyUSB progress.
 
 Lifecycle destruction uses one exact-interface completion barrier after that
 producer fence. It cancels only async slots whose owner is the exact `hid`, then
@@ -113,9 +115,10 @@ raw GET/SET use the generic device-level EP0 lane; an interface owner tag makes
 stop/cancel wake the task immediately. HID report requests and generic control
 messages share same-device EP0 ordering; completed GET_REPORT parser storage no
 longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
-ll-driver contract, but TinyUSB callbacks never wait or run the Linux
-continuation. If the bounded broker is full, either synchronous caller task
-sleeps through a stack-owned FIFO admission waiter instead of polling. A normal
+ll-driver contract, but TinyUSB callbacks never wait for request completion or
+run the Linux continuation. If the bounded broker is full, either synchronous
+caller task sleeps through a stack-owned FIFO admission waiter instead of
+polling. A normal
 slot release or matching teardown wakes it to retry the durable enqueue
 predicate for at most one second; the transfer timeout starts only after
 admission. Nonblocking report
@@ -471,6 +474,7 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_WQ_NOT_READY` / `HID_WQ_LOCK_FAIL` / `HID_WQ_UNLOCK_FAIL` | A task-side workqueue mutex invariant failed. The checked FreeRTOS call was evaluated before the following assert. |
 | `ERR: HID_WQ_WAITER_BAD` / `HID_WQ_WAITER_LOST` / `HID_WQ_SELF_WAIT` | A synchronous workqueue waiter invariant failed outside TinyUSB callback context. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
+| `ERR: HID_LOCK_NOT_READY` / `HID_LOCK_TAKE_FAIL` / `HID_LOCK_GIVE_FAIL` | The shared transport mutex failed an invariant. Its callback-safe path publishes this reason as a lifecycle-notification bit; only lifecycle enters the logger, and the following assert uses the precomputed boolean. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
@@ -526,6 +530,8 @@ member, and lifecycle removal may wait in its task for KeyD to make room.
 
 ## Related Notes
 
+- [`tinyusb-host-port.md`](tinyusb-host-port.md): active SHA-pinned TinyUSB
+  substitutions, their runtime contract, and the required SDK upgrade process.
 - [`pio-usb-memory.md`](pio-usb-memory.md): static RAM and Pico-PIO-USB pools.
 - [`async-hid-requests.md`](async-hid-requests.md): nonblocking TinyUSB request model.
 - [`async-hid-progress.md`](async-hid-progress.md): implemented async-driver coverage.

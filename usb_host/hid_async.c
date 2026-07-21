@@ -8,7 +8,6 @@
 #include "host/hcd.h"
 #include "host/hub.h"
 #include "host/usbh_pvt.h"
-#include "pio_usb.h"
 
 #include "hid_async.h"
 #include "hid_transport_sync.h"
@@ -384,10 +383,11 @@ int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation)
 
 static void hid_async_drain_abort_frames(void)
 {
-	u32 start = pio_usb_host_get_frame_number();
+	/* Keep abort fencing at the TinyUSB HCD boundary, independent of PIO. */
+	u32 start = hcd_frame_number(BOARD_TUH_RHPORT);
 
-	/* FreeRTOS ticks and the independent PIO SOF timer need not share phase. */
-	while (pio_usb_host_get_frame_number() - start <
+	/* FreeRTOS ticks and the independent USB SOF timer need not share phase. */
+	while (hcd_frame_number(BOARD_TUH_RHPORT) - start <
 	       HID_ASYNC_ABORT_DRAIN_FRAMES)
 		vTaskDelay(1);
 }

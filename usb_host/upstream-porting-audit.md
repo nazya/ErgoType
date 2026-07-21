@@ -182,7 +182,10 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   captured boolean. This keeps the operations present in the `NDEBUG` build.
   That assertion rule also covers `hid_async.c`, `usbhid.c`,
   `usbhid_report.c`, and the transport mutex; imported Linux/FreeRTOS sources
-  remain untouched.
+  remain untouched. Since TinyUSB callbacks also enter the transport mutex, its
+  failure branches publish a fixed bit through lifecycle's existing indexed
+  task notification instead of recursing through that mutex or calling the
+  device-side async logger from the callback.
 - Linux's timer wheel must accept IRQ/softirq callers, but every active timer
   parent in this firmware is now task-owned. TinyUSB unmount no longer calls
   even non-waiting `timer_delete()`; it publishes stopping, and the report task
@@ -219,7 +222,8 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   device-managed timing. Linux's 96-slot call and allocation remain commented
   beside that memory-bounded replacement.
 - The existing lifecycle task probes. Feature/raw/OUTPUT traffic passes through
-  `hid_async_task`; caller tasks wait, TinyUSB callbacks do not. Raw GET/SET and
+  `hid_async_task`; caller tasks wait, TinyUSB callbacks do not wait for request
+  progress. Raw GET/SET and
   `.output_report()` use the upstream usbhid helper bodies over the generic
   USB-message bridge. HID owner tags, mutexes, refcount, work cancellation, and
   async drain cover teardown.
@@ -371,16 +375,20 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - Pinned TinyUSB omits its documented `tuh_mount_cb()` after hub enumeration,
   and `tuh_mounted()` becomes true before class-driver set-config completes.
   The build verifies the pinned `usbh.c` SHA and generates one build-local
-  source with five audited deltas: a hub post-`enum_full_complete()` mount
-  fence, a weak generation-authorization hook, direct host-owner root/hub
-  enumeration helpers, and exact daddr/callback/user-data recovery for a lost
-  EP0 completion, plus a global control-IDLE wake. The helpers preserve
+  source with exact host-owner, enumeration-terminal, bounded-recovery, and
+  global-control deltas. The complete active source inventory and grouped
+  maintenance contract are recorded in
+  [`tinyusb-host-port.md`](tinyusb-host-port.md). The helpers preserve
   `enum_new_device()` and avoid a blocking send back into TinyUSB's sole host
   queue from its own consumer. EP0 retirement
   permits three SETUP/DATA/ACK drain fences before the exact old owner receives
   TinyUSB's normal terminal TIMEOUT callback; a replacement serial is untouched.
   Exact unique CMake anchors preserve replaced upstream blocks beside the port
-  and reject source drift. The SDK installation remains untouched.
+  and reject source drift. The pinned TinyUSB source inputs remain untouched.
+  A separate one-anchor generated copy of TinyUSB's PIO HCD completes
+  `hcd_edpt_clear_stall()` by resetting Pico-PIO-USB's local DATA toggle. The
+  HID report transport now calls only that generic HCD API; the vendored PIO
+  implementation is unchanged by this checkpoint.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
 - `hid_register_field()` retains upstream's single-allocation layout and full

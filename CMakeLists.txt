@@ -63,7 +63,8 @@ pico_sdk_init()
 # no host-owner entry which starts enumeration without requeueing itself, and
 # cannot retire an exact EP0 or enumeration owner after a lost HCD completion
 # event. Generate one build-local source with those audited compatibility
-# deltas; never mutate the installed SDK.
+# deltas; never mutate the pinned TinyUSB input. The complete contract and
+# upgrade procedure are documented in usb_host/tinyusb-host-port.md.
 set(TINYUSB_USBH_SOURCE "${PICO_TINYUSB_PATH}/src/host/usbh.c")
 set(TINYUSB_USBH_PORT_SOURCE
     "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-usbh-port.c")
@@ -212,6 +213,23 @@ TU_ATTR_WEAK bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr, uin
   (void) hub_port;
   return false;
 }
+
+// Upstream TinyUSB: no enumeration-progress notification. Firmware's reset
+// coordinator keeps its global EP0 gate closed through the exact terminal.
+TU_ATTR_WEAK void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
+                                         uint8_t hub_port, bool active,
+                                         bool success) {
+  (void) rhport;
+  (void) hub_addr;
+  (void) hub_port;
+  (void) active;
+  (void) success;
+}
+
+// Upstream TinyUSB: no global control-owner idle publication. Firmware reset
+// work uses this edge exactly like USB-core completion wakes a waiting reset.
+TU_ATTR_WEAK void tuh_port_control_idle_cb(void) {
+}
 ]=])
 string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
        "${TINYUSB_USBH_REATTACH_HOOK_UPSTREAM}"
@@ -324,7 +342,7 @@ set_source_files_properties("${TINYUSB_USBH_PORT_SOURCE}" PROPERTIES
 # class-slot enumeration in TinyUSB, and hands SET_IDLE plus report-descriptor
 # ownership/retry to that parser. Linux relies on the reset-default Report
 # protocol and does not emit a generic SET_PROTOCOL request.
-# The installed SDK remains untouched.
+# The pinned TinyUSB input remains untouched.
 set(TINYUSB_HIDH_SOURCE
     "${PICO_TINYUSB_PATH}/src/class/hid/hid_host.c")
 set(TINYUSB_HIDH_PORT_SOURCE
@@ -723,6 +741,95 @@ target_sources(tinyusb_host_base INTERFACE "${TINYUSB_HIDH_PORT_SOURCE}")
 set_source_files_properties("${TINYUSB_HIDH_PORT_SOURCE}" PROPERTIES
                             INCLUDE_DIRECTORIES
                             "${PICO_TINYUSB_PATH}/src/class/hid")
+
+# TinyUSB's PIO HCD reports hcd_edpt_clear_stall() success without resetting
+# its local endpoint toggle. Linux usb_clear_halt() requires both the remote
+# CLEAR_FEATURE(HALT) and the host-side DATA0 reset. Keep that controller detail
+# in the HCD instead of teaching the Linux HID transport PIO root numbering.
+set(TINYUSB_PIO_HCD_SOURCE
+    "${PICO_TINYUSB_PATH}/src/portable/raspberrypi/pio_usb/hcd_pio_usb.c")
+set(TINYUSB_PIO_HCD_PORT_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-hcd-pio-port.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${TINYUSB_PIO_HCD_SOURCE}")
+file(SHA256 "${TINYUSB_PIO_HCD_SOURCE}" TINYUSB_PIO_HCD_SHA256)
+if(NOT TINYUSB_PIO_HCD_SHA256 STREQUAL
+   "310269b29d200bae9b2eadf4ba93a1f76d41e2a9181fe743625ca85137ec4508")
+    message(FATAL_ERROR
+            "Pinned TinyUSB hcd_pio_usb.c changed; re-audit the port")
+endif()
+file(READ "${TINYUSB_PIO_HCD_SOURCE}" TINYUSB_PIO_HCD_CONTENT)
+set(TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM [=[
+bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
+  (void) rhport;
+  (void) dev_addr;
+  (void) ep_addr;
+
+  return true;
+}
+]=])
+set(TINYUSB_PIO_HCD_CLEAR_STALL_PORT [=[
+bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
+  // Upstream TinyUSB:
+  // (void) rhport;
+  // (void) dev_addr;
+  // (void) ep_addr;
+  //
+  // return true;
+  // Pico-PIO-USB owns the endpoint DATA toggle. Complete the HCD contract
+  // after the standard remote CLEAR_FEATURE(HALT) has succeeded.
+  uint8_t const pio_rhport = RHPORT_PIO(rhport);
+  return pio_usb_host_endpoint_reset_data_toggle(pio_rhport, dev_addr, ep_addr);
+}
+]=])
+string(FIND "${TINYUSB_PIO_HCD_CONTENT}"
+       "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
+       TINYUSB_PIO_HCD_CLEAR_STALL_OFFSET)
+if(TINYUSB_PIO_HCD_CLEAR_STALL_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+            "Pinned TinyUSB PIO clear-stall anchor changed; re-audit the port")
+endif()
+string(LENGTH "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
+       TINYUSB_PIO_HCD_CLEAR_STALL_LENGTH)
+math(EXPR TINYUSB_PIO_HCD_CLEAR_STALL_TAIL_OFFSET
+     "${TINYUSB_PIO_HCD_CLEAR_STALL_OFFSET} + ${TINYUSB_PIO_HCD_CLEAR_STALL_LENGTH}")
+string(SUBSTRING "${TINYUSB_PIO_HCD_CONTENT}"
+       ${TINYUSB_PIO_HCD_CLEAR_STALL_TAIL_OFFSET} -1
+       TINYUSB_PIO_HCD_CLEAR_STALL_TAIL)
+string(FIND "${TINYUSB_PIO_HCD_CLEAR_STALL_TAIL}"
+       "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
+       TINYUSB_PIO_HCD_SECOND_CLEAR_STALL)
+if(NOT TINYUSB_PIO_HCD_SECOND_CLEAR_STALL EQUAL -1)
+    message(FATAL_ERROR "TinyUSB PIO clear-stall anchor is not unique")
+endif()
+string(REPLACE "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
+       "${TINYUSB_PIO_HCD_CLEAR_STALL_PORT}"
+       TINYUSB_PIO_HCD_PORT_CONTENT "${TINYUSB_PIO_HCD_CONTENT}")
+file(WRITE "${TINYUSB_PIO_HCD_PORT_SOURCE}"
+     "${TINYUSB_PIO_HCD_PORT_CONTENT}")
+
+get_target_property(TINYUSB_HOST_BASE_SOURCES
+                    tinyusb_host_base INTERFACE_SOURCES)
+set(TINYUSB_PIO_HCD_SOURCE_COUNT 0)
+foreach(TINYUSB_HOST_BASE_SOURCE IN LISTS TINYUSB_HOST_BASE_SOURCES)
+    if(TINYUSB_HOST_BASE_SOURCE STREQUAL "${TINYUSB_PIO_HCD_SOURCE}")
+        math(EXPR TINYUSB_PIO_HCD_SOURCE_COUNT
+             "${TINYUSB_PIO_HCD_SOURCE_COUNT} + 1")
+    endif()
+endforeach()
+if(NOT TINYUSB_PIO_HCD_SOURCE_COUNT EQUAL 1)
+    message(FATAL_ERROR
+            "TinyUSB PIO HCD source must occur exactly once; re-audit the port")
+endif()
+list(FIND TINYUSB_HOST_BASE_SOURCES "${TINYUSB_PIO_HCD_SOURCE}"
+     TINYUSB_PIO_HCD_SOURCE_INDEX)
+list(REMOVE_AT TINYUSB_HOST_BASE_SOURCES ${TINYUSB_PIO_HCD_SOURCE_INDEX})
+set_property(TARGET tinyusb_host_base PROPERTY INTERFACE_SOURCES
+             ${TINYUSB_HOST_BASE_SOURCES})
+target_sources(tinyusb_host_base INTERFACE "${TINYUSB_PIO_HCD_PORT_SOURCE}")
+set_source_files_properties("${TINYUSB_PIO_HCD_PORT_SOURCE}" PROPERTIES
+                            COMPILE_FLAGS
+                            "-Wno-conversion -Wno-cast-qual -Wno-attributes")
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})

@@ -22,44 +22,6 @@ macro(ergotype_tinyusb_usbh_replace_unique LABEL UPSTREAM_VAR PORT_VAR)
            TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
 endmacro()
 
-set(TINYUSB_USBH_ENUM_HOOK_UPSTREAM [=[
-// Upstream TinyUSB: no equivalent; firmware's direct reattach generation fence.
-TU_ATTR_WEAK bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
-  (void) rhport;
-  (void) hub_addr;
-  (void) hub_port;
-  return false;
-}
-]=])
-set(TINYUSB_USBH_ENUM_HOOK_PORT [=[
-// Upstream TinyUSB: no equivalent; firmware's direct reattach generation fence.
-TU_ATTR_WEAK bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
-  (void) rhport;
-  (void) hub_addr;
-  (void) hub_port;
-  return false;
-}
-
-// Upstream TinyUSB: no enumeration-progress notification. Firmware's reset
-// coordinator keeps its global EP0 gate closed through the exact terminal.
-TU_ATTR_WEAK void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
-                                         uint8_t hub_port, bool active,
-                                         bool success) {
-  (void) rhport;
-  (void) hub_addr;
-  (void) hub_port;
-  (void) active;
-  (void) success;
-}
-
-// Upstream TinyUSB: no global control-owner idle publication. Firmware reset
-// work uses this edge exactly like USB-core completion wakes a waiting reset.
-TU_ATTR_WEAK void tuh_port_control_idle_cb(void) {
-}
-]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration state hook"
-    TINYUSB_USBH_ENUM_HOOK_UPSTREAM TINYUSB_USBH_ENUM_HOOK_PORT)
-
 set(TINYUSB_USBH_CONTROL_IDLE_UPSTREAM [=[
 TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage) {
   (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
@@ -278,24 +240,6 @@ set(TINYUSB_USBH_ENUM_INIT_PORT [=[
 ergotype_tinyusb_usbh_replace_unique("enumeration owner init"
     TINYUSB_USBH_ENUM_INIT_UPSTREAM TINYUSB_USBH_ENUM_INIT_PORT)
 
-set(TINYUSB_USBH_ENUM_DEINIT_UPSTREAM [=[
-  // "unplug" all devices on this rhport (hub_addr = 0, hub_port = 0)
-  process_removing_device(rhport, 0, 0);
-
-  // deinit host stack if no controller is active
-]=])
-set(TINYUSB_USBH_ENUM_DEINIT_PORT [=[
-  // "unplug" all devices on this rhport (hub_addr = 0, hub_port = 0)
-  process_removing_device(rhport, 0, 0);
-  // Upstream TinyUSB: no exact enumeration owner to reset on host deinit.
-  tu_memclr(&_enum_port, sizeof(_enum_port));
-  _dev0.enumerating = 0;
-
-  // deinit host stack if no controller is active
-]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration owner deinit"
-    TINYUSB_USBH_ENUM_DEINIT_UPSTREAM TINYUSB_USBH_ENUM_DEINIT_PORT)
-
 set(TINYUSB_USBH_ENUM_ABORT_GATE_UPSTREAM [=[
   // Check if device is still connected (enumerating for dev0)
   const uint8_t daddr = xfer->daddr;
@@ -329,25 +273,6 @@ set(TINYUSB_USBH_SETUP_SUBMIT_PORT [=[
 ]=])
 ergotype_tinyusb_usbh_replace_unique("async SETUP submission"
     TINYUSB_USBH_SETUP_SUBMIT_UPSTREAM TINYUSB_USBH_SETUP_SUBMIT_PORT)
-
-set(TINYUSB_USBH_BLOCKING_SETUP_SUBMIT_UPSTREAM [=[
-    TU_ASSERT( hcd_setup_send(rhport, daddr, (uint8_t*) &_usbh_epbuf.request) );
-
-    while (result == XFER_RESULT_INVALID) {
-]=])
-set(TINYUSB_USBH_BLOCKING_SETUP_SUBMIT_PORT [=[
-    // TU_ASSERT( hcd_setup_send(rhport, daddr, (uint8_t*) &_usbh_epbuf.request) );
-    // Do not strand the one global control owner on synchronous HCD rejection.
-    if (!hcd_setup_send(rhport, daddr, (uint8_t*) &_usbh_epbuf.request)) {
-      _set_control_xfer_stage(CONTROL_STAGE_IDLE);
-      return false;
-    }
-
-    while (result == XFER_RESULT_INVALID) {
-]=])
-ergotype_tinyusb_usbh_replace_unique("blocking SETUP submission"
-    TINYUSB_USBH_BLOCKING_SETUP_SUBMIT_UPSTREAM
-    TINYUSB_USBH_BLOCKING_SETUP_SUBMIT_PORT)
 
 set(TINYUSB_USBH_CONTROL_PROGRESS_UPSTREAM [=[
   tusb_control_request_t const * request = &_usbh_epbuf.request;
@@ -775,57 +700,6 @@ ergotype_tinyusb_usbh_replace_unique("first hub reset completion"
     TINYUSB_USBH_ENUM_HUB_RESET_1_UPSTREAM
     TINYUSB_USBH_ENUM_HUB_RESET_1_PORT)
 
-set(TINYUSB_USBH_ENUM_HUB_GET_2_UPSTREAM [=[
-    case ENUM_HUB_GET_STATUS_2:
-      tusb_time_delay_ms_api(ENUM_RESET_DELAY_MS);
-      TU_ASSERT(hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, _usbh_epbuf.ctrl,
-                                    process_enumeration, ENUM_HUB_CLEAR_RESET_2),);
-      break;
-]=])
-set(TINYUSB_USBH_ENUM_HUB_GET_2_PORT [=[
-    case ENUM_HUB_GET_STATUS_2:
-      tusb_time_delay_ms_api(ENUM_RESET_DELAY_MS);
-      // Upstream TinyUSB:
-      // TU_ASSERT(hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, _usbh_epbuf.ctrl,
-      //                               process_enumeration, ENUM_HUB_CLEAR_RESET_2),);
-      if (!hub_port_get_status(_dev0.hub_addr, _dev0.hub_port,
-                               _usbh_epbuf.ctrl, process_enumeration,
-                               ENUM_HUB_CLEAR_RESET_2)) {
-        (void) enum_full_complete(false);
-        return;
-      }
-      break;
-]=])
-ergotype_tinyusb_usbh_replace_unique("second hub status submission"
-    TINYUSB_USBH_ENUM_HUB_GET_2_UPSTREAM TINYUSB_USBH_ENUM_HUB_GET_2_PORT)
-
-set(TINYUSB_USBH_ENUM_HUB_RESET_2_UPSTREAM [=[
-      // Acknowledge Port Reset Change if Reset Successful
-      if (port_status.change.reset) {
-        TU_ASSERT(hub_port_clear_reset_change(_dev0.hub_addr, _dev0.hub_port,
-                                              process_enumeration, ENUM_SET_ADDR),);
-      }
-      break;
-]=])
-set(TINYUSB_USBH_ENUM_HUB_RESET_2_PORT [=[
-      // Upstream TinyUSB:
-      // // Acknowledge Port Reset Change if Reset Successful
-      // if (port_status.change.reset) {
-      //   TU_ASSERT(hub_port_clear_reset_change(_dev0.hub_addr, _dev0.hub_port,
-      //                                         process_enumeration, ENUM_SET_ADDR),);
-      // }
-      if (!port_status.change.reset ||
-          !hub_port_clear_reset_change(_dev0.hub_addr, _dev0.hub_port,
-                                       process_enumeration, ENUM_SET_ADDR)) {
-        (void) enum_full_complete(false);
-        return;
-      }
-      break;
-]=])
-ergotype_tinyusb_usbh_replace_unique("second hub reset completion"
-    TINYUSB_USBH_ENUM_HUB_RESET_2_UPSTREAM
-    TINYUSB_USBH_ENUM_HUB_RESET_2_PORT)
-
 set(TINYUSB_USBH_ENUM_ADDR0_UPSTREAM [=[
     case ENUM_ADDR0_DEVICE_DESC: {
       // TODO probably doesn't need to open/close each enumeration
@@ -1030,6 +904,7 @@ set(TINYUSB_USBH_ENUM_CONFIG_FULL_PORT [=[
         return;
       }
 
+      // Get full configuration descriptor
       uint8_t const config_idx = CONFIG_NUM - 1;
       TU_LOG_USBH("Get Configuration[0] Descriptor\r\n");
       // Upstream TinyUSB:
@@ -1188,28 +1063,6 @@ set(TINYUSB_USBH_ENUM_HUB_START_PORT [=[
 ergotype_tinyusb_usbh_replace_unique("initial hub status submission"
     TINYUSB_USBH_ENUM_HUB_START_UPSTREAM TINYUSB_USBH_ENUM_HUB_START_PORT)
 
-set(TINYUSB_USBH_ENUM_NEW_ADDRESS_UPSTREAM [=[
-  // Get new address
-  uint8_t const new_addr = get_new_address(desc_device->bDeviceClass == TUSB_CLASS_HUB);
-  TU_ASSERT(new_addr != 0);
-  TU_LOG_USBH("Set Address = %d\r\n", new_addr);
-
-  usbh_device_t* new_dev = get_device(new_addr);
-]=])
-set(TINYUSB_USBH_ENUM_NEW_ADDRESS_PORT [=[
-  // Get new address
-  uint8_t const new_addr = get_new_address(desc_device->bDeviceClass == TUSB_CLASS_HUB);
-  // Upstream TinyUSB:
-  // TU_ASSERT(new_addr != 0);
-  if (new_addr == 0) return false;
-  TU_LOG_USBH("Set Address = %d\r\n", new_addr);
-
-  usbh_device_t* new_dev = get_device(new_addr);
-]=])
-ergotype_tinyusb_usbh_replace_unique("provisional USB address"
-    TINYUSB_USBH_ENUM_NEW_ADDRESS_UPSTREAM
-    TINYUSB_USBH_ENUM_NEW_ADDRESS_PORT)
-
 set(TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_UPSTREAM [=[
   new_dev->connected = 1;
   new_dev->ep0_size = desc_device->bMaxPacketSize0;
@@ -1228,20 +1081,6 @@ set(TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_PORT [=[
 ergotype_tinyusb_usbh_replace_unique("provisional address owner"
     TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_UPSTREAM
     TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_PORT)
-
-set(TINYUSB_USBH_ENUM_ADDRESS_SUBMIT_UPSTREAM [=[
-  TU_ASSERT(tuh_control_xfer(&xfer));
-  return true;
-]=])
-set(TINYUSB_USBH_ENUM_ADDRESS_SUBMIT_PORT [=[
-  // Upstream TinyUSB:
-  // TU_ASSERT(tuh_control_xfer(&xfer));
-  if (!tuh_control_xfer(&xfer)) return false;
-  return true;
-]=])
-ergotype_tinyusb_usbh_replace_unique("SET_ADDRESS control submission"
-    TINYUSB_USBH_ENUM_ADDRESS_SUBMIT_UPSTREAM
-    TINYUSB_USBH_ENUM_ADDRESS_SUBMIT_PORT)
 
 set(TINYUSB_USBH_DRIVER_CONFIG_GUARD_UPSTREAM [=[
 void usbh_driver_set_config_complete(uint8_t dev_addr, uint8_t itf_num) {

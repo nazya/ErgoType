@@ -330,7 +330,10 @@ After resolution multiplier works:
 
 Hard requirements:
 
-- No blocking waits in TinyUSB callbacks.
+- No callback waits for USB, parser, queue, lifecycle, or request-completion
+  progress. Normal shared-state publication briefly acquires the transport
+  mutex; no holder depends on further TinyUSB work. Exceptional diagnostics
+  for failure of that mutex itself set a fixed lifecycle-notification bit.
 - No blocking logging in TinyUSB callbacks.
 - No semaphore/event-group wait to emulate `hid_hw_wait()`.
 - No flash writes from runtime HID paths.

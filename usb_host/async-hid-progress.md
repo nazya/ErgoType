@@ -5,8 +5,10 @@
 - `usb_host/usbhid.c` owns a bounded USB-device cache and fixed probe-identity
   slots allocated before the TinyUSB host starts. Its bounded
   application-driver ingest copies the ephemeral raw configuration stream;
-  mount/unmount callbacks do not allocate, wait, log, or interpret that retained
-  snapshot. HID mount captures only TinyUSB's instance-to-interface identity
+  mount/unmount callbacks do not allocate, log, interpret that retained
+  snapshot, or wait for USB/lifecycle progress. Their bounded publication may
+  briefly take the shared transport mutex. HID mount captures only TinyUSB's
+  instance-to-interface identity
   and wakes the lifecycle task. Global mount also consumes
   the already published cache epoch and leaves device/string descriptor policy
   to lifecycle. Lifecycle calls the ordinary async-backed `usb_control_msg()`
@@ -84,6 +86,12 @@
   assert expression. Rare task-side invariant failures use fixed-size async
   diagnostics before asserting an already computed boolean; diagnostics found
   under the workqueue/timer mutex are emitted only after it is released.
+  Transport-mutex failure is special because the helper is also entered by
+  TinyUSB host callbacks: it publishes one fixed bit through lifecycle's
+  existing indexed task notification, and lifecycle alone calls the logger.
+  The callback error path therefore does not recurse through the mutex, enter
+  the device-side deferred-log queue, or invoke a C11 read-modify-write helper
+  that would hide an RP2040 IRQ-masking spinlock.
   The same no-expression assertion rule is now enforced across the async
   executor, USB HID lifecycle, interrupt-report owner, and transport mutex:
   every active `configASSERT()` there receives one precomputed identifier.
@@ -258,8 +266,10 @@
   report-only owner/parser fence before returning; it does not wait unrelated
   control I/O or physical-detach state. Physical unplug publishes a durable
   detach state. The report task queues one host-owner fence which completes only
-  after TinyUSB's class/HCD close pass. No callback allocates, waits, or frees
-  the buffer. Completion snapshots the byte-sized transport open state;
+  after TinyUSB's class/HCD close pass. No callback allocates or frees the
+  buffer, or waits for report/USB progress; bounded publication may briefly
+  take the shared transport mutex. Completion snapshots the byte-sized
+  transport open state;
   successful payload is dropped for both `CLOSED` and `RESUMING`, including
   `HID_QUIRK_ALWAYS_POLL` while its client is closed. Non-`ALWAYS_POLL` open
   retains upstream's `HID_RESUME_RUNNING` 50-ms drain before changing to
@@ -311,12 +321,13 @@
 - Pico SDK 2.1.1's pinned TinyUSB does not issue `tuh_mount_cb()` for hubs and
   exposes no exact post-`enum_full_complete()` fence or non-recursive
   host-owner enumeration entry. CMake verifies the pinned `usbh.c` SHA and
-  exact unique anchors, then generates a build-local copy with five audited
-  deltas: the hub mount fence, a weak generation hook, direct root/hub
-  enumeration helpers, exact-owner recovery for a lost EP0 completion, and the
-  host-global control-IDLE publication.
-  The installed SDK is never modified and any upstream source drift fails
-  configuration for an explicit re-audit.
+  exact unique anchors, then generates a build-local copy with the host-owner,
+  enumeration-terminal, bounded-recovery, and global-control publications
+  required by the lifecycle glue. The complete active source inventory,
+  semantic patch groups, and SDK upgrade procedure are recorded in
+  [`tinyusb-host-port.md`](tinyusb-host-port.md). The pinned TinyUSB input is
+  never modified and drift in that selected source fails configuration for an
+  explicit re-audit.
 - The same compatibility generation pins `hid_host.c` and preserves its full
   `hidh_open()`, `hidh_set_config()`, and report-descriptor prefetch blocks
   commented beside their replacements. A bounded two-pass scanner accepts the
@@ -328,6 +339,13 @@
   upstream-shaped `usbhid_parse()` sends Linux's SET_IDLE and owns the one
   exact-size descriptor request plus its retry/error semantics. TinyUSB retains
   Report-protocol metadata only to match the reset default.
+- A third, single-anchor compatibility source pins TinyUSB's PIO HCD. Its
+  upstream `hcd_edpt_clear_stall()` is a no-op; the generated implementation
+  maps `rhport` through the HCD's own `RHPORT_PIO()` macro and resets the local
+  endpoint toggle through the existing Pico-PIO-USB helper. Report recovery now
+  calls only the generic HCD API after remote `CLEAR_FEATURE(HALT)` succeeds,
+  so Linux-shaped transport no longer owns PIO root numbering. The vendored
+  Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
 - Input registration no longer opens the firmware's always-on evdev client
@@ -380,6 +398,15 @@
 
 ## Manual Test Notes
 
+- 2026-07-21: TinyUSB PIO-HCD clear-stall adapter checkpoint, exact host UF2
+  SHA256 `7f1d77e9f2d589db50a1e1a863fe12a0bb4126456ab9707200bd51eab25647ef`,
+  clean-builds with `text=501948`, `data=708`, and `bss=245376`. The dirty
+  `device/haptic-touchpad` emulator UF2 SHA256
+  `370afde1483ca15c346c3ec25726f5b48b2d2ad3db245d567d8dcf476f42b0b5`
+  forced `2 -> HID_RX_STALL -> HID_CLEAR_HALT_OK -> s`; input continued after
+  recovery and after programmed removal/re-enumeration of all three interfaces.
+  The active heap returned to the same `free=10264`, `largest=8800`,
+  `blocks=3`, `oom=0` plateau.
 - 2026-07-20: edge-driven CLEAR_HALT checkpoint `usb: make clear-halt admission edge driven`, exact UF2 SHA256
   `312a456a981ac2dcbe057ce8fe247673952106f6dcbb520b26e32f0c7a92beaa`,
   clean-builds with `text=492388`, `data=708`, and `bss=243312`. The requested
@@ -522,9 +549,22 @@
   unplug/replug. The expected normal path has no `HID_RX_STALL`,
   `HID_RX_XFER_FAIL`, `HID_RX_REARM_FAIL`, or `HID_REPORT_SKIP`. Record heap,
   largest free block, block count, and the TinyUSB stack watermark.
-- Exercise recovery with a one-shot interrupt-IN STALL fixture. Expect one
-  `HID_RX_STALL`, then `HID_CLEAR_HALT_OK`, followed by resumed input. Replug
-  repeatedly and unplug while clear-halt is active. A normal TinyUSB NAK does
+- The dirty `device/haptic-touchpad` fixture completed the basic recovery
+  baseline on hardware on 2026-07-21, before the controller-specific DATA0
+  helper moved behind TinyUSB's HCD API: marker `2`, one `HID_RX_STALL`,
+  `HID_CLEAR_HALT_OK`, then marker `s` and continued input. Its programmed
+  reconnect repeated the exact active heap plateau with `oom=0`. This proves
+  the underlying remote clear, local DATA0 reset, and interrupt-IN rearm for
+  the root-device success path. The generated PIO-HCD adapter was then verified
+  with host UF2 SHA256
+  `7f1d77e9f2d589db50a1e1a863fe12a0bb4126456ab9707200bd51eab25647ef`:
+  it repeated `2 -> HID_RX_STALL -> HID_CLEAR_HALT_OK -> s`, continued input,
+  removed all three interfaces, and re-enumerated. The active heap returned to
+  `free=10264`, `largest=8800`, `blocks=3`, with `oom=0`, matching its first
+  enumeration. The isolated `device/rx-stall` fixture remains
+  available for a smaller recovery-only reproduction. A separate deterministic
+  fixture is
+  still needed to unplug while clear-halt is active. A normal TinyUSB NAK does
   not prove FAILED/TIMEOUT retry; that path needs a lower-level no-response or
   bad-packet injector. Also force terminal clear-halt/protocol failure for both
   a root device and a hub child: expect `HID_RESET_Q`, complete old-epoch

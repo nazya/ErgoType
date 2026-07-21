@@ -17,10 +17,19 @@ enum usbhid_async_invariant {
 	USBHID_ASYNC_INVARIANT_HUB_PIN,
 };
 
+/* The shared mutex is also entered by TinyUSB host callbacks. */
+enum usbhid_transport_lock_fault {
+	USBHID_TRANSPORT_LOCK_NOT_READY,
+	USBHID_TRANSPORT_LOCK_TAKE_FAILED,
+	USBHID_TRANSPORT_LOCK_GIVE_FAILED,
+};
+
 /*
  * Boundary between TinyUSB host callbacks and the Linux-style USB HID
  * transport. Callback entry points may only copy bounded ingress data, rotate
- * lifecycle state, and wake a task; they must not allocate, wait, or log.
+ * lifecycle state, and wake a task. They may briefly acquire the shared
+ * transport mutex, whose holders never wait for TinyUSB progress; they must
+ * not allocate, run Linux policy, wait for USB/lifecycle progress, or log.
  */
 void usbhid_backend_hid_mount(uint8_t dev_addr, uint8_t instance,
 			      const uint8_t *desc_report, uint16_t desc_len);
@@ -34,6 +43,9 @@ void usbhid_backend_rx_transfer_failed(uint8_t xfer_result);
 void usbhid_backend_rx_invariant_failed(void);
 void usbhid_backend_async_invariant_failed(
 	enum usbhid_async_invariant reason);
+/* Notification-bit publication only; lifecycle owns the text logger. */
+void usbhid_backend_transport_lock_failed(
+	enum usbhid_transport_lock_fault reason);
 /* Report recovery publishes work; the lifecycle task owns reset/re-enumeration. */
 int usbhid_backend_queue_device_reset(struct hid_device *hid,
 				      uint32_t report_revision,

@@ -19,10 +19,70 @@ Last sequential build pass: 2026-07-13
 - emulator repo: all 19 `device/*` branches built one by one and passed
 - emulator branches built: 19
 
-The emulator repo is currently on `device/holtek-kbd-a055`. Its
-`build/ErgoType.uf2` is always the last built branch artifact, not a stable
-per-branch artifact archive; after the last full pass it contains the final
-branch built manually, currently `device/holtek-kbd-a055`.
+The emulator repo is currently on a dirty `device/haptic-touchpad` worktree.
+Its `build/ErgoType.uf2` is always the last built artifact, not a stable
+per-branch artifact archive. The current pending artifact has SHA-256
+`370afde1483ca15c346c3ec25726f5b48b2d2ad3db245d567d8dcf476f42b0b5`.
+
+### Current interrupt-IN STALL fixture
+
+The dirty `device/haptic-touchpad` fixture stalls marker-keyboard endpoint
+`0x85` exactly once after marker `2`. TinyUSB device core does not make that
+endpoint ready again until the host sends standard endpoint
+`CLEAR_FEATURE(HALT)`. The emulator then sends marker key `s`, which is the
+authoritative end-to-end result:
+
+```text
+key 2 -> interrupt-IN STALL -> host clear-halt/DATA0/rearm -> key s
+```
+
+The expected host diagnostics are one `ERR: HID_RX_STALL` and normally
+`DBG: HID_CLEAR_HALT_OK`. Those task-side messages share a one-entry async
+diagnostic slot and may coalesce, so the later `s` input is stronger evidence:
+it proves remote clear-halt, local host DATA0 reset, and interrupt-IN rearm.
+`HID_CLEAR_HALT_OK` by itself proves only the remote EP0 request.
+
+This STALL runs once per emulator task start, not again after its programmed
+soft reconnect. Reset or reflash the emulator to repeat it. The current
+fixture waits for clear-halt before continuing, so it does not test unplug
+during active recovery or the terminal clear-halt-failure reset path.
+
+The first 2026-07-21 hardware run, before the DATA0 helper moved behind
+TinyUSB's HCD API, reached the complete sequence
+`2 -> HID_RX_STALL -> HID_CLEAR_HALT_OK -> s` and continued through the
+programmed disconnect, three interface removals, re-enumeration, and the final
+markers. The second enumeration returned to the same active heap plateau
+(`free=10248`, `largest=8784`, `blocks=3`, `oom=0`), so that run found no
+per-replug transport allocation leak.
+
+The generated PIO-HCD adapter was subsequently verified with host UF2 SHA256
+`7f1d77e9f2d589db50a1e1a863fe12a0bb4126456ab9707200bd51eab25647ef`
+and emulator UF2 SHA256
+`370afde1483ca15c346c3ec25726f5b48b2d2ad3db245d567d8dcf476f42b0b5`.
+It repeated the complete STALL sequence, continued input, removed all three
+interfaces, and re-enumerated. Its active heap returned exactly to
+`free=10264`, `largest=8800`, `blocks=3`, with `oom=0`.
+
+Both runs exposed a separate test-fixture
+problem: submitting all 33 contacts as one logical input frame overflows the
+62-record normal evdev allowance. That is downstream of the USB transport and
+must not be presented as a STALL-recovery failure.
+
+### Isolated interrupt-IN STALL fixture
+
+For a smaller recovery-only checkpoint, a separate worktree exists at
+`$HOME/tmp/ErgoType-rx-stall` on pending branch
+`device/rx-stall`, based on the clean generic fixture. Its built UF2 is
+`$HOME/tmp/ErgoType-rx-stall/build/ErgoType.uf2`, SHA-256
+`9b0c256f7d373cf30d21670a31556c0365bb3b39746b56caabc7ee5f529650a6`.
+
+The first boot-mouse report completes normally. Its TinyUSB device completion
+then stalls interrupt-IN endpoint `0x84` exactly once per mount. The device
+core owns standard `CLEAR_FEATURE(ENDPOINT_HALT)` and DATA0 state; the fixture
+does not clear the endpoint itself. Expected host behavior is one
+`HID_RX_STALL`, normally `HID_CLEAR_HALT_OK`, and continued left/right mouse
+plus wheel cycles. Continued input is the end-to-end assertion if the two
+one-slot async diagnostics coalesce. Unplug/replug rearms the one-shot STALL.
 
 ## Hardware Verified
 
@@ -40,6 +100,7 @@ claims for unrelated drivers.
 | 2026-07-14 | `device/razer-blackwidow` | rechecked after upstream-style `hid->name` construction fix; Razer macro-enable SET_REPORT and macro input path still work |
 | 2026-07-14 | `device/quirks-jabra-version` | old `bcdDevice` reaches `hid_lookup_quirk()` before probe; host ignores both HID interfaces and no KeyD input events appear |
 | 2026-07-19 | `device/haptic-touchpad` | active multitouch/haptic build enumerates, pointer events move the cursor, and haptic output produces the emulator cursor-feedback signal |
+| 2026-07-21 | dirty `device/haptic-touchpad` STALL fixture | one interrupt-IN STALL is cleared remotely and reset to DATA0 locally; marker `s` proves rearm and resumed input, and the programmed reconnect repeats the same active heap plateau |
 
 ## Current Emulator Branches
 
@@ -361,9 +422,14 @@ The upstream `8813b061` multitouch fix additionally needs a fixture advertising
 `ContactCountMaximum >= 33` and reporting contact ID 32. Include a sticky-finger
 timeout, then verify release, continued input, unplug/replug, and restored heap;
 ordinary low-slot pointer motion does not directly cover the former overflow.
-The same fixture should emit at least one maximum-size MT frame and then a
-sustained stream. It must produce neither `EVDEV_INPUT_DROP` nor a QueueSet
-assert; unplug after the stream must still deliver every removal.
+The first 2026-07-21 attempt sent 33 newly active contacts in one logical frame;
+Linux correctly emitted hundreds of changes and overflowed the deliberately
+bounded evdev-to-KeyD queue. Refine the emulator by staging contacts 0--31 in
+separate drained frames, then send the maximum-size frame with only contact 32
+changing. That still exercises physical slot 32 and the multi-report frame
+without turning this transport test into an artificial queue-overload test.
+The refined run must produce neither `EVDEV_INPUT_DROP` nor a QueueSet assert;
+unplug after the stream must still deliver every removal.
 
 Heavier FF drivers should stay deferred for now:
 

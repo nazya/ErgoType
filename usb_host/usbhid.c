@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -34,6 +35,10 @@
 #define HID_HOST_MAX_DEVICES CFG_TUH_HID
 #define HID_HOST_RAW_INTERFACE_MAX HID_HOST_MAX_DEVICES
 #define USBHID_LIFECYCLE_NOTIFY_INDEX 1u
+#define USBHID_LIFECYCLE_NOTIFY_WAKE (1u << 0)
+#define USBHID_LIFECYCLE_NOTIFY_LOCK_NOT_READY (1u << 1)
+#define USBHID_LIFECYCLE_NOTIFY_LOCK_TAKE (1u << 2)
+#define USBHID_LIFECYCLE_NOTIFY_LOCK_GIVE (1u << 3)
 #define USBHID_STRING_LANGID 0x0409u
 #define USBHID_USB_DEVICE_MAX (CFG_TUH_DEVICE_MAX + CFG_TUH_HUB)
 /* One bounded spare lets a fast replug coexist with one retiring cache entry. */
@@ -75,7 +80,7 @@ const struct device_type usb_if_device_type = {
 	.name = "usb_interface",
 };
 static struct hid_device *usbhid_devices[HID_HOST_MAX_DEVICES];
-static TaskHandle_t usbhid_lifecycle_task_handle;
+static _Atomic(TaskHandle_t) usbhid_lifecycle_task_handle;
 
 struct usbhid_sync_request {
 	TaskHandle_t task;
@@ -2592,21 +2597,25 @@ int usbhid_lifecycle_init(void)
 	return 0;
 }
 
-static void usbhid_lifecycle_kick(void)
+static void usbhid_lifecycle_notify(u32 notifications)
 {
 	TaskHandle_t task;
 
 	/*
-	 * Lifecycle flags/cache slots are the durable predicates. Notification is
-	 * only a coalesced wake edge, matching an upstream wait queue without a
-	 * firmware-only event allocation.
+	 * Lifecycle flags/cache slots are the durable work predicates. Bit zero is
+	 * the coalesced wake edge; the other bits carry only impossible lock-fault
+	 * diagnostics which cannot be published through the failed mutex.
 	 */
-	hid_transport_lock();
-	task = usbhid_lifecycle_task_handle;
-	hid_transport_unlock();
+	task = atomic_load_explicit(&usbhid_lifecycle_task_handle,
+				    memory_order_acquire);
 	if (task)
-		(void)xTaskNotifyGiveIndexed(task,
-					     USBHID_LIFECYCLE_NOTIFY_INDEX);
+		(void)xTaskNotifyIndexed(task, USBHID_LIFECYCLE_NOTIFY_INDEX,
+					 notifications, eSetBits);
+}
+
+static void usbhid_lifecycle_kick(void)
+{
+	usbhid_lifecycle_notify(USBHID_LIFECYCLE_NOTIFY_WAKE);
 }
 
 static void usbhid_transport_fault(enum usbhid_transport_fault fault)
@@ -2615,6 +2624,24 @@ static void usbhid_transport_fault(enum usbhid_transport_fault fault)
 	usbhid_transport_faults |= (u32)fault;
 	hid_transport_unlock();
 	usbhid_lifecycle_kick();
+}
+
+void usbhid_backend_transport_lock_failed(
+	enum usbhid_transport_lock_fault reason)
+{
+	/* The failed lock cannot protect its own diagnostic publication. */
+	switch (reason) {
+	case USBHID_TRANSPORT_LOCK_NOT_READY:
+		usbhid_lifecycle_notify(
+			USBHID_LIFECYCLE_NOTIFY_LOCK_NOT_READY);
+		return;
+	case USBHID_TRANSPORT_LOCK_TAKE_FAILED:
+		usbhid_lifecycle_notify(USBHID_LIFECYCLE_NOTIFY_LOCK_TAKE);
+		return;
+	case USBHID_TRANSPORT_LOCK_GIVE_FAILED:
+		usbhid_lifecycle_notify(USBHID_LIFECYCLE_NOTIFY_LOCK_GIVE);
+		return;
+	}
 }
 
 void usbhid_backend_rx_report_dropped(void)
@@ -2768,6 +2795,16 @@ static void usbhid_lifecycle_log_transport_faults(void)
 		async_msg("ERR: HID_ASYNC_HUB_PIN");
 }
 
+static void usbhid_lifecycle_log_notification_faults(u32 notifications)
+{
+	if (notifications & USBHID_LIFECYCLE_NOTIFY_LOCK_NOT_READY)
+		async_msg("ERR: HID_LOCK_NOT_READY");
+	if (notifications & USBHID_LIFECYCLE_NOTIFY_LOCK_TAKE)
+		async_msg("ERR: HID_LOCK_TAKE_FAIL");
+	if (notifications & USBHID_LIFECYCLE_NOTIFY_LOCK_GIVE)
+		async_msg("ERR: HID_LOCK_GIVE_FAIL");
+}
+
 static void usbhid_disconnect(struct usb_interface *intf);
 
 static void usbhid_lifecycle_drain_disconnects(void)
@@ -2833,7 +2870,8 @@ void usbhid_lifecycle_task(void *pvParameters)
 
 	/* A pre-registration kick is safe: the first loop scans all durable state. */
 	hid_transport_lock();
-	owner_available = !usbhid_lifecycle_task_handle;
+	owner_available = !atomic_load_explicit(
+		&usbhid_lifecycle_task_handle, memory_order_relaxed);
 	if (!owner_available) {
 		hid_transport_unlock();
 		async_msg("ERR: HID_LIFE_OWNER");
@@ -2841,10 +2879,13 @@ void usbhid_lifecycle_task(void *pvParameters)
 		vTaskDelete(NULL);
 		return;
 	}
-	usbhid_lifecycle_task_handle = xTaskGetCurrentTaskHandle();
+	atomic_store_explicit(&usbhid_lifecycle_task_handle,
+			      xTaskGetCurrentTaskHandle(), memory_order_release);
 	hid_transport_unlock();
 
 	for (;;) {
+		BaseType_t notified;
+		u32 notifications = 0;
 		int ret;
 
 		/* Flags/cache slots own work; notification is only a bounded wakeup. */
@@ -2861,9 +2902,11 @@ void usbhid_lifecycle_task(void *pvParameters)
 		}
 		usbhid_lifecycle_log_transport_faults();
 
-		(void)ulTaskNotifyTakeIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
-					      pdTRUE,
-					      usbhid_lifecycle_wait_ticks());
+		notified = xTaskNotifyWaitIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
+					     0, UINT32_MAX, &notifications,
+					     usbhid_lifecycle_wait_ticks());
+		if (notified == pdTRUE)
+			usbhid_lifecycle_log_notification_faults(notifications);
 	}
 }
 
