@@ -15,7 +15,7 @@ struct input_value {
 /*
  * Work3 carried a firmware proxy ABI here for copied input batches, raw HID
  * usage taps, device snapshots, and FF-by-id helpers. That ABI is not upstream
- * Linux and is deferred in this callback-driven slice; keep only the active
+ * Linux and is deferred in this asynchronous host slice; keep only the active
  * Linux input definitions and the final KeyD boundary declarations below.
  */
 
@@ -142,6 +142,10 @@ struct input_dev {
 	struct input_handle *grab;
 
 	spinlock_t event_lock;
+	// Upstream Linux: no equivalent field. The compatibility spinlock cannot
+	// provide task-to-task exclusion, so this mutex implements event_lock's
+	// active task-context critical sections on the firmware port.
+	struct mutex port_event_mutex;
 	struct mutex mutex;
 
 	unsigned int users;

@@ -24,6 +24,16 @@
   it before returning. Report descriptors are therefore supported through
   Linux's 4 KiB `HID_MAX_DESCRIPTOR_SIZE`, independently of TinyUSB's 512-byte
   enumeration scratch buffer.
+- TinyUSB full configuration descriptors keep the permanent 512-byte fast
+  path, while a validated `wTotalLength` from 513 through 4096 bytes is fetched
+  into one exact-size transient host-owner buffer. The short-descriptor
+  completion records only durable pending state; allocation and the full GET
+  happen at the next shallow host-task entry after the callback has unwound.
+  The buffer survives enumeration-control retries and is freed after the
+  synchronous class-open scan or after terminal EP0 drain on every failure,
+  timeout, or remove path. Its companion emulator now provides a dedicated
+  600-byte configuration whose useful HID interface begins at byte 575 and
+  stalls the first full GET to force the same retry path.
 - The pre-probe sequence currently fetches the device descriptor, LANGID,
   product string, manufacturer string, and serial string. That makes
   `hid->version`, `hid->name`, and `hid->uniq` available before
@@ -189,9 +199,11 @@
   duplicate read into the 512-byte enumeration buffer: it completes class mount
   with `NULL`, which is the only value consumed by this callback facade, and
   task-side `usbhid_parse()` performs the single authoritative fetch through
-  the generic asynchronous control broker. Configuration descriptors remain
-  separately limited by the enumeration scratch buffer. The firmware-
-  only full device-descriptor refetch now retains pending HID metadata across
+  the generic asynchronous control broker. Full configuration descriptors are
+  separate from that report path: they use TinyUSB's permanent 512-byte scratch
+  when they fit, or one exact-size host-owner heap buffer up to 4 KiB when they
+  do not. The firmware-only full device-descriptor refetch now retains pending
+  HID metadata across
   three transient failures, with four accepted attempts and 100-ms lifecycle
   deadlines. `usb_control_msg()` pins the exact physical cache entry and
   TinyUSB address epoch while blocked; lifecycle checks the captured cache
@@ -338,10 +350,13 @@
   generated TinyUSB core, an armed continuation, no-progress watchdog, or
   physical-drain fence shortens only the next private queue wait to its exact
   deadline; HCD/deferred events wake that wait earlier. With nothing armed the
-  queue wait is indefinite, and there is no fixed periodic wake. The remaining
-  100-ms control retry is error-only
-  and needs a durable semantic reissue before it can safely leave callback-local
-  transfer storage.
+  queue wait is indefinite, and there is no fixed periodic wake. Failed
+  enumeration-control completion snapshots its callback-local setup tuple into
+  the enum epoch, arms TinyUSB's original 100-ms retry deadline, and returns.
+  Shallow host-owner service reconstructs and resubmits the transfer only after
+  callback unwind and global EP0 idle. The existing retry count and transfer-
+  buffer ownership are preserved without a blocking delay, periodic poll, Pico
+  timer, FreeRTOS timer, or extra queue.
 - The same compatibility generation pins `hid_host.c` and preserves its full
   `hidh_open()` and `hidh_set_config()` blocks commented beside their two
   replacements. A bounded two-pass scanner accepts the
@@ -414,6 +429,18 @@
 
 ## Manual Test Notes
 
+- 2026-07-22: the current dirty host-core step replaces TinyUSB's last blocking
+  100-ms enumeration retry with a host-owned deadline/continuation and adds
+  exact transient full configuration-descriptor storage for 513..4096 bytes.
+  Host UF2 SHA256
+  `63e935043eb04b95c8fe5c377024f6d7b7b9897b82ed04626a502bf9f98fca2f`
+  and emulator UF2 SHA256
+  `58d309156aa7fb4a8152f6623ff2a4a4e1e2c7c0fcebe44f90afcdc307eef496`
+  passed three repeated hardware cycles. The `cafe:1005` fixture deliberately
+  stalls its first full configuration GET, then reaches a working HID interface
+  at byte 575 of a 600-byte configuration after the one-shot retry. Removal
+  returns to stable `free=60936/60944` plateaus with `oom=0`. The ordinary
+  haptic/multitouch hot-plug regression also passed on the same host image.
 - 2026-07-21: TinyUSB PIO-HCD clear-stall adapter checkpoint, exact host UF2
   SHA256 `7f1d77e9f2d589db50a1e1a863fe12a0bb4126456ab9707200bd51eab25647ef`,
   clean-builds with `text=501948`, `data=708`, and `bss=245376`. The dirty
@@ -541,6 +568,13 @@
   exercise a report descriptor larger than 512 bytes. Record free heap and the
   TinyUSB stack watermark; inspect the lifecycle watermark separately if the
   hardware pass exposes any stack symptom.
+- The 600-byte configuration, useful HID interface beyond byte 512, injected
+  failed full GET, and repeated stable add/remove plateau are hardware-verified.
+  Remaining boundary/fault coverage is exact lengths 512, 513, and 4096,
+  invalid/short full reads, and a declared length above 4096.
+- Exercise REMOVE and a foreign ATTACH while the 100-ms retry deadline is
+  armed. The successful error-only continuation itself is hardware-verified;
+  these remaining cases target cancellation and competing topology only.
 - Verify the output-routing/startup-LED checkpoint on hardware: a boot keyboard
   without interrupt OUT must receive the enumeration-time NumLock reset over
   EP0, and an OUTPUT request on an interface with interrupt OUT must use that

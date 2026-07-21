@@ -37,12 +37,19 @@ This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
-The active 2026-07-21 task-side-parser build instead uses a 218.75 KiB heap
-(`(219 * 1024) - 256`). The extra 2 KiB came from keeping the immutable FAT12
+The active 2026-07-21 task-side-parser build instead uses a 218.5 KiB heap
+(`(219 * 1024) - 512`). The extra 2 KiB came from keeping the immutable FAT12
 format image in flash and copying it to a task-local RAM buffer only while
-formatting. Before that change, the 216.75 KiB build linked with `text=495748`, `data=708`, and
-`bss=243320`. `__bss_end__` is `0x2003ff30`, leaving 208 B before scratch
-X; scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
+formatting. After adding the audited ELECOM, Kensington, Topre, and EVision
+builtin drivers, the active build linked with `text=505836`, `data=708`, and
+`bss=245364`. The current dirty event-driven-enumeration build links with
+`text=507140`, `data=708`, and `bss=245388`; `__bss_end__` is `0x2003ff44`,
+leaving 188 B before scratch X. Its enum epoch is 52 B, 24 B larger than the
+preceding state because it retains a retry setup tuple and long-configuration
+ownership rather than a permanent large descriptor array.
+The 256-byte reduction from the preceding 218.75 KiB configuration leaves room
+for the additional static driver runtimes; it does not hide a per-device heap
+allocation. Scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
 root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
 the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
 aligned 256-byte lifecycle descriptor scratch. `hid_async_request` is 60 B and
@@ -58,6 +65,29 @@ the FIFO head. Edge-driven CLEAR_HALT admission reuses the report slot's former
 one-byte retry counter as a capacity latch. Its four independent absolute
 deadlines add 16 B of static state, but no queue, timer, or heap allocation;
 keeping them separate preserves Linux's interrupt-I/O retry epoch across STALL.
+
+The Linux input core's active `event_lock` sections use one equivalent 96-byte
+heap_4 mutex block per live `input_dev`. Its embedded handle changes the
+`input_dev` allocation from a 560-byte to a 568-byte heap_4 block, making the
+total delta 104 B per live input. This is dynamic device cost, not static
+`.bss`: it serializes CORE1 report parsing with CORE0 KeyD LED/FF injection and
+is released with the input device. A global mutex would save RAM only when
+several input devices coexist, but would depart further from Linux and couple
+otherwise independent devices.
+
+TinyUSB's permanent enumeration scratch remains 512 B. A full configuration
+descriptor whose validated `wTotalLength` is 513..4096 bytes adds one exact-size
+FreeRTOS heap allocation only while TinyUSB fetches, retries, and synchronously
+parses that descriptor. With heap_4's 8-byte header/alignment on RP2040, the
+largest 4096-byte request occupies about 4104 B; a 513-byte request occupies
+528 B. The existing 512-byte static scratch is still present, so this is a
+transient addition to the ordinary baseline, not a replacement for that static
+buffer. It is freed before class `set_config` and Linux HID probe allocations,
+or after the matching EP0 owner drains on error, timeout, or removal. Retrying
+reuses the same buffer rather than allocating again. The control-completion
+callback only records pending state; allocation happens after callback unwind
+in the TinyUSB host-owner service. Successful parse frees immediately inside
+TinyUSB's internal enum continuation; terminal failure frees after EP0 drain.
 
 Linux normally allocates `value` and `new_value` for every selector in a HID
 field. This port preserves that layout except for INPUT ARRAY fields, whose
@@ -266,6 +296,7 @@ Current wider smoke-test config:
 #define CFG_TUH_API_EDPT_XFER       1
 #define CFG_TUH_HID                 4
 #define CFG_TUH_ENUMERATION_BUFSIZE 512
+#define ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE 4096
 #define CFG_TUH_HID_EPIN_BUFSIZE    1
 #define CFG_TUH_HID_EPOUT_BUFSIZE   1
 ```
@@ -286,11 +317,12 @@ Tradeoffs:
 - `CFG_TUH_HUB=0`: saves roughly 100-200 B, but external USB hubs do not work.
 - `CFG_TUH_DEVICE_MAX=1`: saves roughly 250-350 B versus 4, but only one downstream physical USB device is supported.
 - `CFG_TUH_HID=3`: saves roughly 100-150 B versus 4 with current buffers. Enough for ErgoType NKRO. Use `2` only for boot keyboard+mouse. Use more for composite devices with more HID interfaces.
-- `CFG_TUH_ENUMERATION_BUFSIZE=256`: saves 256 B versus 512. Larger
-  configuration descriptors can still fail enumeration. The build-local
-  TinyUSB HID class deliberately skips every duplicate report-descriptor
-  prefetch; task-side `usbhid_parse()` instead fetches the class-declared size
-  once through async EP0, up to Linux's 4 KiB limit.
+- `CFG_TUH_ENUMERATION_BUFSIZE=256`: would save 256 B versus the current 512.
+  A validated full configuration above the permanent scratch and no larger
+  than `ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE` still uses the exact transient
+  host-owner path. The build-local TinyUSB HID class separately skips every
+  duplicate report-descriptor prefetch; task-side `usbhid_parse()` fetches the
+  class-declared report size once through async EP0, up to Linux's 4 KiB limit.
 - `CFG_TUH_HID_EPIN_BUFSIZE=1`: direct interrupt IN uses upstream's
   per-interface `inbuf` through the endpoint API, so TinyUSB's class buffer is
   an unused placeholder. Task context sizes that backing for the parsed INPUT
@@ -316,6 +348,15 @@ aligned heap_4 allocation by 2,040 B. Lifecycle serializes probe, so task-side
 `usbhid_parse()` holds at most one exact descriptor buffer across all devices;
 a maximum-size descriptor consumes about 4 KiB transiently and is released on
 parser return after completion or fenced cancellation.
+
+That lifecycle report-descriptor allocation is not the same as the enumeration
+configuration-descriptor allocation above. A long configuration is released
+immediately after TinyUSB's synchronous class-open scan, before class
+set-config completes and before lifecycle starts Linux `usbhid_parse()`.
+Normal scheduling therefore does not overlap their two 4 KiB maxima. Hardware
+tests must still check the long-configuration peak, repeated add/remove plateau,
+and terminal paths independently; a normal descriptor at or below 512 B never
+exercises the transient enum allocation.
 
 Device-reset recovery reserves one additional 88-byte async slot which normal
 requests cannot consume. Ten metadata-only slots request 880 B (an 888-byte

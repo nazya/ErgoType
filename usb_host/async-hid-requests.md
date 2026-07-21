@@ -75,10 +75,15 @@ The active implementation now has these properties:
   descriptors are now fetched by task-side `usbhid_parse()` at their
   class-declared size through the generic asynchronous EP0 owner, up to Linux's
   4 KiB limit;
-  TinyUSB's enumeration buffer still limits configuration descriptors. Direct
-  interrupt-IN uses upstream's per-interface buffer ownership and Linux's
-  16 KiB HID limit. Generic synchronous messages use the native 16-bit USB
-  length and HID `.request()` uses the same 16 KiB Linux limit.
+  full configuration descriptors use TinyUSB's permanent 512-byte scratch or
+  one exact-size host-owner buffer for validated lengths through 4 KiB. The
+  control callback only records pending state; allocation, initial submission,
+  and retry run from shallow TinyUSB host-owner service after callback unwind.
+  Successful configuration parse frees immediately in TinyUSB's internal enum
+  continuation; failure frees after terminal EP0 drain. Direct interrupt-IN
+  uses upstream's per-interface buffer ownership and Linux's 16 KiB HID limit.
+  Generic synchronous messages use the native 16-bit USB length and HID
+  `.request()` uses the same 16 KiB Linux limit.
 
 See `hid_async.c`, `usbhid.c`, and `async-hid-progress.md` for current anchors.
 

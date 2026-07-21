@@ -123,7 +123,8 @@
 #define CFG_TUD_CDC_RX_BUFSIZE   512
 #define CFG_TUD_CDC_TX_BUFSIZE   512
 
-#define CFG_TUH_ENUMERATION_BUFSIZE 512 // Host enum scratch; long configs still fail, while lifecycle refetches skipped HID reports up to 4 KiB.
+#define CFG_TUH_ENUMERATION_BUFSIZE 512 // Permanent TinyUSB scratch for ordinary configuration descriptors.
+#define ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE 4096 // Larger configurations use one exact-size transient host-owner buffer.
 
 #ifndef CFG_TUH_MEM_SECTION
 /* Keep DMA-visible host transfer buffers below the core-1 stack in scratch X. */

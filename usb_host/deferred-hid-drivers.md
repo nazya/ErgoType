@@ -84,6 +84,18 @@ three explicit usages would only test the hook while falsely claiming support
 for the real hardware; increasing the cap would cost roughly 3 KiB per such
 report and is not justified for this legacy keyboard.
 
+`hid-huawei.c` is transport-safe but remains deferred until a dedicated heap
+stress pass. Its CD30 replacement descriptor contains a Consumer array over
+usages `0x0000..0x023c`: it fits the 675-usage policy, but one matched device
+would still allocate roughly 18 KiB of persistent selector state plus about
+5 KiB of transient parser storage.
+
+`hid-jabra.c` and `hid-ortek.c` are technically compatible with the current
+hooks, but are outside the selected allowlist: Jabra broadly matches every USB
+headset/speakerphone from that vendor, while the supported Ortek family is a
+legacy keyboard/trackpad/presenter set. Keep both source files available for a
+specific hardware request instead of paying static registry RAM by default.
+
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
@@ -101,6 +113,22 @@ means `/sys/class/leds`-style brightness devices and vendor LED/RGB panels,
 which need a firmware proxy/API before they are useful in this embedded host.
 On boot-keyboard start, `usbhid` also clears NumLock and submits the complete
 output report through the same route.
+
+## Next In-Scope Driver Candidate
+
+Upstream `hid-magicmouse.c` is the next meaningful work-input import, limited
+to the USB Magic Mouse 2 and Magic Trackpad 2 IDs. The current port already has
+the primitives used by that driver: synchronous raw SET over the async EP0
+owner, input MT slots, delayed work with synchronous cancellation, and the
+timer bridge. It must still receive a dedicated fixture before being linked:
+mode SET success/retry, native multitouch packets, click/motion, disconnect
+during the delayed retry, and repeated reconnect.
+
+The expected extra live allocation for a 16-contact Trackpad 2 is roughly
+3.1 KiB before generic HID parser/input state (driver state, MT slots/tracking,
+and ABS state). Keep Bluetooth/legacy IDs and the unused battery-strength path
+out of the firmware allowlist. This is a deliberate later import, not a reason
+to enable every Apple HID driver or HID++-style protocol stack.
 
 ## Future Transport Work
 

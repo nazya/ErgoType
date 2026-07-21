@@ -65,26 +65,37 @@ static usbh_dev0_t _dev0;
 enum {
   USBH_PORT_ENUM_WATCHDOG_MS = 6000,
   USBH_PORT_ENUM_DRAIN_MS = 2,
+  USBH_PORT_ENUM_RETRY_MS = 100,
   USBH_PORT_ENUM_DRAIN_PASSES = 3,
   USBH_PORT_TASK_EVENT_BUDGET = 8,
   USBH_PORT_ENUM_EVENT_NONE = 0,
   USBH_PORT_ENUM_EVENT_FAILED,
   USBH_PORT_ENUM_EVENT_TIMEOUT,
-  USBH_PORT_ENUM_EVENT_ATTACH_OVERFLOW
+  USBH_PORT_ENUM_EVENT_ATTACH_OVERFLOW,
+  USBH_PORT_ENUM_EVENT_CONFIG_NOMEM,
+  USBH_PORT_ENUM_EVENT_CONFIG_TOO_LARGE,
+  USBH_PORT_ENUM_EVENT_CONFIG_INVALID
 };
 
 enum {
   USBH_PORT_ENUM_DELAY_NONE = 0,
   USBH_PORT_ENUM_DELAY_ROOT_RESET,
   USBH_PORT_ENUM_DELAY_DEBOUNCE,
-  USBH_PORT_ENUM_DELAY_SET_ADDRESS
+  USBH_PORT_ENUM_DELAY_SET_ADDRESS,
+  USBH_PORT_ENUM_DELAY_RETRY
 };
 
 static struct {
   uint32_t progress_ms;
   uint32_t drain_at_ms;
   uint32_t drain_event_start;
+  uint8_t* retry_buffer;
+  uint8_t* config_buffer;
+  uintptr_t retry_user_data;
+  tusb_control_request_t retry_request;
+  uint16_t config_len;
   uint8_t daddr;
+  uint8_t retry_daddr;
   uint8_t failed_count;
   uint8_t drain_passes;
   // Host-task diagnostics survive an immediately chained enumeration epoch.
@@ -101,6 +112,7 @@ static struct {
   bool foreign_fenced;
   bool drain_started;
   bool drain_queue_fencing;
+  bool config_fetch_pending;
 } _enum_port;
 
 // Current TinyUSB uses a separate deferred-attach queue. Keep only the
@@ -145,6 +157,8 @@ extern void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
                                    bool success);
 extern void tuh_port_control_idle_cb(void);
 extern void tuh_port_enum_event_cb(uint8_t event);
+extern void* tuh_port_enum_buffer_alloc_on_host(uint16_t length);
+extern void tuh_port_enum_buffer_free_on_host(void* buffer);
 
 // Upstream TinyUSB: no equivalent; forward declaration for exact pre-address
 // hub-control ownership and the host-only terminal state below.
@@ -152,6 +166,12 @@ static void process_enumeration(tuh_xfer_t* xfer);
 TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage);
 static void _control_xfer_complete(uint8_t daddr, xfer_result_t result);
 static int usbh_port_enum_service_on_host(uint32_t* wait_ms);
+static bool usbh_port_enum_config_has_interfaces_on_host(
+    uint8_t const* config, uint16_t total_len, uint16_t offset,
+    uint8_t count, uint8_t interface_len);
+static bool usbh_port_enum_config_valid_on_host(uint8_t const* config,
+                                                uint16_t total_len);
+static void usbh_port_enum_config_release_on_host(void);
 
 // Upstream TinyUSB: no enum-aware REMOVE ancestry fence. Rank the matching
 // scope while the configured parent chain still exists; a larger rank is a
@@ -295,7 +315,12 @@ static void usbh_port_enum_start_on_host(void) {
   _enum_port.progress_ms = tusb_time_millis_api();
   _enum_port.drain_at_ms = 0;
   _enum_port.drain_event_start = 0;
+  _enum_port.retry_buffer = NULL;
+  _enum_port.config_buffer = NULL;
+  _enum_port.retry_user_data = 0;
+  _enum_port.config_len = 0;
   _enum_port.daddr = 0;
+  _enum_port.retry_daddr = 0;
   _enum_port.failed_count = 0;
   _enum_port.drain_passes = 0;
   _enum_port.removed_hub_addr = 0;
@@ -309,6 +334,7 @@ static void usbh_port_enum_start_on_host(void) {
   _enum_port.foreign_fenced = false;
   _enum_port.drain_started = false;
   _enum_port.drain_queue_fencing = false;
+  _enum_port.config_fetch_pending = false;
 }
 
 static void usbh_port_enum_control_progress_on_host(uint8_t daddr) {
@@ -758,16 +784,27 @@ set(TINYUSB_USBH_ENUM_RETRY_PORT [=[
     bool retry = _dev0.enumerating &&
                  (_enum_port.failed_count < ATTEMPT_COUNT_MAX);
     if (retry) {
+      uint32_t const retry_now = tusb_time_millis_api();
+
       _enum_port.failed_count++;
-      tusb_time_delay_ms_api(ATTEMPT_DELAY_MS);
-      TU_LOG1("Enumeration attempt %u\r\n", _enum_port.failed_count);
-      retry = tuh_control_xfer(xfer);
+      // The callback's tuh_xfer_t and setup packet are stack-local in
+      // _control_xfer_complete(). Snapshot every value needed by a later
+      // submission; its data buffer remains owned by this enumeration epoch.
+      _enum_port.retry_request = *xfer->setup;
+      _enum_port.retry_buffer = xfer->buffer;
+      _enum_port.retry_user_data = xfer->user_data;
+      _enum_port.retry_daddr = xfer->daddr;
+      _enum_port.progress_ms = retry_now;
+      _enum_port.delay_state = USBH_PORT_ENUM_DELAY_RETRY;
     }
 
     if (!retry) (void) enum_full_complete(false);
     return;
   }
   _enum_port.failed_count = 0;
+  _enum_port.retry_buffer = NULL;
+  _enum_port.retry_user_data = 0;
+  _enum_port.retry_daddr = 0;
 ]=])
 ergotype_tinyusb_usbh_replace_unique("enumeration retry epoch"
     TINYUSB_USBH_ENUM_RETRY_UPSTREAM TINYUSB_USBH_ENUM_RETRY_PORT)
@@ -992,11 +1029,24 @@ set(TINYUSB_USBH_ENUM_CONFIG_FULL_PORT [=[
       // Upstream TinyUSB:
       // // TODO not enough buffer to hold configuration descriptor
       // TU_ASSERT(total_len <= CFG_TUH_ENUMERATION_BUFSIZE,);
-      if (total_len < sizeof(tusb_desc_configuration_t) ||
-          total_len > CFG_TUH_ENUMERATION_BUFSIZE) {
+      // Linux first validates the short header, then allocates wTotalLength.
+      // Keep TinyUSB's permanent scratch for ordinary descriptors and defer
+      // only the larger allocation until this callback has unwound.
+      if (xfer->actual_len < sizeof(tusb_desc_configuration_t) ||
+          desc_config[0] != sizeof(tusb_desc_configuration_t) ||
+          desc_config[1] != TUSB_DESC_CONFIGURATION ||
+          total_len < sizeof(tusb_desc_configuration_t)) {
+        _enum_port.report_event = USBH_PORT_ENUM_EVENT_CONFIG_INVALID;
         (void) enum_full_complete(false);
         return;
       }
+      if (total_len > ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE) {
+        _enum_port.report_event = USBH_PORT_ENUM_EVENT_CONFIG_TOO_LARGE;
+        (void) enum_full_complete(false);
+        return;
+      }
+
+      _enum_port.config_len = total_len;
 
       // Get full configuration descriptor
       uint8_t const config_idx = CONFIG_NUM - 1;
@@ -1004,9 +1054,12 @@ set(TINYUSB_USBH_ENUM_CONFIG_FULL_PORT [=[
       // Upstream TinyUSB:
       // TU_ASSERT(tuh_descriptor_get_configuration(daddr, config_idx, _usbh_epbuf.ctrl, total_len,
       //                                             process_enumeration, ENUM_SET_CONFIG),);
-      if (!tuh_descriptor_get_configuration(daddr, config_idx, _usbh_epbuf.ctrl,
-                                            total_len, process_enumeration,
-                                            ENUM_SET_CONFIG)) {
+      if (total_len > CFG_TUH_ENUMERATION_BUFSIZE) {
+        _enum_port.progress_ms = tusb_time_millis_api();
+        _enum_port.config_fetch_pending = true;
+      } else if (!tuh_descriptor_get_configuration(
+                     daddr, config_idx, _usbh_epbuf.ctrl, total_len,
+                     process_enumeration, ENUM_SET_CONFIG)) {
         (void) enum_full_complete(false);
         return;
       }
@@ -1022,7 +1075,21 @@ set(TINYUSB_USBH_ENUM_SET_CONFIG_UPSTREAM [=[
       break;
 ]=])
 set(TINYUSB_USBH_ENUM_SET_CONFIG_PORT [=[
-    case ENUM_SET_CONFIG:
+    case ENUM_SET_CONFIG: {
+      uint8_t const* desc_config = _enum_port.config_buffer ?
+          _enum_port.config_buffer : _usbh_epbuf.ctrl;
+
+      // Upstream TinyUSB trusts a successful full GET. The firmware validates
+      // the retained buffer before its Linux-shaped parser can walk it.
+      if (!_enum_port.config_len ||
+          xfer->actual_len != _enum_port.config_len ||
+          !usbh_port_enum_config_valid_on_host(
+              desc_config, _enum_port.config_len)) {
+        _enum_port.report_event = USBH_PORT_ENUM_EVENT_CONFIG_INVALID;
+        (void) enum_full_complete(false);
+        return;
+      }
+
       // Upstream TinyUSB:
       // TU_ASSERT(tuh_configuration_set(daddr, CONFIG_NUM, process_enumeration, ENUM_CONFIG_DRIVER),);
       if (!tuh_configuration_set(daddr, CONFIG_NUM, process_enumeration,
@@ -1031,6 +1098,7 @@ set(TINYUSB_USBH_ENUM_SET_CONFIG_PORT [=[
         return;
       }
       break;
+    }
 ]=])
 ergotype_tinyusb_usbh_replace_unique("set-configuration submission"
     TINYUSB_USBH_ENUM_SET_CONFIG_UPSTREAM
@@ -1062,11 +1130,18 @@ set(TINYUSB_USBH_ENUM_CONFIG_DRIVER_PORT [=[
       // // driver_open() must not make any usb transfer
       // TU_ASSERT(_parse_configuration_descriptor(daddr, (tusb_desc_configuration_t*) _usbh_epbuf.ctrl),);
       // Partial class opens are closed by the common terminal rollback below.
+      uint8_t* const config_buffer = _enum_port.config_buffer ?
+          _enum_port.config_buffer : _usbh_epbuf.ctrl;
       if (!_parse_configuration_descriptor(
-              daddr, (tusb_desc_configuration_t*) _usbh_epbuf.ctrl)) {
+              daddr, (tusb_desc_configuration_t*) config_buffer)) {
         (void) enum_full_complete(false);
         return;
       }
+
+      // TinyUSB driver_open() consumes configuration bytes synchronously and
+      // retains only copied interface state. Release the exact-size extension
+      // before class set_config and the later Linux HID probe need heap.
+      usbh_port_enum_config_release_on_host();
 ]=])
 ergotype_tinyusb_usbh_replace_unique("configuration driver parse"
     TINYUSB_USBH_ENUM_CONFIG_DRIVER_UPSTREAM
@@ -1280,6 +1355,8 @@ static uint32_t usbh_port_enum_delay_ms_on_host(uint8_t state) {
     return ENUM_RESET_DELAY_MS;
   if (state == USBH_PORT_ENUM_DELAY_DEBOUNCE)
     return ENUM_DEBOUNCING_DELAY_MS;
+  if (state == USBH_PORT_ENUM_DELAY_RETRY)
+    return USBH_PORT_ENUM_RETRY_MS;
   return 2;
 }
 
@@ -1300,6 +1377,28 @@ static void usbh_port_enum_delay_complete_on_host(uint32_t now) {
   uint8_t const state = _enum_port.delay_state;
   _enum_port.delay_state = USBH_PORT_ENUM_DELAY_NONE;
   _enum_port.progress_ms = now;
+
+  if (state == USBH_PORT_ENUM_DELAY_RETRY) {
+    // Upstream TinyUSB:
+    // tusb_time_delay_ms_api(ATTEMPT_DELAY_MS); // delay a bit
+    // TU_LOG1("Enumeration attempt %u\r\n", failed_count);
+    // retry = tuh_control_xfer(xfer);
+    // The host task owns both the deadline and EP0. Rebuild the callback-local
+    // transfer only after the shared control owner is idle.
+    tuh_xfer_t retry_xfer = {
+      .daddr = _enum_port.retry_daddr,
+      .ep_addr = 0,
+      .setup = &_enum_port.retry_request,
+      .buffer = _enum_port.retry_buffer,
+      .complete_cb = process_enumeration,
+      .user_data = _enum_port.retry_user_data
+    };
+
+    TU_LOG1("Enumeration attempt %u\r\n", _enum_port.failed_count);
+    if (!tuh_control_xfer(&retry_xfer))
+      (void) enum_full_complete(false);
+    return;
+  }
 
   if (state == USBH_PORT_ENUM_DELAY_ROOT_RESET) {
     hcd_port_reset_end(_dev0.rhport);
@@ -1385,6 +1484,166 @@ static bool usbh_port_enum_cleanup_contains_control_on_host(void) {
       cleanup_hub_addr, cleanup_hub_port, _ctrl_xfer.daddr);
 }
 
+// Upstream TinyUSB: no bounded configuration preflight. Its parser advances by
+// each device-supplied bLength and casts interface/IAD/endpoint descriptors.
+// Exact-size heap storage makes an invalid final descriptor an immediate OOB,
+// so reject malformed streams and interface-array overflow before parser entry.
+static bool usbh_port_enum_config_has_interfaces_on_host(
+    uint8_t const* config, uint16_t total_len, uint16_t offset,
+    uint8_t count, uint8_t interface_len) {
+  uint8_t found = 0;
+
+  // The caller has already validated every bLength in this stream.
+  while (offset < total_len) {
+    uint8_t const* desc = config + offset;
+    if (desc[1] == TUSB_DESC_INTERFACE_ASSOCIATION) return false;
+    if (desc[1] == TUSB_DESC_INTERFACE &&
+        ((tusb_desc_interface_t const*) desc)->bAlternateSetting == 0) {
+      // TinyUSB accounts every member with the first interface's bLength.
+      // Larger headers are safe only when that group keeps one stride.
+      if (desc[0] != interface_len) return false;
+      found++;
+      if (found == count) return true;
+    }
+    offset = (uint16_t) (offset + desc[0]);
+  }
+  return false;
+}
+
+static bool usbh_port_enum_config_valid_on_host(uint8_t const* config,
+                                                uint16_t total_len) {
+  if (total_len < sizeof(tusb_desc_configuration_t) ||
+      config[0] != sizeof(tusb_desc_configuration_t) ||
+      config[1] != TUSB_DESC_CONFIGURATION)
+    return false;
+
+  tusb_desc_configuration_t const* desc_cfg =
+      (tusb_desc_configuration_t const*) config;
+  uint16_t const declared_len = tu_le16toh(tu_unaligned_read16(
+      config + offsetof(tusb_desc_configuration_t, wTotalLength)));
+  if (declared_len != total_len ||
+      desc_cfg->bNumInterfaces > CFG_TUH_INTERFACE_MAX)
+    return false;
+
+  uint16_t offset = config[0];
+  uint16_t interface_count = 0;
+  bool first_child = true;
+  while (offset < total_len) {
+    uint16_t const remaining = (uint16_t) (total_len - offset);
+    if (remaining < 2) return false;
+
+    uint8_t const* desc = config + offset;
+    uint8_t const desc_len = desc[0];
+    uint8_t const desc_type = desc[1];
+    if (desc_len < 2 || desc_len > remaining) return false;
+    if (first_child && desc_type != TUSB_DESC_INTERFACE_ASSOCIATION &&
+        desc_type != TUSB_DESC_INTERFACE)
+      return false;
+
+    if (desc_type == TUSB_DESC_INTERFACE_ASSOCIATION) {
+      if (desc_len < sizeof(tusb_desc_interface_assoc_t)) return false;
+
+      tusb_desc_interface_assoc_t const* iad =
+          (tusb_desc_interface_assoc_t const*) desc;
+      uint8_t const count = iad->bInterfaceCount;
+      if (!count || iad->bFirstInterface >= CFG_TUH_INTERFACE_MAX ||
+          count > CFG_TUH_INTERFACE_MAX - iad->bFirstInterface)
+        return false;
+
+      uint16_t const next_offset = (uint16_t) (offset + desc_len);
+      uint16_t const next_remaining =
+          (uint16_t) (total_len - next_offset);
+      if (next_remaining < sizeof(tusb_desc_interface_t)) return false;
+
+      uint8_t const* next = config + next_offset;
+      if (next[0] < sizeof(tusb_desc_interface_t) ||
+          next[0] > next_remaining || next[1] != TUSB_DESC_INTERFACE ||
+          ((tusb_desc_interface_t const*) next)->bInterfaceNumber !=
+              iad->bFirstInterface ||
+          ((tusb_desc_interface_t const*) next)->bAlternateSetting != 0)
+        return false;
+    } else if (desc_type == TUSB_DESC_INTERFACE) {
+      if (desc_len < sizeof(tusb_desc_interface_t)) return false;
+
+      tusb_desc_interface_t const* itf =
+          (tusb_desc_interface_t const*) desc;
+      if (itf->bInterfaceNumber >= CFG_TUH_INTERFACE_MAX)
+        return false;
+      if (first_child && itf->bAlternateSetting != 0) return false;
+      if (itf->bAlternateSetting == 0) {
+        interface_count++;
+        if (interface_count > desc_cfg->bNumInterfaces) return false;
+      }
+    } else if (desc_type == TUSB_DESC_ENDPOINT &&
+               desc_len < sizeof(tusb_desc_endpoint_t)) {
+      return false;
+    }
+
+    offset = (uint16_t) (offset + desc_len);
+    first_child = false;
+  }
+
+  if (offset != total_len || interface_count != desc_cfg->bNumInterfaces)
+    return false;
+
+  // TinyUSB groups IAD interfaces, plus legacy CDC/MIDI pairs without an IAD,
+  // before driver_open(). Prove every requested base interface exists so its
+  // helper cannot step from the exact-size buffer end looking for another one.
+  offset = config[0];
+  while (offset < total_len) {
+    uint8_t const* desc = config + offset;
+    uint8_t const desc_type = desc[1];
+    if (desc_type == TUSB_DESC_INTERFACE_ASSOCIATION) {
+      tusb_desc_interface_assoc_t const* iad =
+          (tusb_desc_interface_assoc_t const*) desc;
+      if (!usbh_port_enum_config_has_interfaces_on_host(
+              config, total_len, (uint16_t) (offset + desc[0]),
+              iad->bInterfaceCount, config[offset + desc[0]]))
+        return false;
+    } else if (desc_type == TUSB_DESC_INTERFACE) {
+      tusb_desc_interface_t const* itf =
+          (tusb_desc_interface_t const*) desc;
+      bool implicit_pair = false;
+#if CFG_TUH_MIDI
+      implicit_pair = TUSB_CLASS_AUDIO == itf->bInterfaceClass &&
+                      AUDIO_SUBCLASS_CONTROL == itf->bInterfaceSubClass &&
+                      AUDIO_FUNC_PROTOCOL_CODE_UNDEF ==
+                          itf->bInterfaceProtocol;
+#endif
+#if CFG_TUH_CDC
+      implicit_pair = implicit_pair ||
+                      (TUSB_CLASS_CDC == itf->bInterfaceClass &&
+                       CDC_COMM_SUBCLASS_ABSTRACT_CONTROL_MODEL ==
+                           itf->bInterfaceSubClass);
+#endif
+      if (implicit_pair && itf->bAlternateSetting == 0) {
+        if (itf->bInterfaceNumber > CFG_TUH_INTERFACE_MAX - 2 ||
+            !usbh_port_enum_config_has_interfaces_on_host(
+                config, total_len, offset, 2, desc[0]))
+          return false;
+      }
+    }
+    offset = (uint16_t) (offset + desc[0]);
+  }
+
+  return true;
+}
+
+// Upstream TinyUSB: no equivalent; its configuration descriptor always lives
+// in the permanent enumeration scratch. The port's exact-size extension owns
+// one transient host-transfer buffer through parse, retry, and terminal drain.
+static void usbh_port_enum_config_release_on_host(void) {
+  uint8_t* const config_buffer = _enum_port.config_buffer;
+  if (config_buffer) {
+    if (_enum_port.retry_buffer == config_buffer)
+      _enum_port.retry_buffer = NULL;
+    tuh_port_enum_buffer_free_on_host(config_buffer);
+  }
+  _enum_port.config_buffer = NULL;
+  _enum_port.config_len = 0;
+  _enum_port.config_fetch_pending = false;
+}
+
 static bool enum_full_complete(bool success) {
   uint8_t const rhport = _dev0.rhport;
   uint8_t const hub_addr = _dev0.hub_addr;
@@ -1434,10 +1693,15 @@ static bool enum_full_complete(bool success) {
     }
   }
 
+  usbh_port_enum_config_release_on_host();
+
   _enum_port.progress_ms = 0;
   _enum_port.drain_at_ms = 0;
   _enum_port.drain_event_start = 0;
+  _enum_port.retry_buffer = NULL;
+  _enum_port.retry_user_data = 0;
   _enum_port.daddr = 0;
+  _enum_port.retry_daddr = 0;
   _enum_port.failed_count = 0;
   _enum_port.drain_passes = 0;
   _enum_port.removed_hub_addr = 0;
@@ -1505,6 +1769,10 @@ static uint32_t usbh_port_enum_next_wait_ms_on_host(uint32_t now) {
   }
 
   if (!_enum_port.aborting) {
+    if (_enum_port.config_fetch_pending &&
+        _ctrl_xfer.stage == CONTROL_STAGE_IDLE)
+      return 0;
+
     uint32_t wait_ms = usbh_port_wait_until_on_host(
         now, _enum_port.progress_ms + USBH_PORT_ENUM_WATCHDOG_MS);
     uint8_t const state = _enum_port.delay_state;
@@ -1582,6 +1850,29 @@ static int usbh_port_enum_service_on_host(uint32_t* wait_ms) {
       (delay_state == USBH_PORT_ENUM_DELAY_ROOT_RESET ||
        _ctrl_xfer.stage == CONTROL_STAGE_IDLE)) {
     usbh_port_enum_delay_complete_on_host(now);
+  }
+
+  if (_dev0.enumerating && !_enum_port.aborting &&
+      _enum_port.config_fetch_pending &&
+      _ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
+    uint16_t const config_len = _enum_port.config_len;
+    uint8_t* const config_buffer =
+        tuh_port_enum_buffer_alloc_on_host(config_len);
+    if (!config_buffer) {
+      _enum_port.report_event = USBH_PORT_ENUM_EVENT_CONFIG_NOMEM;
+      (void) enum_full_complete(false);
+    } else {
+      uint8_t const config_idx = CONFIG_NUM - 1;
+
+      _enum_port.config_buffer = config_buffer;
+      _enum_port.config_fetch_pending = false;
+      _enum_port.progress_ms = now;
+      if (!tuh_descriptor_get_configuration(
+              _enum_port.daddr, config_idx, config_buffer, config_len,
+              process_enumeration, ENUM_SET_CONFIG)) {
+        (void) enum_full_complete(false);
+      }
+    }
   }
 
   if (_dev0.enumerating && _enum_port.aborting) {

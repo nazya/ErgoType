@@ -59,8 +59,8 @@ static LIST_HEAD(input_handler_list);
  * input handlers.
  */
 // static DEFINE_MUTEX(input_mutex);
-// Firmware registers input devices/handlers from the host task and has no
-// blocking input_mutex in the callback-driven path.
+// Firmware lifecycle serializes input device/handler registration and does not
+// need Linux's global list mutex; per-device event state is protected below.
 
 // Upstream Linux allocates inputN via IDA/device model. Firmware keeps only a
 // monotonic in-memory proxy id for code that needs stable input_dev identity.
@@ -149,7 +149,8 @@ static void input_pass_values(struct input_dev *dev,
 
 	// lockdep_assert_held(&dev->event_lock);
 	// scoped_guard(rcu) { ... }
-	// Port input core has no event_lock/RCU; keep grab-first handler order.
+	// Caller holds port_event_mutex. Firmware has no RCU; keep the upstream
+	// grab-first handler order within that per-device critical section.
 	if (dev->grab) {
 		if (dev->grab->open)
 			count = dev->grab->handle_events(dev->grab, vals, count);
@@ -417,7 +418,8 @@ void input_handle_event(struct input_dev *dev,
 	int disposition;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// Callback-driven slice has no active event_lock; do not block in report path.
+	// FreeRTOS has no lockdep; active callers hold port_event_mutex in place of
+	// Linux's IRQ-safe event_lock.
 	disposition = input_get_disposition(dev, type, code, &value);
 	if (disposition != INPUT_IGNORE_EVENT) {
 		// if (type != EV_SYN)
@@ -449,8 +451,11 @@ void input_event(struct input_dev *dev,
 {
 	if (is_event_supported(type, dev->evbit, EV_MAX)) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// Port input core has no event_lock; boundary proxy synchronization is tracked separately.
+		// TinyUSB callbacks only publish reports. All input parsing runs in tasks,
+		// so a priority-inheritance mutex replaces this IRQ-side critical section.
+		mutex_lock(&dev->port_event_mutex);
 		input_handle_event(dev, type, code, value);
+		mutex_unlock(&dev->port_event_mutex);
 	}
 }
 // EXPORT_SYMBOL(input_event);
@@ -471,18 +476,22 @@ void input_inject_event(struct input_handle *handle,
 			unsigned int type, unsigned int code, int value)
 {
 	struct input_dev *dev = handle->dev;
+	struct input_handle *grab;
 
-	if (!is_event_supported(type, dev->evbit, EV_MAX))
-		return;
-
-	// grab = rcu_dereference(dev->grab);
-	// if (!grab || grab == handle)
-	// 	input_handle_event(dev, type, code, value);
-	// Port input core has no RCU; use the same grab rule directly.
-	if (dev->grab && dev->grab != handle)
-		return;
-
-	input_handle_event(dev, type, code, value);
+	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+		// guard(spinlock_irqsave)(&dev->event_lock);
+		// KeyD injects output from CORE0 while report parsing updates the same
+		// input_dev on CORE1; serialize the upstream event-lock section.
+		mutex_lock(&dev->port_event_mutex);
+		// guard(rcu)();
+		// Firmware has no RCU. evdev_writer_mutex retains the handle through
+		// this call, while port_event_mutex protects grab and input state.
+		// grab = rcu_dereference(dev->grab);
+		grab = dev->grab;
+		if (!grab || grab == handle)
+			input_handle_event(dev, type, code, value);
+		mutex_unlock(&dev->port_event_mutex);
+	}
 }
 // EXPORT_SYMBOL(input_inject_event);
 // Firmware links this file directly and has no Linux module symbol export.
@@ -758,7 +767,7 @@ static bool input_dev_release_keys(struct input_dev *dev)
 	int code;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// Port input core has no event_lock.
+	// The caller holds port_event_mutex in place of Linux event_lock.
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
 		for_each_set_bit(code, dev->key, KEY_CNT) {
 			input_handle_event(dev, EV_KEY, code, 0);
@@ -786,18 +795,19 @@ static void input_disconnect_device(struct input_dev *dev)
 	dev->going_away = true;
 
 	// guard(spinlock_irq)(&dev->event_lock);
-	// Port input core has no event_lock.
+	// Disconnect is task-owned while KeyD may still inject from another core;
+	// use the task-context replacement for Linux's event lock.
+	mutex_lock(&dev->port_event_mutex);
 	/*
 	 * Simulate keyup events for all pressed keys so that handlers
 	 * are not left with "stuck" keys. The driver may continue
 	 * generate events even after we done here but they will not
 	 * reach any handlers.
 	 */
-	// Unregister runs from the same host callback/task slice; do not block.
 	if (input_dev_release_keys(dev)) {
 		input_handle_event(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	// See nonblocking callback-driven note above.
+	mutex_unlock(&dev->port_event_mutex);
 
 	list_for_each_entry(handle, &dev->h_list, d_node)
 		while (handle->open) {
@@ -914,7 +924,8 @@ int input_default_setkeycode(struct input_dev *dev,
 	int i;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// Port input core has no event_lock.
+	// Firmware has no keymap ioctl caller. A future caller must hold
+	// port_event_mutex in place of the upstream event lock.
 
 	if (!dev->keycodesize)
 		return -EINVAL;
@@ -1208,13 +1219,12 @@ void input_reset_device(struct input_dev *dev)
 {
 	// guard(mutex)(&dev->mutex);
 	// guard(spinlock_irqsave)(&dev->event_lock);
-	// Port input core has no mutex/event_lock guards.
-	// Reset is synchronous in this slice; no blocking event lock.
+	// Firmware has no input_reset_device() caller. Keep this dormant upstream
+	// API visible until a real caller defines its lifecycle/event lock order.
 	input_dev_toggle(dev, true);
 	if (input_dev_release_keys(dev)) {
 		input_handle_event(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	// See nonblocking callback-driven note above.
 }
 // EXPORT_SYMBOL(input_reset_device);
 // Firmware links this file directly and has no Linux module symbol export.
@@ -1392,7 +1402,16 @@ struct input_dev *input_allocate_device(void)
 
 	// mutex_init(&dev->mutex);
 	// spin_lock_init(&dev->event_lock);
-	// Port input core has no mutex/event_lock; timer exists for upstream autorepeat.
+	// The compatibility spinlock is a no-op. Allocate the task-context event
+	// mutex before input_allocate_device() can publish this object to callers.
+	mutex_init(&dev->port_event_mutex);
+	if (!mutex_initialized(&dev->port_event_mutex)) {
+		kfree(dev->vals);
+		kfree(dev);
+		return NULL;
+	}
+	// Linux's separate lifecycle mutex remains deferred; the timer exists for
+	// upstream autorepeat and multitouch callbacks.
 	timer_setup(&dev->timer, NULL, 0);
 	INIT_LIST_HEAD(&dev->h_list);
 	INIT_LIST_HEAD(&dev->node);
@@ -1502,6 +1521,9 @@ void input_free_device(struct input_dev *dev)
 	input_mt_destroy_slots(dev);
 	kfree(dev->absinfo);
 	kfree(dev->vals);
+	// Linux input_put_device() frees input_dev after event users are gone. The
+	// firmware direct-free path also owns this port-only mutex allocation.
+	mutex_destroy(&dev->port_event_mutex);
 	kfree(dev);
 	// }
 }
@@ -1651,7 +1673,8 @@ static int input_device_tune_vals(struct input_dev *dev)
 		return -ENOMEM;
 
 	// scoped_guard(spinlock_irq, &dev->event_lock) {
-	// Port input core has no event_lock; registration/tuning is synchronous.
+	// Lifecycle tunes this private input_dev before registration and report
+	// publication, so no event producer can observe the buffer replacement.
 	dev->max_vals = max_vals;
 	swap(dev->vals, vals);
 	// }
@@ -1788,7 +1811,7 @@ static void __input_unregister_device(struct input_dev *dev)
 	list_for_each_entry_safe(handle, next, &dev->h_list, d_node)
 		handle->handler->disconnect(handle);
 	// WARN_ON(!list_empty(&dev->h_list));
-	// Firmware build keeps warnings out of this callback-driven slice.
+	// Firmware build keeps warnings out of this task-owned lifecycle slice.
 	timer_delete_sync(&dev->timer);
 	// list_del_init(&dev->node);
 	// Port list helper set does not require reinitializing the node.
@@ -1896,7 +1919,7 @@ void input_unregister_handler(struct input_handler *handler)
 	list_for_each_entry_safe(handle, next, &handler->h_list, h_node)
 		handler->disconnect(handle);
 	// WARN_ON(!list_empty(&handler->h_list));
-	// Firmware build keeps warnings out of this callback-driven slice.
+	// Firmware build keeps warnings out of this task-owned lifecycle slice.
 	// list_del_init(&handler->node);
 	// Port list helper set does not require reinitializing the node.
 	list_del(&handler->node);
@@ -2040,13 +2063,14 @@ int input_register_handle(struct input_handle *handle)
 	// else
 	// 	list_add_tail_rcu(&handle->d_node, &dev->h_list);
 	// This port has no RCU input core; filters still go before normal handlers.
-	// Callback-driven slice has no concurrent input worker; do not block in HID callbacks.
+	// Lifecycle finishes handle setup before driver_ready publishes report input,
+	// so no report task can traverse this private list yet.
 	if (handler->filter)
 		list_add(&handle->d_node, &dev->h_list);
 	else
 		list_add_tail(&handle->d_node, &dev->h_list);
 	// }
-	// See nonblocking callback-driven note above.
+	// The sole lifecycle owner also excludes concurrent handle removal here.
 	/*
 	 * Since we are supposed to be called from ->connect()
 	 * which is mutually exclusive with ->disconnect()
@@ -2107,9 +2131,9 @@ static void input_repeat_key(struct timer_list *t)
 	struct input_dev *dev = timer_container_of(dev, t, timer);
 
 	// guard(spinlock_irqsave)(&dev->event_lock);
-	// Port input core has no event_lock; software repeat work is inactive in
-	// the callback-driven slice.
-	// Software repeat worker is not active in the callback-driven slice.
+	// The sole firmware handler clears EV_REP before opening the device, so no
+	// active HID path can arm this upstream software-repeat timer. Restore the
+	// port event mutex here if a future handler retains EV_REP.
 	if (!dev->inhibited &&
 	    test_bit(dev->repeat_key, dev->key) &&
 	    is_event_supported(dev->repeat_key, dev->keybit, KEY_MAX)) {
@@ -2123,7 +2147,7 @@ static void input_repeat_key(struct timer_list *t)
 			mod_timer(&dev->timer, jiffies +
 					msecs_to_jiffies(dev->rep[REP_PERIOD]));
 	}
-	// See nonblocking callback-driven note above.
+	// No active firmware timer can reach this function while EV_REP is cleared.
 }
 
 // /**

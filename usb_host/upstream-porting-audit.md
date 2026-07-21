@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-21
+Updated: 2026-07-22
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -28,7 +28,7 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 
 ## Conforming Areas
 
-- CMake/`CONFIG_HID_*` agree on 13 vendor drivers, generic `hid-multitouch`,
+- CMake/`CONFIG_HID_*` agree on 17 vendor drivers, generic `hid-multitouch`,
   and `hid-haptic`. Active vendor/generic changes keep adjacent upstream lines
   and reasons; no unrelated vendor-flow rewrite was found.
 - `hid-haptic.h` is byte-for-byte baseline. `hid-multitouch.c` retains three
@@ -103,6 +103,19 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - One mutex serializes synchronous KeyD write/upload/erase with unregister.
   Unregister nulls `client->evdev`, sends the existing removal sentinel, and
   KeyD later deletes the queue/client. No second output queue/task or handshake.
+- Linux protects each `input_dev` event state with its IRQ-safe `event_lock`.
+  The compatibility spinlock is intentionally a no-op, so the task-only port
+  keeps the same per-device critical sections with a priority-inheritance
+  mutex: report parsing on CORE1 and KeyD LED/FF injection on CORE0 cannot race
+  `key`/`led`/ABS/MT state, `vals`, `num_vals`, or `grab`. TinyUSB callbacks do
+  not enter the input core. Disconnect takes this mutex only for Linux's
+  release-key/SYN section and releases it before closing handlers. The active
+  order is `driver_input_lock -> port_event_mutex` or
+  `evdev_writer_mutex -> port_event_mutex`; no event-mutex scope waits for a
+  USB completion, work item, timer callback, or writer mutex. The embedded
+  handle grows the allocator block by 8 B and its heap-backed FreeRTOS object
+  costs 96 B, for 104 B per live `input_dev`; allocation failure follows the
+  ordinary `input_allocate_device() == NULL` probe unwind.
 - Host evdev uses a bounded 64-entry member queue for hid-input's standard
   60-value MT hint, its two input-core slots, and release/removal reserve; other
   firmware input queues remain 16 entries. A computed batch above 62 raises a
@@ -328,7 +341,9 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   pool admission waits are bounded and do not consume a wire attempt;
   cancellation wakes the blocked parser while its exact buffer remains live.
   Descriptors up to Linux's 4 KiB limit no longer depend on TinyUSB's 512-byte
-  enumeration scratch; configuration descriptors still do.
+  enumeration scratch. Full configuration descriptors now independently keep
+  that 512-byte static fast path and use an exact transient host-owner buffer
+  for validated lengths through 4 KiB.
   A second SHA-pinned build-local source preserves TinyUSB `hid_host.c`'s full
   `hidh_open()` and `hidh_set_config()` blocks commented beside their two port
   replacements.
@@ -383,9 +398,13 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   maintenance contract are recorded in
   [`tinyusb-host-port.md`](tinyusb-host-port.md). The helpers preserve
   `enum_new_device()`'s root/hub continuation semantics while replacing its
-  blocking 50-ms root reset, 450-ms connection settle, and 2-ms address recovery
-  with host-owned deadlines. The sole TinyUSB event pump therefore remains
-  runnable. Its public loop is the upstream-shaped `while (1) tuh_task();`.
+  blocking 50-ms root reset, 450-ms connection settle, 2-ms address recovery,
+  and error-only 100-ms control retry with host-owned deadlines. The retry
+  replacement preserves TinyUSB's bounded attempt count by copying the
+  callback-local setup tuple into the enum epoch and reconstructing the request
+  after callback unwind and EP0 idle. The sole TinyUSB event pump therefore
+  remains runnable. Its public loop is the upstream-shaped
+  `while (1) tuh_task();`.
   Inside generated `tuh_task_ext()`, the nearest armed deadline shortens the
   private queue wait while real HCD/deferred events wake it earlier; an idle
   host waits indefinitely, with no fixed periodic timeout. Foreign
@@ -397,6 +416,15 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
   TinyUSB's normal terminal TIMEOUT callback; a replacement serial is untouched.
   Exact unique CMake anchors preserve replaced upstream blocks beside the port
   and reject source drift. The pinned TinyUSB source inputs remain untouched.
+  The same generated core validates the nine-byte configuration header. A
+  513..4096-byte `wTotalLength` is retained as pending state until shallow
+  host-owner service can allocate and submit outside the completion callback.
+  `task.c` supplies mandatory platform allocator/free hooks; RP2040 uses
+  FreeRTOS heap_4, while a future ESP backend can select DMA-capable internal
+  memory without modifying the pinned TinyUSB delta. The allocation survives
+  full-GET retries and is freed after synchronous class-open parsing or after
+  terminal EP0 drain on every failure/remove path. No Linux-derived parser or
+  driver owns this buffer.
   A separate one-anchor generated copy of TinyUSB's PIO HCD completes
   `hcd_edpt_clear_stall()` by resetting Pico-PIO-USB's local DATA toggle. The
   HID report transport now calls only that generic HCD API; the vendored PIO
@@ -437,6 +465,10 @@ link status; hiddev, CMedia, and Vivaldi are not certified for enablement.
 - confirmed `sizeof(usbhid_device) == 248`, the four RX ownership/completion
   slots are 32 B each (128 B total), and scratch X is 708 B
 - confirmed `sizeof(input_event) == 16` and `sizeof(port_input_event) == 8`
-- built `device/haptic-touchpad` (`build/ErgoType.uf2`, 159232 bytes)
+- confirmed the generated host source retains 34 exact upstream anchors and
+  the public host loop remains `while (1) tuh_task();`; the new error retry and
+  600-byte long-configuration paths passed their dedicated hardware fixture
+- built and exercised `device/work-input-drivers`, including three repeated
+  `cafe:1005` cycles after its injected full-configuration GET failure
 - `git diff --check`
 - observed two-board haptic cursor feedback

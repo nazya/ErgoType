@@ -92,7 +92,10 @@ fixed polling interval. Inside the generated host core, `tuh_task_ext()` first
 services due enum continuations and shortens its private queue wait to the
 nearest remaining deadline. HCD/deferred work wakes that same wait earlier; an
 idle host with no deadline waits indefinitely. No timer object or wake queue is
-added outside TinyUSB.
+added outside TinyUSB. This now includes the error-only 100-ms enumeration
+control retry: completion snapshots its callback-local request tuple and
+returns, then shallow host-owner service reconstructs it after the deadline and
+global EP0 idle. It does not block the event pump or use Pico/FreeRTOS timers.
 
 The physical publication is intentionally earlier than HID class close: it is
 the producer fence for both ordinary devices and hubs. TinyUSB omits the common
@@ -214,7 +217,20 @@ is sent because USB reset already selects Report protocol. Local async-pool admi
 waits do not consume those attempts and are bounded by the control timeout. The
 firmware-only full device-descriptor refetch separately gets four accepted
 attempts with 100-ms backoff and carries both cache and TinyUSB address epochs
-across the string chain. The configuration-descriptor limit remains 512 bytes.
+across the string chain. Full USB configuration descriptors independently use
+TinyUSB's permanent 512-byte scratch when they fit. A validated
+`wTotalLength` from 513 through 4096 bytes is allocated exactly once by shallow
+host-owner service after the short-GET callback unwinds, retained through full-
+GET retries, and freed immediately after the internal synchronous class-open
+scan or after terminal EP0 drain. RP2040 implements the mandatory platform hook
+with FreeRTOS heap_4; the boundary lets a future ESP port choose DMA-capable
+internal memory.
+
+The 600-byte hardware fixture verifies a working HID interface at byte 575,
+repeated attach/remove with a stable heap plateau, and recovery from an
+injected full-configuration control failure through the 100-ms continuation.
+Remaining fault coverage is REMOVE or a foreign ATTACH while that deadline is
+armed; a normal small device cannot exercise those cancellation/topology races.
 
 EP0 cancellation cannot wait forever for a PIO completion event. The executor
 allows three two-SOF/FIFO fences for TinyUSB's SETUP/DATA/ACK stages. If the
@@ -319,19 +335,19 @@ The working configuration intentionally keeps these changes:
 
 Before static builtin runtime storage, registering 23 drivers and their
 per-driver state/attribute data consumed 4,952 B of FreeRTOS heap in the tested
-build. The current 14 runtime records occupy 784 B of static `.bss`. Static
+build. The current 19 runtime records occupy 1,064 B of static `.bss`. Static
 `.bss` still consumes physical RAM, but it no longer depletes or fragments the
 runtime heap. Excluding a driver from CMake also excludes its runtime record
 while leaving its source in the repository.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
-Cypress, Holtek keyboard, ITE, Kye, Primax, PXRC, Rapoo, Razer, Saitek, and
-Zydacron.
+Cypress, ELECOM, EVision, Holtek keyboard, ITE, Kensington, Kye, Primax, PXRC,
+Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic multitouch.
 
 Current memory-related settings are:
 
 ```text
-configTOTAL_HEAP_SIZE       218.75 KiB
+configTOTAL_HEAP_SIZE       218.5 KiB
 configMINIMAL_STACK_SIZE    384 words
 hid_async_task              512 words
 keyd_task                   5,120 words
@@ -364,6 +380,14 @@ The transport-wide invariant audit also leaves no function call or predicate
 inside an active `configASSERT()`. A collision in the one-slot async diagnostic
 path increments the UI warning counter before dropping the newer text.
 
+Incoming HID reports and KeyD output injection now share Linux input state
+through a per-`input_dev` priority-inheritance mutex. It replaces the active
+task-context sections of upstream `event_lock`; TinyUSB callbacks never acquire
+it. Each live input device therefore consumes a 96-byte heap_4 mutex plus 8 B
+from growth/alignment of its `input_dev` block, 104 B total. Disconnect releases
+the mutex before handler close/unregister, and no protected section waits for
+USB, workqueue, or timer completion.
+
 The callback-safe lifecycle transport pool now has a 2,756 B payload (plus
 allocator overhead) in the FreeRTOS heap at startup with the current
 `CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
@@ -374,6 +398,14 @@ neither payload. Lifecycle serializes probe, so
 (up to 4 KiB), owns it through asynchronous completion/cancel, and frees it
 before returning. Include both the persistent pool and transient descriptor in
 post-enumeration and haptic heap checks.
+
+Enumeration may now own a different exact-size transient for a 513..4096-byte
+full configuration descriptor. A 4096-byte request occupies about 4104 B in
+RP2040 heap_4. TinyUSB releases it immediately after its internal synchronous
+class-open scan, before class set-config and lifecycle enter Linux
+`usbhid_parse()`, so it does not normally overlap the report-descriptor/haptic
+probe peak. Failure, timeout, and remove release it only after the matching EP0
+owner is drained; a retry reuses the same allocation.
 
 The report executor now has one persistent queue. Five 28-byte ordinary-control
 results plus the 84-byte FreeRTOS queue object request 224 B and occupy a
@@ -479,6 +511,9 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
 | `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |
 | `ERR: HID_ATTACH_OVERFLOW` | More distinct topologies arrived during one enumeration than the bounded device table can retain. The excess ATTACH was dropped instead of blocking TinyUSB on its own queue. |
+| `ERR: HID_ENUM_CONFIG_NOMEM` | A validated 513..4096-byte full configuration descriptor could not obtain its exact transient host buffer; the enumeration epoch failed cleanly. |
+| `ERR: HID_ENUM_CONFIG_TOO_LARGE` | The short configuration header declared `wTotalLength` above the firmware's 4096-byte bound; no full GET was submitted. |
+| `ERR: HID_ENUM_CONFIG_INVALID` | The short header or completed full configuration descriptor was short, malformed, or inconsistent with its retained `wTotalLength`; no class parser received it. |
 | `ERR: HID_WQ_NOT_READY` / `HID_WQ_LOCK_FAIL` / `HID_WQ_UNLOCK_FAIL` | A task-side workqueue mutex invariant failed. The checked FreeRTOS call was evaluated before the following assert. |
 | `ERR: HID_WQ_WAITER_BAD` / `HID_WQ_WAITER_LOST` / `HID_WQ_SELF_WAIT` | A synchronous workqueue waiter invariant failed outside TinyUSB callback context. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |

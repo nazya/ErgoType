@@ -11,14 +11,17 @@ targeted behavior or device family.
 The Stadia and AppleIR entries below are retained as historical coverage for
 checkpoint `hid: stabilize stadia ff teardown`. Neither path is in the active CMake allowlist.
 
-### Pending work-input driver fixture
+### Hardware-verified work-input and long-enumeration fixture
 
-The current dirty host tree enables the upstream-shaped `hid-elecom.c`,
-`hid-kensington.c`, and `hid-topre.c` drivers. Their isolated emulator worktree
-is `../ErgoType-hid-devices-elecom` on branch
+Host checkpoint `hid: enable audited work-input drivers` enables the upstream-shaped `hid-elecom.c`,
+`hid-kensington.c`, and `hid-topre.c` drivers. The current host image adds the
+audited `hid-evision.c` receiver fixup and event-driven long enumeration. The
+normal haptic/multitouch regression and the four driver-specific paths use the
+emulator repository
+`../ErgoType-hid-devices` on branch
 `device/work-input-drivers`.
 
-One emulator image repeatedly disconnects and re-enumerates as three devices:
+One emulator image repeatedly disconnects and re-enumerates as five devices:
 
 - ELECOM `056e:00fc`, with the real M-XT3DRBK three-button/five-padding defect
   and six-button reports;
@@ -26,37 +29,43 @@ One emulator image repeatedly disconnects and re-enumerates as three devices:
   input-mapping hook turns into middle/side buttons;
 - Topre `0853:0313`, with the faithful 106-byte REALFORCE descriptor whose
   232-key bitmap is incorrectly marked Array at offsets 30..31.
+- EVision TeLink `320f:226f`, with the exact 236-byte/offset-59 match signature
+  whose three-button Usage Maximum is fixed to five.
+- ErgoType `cafe:1005`, with a valid 600-byte configuration, its mouse HID
+  interface beginning at byte 575, and a deliberate STALL on the first full
+  configuration GET so enumeration must take the 100-ms retry continuation.
 
-This directly checks both fixup drivers, the Kensington mapping hook, a
-nontrivial but bounded Topre parser allocation, and repeated lifecycle cleanup.
-None of the three drivers adds transport calls, tasks, heap allocations, or a
-new Linux subsystem.
+This directly checks all four fixup drivers, the Kensington mapping hook, a
+nontrivial but bounded Topre parser allocation, the long-configuration buffer,
+the error-only enumeration retry, and repeated lifecycle cleanup. None of the
+four Linux drivers adds transport calls, tasks, heap allocations, or a new
+Linux subsystem.
 
-Pending build artifacts:
+Dedicated-pass build artifacts:
 
 - host: `./build/ErgoType.uf2`, SHA-256
-  `609a5adc7d640e5189be0f0586a437c80cf74ab8620654710eb89207be92233f`
+  `63e935043eb04b95c8fe5c377024f6d7b7b9897b82ed04626a502bf9f98fca2f`
 - emulator:
-  `../ErgoType-hid-devices-elecom/build/ErgoType.uf2`,
+  `../ErgoType-hid-devices/build/ErgoType.uf2`,
   SHA-256
-  `04ab95651c0e7ea2671a33bc5ca6ef9256a4c23bb03b272084959384b030b091`
+  `58d309156aa7fb4a8152f6623ff2a4a4e1e2c7c0fcebe44f90afcdc307eef496`
 
 ## Build Status
 
-Last sequential build pass: 2026-07-13
+Last targeted build and hardware pass: 2026-07-22
 
 - host repo: `cmake --build build -j4` passed
-- emulator repo: all 19 `device/*` branches built one by one and passed
-- emulator branches built: 19
+- emulator repo: `device/work-input-drivers` built and completed repeated
+  five-identity hardware cycles
 
-The emulator repo is currently on a dirty `device/haptic-touchpad` worktree.
-Its `build/ErgoType.uf2` is always the last built artifact, not a stable
-per-branch artifact archive. The current pending artifact has SHA-256
-`370afde1483ca15c346c3ec25726f5b48b2d2ad3db245d567d8dcf476f42b0b5`.
+The emulator repo is currently on `device/work-input-drivers`. Its
+`build/ErgoType.uf2` is always the last built artifact, not a stable per-branch
+artifact archive; the exact hardware-tested SHA-256 is recorded above.
 
-### Current interrupt-IN STALL fixture
+### Historical interrupt-IN STALL fixture
 
-The dirty `device/haptic-touchpad` fixture stalls marker-keyboard endpoint
+The previously tested dirty `device/haptic-touchpad` fixture stalled
+marker-keyboard endpoint
 `0x85` exactly once after marker `2`. TinyUSB device core does not make that
 endpoint ready again until the host sends standard endpoint
 `CLEAR_FEATURE(HALT)`. The emulator then sends marker key `s`, which is the
@@ -72,9 +81,9 @@ diagnostic slot and may coalesce, so the later `s` input is stronger evidence:
 it proves remote clear-halt, local host DATA0 reset, and interrupt-IN rearm.
 `HID_CLEAR_HALT_OK` by itself proves only the remote EP0 request.
 
-This STALL runs once per emulator task start, not again after its programmed
-soft reconnect. Reset or reflash the emulator to repeat it. The current
-fixture waits for clear-halt before continuing, so it does not test unplug
+This STALL ran once per emulator task start, not again after its programmed
+soft reconnect. Reset or reflash that fixture to repeat it. It waited for
+clear-halt before continuing, so it did not test unplug
 during active recovery or the terminal clear-halt-failure reset path.
 
 The first 2026-07-21 hardware run, before the DATA0 helper moved behind
@@ -131,6 +140,7 @@ claims for unrelated drivers.
 | 2026-07-14 | `device/quirks-jabra-version` | old `bcdDevice` reaches `hid_lookup_quirk()` before probe; host ignores both HID interfaces and no KeyD input events appear |
 | 2026-07-19 | `device/haptic-touchpad` | active multitouch/haptic build enumerates, pointer events move the cursor, and haptic output produces the emulator cursor-feedback signal |
 | 2026-07-21 | dirty `device/haptic-touchpad` STALL fixture | one interrupt-IN STALL is cleared remotely and reset to DATA0 locally; marker `s` proves rearm and resumed input, and the programmed reconnect repeats the same active heap plateau |
+| 2026-07-22 | `device/work-input-drivers` (`67c1aea`) | ELECOM, Kensington, Topre, and EVision driver signals pass; three `cafe:1005` cycles recover the injected full-configuration GET failure and reach the HID interface at byte 575 of a 600-byte configuration; removal returns to stable `free=60936/60944` plateaus with `oom=0` |
 
 ## Current Emulator Branches
 
@@ -156,6 +166,7 @@ Current branch heads used for the build pass:
 | `device/razer-blackwidow` | `127a06f` |
 | `device/saitek-rat7` | `1d3d945` |
 | `device/zydacron-remote` | `40ee6a8` |
+| `device/work-input-drivers` | `67c1aea` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -224,8 +235,8 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-elecom`, `hid-topre`, `hid-holtek-kbd`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers` pending; `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote` verified |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-kensington`, `hid-zydacron` | `work-input-drivers` pending; `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `zydacron-remote` verified |
+| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-topre`, `hid-holtek-kbd`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-zydacron` | `work-input-drivers`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
 | driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
@@ -242,10 +253,10 @@ drivers are not counted here.
 
 ## Active Drivers Without Dedicated Fixtures
 
-None after the pending work-input fixture is hardware-checked. The active
-vendor allowlist is A4Tech, Chicony, Creative SB0540, Cypress, ELECOM, Holtek
-keyboard, ITE, Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and
-Zydacron; every entry has a matching emulator branch. Core/common glue (`hid-core`, `hid-input`,
+None. The active vendor allowlist is A4Tech, Chicony, Creative SB0540, Cypress,
+ELECOM, EVision,
+Holtek keyboard, ITE, Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek,
+Topre, and Zydacron; every entry has a matching emulator branch. Core/common glue (`hid-core`, `hid-input`,
 `hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all fixtures.
 
 Files present under `usb_host/linux/drivers/hid` but commented out in CMake are
@@ -254,24 +265,24 @@ reuse an already tested hook shape.
 
 ## Coverage Decision
 
-The existing emulator set plus the pending work-input fixture is enough for the
-next hardware pass.
+The existing emulator set plus the hardware-verified work-input fixture covers
+the current active driver allowlist and the long-enumeration success path.
 
 Reasoning:
 
 - the host CMake allowlist links only the active HID `.c` files selected in
   `CMakeLists.txt`
 - the original 19 emulator branches cover the nontrivial behavior classes in
-  that set, and the twentieth work-input fixture directly checks the three
+  that set, and the twentieth work-input fixture directly checks the four
   newly enabled drivers
 - the known metadata-sensitive quirks are covered by dedicated negative tests:
   product string and `bcdDevice`
 - output SET_REPORT paths are represented by keyboard LED/Holtek and Razer/KYE
   style request paths
 
-Do not add more emulator branches before this hardware pass unless a
-specific active driver fails or a specific hook class looks suspicious in
-hardware. The one reasonable optional emulator target is another
+Do not add more emulator branches unless a specific active driver fails or a
+specific hook class looks suspicious in hardware. One reasonable optional
+target is another
 `HID_QUIRK_MULTI_INPUT` device if KYE/Chicony coverage turns out too narrow.
 
 The Stadia fixture preserves historical coverage of simple memless rumble at
@@ -281,8 +292,8 @@ Effect replacement/reuse and teardown races remain the relevant gaps.
 
 ## Hardware Test Matrix
 
-The first hardware pass should not try to exhaust all 19 branches. Use these
-as gates:
+A future broad regression pass need not exhaust all emulator branches. Use
+these as targeted gates when the allowlist or their shared hook paths change:
 
 For each emulator branch:
 
@@ -297,8 +308,9 @@ the emulator board. The host board should run the current ErgoType host build.
 
 Recommended smoke order:
 
-1. `device/work-input-drivers`: proves ELECOM and Topre descriptor fixups plus
-   Kensington vendor-usage mapping; use its separate artifact documented above.
+1. `device/work-input-drivers`: proves ELECOM, Topre, and EVision descriptor
+   fixups plus Kensington vendor-usage mapping; use its separate artifact
+   documented above.
 2. `device/razer-blackwidow`: proves raw async SET_REPORT and macro event path.
 3. `device/hires-wheel`: proves resolution multiplier GET_REPORT to SET_REPORT
    continuation and hi-res wheel input.
@@ -309,20 +321,24 @@ Recommended smoke order:
 6. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
 
-If these six pass, the current emulator coverage is enough for the host commit.
-Run the useful second-pass branches only if one of these gates fails or if a
-specific driver family needs confirmation.
+These gates cover the current host architecture. Run the useful second-pass
+branches only if one fails or a specific driver family needs confirmation.
 
 ### Must Pass
 
 - `device/work-input-drivers`
-  - flash the separate emulator UF2 documented above
+  - flash the emulator UF2 documented above
   - expected ELECOM signal: `Fixing up Elecom mouse button count`, pointer and
     wheel movement, and buttons 4..6 down/up
   - expected Kensington signal: middle and side button events from vendor
     usages 1 and 2
   - expected Topre signal: `fixing up Topre REALFORCE keyboard report
     descriptor`, followed by C and Left Shift press/release
+  - expected EVision signal: `fixing EVision:TeLink Receiver report
+    descriptor`, followed by pointer/wheel and Forward/Back events
+  - expected long-enumeration signal: `cafe:1005` mounts after its injected
+    full-GET failure and produces pointer/wheel input from the HID interface at
+    configuration offset 575
   - failure signal: a missing identity-specific event, HID probe/allocation
     errors, or input stopping/leaking across repeated re-enumeration cycles
 - `device/razer-blackwidow`
@@ -472,7 +488,7 @@ per-driver coverage. The next useful targets are:
    Chicony, only if multi-input behavior looks suspicious in hardware.
 
 Most remaining active lightweight drivers do not need one emulator each before
-the next hardware pass. They mostly reuse the same already-covered hook classes:
+another broad hardware pass. They mostly reuse the same already-covered hook classes:
 fixup, mapping, mapped, event, simple probe, or raw event.
 
 ## Hardware Result Template

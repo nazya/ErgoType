@@ -47,6 +47,10 @@ contracts:
 - the exact enumeration terminal, provisional address owner, and global EP0
   idle transition needed by task-side reset coordination;
 - exact retirement of an EP0 owner after a PIO/HCD completion event is lost;
+- a nonblocking failed-control retry whose continuation outlives TinyUSB's
+  callback-local transfer object;
+- a full configuration-descriptor buffer larger than the permanent 512-byte
+  enumeration scratch without allocating in a control-completion callback;
 - Linux-compatible HID descriptor discovery independent of descriptor order;
 - task-side ownership of `SET_IDLE` and the report-descriptor request, including
   descriptors larger than TinyUSB's 512-byte enumeration buffer.
@@ -105,8 +109,8 @@ fences, three terminal/retry/watchdog pieces, and 15 guarded enumeration-state
 transitions. These counts are an audit index, not a stable API; update them when
 an anchor is added or removed.
 
-For scale, the generated host-core source grows from 1,780 to 2,759 lines and
-its review diff is 1,107 insertions and 128 deletions. The generated HID-class
+For scale, the generated host-core source grows from 1,780 to 3,050 lines and
+its review diff is 1,400 insertions and 130 deletions. The generated HID-class
 source grows from 764 to 862 lines and its review diff is 140 insertions and 42
 deletions. The generated PIO-HCD source grows from 210 to 215 lines and its
 review diff is 10 insertions and five deletions. Much of the insertion count is
@@ -143,8 +147,10 @@ is TinyUSB's existing `ENUM_RESET_2` block under `#if 0`, so neither state is
 reachable in this pinned build.
 
 `tuh_reenumerate_begin_cb()`, `tuh_port_enum_state_cb()`,
-`tuh_port_control_idle_cb()`, and `tuh_port_enum_event_cb()` are mandatory
-strong firmware boundary functions.
+`tuh_port_control_idle_cb()`, `tuh_port_enum_event_cb()`,
+`tuh_port_enum_buffer_alloc_on_host()`, and
+`tuh_port_enum_buffer_free_on_host()` are mandatory strong firmware boundary
+functions.
 The generated core declares them but provides no weak fallback, so missing glue
 fails at link time. TinyUSB's unrelated upstream weak `tuh_event_hook_cb()`
 remains untouched. This also removes a former patch-on-patch anchor: every
@@ -259,6 +265,8 @@ an explicitly bounded host-owner lifecycle. Its anchors cover:
 - SETUP, DATA, and ACK submission failure and progress accounting;
 - root and hub reset/status/descriptor/configuration retries;
 - non-blocking root reset, root/hub connection debounce, and address recovery;
+- a durable 100-ms failed-control retry continuation;
+- exact-size full configuration descriptors from 513 bytes through 4 KiB;
 - bounded deferred-attach ownership outside the sole host event queue;
 - duplicate attach, remove, retired-event, and address-reuse fences;
 - a finite host-event budget and dequeue-generation fence;
@@ -270,8 +278,9 @@ device in its host task. The additions make its one active enumeration epoch
 observable and guaranteed to reach a terminal so the external lifecycle owner
 cannot wait forever or start a competing epoch.
 
-The pinned core's 50-ms root reset, 450-ms root/hub connection debounce, and
-2-ms post-SET_ADDRESS recovery waits used to block that sole host event pump.
+The pinned core's 50-ms root reset, 450-ms root/hub connection debounce, 2-ms
+post-SET_ADDRESS recovery, and 100-ms failed-control retry waits used to block
+that sole host event pump.
 The port now records the exact continuation and deadline, returns to the pump,
 and resumes the corresponding upstream tail from the host-owner service. The
 firmware loop remains literally `while (1) tuh_task();`. At shallow entry,
@@ -283,11 +292,62 @@ external timer, extra queue, finite periodic tick, or firmware-visible
 `wait_ms`. Root reset is ended
 exactly once on normal continuation or terminal cancellation. REMOVE, duplicate
 ATTACH, timeout, and terminal cleanup therefore remain observable during every
-normal enumeration delay. The one remaining blocking delay is the 100-ms
-failed-control-transfer retry. It is reachable only on an error and has
-no circular dependency on TinyUSB progress; converting it safely requires a
-durable semantic retry because its current transfer/setup objects live on the
-callback stack.
+normal enumeration delay. A failed control completion copies its setup packet,
+data-buffer pointer, device address, and `user_data` into the current enum
+epoch, arms the original 100-ms deadline, and returns. The shallow host-owner
+service rebuilds a temporary `tuh_xfer_t` and resubmits only after the callback
+has unwound, the deadline is due, and global EP0 is idle. The buffer itself
+remains owned by the enum epoch. TinyUSB's existing
+`ATTEMPT_COUNT_MAX == 3` delayed-retry bound is unchanged; there is no
+callback-stack reference, blocking delay, periodic poll, Pico
+timer, FreeRTOS timer, or second wake queue.
+
+### Full configuration-descriptor ownership
+
+Pinned TinyUSB stores every full configuration descriptor in its permanent
+`CFG_TUH_ENUMERATION_BUFSIZE` scratch and rejects a larger `wTotalLength`. The
+port deliberately keeps that scratch at 512 bytes: ordinary devices add no
+heap allocation and static RP2040 RAM does not grow by the 4 KiB worst case.
+After the nine-byte header is validated, lengths from 513 through
+`ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE` (currently 4096) become a durable
+host-owner pending state. The completion callback records only the length and
+returns. At the next shallow `tuh_task_ext()` entry, with global EP0 idle,
+the host owner calls `tuh_port_enum_buffer_alloc_on_host()`, submits the full
+GET_DESCRIPTOR into that exact-size buffer, and retains it through any
+failed-control retry.
+
+On RP2040, `usb_host/task.c` implements the allocator boundary with
+`pvPortMalloc()`/`vPortFree()`. The hook is intentionally outside the generated
+TinyUSB source so an ESP host can later require DMA-capable internal memory
+without changing the pinned enumeration state machine. Allocation runs only at
+shallow host-owner service after the short-GET completion has unwound. On the
+success path, the internal `process_enumeration()` continuation frees the buffer
+immediately after synchronous class-open parsing; terminal cleanup frees it
+after EP0 drain on failure. TinyUSB application callbacks never allocate or
+free this buffer.
+
+TinyUSB class `driver_open()` consumes the configuration bytes synchronously
+and retains copied interface state, not pointers into the descriptor. The port
+therefore frees a long buffer immediately after successful configuration parse,
+before class `set_config` and Linux HID lifecycle/probe allocations. Failure,
+REMOVE, timeout, address reuse, and watchdog terminal paths drain the matching
+EP0 owner first and then release the same buffer exactly once. Invalid headers,
+short/mismatched full reads, allocation failure, and lengths above 4 KiB fail
+the enumeration epoch instead of exposing a partial descriptor to a class
+driver. The 512-byte static scratch remains live as before; a maximum long
+descriptor adds one transient 4096-byte request (about a 4104-byte heap_4
+block), not another permanent buffer.
+
+Before `SET_CONFIGURATION`, a port preflight walks the exact returned extent
+and bounds every device-supplied `bLength`. It also validates the standard
+configuration/interface/IAD/endpoint headers, proves every IAD or implicit
+CDC/MIDI group contains the base interfaces TinyUSB will traverse, and rejects
+an interface number outside TinyUSB's fixed `itf2drv[]` array. The current
+`CFG_TUH_INTERFACE_MAX` is eight: a descriptor may be larger than 512 bytes,
+but configurations advertising more than eight base interfaces fail with
+`ERR: HID_ENUM_CONFIG_INVALID` instead of corrupting host state. The companion
+600-byte fixture has four interfaces and puts its useful HID interface at byte
+575, so it remains inside that explicit firmware capacity.
 
 Pinned TinyUSB also deferred a foreign ATTACH by sending it back into its main
 queue with an infinite task wait. Because the sender is that queue's sole
@@ -315,15 +375,20 @@ The deliberately small host-core interface consumed by firmware is:
 - `usbh_port_control_recover_on_host()`;
 - `tuh_reenumerate_begin_cb()`;
 - `tuh_port_enum_state_cb()` and `tuh_port_control_idle_cb()`;
-- `tuh_port_enum_event_cb()`.
+- `tuh_port_enum_event_cb()`;
+- `tuh_port_enum_buffer_alloc_on_host()` and
+  `tuh_port_enum_buffer_free_on_host()`.
 
 The `*_on_host()` entries may be called only by the registered TinyUSB host
 owner. USB/timer callbacks publish bounded identity/result state and wake edges
 only; they do not allocate, log, parse, run Linux driver policy, or wait for
-USB, lifecycle, queue, or parser progress. `tuh_port_enum_event_cb()` is not a
-USB callback: in the current linked call graph it runs at shallow `tuh_task()`
-entry after the previous callback unwound, and may therefore publish an
-`async_msg()` diagnostic. Publication may briefly take the shared
+USB, lifecycle, queue, or parser progress. The enum-buffer allocator and
+`tuh_port_enum_event_cb()` run at shallow `tuh_task()` entry after the previous
+callback unwound. The allocator may therefore use the platform heap, and the
+event hook may publish an `async_msg()` diagnostic. The matching free hook is
+also used by TinyUSB's internal enumeration continuation immediately after its
+synchronous class scan; it is never reached from an application callback.
+Publication may briefly take the shared
 priority-inheritance transport mutex. That mutex is never held across a
 TinyUSB/HCD call, host-task handoff, parser, heap operation, logger, or
 condition wait, so its release never depends on further TinyUSB progress.
@@ -457,6 +522,10 @@ Required hardware coverage for a TinyUSB port update:
 - composite keyboard/mouse/haptic-touchpad interfaces;
 - the emulator descriptor layouts which place HID/extras around endpoints;
 - an authoritative report descriptor larger than 512 bytes;
+- a configuration descriptor larger than 512 bytes, with a useful HID
+  interface located beyond byte 512;
+- injected enumeration-control failure followed by the 100-ms retry, including
+  REMOVE during the armed deadline;
 - hub child enumeration and repeated unplug/replug;
 - fast address reuse and composite-interface remove ordering;
 - output/feature requests and haptic response;

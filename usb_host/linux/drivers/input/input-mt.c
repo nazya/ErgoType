@@ -270,7 +270,7 @@ static void __input_mt_drop_unused(struct input_dev *dev, struct input_mt *mt)
 	int i;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// FreeRTOS port has no lockdep; caller owns the single input-event context.
+	// FreeRTOS port has no lockdep; caller holds port_event_mutex.
 
 	for (i = 0; i < mt->num_slots; i++) {
 		if (input_mt_is_active(&mt->slots[i]) &&
@@ -293,9 +293,12 @@ void input_mt_drop_unused(struct input_dev *dev)
 
 	if (mt) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// FreeRTOS port has no Linux guard() helper.
+		// The compatibility spinlock is a no-op; preserve the same upstream
+		// task-context critical section with the per-device event mutex.
+		mutex_lock(&dev->port_event_mutex);
 		__input_mt_drop_unused(dev, mt);
 		mt->frame++;
+		mutex_unlock(&dev->port_event_mutex);
 	}
 }
 EXPORT_SYMBOL(input_mt_drop_unused);
@@ -311,7 +314,7 @@ void input_mt_release_slots(struct input_dev *dev)
 	struct input_mt *mt = dev->mt;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// FreeRTOS port has no lockdep; caller owns the single input-event context.
+	// FreeRTOS port has no lockdep; caller holds port_event_mutex.
 
 	if (mt) {
 		/* This will effectively mark all slots unused. */
@@ -344,8 +347,11 @@ void input_mt_sync_frame(struct input_dev *dev)
 
 	if (mt->flags & INPUT_MT_DROP_UNUSED) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// FreeRTOS port has no Linux guard() helper.
+		// The compatibility spinlock is a no-op; preserve the same upstream
+		// task-context critical section with the per-device event mutex.
+		mutex_lock(&dev->port_event_mutex);
 		__input_mt_drop_unused(dev, mt);
+		mutex_unlock(&dev->port_event_mutex);
 	}
 
 	if ((mt->flags & INPUT_MT_POINTER) && !(mt->flags & INPUT_MT_SEMI_MT))

@@ -21,6 +21,9 @@ enum {
     USBH_PORT_ENUM_EVENT_FAILED = 1,
     USBH_PORT_ENUM_EVENT_TIMEOUT = 2,
     USBH_PORT_ENUM_EVENT_ATTACH_OVERFLOW = 3,
+    USBH_PORT_ENUM_EVENT_CONFIG_NOMEM = 4,
+    USBH_PORT_ENUM_EVENT_CONFIG_TOO_LARGE = 5,
+    USBH_PORT_ENUM_EVENT_CONFIG_INVALID = 6,
 };
 
 /* Current linked call graph reaches this after every TinyUSB callback unwinds. */
@@ -32,6 +35,28 @@ void tuh_port_enum_event_cb(uint8_t event)
         async_msg("ERR: HID_ENUM_TIMEOUT");
     else if (event == USBH_PORT_ENUM_EVENT_ATTACH_OVERFLOW)
         async_msg("ERR: HID_ATTACH_OVERFLOW");
+    else if (event == USBH_PORT_ENUM_EVENT_CONFIG_NOMEM)
+        async_msg("ERR: HID_ENUM_CONFIG_NOMEM");
+    else if (event == USBH_PORT_ENUM_EVENT_CONFIG_TOO_LARGE)
+        async_msg("ERR: HID_ENUM_CONFIG_TOO_LARGE");
+    else if (event == USBH_PORT_ENUM_EVENT_CONFIG_INVALID)
+        async_msg("ERR: HID_ENUM_CONFIG_INVALID");
+}
+
+/*
+ * Upstream TinyUSB: no equivalent; its full configuration descriptor is
+ * limited to permanent enum scratch. This host-owner hook keeps allocation
+ * outside control-completion callbacks and lets a future ESP port provide
+ * DMA-capable internal memory without changing the pinned TinyUSB delta.
+ */
+void *tuh_port_enum_buffer_alloc_on_host(uint16_t length)
+{
+    return pvPortMalloc(length);
+}
+
+void tuh_port_enum_buffer_free_on_host(void *buffer)
+{
+    vPortFree(buffer);
 }
 
 uint32_t tusb_time_millis_api(void)
