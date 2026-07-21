@@ -449,8 +449,11 @@ void input_event(struct input_dev *dev,
 {
 	if (is_event_supported(type, dev->evbit, EV_MAX)) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// Port input core has no event_lock; boundary proxy synchronization is tracked separately.
+		// The compatibility spinlock is a no-op. All firmware callers are tasks,
+		// so use the per-device mutex for the missing CORE0/CORE1 exclusion.
+		mutex_lock(&dev->port_event_mutex);
 		input_handle_event(dev, type, code, value);
+		mutex_unlock(&dev->port_event_mutex);
 	}
 }
 // EXPORT_SYMBOL(input_event);
@@ -471,18 +474,22 @@ void input_inject_event(struct input_handle *handle,
 			unsigned int type, unsigned int code, int value)
 {
 	struct input_dev *dev = handle->dev;
+	struct input_handle *grab;
 
-	if (!is_event_supported(type, dev->evbit, EV_MAX))
-		return;
-
-	// grab = rcu_dereference(dev->grab);
-	// if (!grab || grab == handle)
-	// 	input_handle_event(dev, type, code, value);
-	// Port input core has no RCU; use the same grab rule directly.
-	if (dev->grab && dev->grab != handle)
-		return;
-
-	input_handle_event(dev, type, code, value);
+	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+		// guard(spinlock_irqsave)(&dev->event_lock);
+		// The compatibility spinlock is a no-op. KeyD injects from CORE0 while
+		// incoming reports update the same input_dev from CORE1.
+		mutex_lock(&dev->port_event_mutex);
+		// guard(rcu)();
+		// Firmware has no RCU; the evdev writer mutex retains this handle while
+		// the per-device mutex protects the grab read and input state below.
+		// grab = rcu_dereference(dev->grab);
+		grab = dev->grab;
+		if (!grab || grab == handle)
+			input_handle_event(dev, type, code, value);
+		mutex_unlock(&dev->port_event_mutex);
+	}
 }
 // EXPORT_SYMBOL(input_inject_event);
 // Firmware links this file directly and has no Linux module symbol export.
@@ -758,7 +765,7 @@ static bool input_dev_release_keys(struct input_dev *dev)
 	int code;
 
 	// lockdep_assert_held(&dev->event_lock);
-	// Port input core has no event_lock.
+	// The caller holds the port event mutex in place of Linux event_lock.
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
 		for_each_set_bit(code, dev->key, KEY_CNT) {
 			input_handle_event(dev, EV_KEY, code, 0);
@@ -786,18 +793,19 @@ static void input_disconnect_device(struct input_dev *dev)
 	dev->going_away = true;
 
 	// guard(spinlock_irq)(&dev->event_lock);
-	// Port input core has no event_lock.
+	// The compatibility spinlock is a no-op. Disconnect runs on CORE1 while
+	// KeyD may still inject output on CORE0, so serialize the shared state.
+	mutex_lock(&dev->port_event_mutex);
 	/*
 	 * Simulate keyup events for all pressed keys so that handlers
 	 * are not left with "stuck" keys. The driver may continue
 	 * generate events even after we done here but they will not
 	 * reach any handlers.
 	 */
-	// Unregister runs from the same host callback/task slice; do not block.
 	if (input_dev_release_keys(dev)) {
 		input_handle_event(dev, EV_SYN, SYN_REPORT, 1);
 	}
-	// See nonblocking callback-driven note above.
+	mutex_unlock(&dev->port_event_mutex);
 
 	list_for_each_entry(handle, &dev->h_list, d_node)
 		while (handle->open) {
@@ -1392,7 +1400,16 @@ struct input_dev *input_allocate_device(void)
 
 	// mutex_init(&dev->mutex);
 	// spin_lock_init(&dev->event_lock);
-	// Port input core has no mutex/event_lock; timer exists for upstream autorepeat.
+	// The compatibility spinlock is a no-op; allocate the port's task-context
+	// event mutex before this input_dev can be published to another core.
+	mutex_init(&dev->port_event_mutex);
+	if (!dev->port_event_mutex.handle) {
+		kfree(dev->vals);
+		kfree(dev);
+		return NULL;
+	}
+	// Port input core has no upstream lifecycle mutex; timer remains for
+	// upstream autorepeat and multitouch callbacks.
 	timer_setup(&dev->timer, NULL, 0);
 	INIT_LIST_HEAD(&dev->h_list);
 	INIT_LIST_HEAD(&dev->node);
@@ -1495,10 +1512,16 @@ void input_free_device(struct input_dev *dev)
 
 	// input_put_device(dev);
 	// Firmware has no Linux device refcount release path.
+	// Direct cleanup bypasses Linux device-core devres teardown, so release
+	// input-owned devres here before the port frees FF/MT storage.
+	devres_release_group(&dev->dev, NULL);
 	input_ff_destroy(dev);
 	input_mt_destroy_slots(dev);
 	kfree(dev->absinfo);
 	kfree(dev->vals);
+	// Linux input_put_device() releases input_dev storage after event users are
+	// gone; the direct firmware free path also owns its port event mutex.
+	mutex_destroy(&dev->port_event_mutex);
 	kfree(dev);
 	// }
 }

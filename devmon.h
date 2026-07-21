@@ -10,7 +10,13 @@
 
 #define MAX_DEVICES 8
 #define DEVICE_EVENT_QUEUE_LEN 16
-#define DEVICE_EVENT_SET_LEN (MAX_DEVICES * DEVICE_EVENT_QUEUE_LEN + MAX_DEVICES)
+/*
+ * hid-input budgets 60 events per MT packet and input core adds two batching
+ * slots. Evdev keeps two more slots reserved for key release and removal.
+ */
+#define EVDEV_EVENT_QUEUE_LEN 64
+/* QueueSet storage must cover the largest possible member in every slot. */
+#define DEVICE_EVENT_SET_LEN (MAX_DEVICES * EVDEV_EVENT_QUEUE_LEN + MAX_DEVICES)
 
 #define DEVICE_INPUT_REMOVED	0xffffu
 #define DEVICE_INPUT_RESET	0xfffeu

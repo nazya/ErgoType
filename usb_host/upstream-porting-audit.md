@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-20
+Updated: 2026-07-21
 
 Rules: `usb_host/upstream-porting-rules.md`. Linux baseline:
 `~/linux-upstream-hid` at `83f1454877cc292b88baf13c829c16ce6937d120`.
@@ -28,11 +28,14 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 
 - CMake/`CONFIG_HID_*` agree on 13 vendor drivers plus `hid-multitouch` and
   `hid-haptic`; active driver diffs preserve adjacent upstream code/reasons.
-- `hid-haptic.h` matches baseline. `hid-multitouch.c` has only three explained
-  `jiffies` substitutions. `hid-haptic.c` retains upstream branch shape; its
-  FreeRTOS mutex cleanup is adjacent and explained. Linux-generic semantic
-  fixes in that file are tracked separately below rather than treated as port
-  glue.
+- `hid-haptic.h` matches baseline. `hid-multitouch.c` has three explained
+  `jiffies` substitutions plus upstream post-baseline fix `8813b061` for the
+  active-slot bitmap, with the baseline lines and commit reason adjacent to
+  every changed block. Reduced `linux/bitmap.h` is marked as the compatibility
+  boundary that keeps that upstream API. `hid-haptic.c` retains upstream branch
+  shape; its FreeRTOS mutex cleanup is adjacent and explained. Linux-generic
+  semantic fixes in that file are tracked separately below rather than treated
+  as port glue.
 - `hid-haptic.c` deliberately caps the upstream 96 simultaneous effect slots
   to the five waveforms preloaded by this firmware. The original expressions
   remain adjacent; reserving 96 slots exhausted the shared heap before a
@@ -71,16 +74,25 @@ hiddev, CMedia, and Vivaldi are not certified for enablement.
 - One mutex serializes KeyD write/upload/erase with unregister. Unregister
   detaches evdev and queues removal; KeyD later frees queue/client. No second
   output queue/task or handshake exists.
+- Each `input_dev` has a task-context mutex in place of the compatibility
+  no-op `event_lock`; it serializes CORE1 reports and MT frame cleanup with
+  CORE0 LED/haptic injection, and disconnect releases input state under it.
 - `driver_input_lock` serializes parsing with remove. Async cancel drops queued
   reports and waits for dequeued parser/completion work before destruction.
+- The lifecycle task has a 3-KiB stack because async queue cancellation has a
+  measured 1520-byte frame below the HID driver teardown call chain.
 - Feature/raw/OUTPUT traffic uses `hid_async_task`: callers may wait, TinyUSB
   callbacks do not. Refcount, work cancellation, and async drain cover teardown.
 - HID field-allocation OOM aborts parsing and propagates through the local
   driver-core shim, so TinyUSB destroys the whole interface instead of binding
   a partial descriptor. The malloc hook leaves IRQs enabled and increments the
   persistent UI error count; `ERR: HID_OOM` remains best-effort CDC output.
-- Evdev overflow drops only the incoming ordinary event; lifecycle sends may
-  wait in their task, so producers never dequeue a QueueSet member.
+- Host evdev queues hold one 62-value MT batch plus the release/removal reserve.
+  Overflow drops only the incoming ordinary event; lifecycle sends may wait in
+  their task, so producers never dequeue a QueueSet member.
+- Type-B `ABS_MT_*` reaches an explicit deferred no-op in KeyD; other unsupported
+  `EV_ABS` codes are dropped instead of returning stale event state. Direct
+  input-device cleanup releases input-owned devres before FF/MT.
 - Host keyboard LEDs use the virtual `devmon` path and synchronous evdev writer;
   the laptop/remapper/fixture loop passed on hardware.
 

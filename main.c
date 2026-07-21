@@ -267,9 +267,12 @@ static void app_task(void *pvParameters)
         int usbhid_disconnect_ret = usbhid_disconnect_init();
         if (usbhid_disconnect_ret < 0)
             async_msg("ERR: HID_DISCONNECT_INIT_FAIL");
-        else
-            xTaskCreateAffinitySet(usbhid_disconnect_task, NULL, MIN_STACK_SIZE, NULL,
+        else {
+            // Async cancellation keeps the four-entry HID request queue on this
+            // task's stack while driver teardown is still above it in the call chain.
+            xTaskCreateAffinitySet(usbhid_disconnect_task, NULL, 2 * MIN_STACK_SIZE, NULL,
                                    IDLE_PRIORITY + 3, CORE1, NULL);
+        }
 
         BaseType_t host_task_ret = xTaskCreateAffinitySet(tusb_host_task, NULL, TUH_STACK_SIZE,
                                                           NULL, TUSB_PRIORITY, CORE1, NULL);

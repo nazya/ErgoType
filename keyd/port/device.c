@@ -263,9 +263,30 @@ struct device_event *device_read_event(struct device *dev)
 			devev.x = 0;
 
 			break;
+		case ABS_MT_SLOT:
+		case ABS_MT_TOUCH_MAJOR:
+		case ABS_MT_TOUCH_MINOR:
+		case ABS_MT_WIDTH_MAJOR:
+		case ABS_MT_WIDTH_MINOR:
+		case ABS_MT_ORIENTATION:
+		case ABS_MT_POSITION_X:
+		case ABS_MT_POSITION_Y:
+		case ABS_MT_TOOL_TYPE:
+		case ABS_MT_BLOB_ID:
+		case ABS_MT_PRESSURE:
+		case ABS_MT_DISTANCE:
+		case ABS_MT_TOOL_X:
+		case ABS_MT_TOOL_Y:
+		case ABS_MT_TRACKING_ID:
+			// Upstream KeyD has no dedicated Type-B handling. HID/input-mt already
+			// delivers the stream here; firmware consumes only pointer-emulation
+			// ABS_X/Y until slot/gesture handling is implemented.
+			return NULL;
 		default:
 			dbg("Unrecognized EV_ABS code: %x", ev.code);
-			break;
+			// break;
+			// Restore upstream KeyD: unsupported ABS must not reuse static devev.
+			return NULL;
 		}
 
 		break;

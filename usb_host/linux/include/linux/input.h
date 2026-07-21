@@ -142,6 +142,9 @@ struct input_dev {
 	struct input_handle *grab;
 
 	spinlock_t event_lock;
+	// Linux event_lock is not implemented by the compatibility spinlock. This
+	// task-only port mutex serializes CORE1 reports with CORE0 evdev injection.
+	struct mutex port_event_mutex;
 	struct mutex mutex;
 
 	unsigned int users;

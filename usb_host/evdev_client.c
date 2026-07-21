@@ -106,7 +106,9 @@ static struct evdev_client *evdev_register_device(const struct port_input_dev *s
 	if (!client)
 		return NULL;
 	memset(client, 0, sizeof *client);
-	client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
+	// client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
+	// Host MT batches use up to 62 records; keep two more for release/removal.
+	client->buffer = xQueueCreate(EVDEV_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
 	if (!client->buffer) {
 		vPortFree(client);
 		return NULL;
@@ -282,7 +284,9 @@ void __pass_event(struct evdev_client *client,
 	if (port_event.type == EV_KEY && !port_event.value)
 		reserve = EVDEV_QUEUE_REMOVE_RESERVE;
 
-	if (uxQueueMessagesWaiting(client->buffer) < DEVICE_EVENT_QUEUE_LEN - reserve &&
+	// if (uxQueueMessagesWaiting(client->buffer) < DEVICE_EVENT_QUEUE_LEN - reserve &&
+	// Host evdev uses the MT-sized queue allocated above.
+	if (uxQueueMessagesWaiting(client->buffer) < EVDEV_EVENT_QUEUE_LEN - reserve &&
 	    xQueueSendToBack(client->buffer, &port_event, 0) == pdPASS)
 		return;
 
