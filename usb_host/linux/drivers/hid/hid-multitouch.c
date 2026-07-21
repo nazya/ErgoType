@@ -31,6 +31,8 @@
  * [1] https://gitlab.freedesktop.org/libevdev/hid-tools
  */
 
+// Upstream 8813b061 imports bitmap helpers for separately tracked active slots.
+#include <linux/bitmap.h>
 #include <linux/bits.h>
 #include <linux/device.h>
 #include <linux/hid.h>
@@ -97,8 +99,10 @@ enum report_mode {
 	TOUCHPAD_REPORT_ALL = TOUCHPAD_REPORT_BUTTONS | TOUCHPAD_REPORT_CONTACTS,
 };
 
-#define MT_IO_SLOTS_MASK		GENMASK(7, 0) /* reserve first 8 bits for slot tracking */
-#define MT_IO_FLAGS_RUNNING		32
+// #define MT_IO_SLOTS_MASK		GENMASK(7, 0) /* reserve first 8 bits for slot tracking */
+// #define MT_IO_FLAGS_RUNNING		32
+// Upstream 8813b061 moves slot state out of this flags word.
+#define MT_IO_FLAGS_RUNNING		0
 
 static const bool mtrue = true;		/* default for true */
 static const bool mfalse;		/* default for false */
@@ -176,10 +180,15 @@ struct mt_device {
 	struct timer_list release_timer;	/* to release sticky fingers */
 	struct hid_haptic_device *haptic;	/* haptic related configuration */
 	struct hid_device *hdev;	/* hid_device we're attached to */
-	unsigned long mt_io_flags;	/* mt flags (MT_IO_FLAGS_RUNNING)
-					 * first 8 bits are reserved for keeping the slot
-					 * states, this is fine because we only support up
-					 * to 250 slots (MT_MAX_MAXCONTACT)
+	// unsigned long mt_io_flags;	/* mt flags (MT_IO_FLAGS_RUNNING)
+	// 					 * first 8 bits are reserved for keeping the slot
+	// 					 * states, this is fine because we only support up
+	// 					 * to 250 slots (MT_MAX_MAXCONTACT)
+	// 					 */
+	// Upstream 8813b061 gives slot state a maxcontacts-sized bitmap.
+	unsigned long mt_io_flags;	/* mt flags (MT_IO_FLAGS_RUNNING) */
+	unsigned long *active_slots;	/* bitmap of slots with an active
+					 * contact, sized for maxcontacts
 					 */
 	__u8 inputmode_value;	/* InputMode HID feature value */
 	__u8 maxcontacts;
@@ -1035,7 +1044,9 @@ static void mt_release_pending_palms(struct mt_device *td,
 
 	for_each_set_bit(slotnum, app->pending_palm_slots, td->maxcontacts) {
 		clear_bit(slotnum, app->pending_palm_slots);
-		clear_bit(slotnum, &td->mt_io_flags);
+		// clear_bit(slotnum, &td->mt_io_flags);
+		// Upstream 8813b061 stores active contacts in active_slots.
+		clear_bit(slotnum, td->active_slots);
 
 		input_mt_slot(input, slotnum);
 		input_mt_report_slot_inactive(input);
@@ -1250,9 +1261,13 @@ static int mt_process_slot(struct mt_device *td, struct input_dev *input,
 		input_event(input, EV_ABS, ABS_MT_TOUCH_MAJOR, major);
 		input_event(input, EV_ABS, ABS_MT_TOUCH_MINOR, minor);
 
-		set_bit(slotnum, &td->mt_io_flags);
+		// set_bit(slotnum, &td->mt_io_flags);
+		// Upstream 8813b061 stores active contacts in active_slots.
+		set_bit(slotnum, td->active_slots);
 	} else {
-		clear_bit(slotnum, &td->mt_io_flags);
+		// clear_bit(slotnum, &td->mt_io_flags);
+		// Upstream 8813b061 stores active contacts in active_slots.
+		clear_bit(slotnum, td->active_slots);
 	}
 
 	return 0;
@@ -1387,7 +1402,9 @@ static void mt_touch_report(struct hid_device *hid,
 	 * defect.
 	 */
 	if (app->quirks & MT_QUIRK_STICKY_FINGERS) {
-		if (td->mt_io_flags & MT_IO_SLOTS_MASK)
+		// if (td->mt_io_flags & MT_IO_SLOTS_MASK)
+		// Upstream 8813b061 checks the separately sized active-slot bitmap.
+		if (!bitmap_empty(td->active_slots, td->maxcontacts))
 			mod_timer(&td->release_timer,
 				  jiffies + msecs_to_jiffies(100));
 		else
@@ -1445,6 +1462,16 @@ static int mt_touch_input_configured(struct hid_device *hdev,
 		__set_bit(INPUT_PROP_BUTTONPAD, input->propbit);
 	if (td->is_pressurepad)
 		__set_bit(INPUT_PROP_PRESSUREPAD, input->propbit);
+
+	// Upstream 8813b061 allocates slot state after maxcontacts is finalized.
+	if (!td->active_slots) {
+		td->active_slots = devm_kcalloc(&td->hdev->dev,
+						BITS_TO_LONGS(td->maxcontacts),
+						sizeof(long),
+						GFP_KERNEL);
+		if (!td->active_slots)
+			return -ENOMEM;
+	}
 
 	app->pending_palm_slots = devm_kcalloc(&hi->input->dev,
 					       BITS_TO_LONGS(td->maxcontacts),
@@ -1923,7 +1950,9 @@ static void mt_release_contacts(struct hid_device *hid)
 			for (i = 0; i < mt->num_slots; i++) {
 				input_mt_slot(input_dev, i);
 				input_mt_report_slot_inactive(input_dev);
-				clear_bit(i, &td->mt_io_flags);
+				// clear_bit(i, &td->mt_io_flags);
+				// Upstream 8813b061 stores active contacts in active_slots.
+				clear_bit(i, td->active_slots);
 			}
 			input_mt_sync_frame(input_dev);
 			input_sync(input_dev);
@@ -1946,7 +1975,9 @@ static void mt_expired_timeout(struct timer_list *t)
 	 */
 	if (test_and_set_bit_lock(MT_IO_FLAGS_RUNNING, &td->mt_io_flags))
 		return;
-	if (td->mt_io_flags & MT_IO_SLOTS_MASK)
+	// if (td->mt_io_flags & MT_IO_SLOTS_MASK)
+	// Upstream 8813b061 checks the separately sized active-slot bitmap.
+	if (!bitmap_empty(td->active_slots, td->maxcontacts))
 		mt_release_contacts(hdev);
 	clear_bit_unlock(MT_IO_FLAGS_RUNNING, &td->mt_io_flags);
 }

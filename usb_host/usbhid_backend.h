@@ -8,6 +8,15 @@
 
 struct hid_device;
 
+/* Fixed callback-side reason; lifecycle owns the corresponding text logger. */
+enum usbhid_async_invariant {
+	USBHID_ASYNC_INVARIANT_NONE,
+	USBHID_ASYNC_INVARIANT_HOST_OWNER,
+	USBHID_ASYNC_INVARIANT_EP0_ABORT_OWNER,
+	USBHID_ASYNC_INVARIANT_XFER_TUPLE,
+	USBHID_ASYNC_INVARIANT_HUB_PIN,
+};
+
 /*
  * Boundary between TinyUSB host callbacks and the Linux-style USB HID
  * transport. Callback entry points may only copy bounded ingress data, rotate
@@ -23,7 +32,8 @@ void usbhid_backend_rx_report_dropped(void);
 void usbhid_backend_rx_rearm_failed(void);
 void usbhid_backend_rx_transfer_failed(uint8_t xfer_result);
 void usbhid_backend_rx_invariant_failed(void);
-void usbhid_backend_async_invariant_failed(void);
+void usbhid_backend_async_invariant_failed(
+	enum usbhid_async_invariant reason);
 /* Report recovery publishes work; the lifecycle task owns reset/re-enumeration. */
 int usbhid_backend_queue_device_reset(struct hid_device *hid,
 				      uint32_t report_revision,

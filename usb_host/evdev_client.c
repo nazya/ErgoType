@@ -29,6 +29,12 @@ struct evdev_client {
 	// Firmware has no struct file, but ff-core uses file pointer identity as
 	// the force-feedback effect owner token.
 	struct file file;
+	/*
+	 * Linux's input_dev outlives an open evdev file. Firmware queues ADD by
+	 * value and may destroy input_dev before KeyD consumes it, so retain the
+	 * same bounded name in the client tombstone that survives until REMOVED.
+	 */
+	char name[32];
 	// struct list_head node;
 	// enum input_clock_type clk_type;
 	// bool revoked;
@@ -38,6 +44,8 @@ struct evdev_client {
 	// Firmware keeps the upstream field name, but backs the per-client
 	// buffer with a FreeRTOS queue instead of a ring array.
 	QueueHandle_t buffer;
+	/* Firmware keeps the prepared client private until input open succeeds. */
+	bool published;
 };
 
 /*
@@ -85,30 +93,45 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 	return port_dev;
 }
 
-static struct evdev_client *evdev_register_device(const struct port_input_dev *src,
-						  struct evdev *evdev)
+static int evdev_prepare_device(const struct port_input_dev *src,
+				struct evdev *evdev,
+				struct evdev_client **client_slot)
 {
 	struct evdev_client *client;
-	struct port_input_dev port_dev;
-	int ret;
 
 	if (!evdev_writer_mutex) {
 		evdev_writer_mutex = xSemaphoreCreateMutex();
 		if (!evdev_writer_mutex)
-			return NULL;
+			return -ENOMEM;
 	}
 
 	client = pvPortMalloc(sizeof *client);
 	if (!client)
-		return NULL;
+		return -ENOMEM;
 	memset(client, 0, sizeof *client);
-	client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
+	// client->buffer = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
+	// Host MT batches use up to 62 records; retain release/removal headroom.
+	client->buffer = xQueueCreate(EVDEV_EVENT_QUEUE_LEN,
+				      sizeof(struct port_input_event));
 	if (!client->buffer) {
 		vPortFree(client);
-		return NULL;
+		return -ENOMEM;
 	}
 	client->evdev = evdev;
-	port_dev = *src;
+	strscpy(client->name, src->name ? src->name : "usb-hid",
+		sizeof(client->name));
+	*client_slot = client;
+
+	return 0;
+}
+
+static int evdev_publish_device(const struct port_input_dev *src,
+				struct evdev_client *client)
+{
+	struct port_input_dev port_dev = *src;
+	int ret;
+
+	port_dev.name = client->name;
 	port_dev.ev_queue = client->buffer;
 	// file->private_data = client;
 	// Firmware has no eventX file; devmon stores the evdev_client pointer
@@ -117,21 +140,34 @@ static struct evdev_client *evdev_register_device(const struct port_input_dev *s
 	port_dev.writer.write = evdev_client_write;
 	port_dev.writer.upload_ff = evdev_client_upload_ff;
 	port_dev.writer.erase_ff = evdev_client_erase_ff;
+	/*
+	 * Publish readiness before the ADD queue send can wake KeyD. No external
+	 * owner has the client yet; roll it back if QueueSet/ADD publication fails.
+	 */
+	client->published = true;
 	ret = devmon_add_device(&port_dev);
 	if (ret < 0) {
-		vQueueDelete(client->buffer);
-		vPortFree(client);
-		return NULL;
+		client->published = false;
+		return ret;
 	}
 
-	return client;
+	return 0;
 }
 
-struct evdev_client *evdev_register_input_device(struct input_dev *src,
-						 struct evdev *evdev)
+int evdev_prepare_input_device(struct input_dev *src, struct evdev *evdev,
+			       struct evdev_client **client_slot)
 {
 	struct hid_device *hid = input_get_drvdata(src);
 	struct port_input_dev port_dev;
+
+	/*
+	 * Firmware deliberately bounds host queues at Linux hid-input's standard
+	 * 60-value MT hint plus two input-core slots. Keep unusual larger batches
+	 * usable on a best-effort basis, but make the reduced boundary visible.
+	 */
+	if (src->max_vals >
+	    EVDEV_EVENT_QUEUE_LEN - EVDEV_QUEUE_NORMAL_RESERVE)
+		async_msg("WARN: EVDEV_BATCH_CAP");
 
 	if (!hid && src->dev.parent && src->dev.parent->bus == &hid_bus_type) {
 		// input_set_drvdata(input_dev, hid);
@@ -143,7 +179,22 @@ struct evdev_client *evdev_register_input_device(struct input_dev *src,
 
 	clear_bit(EV_REP, src->evbit);
 	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
-	return evdev_register_device(&port_dev, evdev);
+	return evdev_prepare_device(&port_dev, evdev, client_slot);
+}
+
+int evdev_publish_input_device(struct input_dev *src,
+			       struct evdev_client *client)
+{
+	struct hid_device *hid = input_get_drvdata(src);
+	struct port_input_dev port_dev;
+
+	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
+	return evdev_publish_device(&port_dev, client);
+}
+
+bool evdev_client_is_published(const struct evdev_client *client)
+{
+	return client->published;
 }
 
 int evdev_client_write(struct evdev_client *client,
@@ -195,7 +246,13 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 void evdev_unregister_device(struct evdev_client *client)
 {
 	struct port_input_event ev = {0};
-	struct port_input_event dropped;
+
+	/* A failed activation never exposed this client or added its QueueSet. */
+	if (!client->published) {
+		vQueueDelete(client->buffer);
+		vPortFree(client);
+		return;
+	}
 
 	// if (evdev->exist && !client->revoked)
 	// 	input_flush_device(&evdev->handle, file);
@@ -211,11 +268,13 @@ void evdev_unregister_device(struct evdev_client *client)
 	ev.type = DEVICE_INPUT_REMOVED;
 	// ret = evdev_send_input_reserved(device, &ev, 0);
 	// configASSERT(ret == pdPASS);
-	// TinyUSB unmount path must not assert/block; drop one stale event if
-	// needed so removal reaches keyd.
-	if (uxQueueMessagesWaiting(client->buffer) >= DEVICE_EVENT_QUEUE_LEN)
-		(void)xQueueReceive(client->buffer, &dropped, 0);
-	(void)xQueueSendToBack(client->buffer, &ev, 0);
+	// if (uxQueueMessagesWaiting(client->buffer) >= DEVICE_EVENT_QUEUE_LEN)
+	// 	(void)xQueueReceive(client->buffer, &dropped, 0);
+	// (void)xQueueSendToBack(client->buffer, &ev, 0);
+	// TinyUSB unmount callback only queues lifecycle work. Unregister therefore
+	// runs in task context and may wait for KeyD; only the QueueSet consumer may
+	// dequeue from this member queue, otherwise its notification becomes stale.
+	(void)xQueueSendToBack(client->buffer, &ev, portMAX_DELAY);
 	// vPortFree(client);
 	// KeyD owns the client after this removal event and frees it together with
 	// its device; keeping it alive makes the synchronous writer pointer safe.
@@ -262,18 +321,28 @@ void __pass_event(struct evdev_client *client,
 	if (port_event.type == EV_KEY && !port_event.value)
 		reserve = EVDEV_QUEUE_REMOVE_RESERVE;
 
-	if (uxQueueMessagesWaiting(client->buffer) < DEVICE_EVENT_QUEUE_LEN - reserve &&
+	// if (uxQueueMessagesWaiting(client->buffer) < DEVICE_EVENT_QUEUE_LEN - reserve &&
+	// Host evdev owns the MT-sized member queue allocated during prepare.
+	if (uxQueueMessagesWaiting(client->buffer) < EVDEV_EVENT_QUEUE_LEN - reserve &&
 	    xQueueSendToBack(client->buffer, &port_event, 0) == pdPASS)
 		return;
 
-	struct port_input_event dropped;
-	struct port_input_event syn_dropped = {0};
-
+	/*
+	 * The QueueSet consumer owns dequeue. Dropping the incoming record keeps
+	 * queued releases and lifecycle markers stable and notifications paired.
+	 * Historical firmware SYN_DROPPED attempt, kept as the recovery site:
+	 *
+	 * struct port_input_event dropped;
+	 * struct port_input_event syn_dropped = {0};
+	 *
+	 * async_msg("ERR: EVDEV_INPUT_DROP");
+	 * syn_dropped.type = EV_SYN;
+	 * syn_dropped.code = SYN_DROPPED;
+	 * (void)xQueueReceive(client->buffer, &dropped, 0);
+	 * (void)xQueueSendToBack(client->buffer, &syn_dropped, 0);
+	 *
+	 * A future SYN_DROPPED path must dequeue from KeyD after
+	 * xQueueSelectFromSet() and perform real input-state resynchronization.
+	 */
 	async_msg("ERR: EVDEV_INPUT_DROP");
-	syn_dropped.type = EV_SYN;
-	syn_dropped.code = SYN_DROPPED;
-
-	(void)xQueueReceive(client->buffer, &dropped, 0);
-	if (xQueueSendToBack(client->buffer, &syn_dropped, 0) != pdPASS)
-		async_msg("ERR: EVDEV_SYN_DROPPED");
 }

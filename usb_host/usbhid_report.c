@@ -67,6 +67,8 @@ enum usbhid_report_host_action {
 
 enum usbhid_report_recovery {
 	USBHID_REPORT_RECOVERY_NONE,
+	/* Host-owner arm failure; report task owns retry/reset policy. */
+	USBHID_REPORT_RECOVERY_IO_ERROR_PENDING,
 	USBHID_REPORT_RECOVERY_IO_RETRY,
 	USBHID_REPORT_RECOVERY_IO_RETRY_CANCEL,
 	USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT,
@@ -160,6 +162,7 @@ static void usbhid_report_detach_fence_on_host(void *data);
 static void usbhid_report_xfer_complete(tuh_xfer_t *xfer);
 static void hid_retry_timeout(struct timer_list *t);
 static void hid_io_error(struct hid_device *hid);
+static bool usbhid_report_process_io_error(void);
 static bool usbhid_report_process_stopping_recovery(void);
 static bool usbhid_report_process_clear_halt(void);
 static void usbhid_report_clear_halt_complete(
@@ -1017,9 +1020,9 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 // done:
 // 	spin_unlock_irqrestore(&usbhid->lock, flags);
 // }
-// TinyUSB reports completion in host-task context, not URB IRQ context. The
-// local retry state therefore uses the shared transport task mutex, while the
-// timer and reset owner tasks replace Linux's timer/workqueue handoff.
+// TinyUSB's host owner publishes a failed arm to the report task. The local
+// retry state therefore uses the shared transport task mutex, while the timer
+// and reset owner tasks replace Linux's timer/workqueue handoff.
 static void hid_io_error(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
@@ -1030,21 +1033,64 @@ static void hid_io_error(struct hid_device *hid)
 	u32 revision = 0;
 	TaskHandle_t waiter = NULL;
 	bool device_reset = false;
+	bool requeue = false;
+	bool park = false;
+	bool pending_owned;
 	int index;
 
 	hid_transport_lock();
 	index = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
-	if (index < 0 || index >= CFG_TUH_HID ||
-	    usbhid_report_rx_slots[index].owner != hid ||
+	pending_owned = index >= 0 && index < CFG_TUH_HID &&
+		usbhid_report_rx_slots[index].owner == hid &&
+		usbhid_report_recovery[index] ==
+			USBHID_REPORT_RECOVERY_IO_ERROR_PENDING;
+	if (!pending_owned ||
 	    usbhid_report_rx_slots[index].generation != usbhid->generation ||
+	    usbhid_report_rx_slots[index].revision != usbhid->report_revision ||
 	    usbhid->report_owner != USBHID_REPORT_STOPPED ||
 	    !usbhid->report_host_pending || !usbhid->report_wanted ||
 	    usbhid->transport_stopping) {
-		if (index >= 0 && index < CFG_TUH_HID &&
-		    usbhid_report_rx_slots[index].owner == hid &&
-		    usbhid->report_owner == USBHID_REPORT_STOPPED &&
-		    usbhid_report_recovery[index] == USBHID_REPORT_RECOVERY_NONE)
+		if (pending_owned) {
+			usbhid_report_recovery[index] =
+				USBHID_REPORT_RECOVERY_NONE;
+			if (usbhid->report_owner == USBHID_REPORT_STOPPED) {
+				/* A close/reopen discards the old failure and arms its new epoch. */
+				requeue = usbhid_report_rx_slots[index].generation ==
+						usbhid->generation &&
+					  usbhid->report_wanted &&
+					  !usbhid->transport_stopping;
+				usbhid->report_host_pending = requeue;
+				park = !requeue && usbhid->report_wanted &&
+				       !usbhid->transport_stopping;
+				if (park)
+					usbhid->report_wanted = false;
+			}
+		}
+		generation = usbhid->generation;
+		waiter = usbhid_report_idle_waiter_locked(hid);
+		hid_transport_unlock();
+		if (waiter)
+			xTaskNotifyGive(waiter);
+		if (!requeue) {
+			if (park)
+				usbhid_backend_rx_rearm_failed();
+			return;
+		}
+		if (usbhid_report_queue_reconcile(hid, generation, false))
+			return;
+
+		/* A full reconcile table cannot retain this current open epoch. */
+		usbhid_backend_rx_rearm_failed();
+		waiter = NULL;
+		hid_transport_lock();
+		if (usbhid_report_rx_slots[index].owner == hid &&
+		    usbhid_report_rx_slots[index].generation == generation &&
+		    usbhid_report_recovery[index] ==
+			USBHID_REPORT_RECOVERY_NONE &&
+		    usbhid->report_host_pending) {
+			usbhid->report_wanted = false;
 			usbhid->report_host_pending = false;
+		}
 		waiter = usbhid_report_idle_waiter_locked(hid);
 		hid_transport_unlock();
 		if (waiter)
@@ -1088,6 +1134,50 @@ static void hid_io_error(struct hid_device *hid)
 		return;
 	}
 	usbhid_report_schedule_io_retry_timer(hid, index, expires);
+}
+
+/*
+ * Upstream calls hid_io_error() after usb_submit_urb() fails. TinyUSB permits
+ * the physical submit only in its host owner, so that owner publishes this
+ * fixed-slot state and the report task resumes the upstream retry policy.
+ */
+static bool usbhid_report_process_io_error(void)
+{
+	struct hid_device *hid = NULL;
+	TaskHandle_t waiter = NULL;
+	bool processed = false;
+
+	hid_transport_lock();
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		struct usbhid_device *usbhid;
+
+		if (usbhid_report_recovery[i] !=
+		    USBHID_REPORT_RECOVERY_IO_ERROR_PENDING)
+			continue;
+		processed = true;
+		hid = usbhid_report_rx_slots[i].owner;
+		usbhid = hid ? hid->driver_data : NULL;
+		if (usbhid && usbhid->report_host_pending)
+			break;
+
+		/* No lifetime fence remains, so retire without exporting a pointer. */
+		usbhid_report_recovery[i] = USBHID_REPORT_RECOVERY_NONE;
+		if (usbhid && usbhid->report_owner == USBHID_REPORT_STOPPED) {
+			usbhid->report_host_pending = false;
+			waiter = usbhid_report_idle_waiter_locked(hid);
+		}
+		hid = NULL;
+		break;
+	}
+	hid_transport_unlock();
+
+	if (waiter)
+		xTaskNotifyGive(waiter);
+	if (hid) {
+		usbhid_backend_rx_rearm_failed();
+		hid_io_error(hid);
+	}
+	return processed;
 }
 
 // Async replacement for the HID_CLEAR_HALT half of hid_reset() above. The
@@ -1847,7 +1937,7 @@ static void usbhid_report_reconcile_on_host(void *data)
 		// 	}
 		// }
 		// TinyUSB submission runs only in this host-owner pass. A failed submit
-		// enters the same delayed I/O recovery instead of spinning here.
+		// publishes the old URB error edge; the report task owns hid_io_error().
 		ok = tuh_hid_mounted(usbhid->dev_addr, usbhid->instance) &&
 		     usbhid_report_arm_on_host(hid, generation);
 		if (ok) {
@@ -1863,7 +1953,6 @@ static void usbhid_report_reconcile_on_host(void *data)
 			continue;
 		}
 
-		usbhid_backend_rx_rearm_failed();
 		hid_transport_lock();
 		if (usbhid->report_owner == USBHID_REPORT_ARMED)
 			usbhid->report_owner = USBHID_REPORT_STOPPED;
@@ -1875,8 +1964,31 @@ static void usbhid_report_reconcile_on_host(void *data)
 				xTaskNotifyGive(waiter);
 			return;
 		}
+		if (index < 0 || index >= CFG_TUH_HID ||
+		    usbhid_report_rx_slots[index].owner != hid ||
+		    usbhid->generation != generation) {
+			/* The failed submit no longer belongs to a live report epoch. */
+			usbhid->report_wanted = false;
+			usbhid->report_host_pending = false;
+			waiter = usbhid_report_idle_waiter_locked(hid);
+			hid_transport_unlock();
+			usbhid_backend_rx_rearm_failed();
+			if (waiter)
+				xTaskNotifyGive(waiter);
+			return;
+		}
+		if (usbhid->report_revision != revision) {
+			/* close/reopen won; retry only the new open epoch. */
+			hid_transport_unlock();
+			continue;
+		}
+		/* !mounted short-circuits arm_on_host(), so publish its epoch here. */
+		usbhid_report_rx_slots[index].generation = generation;
+		usbhid_report_rx_slots[index].revision = revision;
+		usbhid_report_recovery[index] =
+			USBHID_REPORT_RECOVERY_IO_ERROR_PENDING;
 		hid_transport_unlock();
-		hid_io_error(hid);
+		usbhid_report_notify_task();
 		return;
 	}
 }
@@ -2035,7 +2147,7 @@ void usbhid_report_task(void *pvParameters)
 		struct usbhid_input_report_event event;
 		TaskHandle_t waiter = NULL;
 		bool defer = false;
-		bool io_retry = false;
+		bool io_error = false;
 		bool payload_valid;
 		bool completion_owned;
 		bool status_current;
@@ -2045,6 +2157,10 @@ void usbhid_report_task(void *pvParameters)
 
 		/* TinyUSB callback only published stop; task owns timer cancellation. */
 		if (usbhid_report_process_stopping_recovery())
+			continue;
+
+		/* Host owner publishes failed arm; report task owns retry policy. */
+		if (usbhid_report_process_io_error())
 			continue;
 
 		/* Callback ingress publishes this durable predicate before its wake. */
@@ -2100,7 +2216,14 @@ void usbhid_report_task(void *pvParameters)
 		status_current = completion_owned &&
 			event.revision == usbhid->report_revision &&
 			usbhid->report_wanted && !usbhid->transport_stopping;
-		process = status_current;
+		/*
+		 * Linux cannot deliver to an eventX fd before userspace opens it.
+		 * Firmware's first input_open_device() starts one HID endpoint shared
+		 * by all sibling input_dev objects, so keep parsing behind the final
+		 * post-probe activation publication. Transport completion/recovery and
+		 * rearm remain live while this parser-only gate is closed.
+		 */
+		process = status_current && usbhid->driver_ready;
 		/*
 		 * Previous callback-side port:
 		 *     protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
@@ -2230,8 +2353,17 @@ void usbhid_report_task(void *pvParameters)
 				// 	return;
 				// TinyUSB FAILED is the PIO protocol-error bucket; TIMEOUT
 				// maps directly to Linux -ETIMEDOUT.
-				usbhid->report_host_pending = true;
-				io_retry = true;
+				if (index >= 0 && index < CFG_TUH_HID &&
+				    usbhid_report_rx_slots[index].owner == event.hid) {
+					usbhid_report_rx_slots[index].generation =
+						event.generation;
+					usbhid_report_rx_slots[index].revision =
+						event.revision;
+					usbhid_report_recovery[index] =
+						USBHID_REPORT_RECOVERY_IO_ERROR_PENDING;
+					usbhid->report_host_pending = true;
+					io_error = true;
+				}
 				break;
 			default:
 				// default:		/* error */
@@ -2247,7 +2379,7 @@ void usbhid_report_task(void *pvParameters)
 		waiter = usbhid_report_idle_waiter_locked(event.hid);
 		hid_transport_unlock();
 
-		if (io_retry)
+		if (io_error)
 			hid_io_error(event.hid);
 		else if (defer)
 			usbh_defer_func(usbhid_report_reconcile_on_host,

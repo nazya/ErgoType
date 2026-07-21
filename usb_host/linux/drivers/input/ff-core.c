@@ -334,6 +334,12 @@ int input_ff_create(struct input_dev *dev, unsigned int max_effects)
 
 	ff->max_effects = max_effects;
 	mutex_init(&ff->mutex);
+	// Linux mutex_init() cannot fail; the FreeRTOS compatibility mutex owns a
+	// heap-backed semaphore, so leave no unusable ff_device on allocation OOM.
+	if (!mutex_initialized(&ff->mutex)) {
+		kfree(ff->effects);
+		return -ENOMEM;
+	}
 
 	dev->flush = input_ff_flush;
 	dev->event = input_ff_event;

@@ -10,7 +10,13 @@
 
 #define MAX_DEVICES 8
 #define DEVICE_EVENT_QUEUE_LEN 16
-#define DEVICE_EVENT_SET_LEN (MAX_DEVICES * DEVICE_EVENT_QUEUE_LEN + MAX_DEVICES)
+/*
+ * Standard hid-input MT buffering uses 60 values plus two input-core framing
+ * slots. Host evdev keeps two further slots for key release and removal.
+ */
+#define EVDEV_EVENT_QUEUE_LEN 64
+/* QueueSet storage must cover the largest possible member in every slot. */
+#define DEVICE_EVENT_SET_LEN (MAX_DEVICES * EVDEV_EVENT_QUEUE_LEN + MAX_DEVICES)
 
 #define DEVICE_INPUT_REMOVED	0xffffu
 #define DEVICE_INPUT_RESET	0xfffeu

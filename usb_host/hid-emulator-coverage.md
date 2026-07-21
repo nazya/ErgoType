@@ -205,8 +205,9 @@ hardware. The one reasonable optional emulator target is another
 `HID_QUIRK_MULTI_INPUT` device if KYE/Chicony coverage turns out too narrow.
 
 The Stadia fixture preserves historical coverage of simple memless rumble at
-`hid: stabilize stadia ff teardown`. The active build has no FF driver; standard haptic touchpad coverage
-is the relevant future gap.
+`hid: stabilize stadia ff teardown`. The active build instead uses the standard HID Haptics Page path;
+the haptic-touchpad fixture covers its basic probe, pointer, and output flow.
+Effect replacement/reuse and teardown races remain the relevant gaps.
 
 ## Hardware Test Matrix
 
@@ -329,18 +330,40 @@ Hardware Verified until their signals are observed.
 
 ## Still Not Covered
 
-No active driver currently creates an FF device. `ff-core.c` and the generic
-evdev/input output plumbing remain for future standard haptic support:
+The active `hid-haptic` driver creates an FF device through `ff-core.c`, and
+the generic evdev/input output plumbing is live:
 
 - `device_upload_ff()` reaches `input_ff_upload()`
 - `device_erase_ff()` reaches `input_ff_erase()`
 - `device_set_ff()` sends `EV_FF` through `evdev_write()` /
   `input_inject_event()`
 
-The next relevant FF fixture is a standard HID Haptics Page touchpad. That
-requires `hid-haptic.c`, `hid-multitouch.c`, async feature GET_REPORT probe
-continuations, and haptic-specific lifetime/locking coverage. It does not use
-`ff-memless` or the historical Stadia layout-rumble trigger.
+The standard HID Haptics Page touchpad fixture already exercises
+`hid-haptic.c`, `hid-multitouch.c`, asynchronous feature GET_REPORT probe, and
+basic output. It does not yet force in-place effect replacement, rapid
+PLAY-to-erase/reuse, unplug during queued PLAY, all five effect slots, or mode
+restoration after the final Press/Release effect. It does not use `ff-memless`
+or the historical Stadia layout-rumble trigger.
+
+The post-probe activation step also needs a composite regression: all input
+devices must receive one devmon ADD with final capabilities and no writer may
+be reachable before every matching handle has opened. Input must begin only
+after all prepared queues are published; unplug during partial/complete
+activation or just before `driver_ready` must yield one matching removal
+without a stale writer or post-detach publication.
+
+For fixtures that queue a mode SET during probe (`haptic-touchpad` and the Kye
+tablet-mode cases), its completion must precede the first published input. Also
+unplug once while that SET is pending; lifecycle must leave through the normal
+fenced teardown without `HID_WAIT_BUSY`/`HID_WAIT_OWNER` or a stalled board.
+
+The upstream `8813b061` multitouch fix additionally needs a fixture advertising
+`ContactCountMaximum >= 33` and reporting contact ID 32. Include a sticky-finger
+timeout, then verify release, continued input, unplug/replug, and restored heap;
+ordinary low-slot pointer motion does not directly cover the former overflow.
+The same fixture should emit at least one maximum-size MT frame and then a
+sustained stream. It must produce neither `EVDEV_INPUT_DROP` nor a QueueSet
+assert; unplug after the stream must still deliver every removal.
 
 Heavier FF drivers should stay deferred for now:
 

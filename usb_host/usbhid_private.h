@@ -86,7 +86,7 @@ struct usbhid_device {
 	/* Keep the enum byte-sized: this object is allocated once per interface. */
 	u8 report_open_state;
 	bool report_host_pending;
-	/* Cross-interface readers may enter only after hid_add_device() succeeds. */
+	/* Publish parsers/readers only after post-probe evdev activation completes. */
 	bool driver_ready;
 	bool transport_stopping;
 	bool disconnect_queued;

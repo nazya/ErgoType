@@ -11,6 +11,7 @@
 
 #include "hid_async.h"
 #include "hid_transport_sync.h"
+#include "evdev.h"
 #include "usbhid.h"
 #include "usbhid_backend.h"
 #include "usbhid_private.h"
@@ -125,7 +126,10 @@ enum usbhid_transport_fault {
 	USBHID_FAULT_RX_XFER = 1u << 8,
 	USBHID_FAULT_IO_ACCOUNTING = 1u << 9,
 	USBHID_FAULT_RX_INVARIANT = 1u << 10,
-	USBHID_FAULT_ASYNC_INVARIANT = 1u << 11,
+	USBHID_FAULT_ASYNC_HOST_OWNER = 1u << 11,
+	USBHID_FAULT_ASYNC_EP0_ABORT_OWNER = 1u << 12,
+	USBHID_FAULT_ASYNC_XFER_TUPLE = 1u << 13,
+	USBHID_FAULT_ASYNC_HUB_PIN = 1u << 14,
 };
 
 enum usbhid_preprobe_stage {
@@ -2634,9 +2638,32 @@ void usbhid_backend_rx_invariant_failed(void)
 	usbhid_transport_fault(USBHID_FAULT_RX_INVARIANT);
 }
 
-void usbhid_backend_async_invariant_failed(void)
+void usbhid_backend_async_invariant_failed(
+	enum usbhid_async_invariant reason)
 {
-	usbhid_transport_fault(USBHID_FAULT_ASYNC_INVARIANT);
+	enum usbhid_transport_fault fault;
+
+	switch (reason) {
+	case USBHID_ASYNC_INVARIANT_NONE:
+		return;
+	case USBHID_ASYNC_INVARIANT_HOST_OWNER:
+		fault = USBHID_FAULT_ASYNC_HOST_OWNER;
+		break;
+	case USBHID_ASYNC_INVARIANT_EP0_ABORT_OWNER:
+		fault = USBHID_FAULT_ASYNC_EP0_ABORT_OWNER;
+		break;
+	case USBHID_ASYNC_INVARIANT_XFER_TUPLE:
+		fault = USBHID_FAULT_ASYNC_XFER_TUPLE;
+		break;
+	case USBHID_ASYNC_INVARIANT_HUB_PIN:
+		fault = USBHID_FAULT_ASYNC_HUB_PIN;
+		break;
+	default:
+		/* A new callback reason must get a fixed lifecycle diagnostic. */
+		fault = USBHID_FAULT_ASYNC_XFER_TUPLE;
+		break;
+	}
+	usbhid_transport_fault(fault);
 }
 
 void usbhid_backend_control_gate_idle(void)
@@ -2731,8 +2758,14 @@ static void usbhid_lifecycle_log_transport_faults(void)
 		async_msg("ERR: HID_IO_ACCOUNTING");
 	if (faults & USBHID_FAULT_RX_INVARIANT)
 		async_msg("ERR: HID_RX_INVARIANT");
-	if (faults & USBHID_FAULT_ASYNC_INVARIANT)
-		async_msg("ERR: HID_ASYNC_INVARIANT");
+	if (faults & USBHID_FAULT_ASYNC_HOST_OWNER)
+		async_msg("ERR: HID_ASYNC_HOST_OWNER");
+	if (faults & USBHID_FAULT_ASYNC_EP0_ABORT_OWNER)
+		async_msg("ERR: HID_EP0_ABORT_OWNER");
+	if (faults & USBHID_FAULT_ASYNC_XFER_TUPLE)
+		async_msg("ERR: HID_ASYNC_XFER_TUPLE");
+	if (faults & USBHID_FAULT_ASYNC_HUB_PIN)
+		async_msg("ERR: HID_ASYNC_HUB_PIN");
 }
 
 static void usbhid_disconnect(struct usb_interface *intf);
@@ -3040,10 +3073,34 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 		goto fail;
 	}
 
+	/*
+	 * Upstream may leave driver probe SET_REPORT requests in the usbhid output
+	 * FIFO. Firmware runs direct interrupt IN independently from async EP0/OUT
+	 * and exposes an always-on evdev client, so finish that finite probe I/O
+	 * before client activation can start input or issue output of its own.
+	 * usbhid_wait_io() excludes the continuously armed interrupt-IN transport.
+	 */
+	ret = usbhid_wait_io(hid);
+	if (ret < 0)
+		goto fail_bound;
+
+	// Linux keeps a per-open evdev client private until open succeeds. Firmware
+	// has one always-on client, so activate it only after the complete HID probe.
+	ret = evdev_activate_hid(hid);
+	if (ret < 0) {
+		async_msg("ERR: HID_EVDEV_ACTIVATE_FAIL");
+		goto fail_bound;
+	}
+
 	/* Publish the fully built input/driver graph to sibling-interface users. */
 	hid_transport_lock();
-	usbhid->driver_ready = true;
+	if (usbhid->disconnect_queued || usbhid->transport_stopping)
+		ret = -ENODEV;
+	else
+		usbhid->driver_ready = true;
 	hid_transport_unlock();
+	if (ret < 0)
+		goto fail_bound;
 
 	/*
 	 * Direct interrupt IN starts from usbhid_open()/usbhid_start() after the
@@ -3052,6 +3109,13 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 	 */
 	return 0;
 
+fail_bound:
+	/* Keep the registry pin until every report/async owner is fenced. */
+	usbhid_report_stop(hid);
+	if (hid_async_cancel_device(hid))
+		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
+	usbhid_teardown_wait(hid);
+	usbhid_remove_slot(hid);
 fail:
 	hid_destroy_device(hid);
 	/* hid_destroy_device() may run .close()/.stop(), so destroy this last. */

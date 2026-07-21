@@ -228,7 +228,8 @@ static void hid_async_call_on_host(void *data)
 	hid_transport_unlock();
 	if (!host_owner_valid) {
 		/* Host callback publishes diagnostics; lifecycle performs logging. */
-		usbhid_backend_async_invariant_failed();
+		usbhid_backend_async_invariant_failed(
+			USBHID_ASYNC_INVARIANT_HOST_OWNER);
 		call->status = -EIO;
 		goto complete;
 	}
@@ -292,7 +293,8 @@ static void hid_async_call_on_host(void *data)
 				logical_aborted = tuh_edpt_abort_xfer(call->dev_addr, 0);
 				/* The validated old owner must still be the global EP0. */
 				if (!logical_aborted) {
-					usbhid_backend_async_invariant_failed();
+					usbhid_backend_async_invariant_failed(
+						USBHID_ASYNC_INVARIANT_EP0_ABORT_OWNER);
 					call->status = -EIO;
 				}
 			}
@@ -1356,20 +1358,23 @@ static int hid_async_xfer_status(u8 result)
  * callback actually provides before publishing the fixed slot to task context.
  */
 static bool hid_async_completion_payload_valid_locked(
-		const struct hid_async_slot *slot, const tuh_xfer_t *xfer)
+		const struct hid_async_slot *slot, const tuh_xfer_t *xfer,
+		u32 actual_len)
 {
 	const struct hid_async_request *req = &slot->req;
 	const tusb_control_request_t *setup;
 	struct usbhid_device *usbhid;
 
-	if (xfer->actual_len > req->len)
+	if (actual_len > req->len)
 		return false;
 	if (hid_async_lane_is_out((enum hid_async_lane)slot->lane))
 		return req->kind == HID_ASYNC_REQUEST_OUTPUT_REPORT ||
 		       req->kind == HID_ASYNC_REQUEST_USB_INTERRUPT;
 
 	setup = xfer->setup;
-	if (!setup || xfer->buffer != (req->len ? req->data : NULL))
+	if (!setup)
+		return false;
+	if (xfer->buffer != (req->len ? req->data : NULL))
 		return false;
 
 	switch (req->kind) {
@@ -2087,12 +2092,14 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 	u32 serial = (u32)xfer->user_data;
 	u8 hub_addr = 0;
 	u8 hub_port = 0;
+	u32 actual_len = 0;
 	int host_status = 0;
+	enum usbhid_async_invariant invariant =
+		USBHID_ASYNC_INVARIANT_NONE;
 	bool completed = false;
 	bool host_complete = false;
 	bool hub_slot_owned = false;
 	bool hub_slot_valid = true;
-	bool invariant_failed = false;
 
 	hid_transport_lock();
 	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
@@ -2109,6 +2116,17 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 
 		slot = candidate;
 		slot->accepting_completion = false;
+		actual_len = xfer->actual_len;
+		/*
+		 * TinyUSB 2.1.1 carries PIO's eight-byte SETUP completion into
+		 * actual_len when an EP0 request has no data stage. Linux reports
+		 * transferred payload bytes, so accept that pinned transport spelling
+		 * but publish the same zero result as usbcore.
+		 */
+		if (!xfer->ep_addr && !req->len &&
+		    (actual_len == 0 ||
+		     actual_len == sizeof(tusb_control_request_t)))
+			actual_len = 0;
 		if (req->dev_addr != xfer->daddr || !req->dev_addr ||
 		    req->dev_addr > HID_ASYNC_DEVICE_ADDR_MAX ||
 		    req->generation !=
@@ -2116,18 +2134,20 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 		    (hid_async_lane_is_out(
 			(enum hid_async_lane)candidate->lane) ?
 			xfer->ep_addr != req->ep_addr : xfer->ep_addr != 0) ||
-		    !hid_async_completion_payload_valid_locked(candidate, xfer)) {
+		    !hid_async_completion_payload_valid_locked(candidate, xfer,
+							 actual_len))
+			invariant = USBHID_ASYNC_INVARIANT_XFER_TUPLE;
+		if (invariant != USBHID_ASYNC_INVARIANT_NONE) {
 			/* Physical giveback is terminal; task context retires the bad tuple. */
 			req->actual_len = 0;
 			req->xfer_result = XFER_RESULT_INVALID;
 			slot->completion_status = -EIO;
 			slot->completion_ready = true;
 			completed = true;
-			invariant_failed = true;
 			break;
 		}
 
-		req->actual_len = (u16)xfer->actual_len;
+		req->actual_len = (u16)actual_len;
 		req->xfer_result = xfer->result;
 		slot->completion_status = hid_async_xfer_status(xfer->result);
 		if (req->kind == HID_ASYNC_REQUEST_HUB_RESET) {
@@ -2172,10 +2192,10 @@ static void hid_async_xfer_complete(tuh_xfer_t *xfer)
 		}
 		hid_transport_unlock();
 		if (!hub_slot_valid)
-			invariant_failed = true;
+			invariant = USBHID_ASYNC_INVARIANT_HUB_PIN;
 	}
-	if (invariant_failed)
-		usbhid_backend_async_invariant_failed();
+	if (invariant != USBHID_ASYNC_INVARIANT_NONE)
+		usbhid_backend_async_invariant_failed(invariant);
 	if (completed)
 		hid_async_notify_task();
 }

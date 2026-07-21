@@ -8,6 +8,8 @@
  * userspace eventX file descriptors with a devmon-backed client.
  */
 #include "linux/include/linux/input.h"
+// Firmware post-probe activation groups handles by their owning HID device.
+#include "linux/include/linux/hid.h"
 #include "evdev.h"
 
 struct evdev {
@@ -80,6 +82,14 @@ static unsigned int evdev_events(struct input_handle *handle,
 	// rcu_read_unlock();
 	// Firmware has one devmon-backed client.
 	client = evdev->client;
+	/*
+	 * Firmware prepares and opens all sibling handles before publishing their
+	 * QueueSet members. An open hook may synchronously emit input, but no
+	 * always-on client is externally visible yet and a nonempty queue cannot
+	 * subsequently be added to a FreeRTOS QueueSet.
+	 */
+	if (!evdev_client_is_published(client))
+		return count;
 	evdev_pass_values(client, vals, count, ev_time);
 
 	return count;
@@ -171,25 +181,11 @@ static int evdev_connect(struct input_handler *handler, struct input_dev *dev,
 	// device_initialize(&evdev->dev);
 	// cdev_init(&evdev->cdev, &evdev_fops);
 	// error = cdev_device_add(&evdev->cdev, &evdev->dev);
-	// Firmware registers a devmon-backed client instead of Linux eventX fd.
-	evdev->client = evdev_register_input_device(dev, evdev);
-	if (!evdev->client) {
-		error = -EAGAIN;
-		goto err_unregister_handle;
-	}
-
-	// error = evdev_open_device(evdev);
-	// Firmware has no userspace open(eventX); keep the input handle always open.
-	error = input_open_device(&evdev->handle);
-	if (error)
-		goto err_cleanup_evdev;
+	// Firmware defers the devmon client and input_open_device() until the HID
+	// driver's synchronous probe has finalized every input capability.
 
 	return 0;
 
-err_cleanup_evdev:
-	evdev_unregister_device(evdev->client);
-err_unregister_handle:
-	input_unregister_handle(&evdev->handle);
 err_free_evdev:
 	kfree(evdev);
 err_free_minor:
@@ -212,7 +208,9 @@ static void evdev_disconnect(struct input_handle *handle)
 	// Firmware tears down the devmon-backed client directly.
 	if (handle->open)
 		input_close_device(handle);
-	evdev_unregister_device(evdev->client);
+	// Disconnect may run after connect but before post-probe activation.
+	if (evdev->client)
+		evdev_unregister_device(evdev->client);
 	input_unregister_handle(handle);
 	kfree(evdev);
 }
@@ -238,6 +236,59 @@ static struct input_handler evdev_handler = {
 	.name		= "evdev",
 	.id_table	= evdev_ids,
 };
+
+int evdev_activate_hid(struct hid_device *hid)
+{
+	struct input_handle *handle;
+	int error;
+
+	// Upstream creates the evdev object privately in connect() and only exposes
+	// a usable fd after evdev_open_device() succeeds. Firmware has no fd, so
+	// first prepare every client/queue without publishing its devmon ADD.
+	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
+		struct input_dev *dev = handle->dev;
+		struct evdev *evdev;
+
+		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
+			continue;
+
+		evdev = handle->private;
+		error = evdev_prepare_input_device(dev, evdev, &evdev->client);
+		if (error)
+			return error;
+	}
+
+	// error = evdev_open_device(evdev);
+	// Firmware auto-opens one client for every matching input_dev. Open only
+	// after all private clients exist: the first hid_hw_open() may start the one
+	// interrupt-IN endpoint shared by all sibling input_dev objects.
+	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
+		struct input_dev *dev = handle->dev;
+
+		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
+			continue;
+
+		error = input_open_device(handle);
+		if (error)
+			return error;
+	}
+
+	/* Publish writers only after every corresponding Linux input open worked. */
+	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
+		struct input_dev *dev = handle->dev;
+		struct evdev *evdev;
+
+		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
+			continue;
+
+		evdev = handle->private;
+		error = evdev_publish_input_device(dev, evdev->client);
+		if (error)
+			return error;
+	}
+
+	return 0;
+}
 
 // static int __init evdev_init(void)
 // Firmware calls evdev_init() from the host startup path.

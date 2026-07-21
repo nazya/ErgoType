@@ -49,7 +49,12 @@ TinyUSB mount
   -> exact async-backed GET_DESCRIPTOR(report), capped at 4 KiB
   -> Linux HID report parse and release the transient descriptor buffer
   -> synchronous driver match and probe
-  -> hidinput open, then direct TinyUSB endpoint-IN receive starts
+  -> register Linux input devices and inactive evdev handles
+  -> drain finite probe-originated control/OUT requests
+  -> privately prepare all evdev queues, then open all matching handles
+  -> publish all devmon ADDs/writers only after every open succeeds
+  -> atomically publish driver_ready unless physical detach already won
+  -> direct TinyUSB endpoint-IN receive starts
   -> Linux HID input mapping -> evdev -> KeyD
 ```
 
@@ -161,7 +166,10 @@ owner resets the PIO endpoint toggle to DATA0 and rearms. If close races an
 already active request, success still resets that local toggle and wire failure
 still requests device reset, matching running Linux `reset_work`; only rearm is
 suppressed while closed. Stop/unplug cancels the obsolete transport epoch.
-Protocol errors use upstream's bounded delayed retry. The remaining difference
+Failed physical arm is also policy-free in the host owner: it publishes its
+generation/open revision, and the report task starts the same upstream bounded
+retry only if that epoch is still current. Protocol errors use that delayed
+retry as well. The remaining difference
 from Linux is the implementation behind `usb_queue_reset_device()`. After
 recovery exhaustion this port makes the same reset decision, but its lifecycle
 owner performs full TinyUSB teardown/re-enumeration so configured class state
@@ -411,12 +419,31 @@ not produce a falling `free` value. Mixed report sizes interleaved with
 persistent device allocations can still leave temporary holes: `largest` may
 fall even after total `free` returns, which is fragmentation rather than a leak.
 
+The haptic driver now allocates at most five application effect records and
+five report snapshots. The adjacent commented upstream allocation remains 96
+slots; that userspace-oriented capacity would
+reserve 91 unused records plus 91 device-sized report buffers from the same
+heap needed to probe the remaining interfaces of a composite touchpad.
+Its two driver mutexes and ff-core mutex are heap-backed FreeRTOS semaphores,
+unlike embedded Linux mutexes. Every construction is now checked before first
+use. Failure unwinds as probe `-ENOMEM` and clears the provisional
+`EV_FF`/`FF_HAPTIC` bits, so the multitouch driver can retain ordinary pointer
+input without publishing an FF-capable device whose `dev->ff` is NULL.
+
+Each multitouch device now owns one devres-managed active-slot bitmap after
+`maxcontacts` is finalized. Its payload is 4 B through 32 contacts and at most
+32 B at the `u8` 255-contact maximum, plus heap_4 metadata. This small bounded
+allocation replaces using a single 32-bit flags word as both a lock bit and an
+unbounded slot bitmap; the former RUNNING bit 32 and any slot at or above 32
+wrote into adjacent `mt_device` state on RP2040.
+
 ## Log Reference
 
 | Message | Meaning |
 | --- | --- |
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
+| `ERR: HID_EVDEV_ACTIVATE_FAIL` | Driver probe completed, but post-probe devmon publication or input open failed; the fully bound HID is torn down. |
 | `ERR: HID_USB_DEV_ALLOC_FAIL` | The bounded physical-device cache has no reusable slot. |
 | `ERR: HID_PROBE_DEFER_FAIL` | Mount/pre-probe identity could not be retained, the bounded probe slots were occupied, or device-descriptor pre-probe exhausted its attempts. |
 | `ERR: HID_PROBE_NOMEM` | A parser/probe allocation failed, including the transient exact-size report-descriptor buffer. |
@@ -428,7 +455,9 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt transfer failed; terminal recovery queues coordinated device teardown/re-enumeration. |
 | `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. |
 | `ERR: HID_RX_INVARIANT` | Interrupt-IN completion did not match its live owner/epoch/buffer tuple. The callback parked it before parser publication. |
-| `ERR: HID_ASYNC_INVARIANT` | A deferred host call, EP0 abort, broker completion, or pinned hub-reset completion violated its owner/transfer tuple; the existing task-side `-EIO` retirement path ran. |
+| `ERR: HID_ASYNC_HOST_OWNER` / `HID_EP0_ABORT_OWNER` | A deferred TinyUSB call ran outside the registered host owner, or a validated physical EP0 abort found no matching TinyUSB logical owner. |
+| `ERR: HID_ASYNC_XFER_TUPLE` | A serial-matched broker completion violated its address/epoch/endpoint/payload tuple; the existing task-side `-EIO` retirement path ran. Zero-data EP0 completion is normalized from TinyUSB/PIO's eight-byte SETUP accounting to Linux's zero payload bytes before this check. |
+| `ERR: HID_ASYNC_HUB_PIN` | A pinned hub-reset slot changed identity during its immediate host-owner completion handoff. |
 | `DBG: HID_RESET_Q` | Terminal report recovery published an exact physical-device reset to lifecycle. |
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
@@ -446,6 +475,7 @@ fall even after total `free` returns, which is fragmentation rather than a leak.
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
+| `WARN: EVDEV_BATCH_CAP` | An unusual input device computed more than the bounded 62-value host batch; input remains best-effort. |
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally
 gone: callback context no longer calls the logger. A connection that never
@@ -481,8 +511,18 @@ verified enumeration, pointer input, and haptic cursor feedback. A real
 touchpad, strict output ordering, repeated teardown, and the new exact-control
 completion checkpoint still need hardware coverage.
 
+The current dirty haptic lifecycle step additionally restores DEVICE
+auto-trigger after the final Press/Release replacement or erase, cancels a
+queued PLAY before its slot buffer is rewritten, and drains every PLAY/STOP
+work item before the HID reference and buffers are released. These cases still
+need the next hardware pass before they become a checkpoint.
+
 The evdev writer lifetime fix remains active because keyboard LED writes share
 the same KeyD-versus-disconnect ownership boundary even without an FF driver.
+Activation keeps every writer private until all matching input handles have
+opened. Host queues hold a complete 62-value MT batch plus two reserved records;
+overflow drops the incoming value without directly receiving from a QueueSet
+member, and lifecycle removal may wait in its task for KeyD to make room.
 
 ## Related Notes
 
