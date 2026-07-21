@@ -34,9 +34,9 @@ typedef int ktime_t;
 typedef long loff_t;
 
 /*
- * Temporary callback-driven host slice: keep Linux descriptor/report/input
- * parsing, but do not enable subsystems that need hardware control requests,
- * blocking workqueue waits, or userspace/class proxy surfaces yet.
+ * Firmware-selected asynchronous host slice: keep Linux
+ * descriptor/report/input parsing and enable only drivers whose transport and
+ * subsystem dependencies are implemented by the port.
  */
 /*
  * Upstream gets HID driver-selection symbols from generated autoconf.h.
@@ -47,14 +47,17 @@ typedef long loff_t;
 #define CONFIG_HID_CHICONY 1
 #define CONFIG_HID_CREATIVE_SB0540 1
 #define CONFIG_HID_CYPRESS 1
+#define CONFIG_HID_ELECOM 1
 #define CONFIG_HID_HOLTEK 1
 #define CONFIG_HID_ITE 1
+#define CONFIG_HID_KENSINGTON 1
 #define CONFIG_HID_KYE 1
 #define CONFIG_HID_PRIMAX 1
 #define CONFIG_HID_PXRC 1
 #define CONFIG_HID_RAPOO 1
 #define CONFIG_HID_RAZER 1
 #define CONFIG_HID_SAITEK 1
+#define CONFIG_HID_TOPRE 1
 #define CONFIG_HID_ZYDACRON 1
 #define CONFIG_HID_HAPTIC 1
 #define CONFIG_HID_MULTITOUCH 1
@@ -73,8 +76,8 @@ typedef long loff_t;
 // Linux backlight class proxy is deferred.
 // #define CONFIG_HID_PID 1
 // PID force-feedback transport is deferred.
-// #define CONFIG_HID_HAPTIC 1
-// Generic haptic subsystem proxy is deferred.
+// The standard HID Haptics Page helper is enabled above; PID and unrelated
+// force-feedback driver stacks remain deferred.
 
 /*
  * These optional drivers and driver features stay disabled until their source

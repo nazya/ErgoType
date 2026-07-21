@@ -28,6 +28,11 @@ Razer is in this bucket: the tested macro-enable SET_REPORT uses upstream
 `usbhid_set_raw_report()` over the generic async USB owner, and USB strings are
 available before probe.
 
+Multitouch and the standard HID Haptics Page helper are also in this bucket.
+The lifecycle task completes the multitouch feature GET_REPORT before probe
+continues, while haptic output uses the same asynchronous report owner. Both
+paths have emulator/hardware coverage, including unplug and re-enumeration.
+
 Regular FEATURE and raw requests stay on EP0; `.output_report()` remains the
 interrupt-only entry point and returns `-ENOSYS` without an OUT endpoint.
 
@@ -70,6 +75,14 @@ synchronous waits:
 - force-feedback PID state
 - framebuffer
 - ALSA/rawmidi
+
+`hid-cherry.c` is also deferred, but for the bounded parser rather than a
+missing transport API. Real Cymotion descriptors expand an array to selector
+`0x03ff`, and the driver's useful `0x301..0x303` mappings sit above this
+firmware's `HID_MAX_USAGES=675` (`0x2a2`) cap. A synthetic descriptor with
+three explicit usages would only test the hook while falsely claiming support
+for the real hardware; increasing the cap would cost roughly 3 KiB per such
+report and is not justified for this legacy keyboard.
 
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
@@ -114,7 +127,6 @@ by itself is no longer a transport blocker:
 - `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
   wait-style init dependencies remain unaudited.
 - `hid-logitech-hidpp.c`: request/response protocol with wait queues.
-- `hid-multitouch.c`: feature GET_REPORT state must be read before setup.
 - `hid-ntrig.c`: USB control-message firmware/query path.
 - `hid-sony.c`, `hid-nintendo.c`, `hid-playstation.c`: controller init uses
   request/response and worker-style state.

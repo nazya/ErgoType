@@ -11,6 +11,36 @@ targeted behavior or device family.
 The Stadia and AppleIR entries below are retained as historical coverage for
 checkpoint `hid: stabilize stadia ff teardown`. Neither path is in the active CMake allowlist.
 
+### Pending work-input driver fixture
+
+The current dirty host tree enables the upstream-shaped `hid-elecom.c`,
+`hid-kensington.c`, and `hid-topre.c` drivers. Their isolated emulator worktree
+is `../ErgoType-hid-devices-elecom` on branch
+`device/work-input-drivers`.
+
+One emulator image repeatedly disconnects and re-enumerates as three devices:
+
+- ELECOM `056e:00fc`, with the real M-XT3DRBK three-button/five-padding defect
+  and six-button reports;
+- Kensington `047d:2041`, with Microsoft vendor usages 1 and 2 that only its
+  input-mapping hook turns into middle/side buttons;
+- Topre `0853:0313`, with the faithful 106-byte REALFORCE descriptor whose
+  232-key bitmap is incorrectly marked Array at offsets 30..31.
+
+This directly checks both fixup drivers, the Kensington mapping hook, a
+nontrivial but bounded Topre parser allocation, and repeated lifecycle cleanup.
+None of the three drivers adds transport calls, tasks, heap allocations, or a
+new Linux subsystem.
+
+Pending build artifacts:
+
+- host: `./build/ErgoType.uf2`, SHA-256
+  `609a5adc7d640e5189be0f0586a437c80cf74ab8620654710eb89207be92233f`
+- emulator:
+  `../ErgoType-hid-devices-elecom/build/ErgoType.uf2`,
+  SHA-256
+  `04ab95651c0e7ea2671a33bc5ca6ef9256a4c23bb03b272084959384b030b091`
+
 ## Build Status
 
 Last sequential build pass: 2026-07-13
@@ -194,12 +224,12 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | A4-style simple fixups plus `hid-holtek-*`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other lightweight fixup-only drivers | `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote` |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-zydacron`, simple key-remap drivers | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `zydacron-remote` |
-| driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek`, `hid-speedlink`, `hid-xinmo` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
-| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-waltop`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
-| `input_configured` / extra input device naming | `hid-creative-sb0540`, `hid-retrode` | `creative-sb0540`; `hid-retrode` only renames per-report input devices and reuses the same `HID_QUIRK_MULTI_INPUT` input-core path |
-| `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | `hid-retrode`, KYE entries from `hid-quirks.c`, `hid-chicony`, `hid-glorious` | `kye-easypen-m406`, `chicony-wireless-radio` |
+| `report_fixup` | `hid-elecom`, `hid-topre`, `hid-holtek-kbd`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers` pending; `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote` verified |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-kensington`, `hid-zydacron` | `work-input-drivers` pending; `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `zydacron-remote` verified |
+| driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
+| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
+| `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
+| `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
 | workqueue callback | `hid-input` LED work, future FF workers | LED path via `holtek-kbd-a055`; FF worker still gated below |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
@@ -212,55 +242,34 @@ drivers are not counted here.
 
 ## Active Drivers Without Dedicated Fixtures
 
-These active drivers do not need one emulator branch each before the first
-hardware pass. They reuse hook classes already covered above.
+None after the pending work-input fixture is hardware-checked. The active
+vendor allowlist is A4Tech, Chicony, Creative SB0540, Cypress, ELECOM, Holtek
+keyboard, ITE, Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and
+Zydacron; every entry has a matching emulator branch. Core/common glue (`hid-core`, `hid-input`,
+`hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all fixtures.
 
-- Core/common glue: `hid-core`, `hid-input`, `hid-generic`, `hid-drivers`,
-  `hid-quirks`. These are exercised by every emulator branch plus the dedicated
-  quirk branches.
-- Fixup-only or simple fixup/probe drivers: `hid-aureal`, `hid-elecom`,
-  `hid-gembird`, `hid-glorious`, `hid-holtek-mouse`, `hid-huawei`,
-  `hid-keytouch`, `hid-macally`, `hid-maltron`, `hid-nti`, `hid-ortek`,
-  `hid-redragon`, `hid-semitek`, `hid-sigmamicro`, `hid-topre`,
-  `hid-viewsonic`, `hid-vrc2`, `hid-xiaomi`. These are covered by the Holtek,
-  KYE, PXRC, and Zydacron fixup/probe fixtures.
-- Mapping-only or fixup-plus-mapping drivers: `hid-accutouch`, `hid-cherry`,
-  `hid-evision`, `hid-kensington`, `hid-lcpower`, `hid-monterey`,
-  `hid-penmount`, `hid-sunplus`, `hid-tivo`, `hid-topseed`, `hid-twinhan`.
-  These are covered by A4Tech, ITE, and Zydacron mapping fixtures.
-- Mapping/event drivers without new transport behavior: `hid-ezkey`,
-  `hid-gyration`, `hid-icade`, `hid-speedlink`, `hid-xinmo`. These are covered
-  by A4Tech, Cypress, ITE, and Saitek event fixtures.
-- Raw-event drivers without new request/lifecycle behavior: `hid-waltop`.
-  This is covered by Primax, PXRC, Saitek, Rapoo, and Zydacron raw-event
-  fixtures.
-- Metadata/input-device naming only: `hid-retrode`. This uses
-  `HID_QUIRK_MULTI_INPUT` and `input_configured()` to name per-report input
-  devices; KYE/Chicony cover the multi-input/input-per-application core path,
-  and Creative covers `input_configured()`.
-
-Add a dedicated fixture for one of these only if the hardware smoke pass points
-at that driver family or at a hook class not represented by the current
-fixtures.
+Files present under `usb_host/linux/drivers/hid` but commented out in CMake are
+not active drivers and must not be listed here as covered merely because they
+reuse an already tested hook shape.
 
 ## Coverage Decision
 
-The current emulator set is enough for the next hardware pass.
+The existing emulator set plus the pending work-input fixture is enough for the
+next hardware pass.
 
 Reasoning:
 
 - the host CMake allowlist links only the active HID `.c` files selected in
   `CMakeLists.txt`
-- the 19 emulator branches cover the nontrivial behavior classes in that set
-- remaining active lightweight drivers mostly reuse already-covered classes:
-  `report_fixup`, `input_mapping`, `input_mapped`, `.event`, simple `.probe`,
-  or `.raw_event`
+- the original 19 emulator branches cover the nontrivial behavior classes in
+  that set, and the twentieth work-input fixture directly checks the three
+  newly enabled drivers
 - the known metadata-sensitive quirks are covered by dedicated negative tests:
   product string and `bcdDevice`
 - output SET_REPORT paths are represented by keyboard LED/Holtek and Razer/KYE
   style request paths
 
-Do not add more emulator branches before the first hardware pass unless a
+Do not add more emulator branches before this hardware pass unless a
 specific active driver fails or a specific hook class looks suspicious in
 hardware. The one reasonable optional emulator target is another
 `HID_QUIRK_MULTI_INPUT` device if KYE/Chicony coverage turns out too narrow.
@@ -288,22 +297,34 @@ the emulator board. The host board should run the current ErgoType host build.
 
 Recommended smoke order:
 
-1. `device/razer-blackwidow`: proves raw async SET_REPORT and macro event path.
-2. `device/hires-wheel`: proves resolution multiplier GET_REPORT to SET_REPORT
+1. `device/work-input-drivers`: proves ELECOM and Topre descriptor fixups plus
+   Kensington vendor-usage mapping; use its separate artifact documented above.
+2. `device/razer-blackwidow`: proves raw async SET_REPORT and macro event path.
+3. `device/hires-wheel`: proves resolution multiplier GET_REPORT to SET_REPORT
    continuation and hi-res wheel input.
-3. `device/quirks-atmel-ma901`: proves product-string metadata reaches
+4. `device/quirks-atmel-ma901`: proves product-string metadata reaches
    `hid_ignore()` before probe.
-4. `device/quirks-jabra-version`: proves `bcdDevice` metadata reaches
+5. `device/quirks-jabra-version`: proves `bcdDevice` metadata reaches
    `hid_lookup_quirk()` before probe.
-5. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
+6. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
 
-If these five pass, the current emulator coverage is enough for the host commit.
+If these six pass, the current emulator coverage is enough for the host commit.
 Run the useful second-pass branches only if one of these gates fails or if a
 specific driver family needs confirmation.
 
 ### Must Pass
 
+- `device/work-input-drivers`
+  - flash the separate emulator UF2 documented above
+  - expected ELECOM signal: `Fixing up Elecom mouse button count`, pointer and
+    wheel movement, and buttons 4..6 down/up
+  - expected Kensington signal: middle and side button events from vendor
+    usages 1 and 2
+  - expected Topre signal: `fixing up Topre REALFORCE keyboard report
+    descriptor`, followed by C and Left Shift press/release
+  - failure signal: a missing identity-specific event, HID probe/allocation
+    errors, or input stopping/leaking across repeated re-enumeration cycles
 - `device/razer-blackwidow`
   - build command: `git checkout device/razer-blackwidow && cmake --build build -j4`
   - expected host signal: Razer SET_REPORT is queued and completes, then macro
