@@ -22,6 +22,7 @@ enum command {
     CMD_FILE_LIST_READ_CHUNK,
     CMD_FILE_DELETE,
     CMD_FILE_READ_END,
+    CMD_SESSION_RESET,
 };
 
 enum status {
@@ -149,6 +150,20 @@ static void write_reset(void)
     write_buffer_size = 0;
     write_active = false;
     path[0] = '\0';
+}
+
+void webhid_reset(void)
+{
+    /*
+     * TinyUSB invokes this from the sole device owner after the previous
+     * callback has unwound. A read transaction deliberately owns fatfs_mutex
+     * across feature reports; bus reset/unplug is its exact abort edge.
+     * LIST/WRITE retain only heap buffers, which are released here as well.
+     */
+    read_reset();
+    list_reset();
+    write_reset();
+    memset(response, 0, sizeof(response));
 }
 
 static void file_open_read(uint8_t const* buffer, uint16_t bufsize)
@@ -711,6 +726,11 @@ void webhid_set_report(uint8_t report_id, hid_report_type_t report_type,
         break;
     case CMD_FILE_READ_END:
         file_read_end();
+        break;
+    case CMD_SESSION_RESET:
+        webhid_reset();
+        response_begin(CMD_SESSION_RESET);
+        response_status(STATUS_OK, FR_OK);
         break;
     default:
         response_status(STATUS_UNKNOWN_COMMAND, FR_OK);
