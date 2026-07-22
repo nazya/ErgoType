@@ -1219,6 +1219,7 @@ const WEBHID_CMD_FILE_LIST_OPEN = 8;
 const WEBHID_CMD_FILE_LIST_READ_CHUNK = 9;
 const WEBHID_CMD_FILE_DELETE = 10;
 const WEBHID_CMD_FILE_READ_END = 11;
+const WEBHID_CMD_SESSION_RESET = 12;
 const WEBHID_STATUS_OK = 0;
 const WEBHID_STATUS_BUSY = 4;
 const WEBHID_FILE_READ_DATA_OFFSET = 13;
@@ -1255,6 +1256,7 @@ const commandNames = {
   [WEBHID_CMD_FILE_LIST_READ_CHUNK]: "list read chunk",
   [WEBHID_CMD_FILE_DELETE]: "delete",
   [WEBHID_CMD_FILE_READ_END]: "read end",
+  [WEBHID_CMD_SESSION_RESET]: "session reset",
 };
 const fsResultNames = {
   0: "ok",
@@ -2620,6 +2622,7 @@ async function openDevice(selectedDevice, source) {
     }
   }
   try {
+    await featureCommand(WEBHID_CMD_SESSION_RESET);
     await requestStatus();
   } catch (error) {
     deviceReady = false;
