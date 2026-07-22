@@ -406,10 +406,11 @@ static void ml_effect_timer(struct timer_list *t)
 	pr_debug("timer: updating effects\n");
 
 	// guard(spinlock_irqsave)(&dev->event_lock);
-	// This source is not linked by the firmware. Before enabling ff-memless,
-	// restore an event-lock-equivalent scope around this timer-side update;
-	// running ml_play_effects() unlocked would race upload/playback state.
+	// Firmware timers run in task context, so the per-input PI mutex preserves
+	// the same state boundary without masking interrupts.
+	mutex_lock(&dev->port_event_mutex);
 	ml_play_effects(ml);
+	mutex_unlock(&dev->port_event_mutex);
 }
 
 /*
@@ -468,9 +469,9 @@ static int ml_ff_upload(struct input_dev *dev,
 	struct ml_effect_state *state = &ml->states[effect->id];
 
 	// guard(spinlock_irq)(&dev->event_lock);
-	// This source is not linked by the firmware. Before enabling ff-memless,
-	// restore an event-lock-equivalent scope here that serializes with the
-	// timer and input-event paths; this upload must not run unlocked.
+	// All firmware FF callers are tasks; serialize upload with the timer and
+	// input-event paths through the same per-input PI mutex.
+	mutex_lock(&dev->port_event_mutex);
 
 	if (test_bit(FF_EFFECT_STARTED, &state->flags)) {
 		__clear_bit(FF_EFFECT_PLAYING, &state->flags);
@@ -482,6 +483,7 @@ static int ml_ff_upload(struct input_dev *dev,
 		ml_schedule_timer(ml);
 	}
 
+	mutex_unlock(&dev->port_event_mutex);
 	return 0;
 }
 

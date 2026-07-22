@@ -38,6 +38,16 @@ an MT-only touchpad. Linux already publishes the correct Type-B stream and
 legacy `ABS_X/Y` pointer emulation; the remaining stale-ABS fix, SYN framing,
 and absolute-to-relative product policy belong after the Linux evdev boundary.
 
+The retained narrow gaming path is Google Stadia `FF_RUMBLE` through
+`hid-google-stadiaff.c` and `ff-memless.c`. Both sources are currently unlinked
+because firmware has no product client for rumble. This is a product boundary,
+not an unresolved driver bug: the driver's upstream spinlock and the two
+ff-memless input `event_lock` scopes are mapped to task-context
+priority-inheritance mutexes, and a targeted 2026-07-22 run passed upload,
+timer stop, same-ID replay, running-work unplug, remove, and reconnect. Enable
+the two CMake entries together when such a client is selected; the ordinary
+layout-change `FF_HAPTIC` hook is a different path.
+
 Regular FEATURE and raw requests stay on EP0; `.output_report()` remains the
 interrupt-only entry point and returns `-ENOSYS` without an OUT endpoint.
 

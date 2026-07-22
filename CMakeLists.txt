@@ -744,6 +744,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-evision.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ezkey.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gembird.c
+        # Deferred: the audited Stadia FF_RUMBLE path works, but firmware has
+        # no product client for it yet. Enable together with ff-memless below.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-google-stadiaff.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-gyration.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-glorious.c
         # Deferred: the CD30 keyboard's replacement descriptor creates a
@@ -806,6 +809,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Deferred with hid-vivaldi*.c above.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/vivaldi-fmap.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-core.c
+        # Deferred with hid-google-stadiaff until a product FF_RUMBLE client
+        # exists; ff-core remains linked for standard HID Haptics.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-memless.c
         # Deferred: LED/backlight class proxies are not needed by the current HID
         # allowlist.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c

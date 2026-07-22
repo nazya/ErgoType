@@ -5,24 +5,14 @@
  * Copyright 2023 Google LLC
  */
 
-/*
- * PORTING STATUS — DO NOT LINK.
- *
- * This inactive experiment calls FreeRTOS semaphore APIs directly from a
- * Linux-derived driver. That glue belongs behind the compatibility/workqueue
- * boundary, so this file does not yet satisfy upstream-porting-rules.md. Keep
- * it out of CMake until the direct RTOS dependency is removed and the Linux
- * spinlock/lifetime shape is re-audited.
- */
-
 #include <linux/hid.h>
 #include <linux/input.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-
-// FreeRTOS provides the real task mutex replacing the compat spinlock below.
-#include "FreeRTOS.h"
-#include "semphr.h"
+// Upstream uses an IRQ-safe spinlock. Firmware play, work, and remove callers
+// are tasks, so the compatibility mutex preserves exclusion without exposing
+// RTOS APIs inside this Linux-derived driver.
+#include <linux/mutex.h>
 
 #include "hid-ids.h"
 
@@ -32,8 +22,9 @@ struct stadiaff_device {
 	struct hid_device *hid;
 	struct hid_report *report;
 	// spinlock_t lock;
-	// The compat spinlock does not exclude the port's CORE0/CORE1 tasks.
-	SemaphoreHandle_t lock;
+	// Firmware callers are tasks on both cores; use the port's blocking PI
+	// mutex in place of Linux's IRQ-side spinlock.
+	struct mutex lock;
 	bool removed;
 	uint16_t strong_magnitude;
 	uint16_t weak_magnitude;
@@ -46,15 +37,14 @@ static void stadiaff_work(struct work_struct *work)
 		container_of(work, struct stadiaff_device, work);
 	struct hid_field *rumble_field = stadiaff->report->field[0];
 	// unsigned long flags;
-	// The FreeRTOS mutex does not save IRQ state.
+	// Firmware work runs in task context and does not need IRQ state.
 
 	// spin_lock_irqsave(&stadiaff->lock, flags);
-	// This work runs in a FreeRTOS task, so the real mutex may block here.
-	xSemaphoreTake(stadiaff->lock, portMAX_DELAY);
+	mutex_lock(&stadiaff->lock);
 	rumble_field->value[0] = stadiaff->strong_magnitude;
 	rumble_field->value[1] = stadiaff->weak_magnitude;
 	// spin_unlock_irqrestore(&stadiaff->lock, flags);
-	xSemaphoreGive(stadiaff->lock);
+	mutex_unlock(&stadiaff->lock);
 
 	hid_hw_request(stadiaff->hid, stadiaff->report, HID_REQ_SET_REPORT);
 }
@@ -65,18 +55,17 @@ static int stadiaff_play(struct input_dev *dev, void *data,
 	struct hid_device *hid = input_get_drvdata(dev);
 	struct stadiaff_device *stadiaff = hid_get_drvdata(hid);
 	// unsigned long flags;
-	// The FreeRTOS mutex does not save IRQ state.
+	// Firmware FF playback runs in task context and does not need IRQ state.
 
 	// spin_lock_irqsave(&stadiaff->lock, flags);
-	// FF play runs in KeyD or HID timer task, outside TinyUSB callbacks.
-	xSemaphoreTake(stadiaff->lock, portMAX_DELAY);
+	mutex_lock(&stadiaff->lock);
 	if (!stadiaff->removed) {
 		stadiaff->strong_magnitude = effect->u.rumble.strong_magnitude;
 		stadiaff->weak_magnitude = effect->u.rumble.weak_magnitude;
 		schedule_work(&stadiaff->work);
 	}
 	// spin_unlock_irqrestore(&stadiaff->lock, flags);
-	xSemaphoreGive(stadiaff->lock);
+	mutex_unlock(&stadiaff->lock);
 
 	return 0;
 }
@@ -105,10 +94,11 @@ static int stadiaff_init(struct hid_device *hid)
 				GFP_KERNEL);
 	if (!stadiaff)
 		return -ENOMEM;
-	// spin_lock_init(&stadiaff->lock);
-	// Create the real mutex before input_ff_create_memless() exposes play.
-	stadiaff->lock = xSemaphoreCreateMutex();
-	if (!stadiaff->lock)
+	// Upstream's spin_lock_init() remains at its original location below.
+	// The heap-backed compatibility mutex can fail to initialize, so create it
+	// before input_ff_create_memless() exposes the playback callback.
+	mutex_init(&stadiaff->lock);
+	if (!mutex_initialized(&stadiaff->lock))
 		return -ENOMEM;
 
 	hid_set_drvdata(hid, stadiaff);
@@ -120,7 +110,7 @@ static int stadiaff_init(struct hid_device *hid)
 	// 	return error;
 	// Release the port-owned mutex when FF setup fails.
 	if (error) {
-		vSemaphoreDelete(stadiaff->lock);
+		mutex_destroy(&stadiaff->lock);
 		return error;
 	}
 
@@ -128,6 +118,8 @@ static int stadiaff_init(struct hid_device *hid)
 	stadiaff->hid = hid;
 	stadiaff->report = report;
 	INIT_WORK(&stadiaff->work, stadiaff_work);
+	// spin_lock_init(&stadiaff->lock);
+	// Port replacement is initialized above because mutex_init() can fail.
 
 	hid_info(hid, "Force Feedback for Google Stadia controller\n");
 
@@ -164,19 +156,19 @@ static void stadia_remove(struct hid_device *hid)
 {
 	struct stadiaff_device *stadiaff = hid_get_drvdata(hid);
 	// unsigned long flags;
-	// The FreeRTOS mutex does not save IRQ state.
+	// Firmware remove runs in task context and does not need IRQ state.
 
 	// spin_lock_irqsave(&stadiaff->lock, flags);
 	// Remove runs in usbhid_lifecycle_task, not the TinyUSB callback.
-	xSemaphoreTake(stadiaff->lock, portMAX_DELAY);
+	mutex_lock(&stadiaff->lock);
 	stadiaff->removed = true;
 	// spin_unlock_irqrestore(&stadiaff->lock, flags);
-	xSemaphoreGive(stadiaff->lock);
+	mutex_unlock(&stadiaff->lock);
 
 	cancel_work_sync(&stadiaff->work);
 	hid_hw_stop(hid);
 	// The port-owned mutex outlives work and evdev teardown, then is released.
-	vSemaphoreDelete(stadiaff->lock);
+	mutex_destroy(&stadiaff->lock);
 }
 
 static const struct hid_device_id stadia_devices[] = {

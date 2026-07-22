@@ -34,10 +34,17 @@ commit `3da259a`; Linux pointer emulation has already consumed those codes.
 This deliberately does not add `SYN_DROPPED` resync or rewrite Linux
 `hid-multitouch`/`input-mt`; no resynchronization claim is made here.
 
-Checkpoint `hid: stabilize stadia ff teardown` preserves the Stadia/`ff-memless` implementation and teardown
-fixes. The working tree keeps that gaming path unlinked and instead links
-upstream `hid-multitouch` plus `hid-haptic`. Both firmware images build; a
-two-Pico run confirms haptic OUTPUT through emulator cursor feedback.
+Checkpoint `hid: stabilize stadia ff teardown` preserves a historical Stadia/`ff-memless` implementation and
+successful emulator run. The retained source now replaces its direct FreeRTOS
+semaphore use and the two omitted ff-memless event-lock scopes with
+compatibility priority-inheritance mutexes. A targeted `FF_RUMBLE` client
+retested that conversion on 2026-07-22 in a temporary linked/instrumented host
+image: two full cycles separated by reconnect passed timer stop, same-ID
+replay, running-work unplug, and remove. The pair is now unlinked until
+firmware has a product client; the ordinary layout hook emits `FF_HAPTIC` and
+remains a separate active path.
+Upstream `hid-multitouch` plus `hid-haptic` remain linked, and their separate
+two-Pico OUTPUT path has hardware cursor-feedback coverage.
 
 The current dirty tree descends from hardware-verified `usb: complete event-driven enumeration path`; its latest
 pre-audit executable checkpoint also passed repeated automatic driver,
@@ -161,16 +168,21 @@ the audited scope.
 
 The inactive files were also compared, rather than inferred safe merely because
 CMake omits them. Most differ only by an adjacent, explained immutable driver
-descriptor. Three are explicit enablement blockers:
+descriptor. One is an explicit enablement blocker:
 
 - `usbhid/hiddev.c` is a firmware proxy rewrite, not a line-preserving port of
   Linux's fd/ioctl/fasync implementation. Move that proxy to glue and restore
   the Linux-derived file before enabling it.
-- `hid-google-stadiaff.c` directly embeds FreeRTOS semaphore API in a
-  Linux-derived driver. Keep it unlinked until the lock/lifetime adapter lives
-  behind the compatibility or workqueue boundary.
-- `ff-memless.c` is unlinked and its two upstream `event_lock` scopes are not
-  implemented. They are now marked as mandatory work before relinking it.
+
+`hid-google-stadiaff.c` and `ff-memless.c` are retained, audited, and currently
+unlinked by product policy rather than by a compatibility blocker. Stadia uses
+the compatibility `struct mutex` instead of embedding FreeRTOS API in the
+Linux-derived driver; every play, work, and remove caller is task-context, and
+the adjacent upstream spinlock lines remain visible. The two ff-memless
+upstream `event_lock` scopes use the same per-input `port_event_mutex` as the
+input/FF paths. The firmware timer callback runs outside the timer mutex, so
+this adds no reverse timer/event lock edge. Their hardware retest passed on
+2026-07-22 as recorded below and in `hid-emulator-coverage.md`.
 
 For completeness, the disabled HID sources whose only function-level change is
 that adjacent immutable-descriptor replacement are: `hid-accutouch`,
@@ -182,8 +194,8 @@ that adjacent immutable-descriptor replacement are: `hid-accutouch`,
 `hid-sigmamicro`, `hid-speedlink`, `hid-sunplus`, `hid-tivo`, `hid-topseed`,
 `hid-twinhan`, `hid-viewsonic`, `hid-vivaldi`, `hid-vrc2`, `hid-waltop`,
 `hid-xiaomi`, and `hid-xinmo`. `hid-vivaldi-common.c` is byte-for-byte baseline.
-Together with `hid-cmedia.c`, Stadia, and hiddev, this accounts for all 42
-unlinked HID `.c` files.
+Together with `hid-cmedia.c`, `hid-google-stadiaff.c`, and hiddev, this accounts
+for all 42 unlinked HID `.c` files.
 
 The dormant `hid-core.c` `new_id` block is unreachable because firmware
 publishes no driver groups, but it remains a partial local parser/lockless
@@ -207,14 +219,18 @@ gets generic compatibility primitives by including `hid.h`; that upward layer
 dependency is marked as cleanup debt, not claimed as upstream structure.
 
 The linked non-compatibility private headers `hid-ids.h`, `hid-haptic.h`, and
-`input-core-private.h` are byte-for-byte identical to the pinned baseline.
+`input-core-private.h` are byte-for-byte identical to the pinned baseline. The
+table also records the two audited deferred FF sources so their enablement
+contract remains visible.
 
 | Linux-derived file | Remaining explained differences |
 | --- | --- |
 | `hid-input.c` | Local include path and immutable `hid_driver` pointer only. |
 | `input-mt.c` | Local includes, task-context event-mutex boundaries, and upstream commit `8813b061` for the active-slot bitmap. |
 | `ff-core.c` | Explicit unlocks replacing Linux `guard(mutex)`, `port_event_mutex` replacing IRQ event-lock scopes, and checked/destroyed heap-backed FreeRTOS mutex state. |
+| `ff-memless.c` | Its two upstream `event_lock` scopes use the per-input task-context PI mutex; the original `guard(spinlock_irq*)` lines remain adjacent. |
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
+| `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, explicit hidraw omission, and mutable runtime state beside flash-resident driver descriptors. |
 | `input.c` | Task-context input event mutex, firmware devres/action ownership, direct object release, and Linux presentation/PM/userspace code retained exactly under `#if 0` at its omitted runtime boundary. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
@@ -277,13 +293,14 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake/`CONFIG_HID_*` agree on 19 linked vendor driver descriptors across 18
-  vendor config families, generic `hid-multitouch`, and `hid-haptic`. The
-  compound Holtek config now links both keyboard and mouse descriptor-fixup
-  drivers; the unlinked game-controller-only `hid-holtekff` ID is left generic
-  instead of being marked as having an absent special driver. Active
-  vendor/generic changes keep adjacent upstream lines and reasons; no unrelated
-  vendor-flow rewrite was found.
+- CMake links 19 vendor driver descriptor translation units across 18 enabled
+  vendor `CONFIG_HID_*` families (the compound Holtek config contributes
+  keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
+  are also linked. Stadia has no reduced config gate and is excluded simply by
+  leaving its source out of CMake. The unlinked game-controller-only
+  `hid-holtekff` ID is left generic instead of being marked as having an absent
+  special driver. Active vendor/generic changes keep adjacent upstream lines
+  and reasons; no unrelated vendor-flow rewrite was found.
 - The imported `hid-magicmouse.c` matches only USB Magic Mouse 2 and Trackpad 2
   IDs. Its synchronous mode SET runs from lifecycle task context through the
   existing async EP0 owner. USB Mouse 2 returns before the upstream delayed
@@ -307,11 +324,13 @@ it contains no callback, logging, allocation, or wait.
   bits before leaving `dev->ff == NULL`; dynamic mutex backing is destroyed.
 - Resolution-multiplier setup is back to the upstream synchronous block; the
   former local continuation functions are gone.
-- `ff-core` remains linked; `ff-memless`/Stadia do not. Evdev clears `EV_REP`
-  because KeyD owns held-key state and discards Linux repeat value `2`.
+- `ff-core` remains linked for HID Haptics; `ff-memless` and Stadia do not.
+  Evdev clears `EV_REP` because KeyD owns held-key state and discards Linux
+  repeat value `2`.
 - AppleIR remains unlinked. The timer bridge now serves multitouch's 100-ms
-  sticky-contact release; haptic waveform duration is device-managed and has
-  no FF duration timer.
+  sticky-contact release. Standard HID Haptics waveform duration is
+  device-managed and has no FF duration timer; the retained ff-memless timer
+  path runs only when that deferred source is linked.
 - `hid-drivers.c` is marked port-only linker/initcall glue; its Linux-derived
   directory placement remains an explicit exception. Like Linux module/initcall
   startup, one failed entry is reported without suppressing unrelated entries
@@ -582,12 +601,15 @@ contains a hypothetical NULL check that no current caller can exercise.
   callback/lifecycle `FREE/PENDING/ACTIVE` mini-state-machine without changing
   the 16-byte slot or adding a queue.
 
-## Haptic Status
+## Force-Feedback Status
 
-- `hid-multitouch`/`hid-haptic` are active; Stadia/`ff-memless` are unlinked.
-  Haptic uses `input_ff_create()` with five firmware-owned effect slots and
+- `hid-multitouch`/`hid-haptic` and `ff-core` are active. Standard HID Haptics
+  uses `input_ff_create()` with five firmware-owned effect slots and
   device-managed timing. Linux's 96-slot call and allocation remain commented
   beside that memory-bounded replacement.
+- Stadia/`ff-memless` are retained but unlinked until a product `FF_RUMBLE`
+  client exists. If both CMake entries are restored together, Stadia uses the
+  upstream memless 16-slot policy and timer path.
 - The existing lifecycle task probes. Feature/raw/OUTPUT traffic passes through
   `hid_async_task`; caller tasks wait, TinyUSB callbacks do not wait for request
   progress. Raw GET/SET and
@@ -599,9 +621,10 @@ contains a hypothetical NULL check that no current caller can exercise.
   final `EV_FF`/`FF_HAPTIC` state is therefore atomic at the firmware client
   boundary without a READY/update side channel.
 - The temporary manual layout-change hook ignores the startup notification,
-  builds and uploads/plays Press, then erases/stops it on the next change.
-  Effect state is caller-owned; no test helper or field was added to the
-  evdev/KeyD device structures.
+  builds and uploads/plays a HID Haptics Press effect, then erases/stops it on
+  the next change. Effect state is caller-owned; no test helper or field was
+  added to the evdev/KeyD device structures. It emits `FF_HAPTIC`, not
+  `FF_RUMBLE`, so it does not exercise Stadia.
 - ff-core retains an old definition throughout replacement upload and retains
   an erased definition while the driver callback runs. `hid-haptic` uses those
   upstream contracts to decide HOST/DEVICE ownership; it cancels a slot's
@@ -611,6 +634,10 @@ contains a hypothetical NULL check that no current caller can exercise.
   it coalesces upstream STOP-to-PLAY into PLAY/up, while explicit STOP moves
   the cursor down. Both UF2s build; enumeration and cursor feedback pass on
   hardware. Full output-order, unplug, and stack-watermark checks remain.
+- Fixture `ErgoType-hid-devices:device/google-stadiaff` passed the retained
+  mutex conversion before deferral with a temporary targeted `FF_RUMBLE`
+  client, including timer stop, replay, running-work unplug, clean remove, and
+  reconnect.
 
 ## Open Semantic Boundaries
 
@@ -738,8 +765,8 @@ contains a hypothetical NULL check that no current caller can exercise.
 - Compatibility `BUG_ON(expression)` evaluates its condition exactly once into
   a local boolean and passes only that identifier to `configASSERT()`. There is
   no extra silent busy-loop or release-build fail-stop policy. Its current
-  repository caller is in the unlinked `ff-memless` path, but linking that
-  driver no longer changes whether the expression itself is evaluated.
+  repository caller is in the unlinked `ff-memless` path; linking that helper
+  still evaluates the expression exactly once before the assertion.
 - The timer bridge does not reject a timer whose callback is `NULL`, and a
   zero-delay self-rearming callback could monopolize its single task. All
   active timers have non-NULL callbacks and rearm in the future, so neither
@@ -1003,7 +1030,7 @@ Verified through hardware checkpoint `usb: complete event-driven enumeration pat
 - `git diff --check`
 - observed two-board haptic cursor feedback
 
-Current dirty-tree audit candidate:
+Current checkpoint audit:
 
 - re-diffed all 29 linked Linux-derived C translation units against clean
   `83f14548` plus the named `8813b061` multitouch fix. Twenty-eight retain an

@@ -12,8 +12,10 @@ driver in CMake. The current host build links the CMake HID allowlist from
 `usb_host/linux/drivers/hid`, while the emulator repo has one branch per
 targeted behavior or device family.
 
-The Stadia and AppleIR entries below are retained as historical coverage for
-checkpoint `hid: stabilize stadia ff teardown`. Neither path is in the active CMake allowlist.
+The AppleIR entry below retains historical coverage from checkpoint `hid: stabilize stadia ff teardown` and
+remains unlinked. Stadia/`ff-memless` is also outside the current CMake
+allowlist, but its retained mutex conversion was retested before deferral on
+2026-07-22.
 
 ### Hardware-verified work-input and long-enumeration fixture
 
@@ -203,7 +205,8 @@ claims for unrelated drivers.
 | Date | Branch | Verified signal |
 | --- | --- | --- |
 | 2026-07-10 | `device/razer-blackwidow` | host sends Razer raw SET_REPORT, emulator then emits macro usage, and Pico host sees unsupported KeyD code `0x290` events |
-| 2026-07-14 | `device/google-stadiaff` | layout-change FF trigger sends Stadia rumble start and ff-memless timer stop; emulator marker moves pointer up on start and down on stop |
+| 2026-07-14 | `device/google-stadiaff` (historical host `hid: stabilize stadia ff teardown`) | layout-change FF trigger sends Stadia rumble start and ff-memless timer stop; emulator marker moves pointer up on start and down on stop; this does not verify the current mutex conversion |
+| 2026-07-22 | `device/google-stadiaff` (`f8f9a38`) with temporary linked/instrumented host trigger | retained mutex conversion passes start, 300-ms timer stop, same-ID replay, unplug during the exact running Stadia work, and clean remove in two complete cycles separated by reconnect; both cycles return to the same 60,816-byte free-heap plateau with `oom=0` |
 | 2026-07-14 | `device/apple-ir` | AppleIR two-packet middle command reaches `hid-appleir.c`; host emits `enter down`, and timer release emits `enter up` |
 | 2026-07-14 | `device/hires-wheel` | resolution-multiplier SET_REPORT is queued/completed; keyboard, pointer, scroll, and hi-res wheel/hwheel events reach the Pico host input boundary |
 | 2026-07-14 | `device/quirks-atmel-ma901` | after fixing upstream-style `hid->name` construction, the fixture matches laptop Linux behavior and generic pointer/scroll input is not falsely ignored |
@@ -251,8 +254,10 @@ Branch heads recorded for the 2026-07-22 build pass:
   coverage.
 - `device/google-stadiaff`: Google Stadia VID/PID and a report descriptor with
   gamepad input report ID 1 plus rumble output report ID 5. This branch
-  historically exercised `hid-google-stadiaff.c` plus `ff-memless.c` and the
-  short layout-rumble trigger preserved in checkpoint `hid: stabilize stadia ff teardown`.
+  exercised `hid-google-stadiaff.c` plus `ff-memless.c` with the short
+  layout-rumble trigger at historical host checkpoint `hid: stabilize stadia ff teardown`, then verified the
+  retained mutex conversion with the temporary linked/instrumented trigger
+  recorded below.
 - `device/hires-wheel`: generic HID resolution multiplier path:
   async `GET_REPORT` followed by async `SET_REPORT`, plus hi-res wheel and AC
   Pan input.
@@ -319,7 +324,7 @@ drivers are not counted here.
 | USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | `rapoo-2_4g-receiver`, `razer-blackwidow` |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
-| Historical Stadia/ff-memless path, inactive (`ff-core.c` remains active for HID Haptics) | `hid-google-stadiaff.c` and `ff-memless.c` at `hid: stabilize stadia ff teardown` | `google-stadiaff` |
+| Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | no dedicated fixture or real-device pass yet |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
@@ -328,8 +333,10 @@ drivers are not counted here.
 `hid-holtek-mouse` is active so `CONFIG_HID_HOLTEK` no longer marks six mouse
 IDs as special without linking their report fixup, but it has no dedicated
 emulator fixture yet. The USB-only Magic Mouse 2 / Trackpad 2 driver is also
-active and build-audited but has no dedicated fixture or real-device pass. The
-remaining active vendor allowlist is A4Tech,
+active and build-audited but has no dedicated fixture or real-device pass.
+Stadia has a dedicated emulator fixture and a current result for its retained,
+unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
+A4Tech,
 Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron; each
 of those entries has a matching emulator branch. Core/common glue (`hid-core`,
@@ -345,7 +352,8 @@ reuse an already tested hook shape.
 The existing emulator set plus the hardware-verified work-input fixture covers
 the previously active allowlist and the long-enumeration success path. The new
 Holtek mouse linkage and the USB-only Magic Mouse 2 / Trackpad 2 linkage are
-build-audited but remain driver-specific fixture gaps.
+build-audited but remain driver-specific fixture gaps. Stadia's existing
+fixture covers its deferred mutex-conversion path if it is relinked later.
 
 Reasoning:
 
@@ -364,10 +372,13 @@ specific hook class looks suspicious in hardware. One reasonable optional
 target is another
 `HID_QUIRK_MULTI_INPUT` device if KYE/Chicony coverage turns out too narrow.
 
-The Stadia fixture preserves historical coverage of simple memless rumble at
-`hid: stabilize stadia ff teardown`. The active build instead uses the standard HID Haptics Page path;
-the haptic-touchpad fixture covers its basic probe, pointer, and output flow.
-Effect replacement/reuse and teardown races remain the relevant gaps.
+The Stadia fixture covers the retained, currently unlinked mutex conversion:
+simple memless rumble, automatic stop, same-ID replay, unplug during a running
+driver work, remove, and reconnect. The standard HID Haptics Page path remains
+active, and the haptic-touchpad fixture covers its basic probe, pointer, and
+output flow. In-place effect replacement, explicit erase/reuse, multiple
+simultaneous effects, and stress beyond the deterministic teardown window
+remain relevant FF gaps if Stadia is enabled for a product client.
 
 ## Hardware Test Matrix
 
@@ -502,9 +513,43 @@ Hardware Verified until their signals are observed.
   - an enumeration-time `first=0x00` report proves only boot reset/EP0
     fallback; the later `first=0x02` report is still required to prove the
     Holtek LED redirect.
-- `device/google-stadiaff` (historical, checkpoint `hid: stabilize stadia ff teardown`)
+- `device/google-stadiaff`
+  - historical host `hid: stabilize stadia ff teardown` used a layout-change `FF_RUMBLE` trigger and
+    observed SET_REPORT ID 5 plus the ff-memless timer stop.
+  - a temporary linked/instrumented host image was tested with a targeted
+    `FF_RUMBLE` trigger before the pair returned to the deferred CMake set; its
+    exact SHA256 is recorded in Hardware Test Identity below. The ordinary
+    layout-change hook still emits the unrelated `FF_HAPTIC` type.
   - expected device-side signal: emulator CDC log reports SET_REPORT for
-    report ID 5 after a host layout change triggers rumble.
+    report ID 5, with its pointer marker moving on rumble start and stop.
+
+### Future FF client boundary
+
+The concise client recipe and lifetime rules are in the
+`Future firmware FF client hook` section of `hid-host-bringup.md`. The full
+available client sequence is:
+
+```text
+device_upload_ff(id=-1) -> assigned effect ID
+device_set_ff(id, 1)    -> play
+ff-memless timer        -> automatic stop at replay.length
+device_set_ff(id, 1)    -> replay the same uploaded slot
+device_set_ff(id, 0)    -> optional explicit stop
+device_erase_ff(id)     -> release the slot
+```
+
+The targeted Stadia run exercised upload, play, automatic timer stop, and
+same-ID replay. It did not issue the explicit stop or erase calls in this
+generic future-client sequence.
+
+All calls belong to a task-owned client. Never make them from a TinyUSB
+callback. An effect ID dies with its `struct device`: clear it on
+`EV_DEV_REMOVE` and upload a new `id = -1` effect after reconnect. The temporary
+test changed `device_set_ff()` to return the immediate writer result only for
+diagnostics; that is not USB completion and is not part of the current void
+API. The `EV_FF` echo may reach the current KeyD reader as
+`unrecognized evdev event type: 21`; that message is a downstream-consumer gap,
+not a failed FF request.
 
 ## Still Not Covered
 
@@ -520,8 +565,10 @@ The standard HID Haptics Page touchpad fixture already exercises
 `hid-haptic.c`, `hid-multitouch.c`, asynchronous feature GET_REPORT probe, and
 basic output. It does not yet force in-place effect replacement, rapid
 PLAY-to-erase/reuse, unplug during queued PLAY, all five effect slots, or mode
-restoration after the final Press/Release effect. It does not use `ff-memless`
-or the historical Stadia layout-rumble trigger.
+restoration after the final Press/Release effect. It does not use the retained,
+unlinked `ff-memless`/Stadia path: the ordinary layout-change hook produces
+`FF_HAPTIC`, whereas Stadia requires `FF_RUMBLE`. The targeted test recorded
+above covers that deferred path independently.
 
 The post-probe activation step also needs a composite regression: all input
 devices must receive one devmon ADD with final capabilities and no writer may
@@ -642,6 +689,15 @@ and emulator CDC lines under each item.
   - host: layout change triggers FF upload/play, then ff-memless timer stop.
   - emulator: pointer moves up on rumble start and down on rumble stop.
   - verdict: pass, checked on Pico host with emulator.
+- [x] `device/google-stadiaff` retained Stadia/ff-memless mutex conversion
+  - host: targeted `FF_RUMBLE` upload/play reaches report ID 5, then the
+    ff-memless duration timer stops it; the ordinary `FF_HAPTIC` hook is not a
+    substitute for this trigger.
+  - emulator: pointer moves up on rumble start and down on rumble stop.
+  - verdict: pass on 2026-07-22 with the temporary linked/instrumented host
+    image; two complete cycles separated by reconnect covered same-ID replay
+    and running-work unplug/remove before the pair returned to the deferred
+    CMake set.
 - [x] `device/apple-ir` historical AppleIR path at `hid: stabilize stadia ff teardown`
   - host: `enter down` arrives from the two-packet AppleIR middle command;
     `enter up` arrives from the host timer path.

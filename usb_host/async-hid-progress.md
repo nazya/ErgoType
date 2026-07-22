@@ -440,9 +440,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   member, so notification tokens remain paired. Lifecycle removal runs in task
   context and waits for KeyD to make its reserved queue slot available.
 - The standard HID Haptics path is linked through `hid-haptic`,
-  `hid-multitouch`, ff-core, evdev, and the firmware workqueue. Broader gaming
-  FF drivers remain deferred. The bounded firmware hiddev proxy remains an
-  unlinked source; no active HID claims it.
+  `hid-multitouch`, ff-core, evdev, and the firmware workqueue. The audited
+  Stadia `FF_RUMBLE` driver and `ff-memless` helper are retained but unlinked
+  until firmware has a product client for them; broader gaming FF drivers
+  remain deferred. The bounded firmware hiddev proxy remains an unlinked
+  source; no active HID claims it.
 - Haptic effect storage is bounded to five firmware application slots rather
   than Linux's 96 userspace slots. Each slot still owns
   the upstream per-effect report snapshot, but unused slots no longer consume
@@ -465,9 +467,22 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-22: before the audited Stadia/`ff-memless` pair was returned to the
+  deferred CMake set, a targeted two-Pico `FF_RUMBLE` test validated it. The
+  temporary linked/instrumented host image had SHA256
+  `8b188a595689102872e65ff7529ad3bbef3cb21b1d026e3378498688ba04bfbf`
+  (`text=520188`, `data=788`, `bss=245100`); emulator commit `f8f9a38` image
+  SHA256 was
+  `499f249c748e7f5eb82e791ac654c7a03e0c20dae1e96050476c568a8b9a1ac3`.
+  Two complete cycles separated by one reconnect observed upload, start, the
+  300-ms `ff-memless` timer stop, replay of the same effect ID, unplug while
+  that exact Stadia work was running, and clean removal. The post-remove heap
+  returned to 60,816 B in both cycles with `oom=0`.
 - 2026-07-22: the teardown-result fix, exact UF2 SHA256
   `db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242`,
-  passed repeated automatic ELECOM, Kensington, Topre, EVision, and
+  is also the current rebuilt image after returning Stadia/ff-memless to the
+  deferred CMake set. It passed repeated automatic ELECOM, Kensington, Topre,
+  EVision, and
   `cafe:1005` long-configuration cycles. Input continued and the former false
   `HID_TEARDOWN_WAIT` diagnostic disappeared; the log contained no `ERR` or
   `WARN`. Removal repeatedly returned to `free=60784..60800`, minimum observed

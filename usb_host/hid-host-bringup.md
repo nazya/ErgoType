@@ -376,8 +376,9 @@ The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
 Kye, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic
 multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2 driver.
-Holtek's separate On Line Grip game-controller driver remains unlinked and its
-ID is not advertised as requiring a special driver.
+Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
+game-controller driver remain unlinked; their IDs are not advertised as
+requiring an absent special driver.
 
 The current heap, task-stack, TinyUSB, and Pico-PIO-USB settings are maintained
 in [`pio-usb-memory.md`](pio-usb-memory.md). Do not copy a dirty build's exact
@@ -536,8 +537,68 @@ the driver. Keep both sides synchronized.
 
 ## Force Feedback and Remaining Risks
 
-No gaming FF driver is active. The tested Stadia/`ff-memless` implementation is
-preserved in checkpoint `hid: stabilize stadia ff teardown`, but both sources are excluded from CMake.
+No gaming FF driver is active. The tree retains the audited
+`hid-google-stadiaff.c` plus `ff-memless.c` implementation for Stadia
+`FF_RUMBLE`, but both CMake entries are commented out until firmware has a
+product client. The driver's upstream spinlock and ff-memless's two input
+`event_lock` scopes are represented by task-context priority-inheritance
+mutexes, with the original upstream lines retained beside the port.
+
+The retained pair was tested before deferral with a temporary targeted client:
+two complete cycles separated by reconnect passed upload, duration-timer stop,
+same-ID replay, unplug during the exact running Stadia work item, and clean
+remove. Exact fixture and image identities are recorded in
+`hid-emulator-coverage.md`. To restore the experiment, enable both
+`usb_host/linux/drivers/hid/hid-google-stadiaff.c` and
+`usb_host/linux/drivers/input/ff-memless.c` in the root `CMakeLists.txt`;
+`ff-core.c` must remain linked for the independently active HID Haptics path.
+
+### Future firmware FF client hook
+
+The Linux drivers expose force feedback to the firmware client through the
+task-context KeyD/evdev boundary, not through TinyUSB callbacks:
+
+```c
+struct ff_effect effect = {
+    .type = FF_RUMBLE,
+    .id = -1,
+    .replay = {
+        .length = 300,
+    },
+    .u.rumble = {
+        .strong_magnitude = 0x6000,
+        .weak_magnitude = 0xffff,
+    },
+};
+
+if (device_upload_ff(dev, &effect) == 0) {
+    int effect_id = effect.id;
+
+    device_set_ff(dev, effect_id, 1); /* play; length stops it later */
+    /* A later device_set_ff(dev, effect_id, 0) explicitly stops it. */
+    /* A later device_set_ff(dev, effect_id, 1) replays the same slot. */
+    /* device_erase_ff(dev, effect_id) releases the slot when finished. */
+}
+```
+
+The Stadia run tested upload, play, automatic timer stop, and same-ID replay.
+The explicit stop and erase calls shown above are the available client API,
+but that targeted run did not exercise them.
+
+The client owns the returned effect ID only for that `struct device` lifetime.
+Discard both on `EV_DEV_REMOVE`; after reconnect, upload again with `id = -1`.
+For `ff-memless`, a nonzero play value is the repeat count and
+`replay.length` schedules the automatic stop. The normal output path is
+asynchronous/fire-and-forget: a successful writer call is not USB completion.
+
+The known Stadia test selected `18d1:9400` directly. A future generic client
+should publish the Linux `EV_FF`/`ffbit` capabilities across the evdev-to-KeyD
+boundary instead of identifying devices by VID/PID or probing with failed
+uploads. `FF_RUMBLE` and the standard HID Haptics Page's `FF_HAPTIC` are
+different effect types; use only a capability advertised by that input device.
+The firmware definition of `struct ff_effect` comes from
+`usb_host/linux/include/uapi/linux/input.h`; keep that import in a thin glue
+module rather than spreading Linux UAPI details through KeyD.
 
 The generic `ff-core`, `hid-haptic`, `hid-multitouch`, evdev
 upload/play/stop/erase boundary, workqueue bridge, and async output transport

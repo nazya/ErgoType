@@ -49,9 +49,10 @@ formatting. After adding the audited ELECOM, Kensington, Topre, and EVision
 builtin drivers, that historical image linked with `text=505836`, `data=708`,
 and `bss=245364`.
 
-The current dirty simplification candidate still uses the fixed 218.5 KiB
-(`223744`-byte) FreeRTOS heap. It builds and passed repeated automatic driver,
-long-configuration, input, and removal cycles on hardware:
+The current checkpoint excludes Stadia/`ff-memless` from the link and uses the
+fixed 218.5 KiB (`223744`-byte) FreeRTOS heap. Its rebuilt UF2 is byte-identical
+to the previously hardware-verified pre-Stadia image, which passed repeated
+automatic driver, long-configuration, input, and removal cycles:
 
 ```text
 text/data/bss                 514948 / 788 / 245040 B
@@ -59,12 +60,47 @@ __bss_end__                   0x2003fd38
 main-bank headroom            712 B to 0x20040000
 scratch X                     788 B (0x20040000..0x20040314)
 scratch X / core-1 gap        1260 B to 0x20040800
-candidate UF2 SHA-256         db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242
+verified UF2 SHA-256          db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242
 hardware verdict              passed 2026-07-22; stable remove plateau, oom=0
 ```
 
-These values belong only to that exact dirty build candidate. Do not reuse them
-after another link or attach a later hardware verdict to this hash. The current architecture still has one ordinary
+The optional linked Stadia experiment added `hid-google-stadiaff.c` and
+`ff-memless.c`, with their active event-lock scopes mapped to firmware
+priority-inheritance mutexes. It builds as:
+
+```text
+text/data/bss                 518204 / 788 / 245088 B
+__bss_end__                   0x2003fd68
+main-bank headroom            664 B to 0x20040000
+scratch X                     788 B (0x20040000..0x20040314)
+scratch X / core-1 gap        1260 B to 0x20040800
+candidate UF2 SHA-256         5491f7e19c2230d35570a89191ca8cf4a65535c430275702ef79f776917f529b
+hardware verdict              exact base image not flashed; integration tested below
+```
+
+The same retained Stadia/ff-memless source was hardware-tested before deferral
+with a temporary targeted trigger and deterministic workqueue teardown window,
+not by flashing the build-only candidate above unchanged:
+
+```text
+text/data/bss                 520188 / 788 / 245100 B
+__bss_end__                   0x2003fd7c
+main-bank headroom            644 B to 0x20040000
+temporary test UF2 SHA-256    8b188a595689102872e65ff7529ad3bbef3cb21b1d026e3378498688ba04bfbf
+hardware verdict              two full cycles separated by reconnect passed
+post-remove free heap         60816 B in both cycles; oom=0
+```
+
+The temporary trigger and eight-second fault injection are not part of the
+current checkpoint. They proved the retained driver, timer, workqueue cancel,
+transport, and reconnect paths while making the teardown race observable. The
+targeted run covered upload/play, automatic timer stop, and same-ID replay; it
+did not issue the explicit stop or erase client calls.
+
+Relative to the verified image, the build-only linked pair added 3,256 B of
+text and 48 B of BSS, reducing main-bank headroom by 48 B. Those values belong
+only to exact image `5491f7e...`; the current unlinked build is the exact
+`db3ecf...` image above. The current architecture still has one ordinary
 32-entry TinyUSB event queue with no spill state, a transient long-configuration
 buffer rather than a permanent 4 KiB array, metadata-only physical async slots,
 and stack-owned admission waiters. Exact structure/block sizes below must be
