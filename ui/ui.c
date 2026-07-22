@@ -96,7 +96,7 @@ enum {
     UI_EVT_LAYOUT          = 1u << 7,
 };
 
-TaskHandle_t ui_handle;
+static TaskHandle_t ui_owner;
 
 static volatile uint32_t ui_led_pattern[MAX_LED];
 static volatile bool ui_led_loop[MAX_LED];
@@ -105,11 +105,11 @@ static volatile uint32_t ui_ws2812_pattern;
 static volatile bool ui_ws2812_loop;
 static volatile uint32_t ui_ws2812_color;
 
-static volatile uint32_t ui_warn_count;
-static volatile uint32_t ui_err_count;
-static volatile uint32_t ui_cdc_drop_writes;
-static volatile uint32_t ui_cdc_drop_bytes;
-static volatile bool ui_cdc_connected;
+static uint32_t ui_warn_count;
+static uint32_t ui_err_count;
+static uint32_t ui_cdc_drop_writes;
+static uint32_t ui_cdc_drop_bytes;
+static bool ui_cdc_connected;
 static char ui_layout_name[UI_LAYOUT_NAME_LEN + 1u];
 static char ui_output_events[UI_OUTPUT_EVENTS_MAX_ROWS][UI_OUTPUT_EVENT_LINE_LEN + 1u];
 static volatile uint8_t ui_output_events_head;
@@ -122,17 +122,31 @@ static inline uint32_t rot_r32(uint32_t v)
     return (v >> 1) | (v << 31);
 }
 
+/*
+ * Every current UI wake producer runs in task context: TinyUSB device
+ * callbacks run in tusb_device_task, UI ticks run in the timer daemon, and
+ * layout/output updates run in application tasks. ISR-capable diagnostics
+ * publish counters below and deliberately do not wake the UI task.
+ */
+static void ui_notify_owner(uint32_t events)
+{
+    TaskHandle_t owner = __atomic_load_n(&ui_owner, __ATOMIC_ACQUIRE);
+
+    if (owner)
+        (void)xTaskNotify(owner, events, eSetBits);
+}
+
 static void ui_tick_timer_cb(TimerHandle_t timer)
 {
     (void)timer;
-    xTaskNotify(ui_handle, UI_EVT_TICK, eSetBits);
+    ui_notify_owner(UI_EVT_TICK);
 }
 
 void ui_led_set_pattern(uint8_t led_idx, uint32_t pattern, bool loop)
 {
     ui_led_pattern[led_idx] = pattern;
     ui_led_loop[led_idx] = loop;
-    xTaskNotify(ui_handle, led_idx ? UI_EVT_LED1 : UI_EVT_LED0, eSetBits);
+    ui_notify_owner(led_idx ? UI_EVT_LED1 : UI_EVT_LED0);
 }
 
 void ui_ws2812_set(uint32_t color, uint32_t pattern, bool loop)
@@ -140,40 +154,39 @@ void ui_ws2812_set(uint32_t color, uint32_t pattern, bool loop)
     ui_ws2812_color = color;
     ui_ws2812_pattern = pattern;
     ui_ws2812_loop = loop;
-    xTaskNotify(ui_handle, UI_EVT_WS2812, eSetBits);
+    ui_notify_owner(UI_EVT_WS2812);
 }
 
 void ui_notify_warn(void)
 {
-    ui_warn_count++;
+    /* Task-context async_msg() producers may collide across either core. */
+    (void)__atomic_fetch_add(&ui_warn_count, 1u, __ATOMIC_RELAXED);
 }
 
 void ui_notify_err(void)
 {
-    ui_err_count++;
+    (void)__atomic_fetch_add(&ui_err_count, 1u, __ATOMIC_RELAXED);
 }
 
 void ui_notify_cdc_drop(size_t bytes)
 {
-    ui_cdc_drop_writes++;
-    ui_cdc_drop_bytes += (uint32_t)bytes;
+    (void)__atomic_fetch_add(&ui_cdc_drop_writes, 1u, __ATOMIC_RELAXED);
+    (void)__atomic_fetch_add(&ui_cdc_drop_bytes, (uint32_t)bytes,
+                             __ATOMIC_RELAXED);
 }
 
 void ui_notify_cdc_connected(void)
 {
-    ui_cdc_connected = true;
+    __atomic_store_n(&ui_cdc_connected, true, __ATOMIC_RELEASE);
 }
 
 void ui_notify_cdc_disconnected(void)
 {
-    ui_cdc_connected = false;
+    __atomic_store_n(&ui_cdc_connected, false, __ATOMIC_RELEASE);
 }
 
 void ui_notify_output_event(const char *s)
 {
-    if (!ui_handle)
-        return;
-
     char line[UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
 
     (void)snprintf(line, sizeof(line), "%s", s);
@@ -185,17 +198,14 @@ void ui_notify_output_event(const char *s)
     if (ui_output_events_count != UI_OUTPUT_EVENTS_MAX_ROWS)
         ui_output_events_count++;
 
-    xTaskNotify(ui_handle, UI_EVT_OUTPUT_EVENTS, eSetBits);
+    ui_notify_owner(UI_EVT_OUTPUT_EVENTS);
 }
 
 void ui_notify_layout(const char *name)
 {
-    if (!ui_handle)
-        return;
-
     (void)snprintf(ui_layout_name, sizeof(ui_layout_name), "%s", name);
 
-    xTaskNotify(ui_handle, UI_EVT_LAYOUT, eSetBits);
+    ui_notify_owner(UI_EVT_LAYOUT);
 }
 
 typedef enum {
@@ -235,10 +245,12 @@ static void ui_render_boot(ui_state_t *ui)
 
 static void ui_read_stats(ui_state_t *ui)
 {
-    ui->err_count = ui_err_count;
-    ui->warn_count = ui_warn_count;
-    ui->cdc_drop_writes = ui_cdc_drop_writes;
-    ui->cdc_drop_bytes = ui_cdc_drop_bytes;
+    ui->err_count = __atomic_load_n(&ui_err_count, __ATOMIC_RELAXED);
+    ui->warn_count = __atomic_load_n(&ui_warn_count, __ATOMIC_RELAXED);
+    ui->cdc_drop_writes = __atomic_load_n(&ui_cdc_drop_writes,
+                                           __ATOMIC_RELAXED);
+    ui->cdc_drop_bytes = __atomic_load_n(&ui_cdc_drop_bytes,
+                                          __ATOMIC_RELAXED);
 }
 
 static void ui_draw_diagnostics(ui_state_t *ui)
@@ -311,25 +323,35 @@ static void ui_update_status_indicators(ui_state_t *ui)
 {
     const uint8_t warn_span[UI_STATUS_CDC_WARN_PX] = {0x5Fu, 0x00u};
     const uint8_t clear_span[UI_STATUS_CDC_WARN_PX] = {0x00u, 0x00u};
+    bool cdc_connected = __atomic_load_n(&ui_cdc_connected,
+                                          __ATOMIC_ACQUIRE);
+    uint32_t err_count = __atomic_load_n(&ui_err_count, __ATOMIC_RELAXED);
+    uint32_t warn_count = __atomic_load_n(&ui_warn_count, __ATOMIC_RELAXED);
+    uint32_t drop_writes = __atomic_load_n(&ui_cdc_drop_writes,
+                                            __ATOMIC_RELAXED);
+    uint32_t drop_bytes = __atomic_load_n(&ui_cdc_drop_bytes,
+                                           __ATOMIC_RELAXED);
 
-    if (ui->cdc_connected != ui_cdc_connected) {
-        ui->cdc_connected = ui_cdc_connected;
+    if (ui->cdc_connected != cdc_connected) {
+        ui->cdc_connected = cdc_connected;
         const char *s = ui->cdc_connected ? "CDC" : "   ";
         ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, s, UI_STATUS_CDC_LEN);
         ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
-                                (ui->cdc_connected && ui_cdc_drop_writes) ? warn_span : clear_span,
+                                (ui->cdc_connected && drop_writes) ?
+                                    warn_span : clear_span,
                                 UI_STATUS_CDC_WARN_PX);
     }
 
-    if (ui->err_count != ui_err_count ||
-        ui->warn_count != ui_warn_count ||
-        ui->cdc_drop_writes != ui_cdc_drop_writes ||
-        ui->cdc_drop_bytes != ui_cdc_drop_bytes) {
+    if (ui->err_count != err_count ||
+        ui->warn_count != warn_count ||
+        ui->cdc_drop_writes != drop_writes ||
+        ui->cdc_drop_bytes != drop_bytes) {
         ui_read_stats(ui);
         ui_draw_diagnostics(ui);
         ui_draw_output_events(ui);
         ssd1306_write_page_span(ui->disp, 0, UI_STATUS_CDC_WARN_X,
-                                (ui->cdc_connected && ui->cdc_drop_writes) ? warn_span : clear_span,
+                                (ui->cdc_connected && drop_writes) ?
+                                    warn_span : clear_span,
                                 UI_STATUS_CDC_WARN_PX);
     }
 }
@@ -340,7 +362,7 @@ static void ui_render_status_screen(ui_state_t *ui)
 
     ssd1306_clear(ui->disp);
     ssd1306_putn6x8(ui->disp, 0, UI_STATUS_MODE_COL, mode == MSC ? "MSC" : "HID", UI_STATUS_MODE_LEN);
-    ui->cdc_connected = ui_cdc_connected;
+    ui->cdc_connected = __atomic_load_n(&ui_cdc_connected, __ATOMIC_ACQUIRE);
     ssd1306_putn6x8(ui->disp, 0, UI_STATUS_CDC_COL, ui->cdc_connected ? "CDC" : "   ", UI_STATUS_CDC_LEN);
     const uint8_t warn_span[UI_STATUS_CDC_WARN_PX] = {0x5Fu, 0x00u};
     const uint8_t clear_span[UI_STATUS_CDC_WARN_PX] = {0x00u, 0x00u};
@@ -394,6 +416,9 @@ static void ui_tick_status_screen(ui_state_t *ui)
 void ui_task(void *pvParameters)
 {
     const config_t *config = (const config_t *)pvParameters;
+
+    /* Publish before reading state so producers cannot miss the startup edge. */
+    __atomic_store_n(&ui_owner, xTaskGetCurrentTaskHandle(), __ATOMIC_RELEASE);
 
     ui_state_t ui = {0};
 

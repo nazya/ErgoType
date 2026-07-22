@@ -2626,7 +2626,10 @@ static const struct hid_usage_id mt_grabbed_usages[] = {
 	{ HID_ANY_ID - 1, HID_ANY_ID - 1, HID_ANY_ID - 1}
 };
 
-static struct hid_driver mt_driver = {
+// static struct hid_driver mt_driver = {
+// Firmware stores imported driver descriptors in flash; mutable registration
+// state lives in the linker-owned hid_driver_runtime object.
+static const struct hid_driver mt_driver = {
 	.name = "hid-multitouch",
 	.id_table = mt_devices,
 	.probe = mt_probe,

@@ -53,6 +53,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "jconfig.h"
 #include "devmon.h"
 #include "keys.h"
+#include "stdio_tusb_cdc.h"
 
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
@@ -392,9 +393,20 @@ void keyscan_task(void* pvParameters) {
         input_bitmap_set(code, port_dev.keybit);
     }
     port_dev.ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
-    configASSERT(port_dev.ev_queue);
+    if (!port_dev.ev_queue) {
+        async_msg("ERR: KEYSCAN_QUEUE");
+        vTaskDelete(NULL);
+        return;
+    }
+
     int add_rc = devmon_add_device(&port_dev);
-    configASSERT(add_rc == 0);
+    if (add_rc != 0) {
+        async_msg("ERR: KEYSCAN_DEVMON");
+        vQueueDelete(port_dev.ev_queue);
+        vTaskDelete(NULL);
+        return;
+    }
+
     keyscan_event_queue = port_dev.ev_queue;
 
     if (0) {

@@ -141,9 +141,8 @@ set(TINYUSB_USBH_REATTACH_PORT [=[
 }
 
 // Upstream TinyUSB: no equivalent; host-owner attach without queue recursion.
-bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
-  TU_VERIFY(!_dev0.enumerating && _ctrl_xfer.stage == CONTROL_STAGE_IDLE);
-
+static bool usbh_port_attach_start_on_host(uint8_t rhport, uint8_t hub_addr,
+                                           uint8_t hub_port) {
   hcd_event_t event = {
     .rhport = rhport,
     .event_id = HCD_EVENT_DEVICE_ATTACH,
@@ -158,13 +157,39 @@ bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port
   return enum_new_device(&event);
 }
 
+bool usbh_port_attach_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
+  if (_dev0.enumerating || _ctrl_xfer.stage != CONTROL_STAGE_IDLE) return false;
+  // A reset continuation may supersede an older retained ATTACH, but it must
+  // never bypass that topology's still-live Linux/cache generation.
+  if (!usbh_port_deferred_attach_direct_ready_on_host(
+          rhport, hub_addr, hub_port)) return false;
+  usbh_port_deferred_attach_consume_direct_on_host(
+      rhport, hub_addr, hub_port);
+  return usbh_port_attach_start_on_host(rhport, hub_addr, hub_port);
+}
+
+// Upstream TinyUSB: its removal is synchronous. Firmware calls this only from
+// the host owner after the old Linux/cache generation reaches final release.
+void usbh_port_replace_ready_on_host(uint8_t rhport, uint8_t hub_addr,
+                                     uint8_t hub_port) {
+  usbh_port_deferred_attach_retired_on_host(rhport, hub_addr, hub_port);
+}
+
 // Upstream TinyUSB: no equivalent; atomic raced-epoch close and direct attach.
 bool usbh_port_reenumerate_on_host(uint8_t rhport, uint8_t hub_addr, uint8_t hub_port) {
-  TU_VERIFY(!_dev0.enumerating && _ctrl_xfer.stage == CONTROL_STAGE_IDLE);
-  TU_VERIFY(tuh_reenumerate_begin_cb(rhport, hub_addr, hub_port));
+  if (_dev0.enumerating || _ctrl_xfer.stage != CONTROL_STAGE_IDLE) return false;
+  if (!usbh_port_deferred_attach_direct_ready_on_host(
+          rhport, hub_addr, hub_port)) return false;
+  bool const reenumerate =
+      tuh_reenumerate_begin_cb(rhport, hub_addr, hub_port);
+  if (!reenumerate) return false;
+  // Authorization may fail on a raced parent/reset epoch; consume only after
+  // it succeeds so that failure cannot lose the retained physical ATTACH.
+  usbh_port_deferred_attach_consume_direct_on_host(
+      rhport, hub_addr, hub_port);
 
   process_removing_device(rhport, hub_addr, hub_port);
-  return usbh_port_attach_on_host(rhport, hub_addr, hub_port);
+  return usbh_port_attach_start_on_host(rhport, hub_addr, hub_port);
 }
 
 static uint8_t get_new_address(bool is_hub) {
@@ -188,60 +213,6 @@ if(NOT TINYUSB_USBH_SECOND_REATTACH EQUAL -1)
 endif()
 string(REPLACE "${TINYUSB_USBH_REATTACH_UPSTREAM}"
        "${TINYUSB_USBH_REATTACH_PORT}"
-       TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
-
-# Upstream TinyUSB has no exact-owner recovery after an HCD completion event is
-# lost. Preserve its ordinary completion helper verbatim, then add a build-local
-# host-owner entry which matches daddr + callback + user_data before synthesizing
-# the same terminal TIMEOUT giveback.
-set(TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM [=[
-static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
-]=])
-set(TINYUSB_USBH_CONTROL_RECOVER_PORT [=[
-// Upstream TinyUSB: no equivalent; firmware must terminate an exact
-// callback/user_data owner after bounded PIO completion-drain failure.
-int usbh_port_control_recover_on_host(uint8_t daddr,
-                                      tuh_xfer_cb_t complete_cb,
-                                      uintptr_t user_data) {
-  if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
-    return 0;
-  }
-
-  if (_ctrl_xfer.daddr != daddr ||
-      _ctrl_xfer.complete_cb != complete_cb ||
-      _ctrl_xfer.user_data != user_data) {
-    return -1;
-  }
-
-  (void) hcd_edpt_abort_xfer(usbh_get_rhport(daddr), daddr, 0);
-  _control_xfer_complete(daddr, XFER_RESULT_TIMEOUT);
-  return 1;
-}
-
-static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
-]=])
-string(FIND "${TINYUSB_USBH_PORT_CONTENT}"
-       "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
-       TINYUSB_USBH_CONTROL_RECOVER_OFFSET)
-if(TINYUSB_USBH_CONTROL_RECOVER_OFFSET EQUAL -1)
-    message(FATAL_ERROR
-            "Pinned TinyUSB control-complete anchor changed; re-audit the port")
-endif()
-string(LENGTH "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
-       TINYUSB_USBH_CONTROL_RECOVER_LENGTH)
-math(EXPR TINYUSB_USBH_CONTROL_RECOVER_TAIL_OFFSET
-     "${TINYUSB_USBH_CONTROL_RECOVER_OFFSET} + ${TINYUSB_USBH_CONTROL_RECOVER_LENGTH}")
-string(SUBSTRING "${TINYUSB_USBH_PORT_CONTENT}"
-       ${TINYUSB_USBH_CONTROL_RECOVER_TAIL_OFFSET} -1
-       TINYUSB_USBH_CONTROL_RECOVER_TAIL)
-string(FIND "${TINYUSB_USBH_CONTROL_RECOVER_TAIL}"
-       "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
-       TINYUSB_USBH_SECOND_CONTROL_RECOVER)
-if(NOT TINYUSB_USBH_SECOND_CONTROL_RECOVER EQUAL -1)
-    message(FATAL_ERROR "TinyUSB control-complete anchor is not unique")
-endif()
-string(REPLACE "${TINYUSB_USBH_CONTROL_RECOVER_UPSTREAM}"
-       "${TINYUSB_USBH_CONTROL_RECOVER_PORT}"
        TINYUSB_USBH_PORT_CONTENT "${TINYUSB_USBH_PORT_CONTENT}")
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/usb_host/tinyusb-usbh-enum-port.cmake")
@@ -444,30 +415,41 @@ bool hidh_open(uint8_t rhport, uint8_t daddr, tusb_desc_interface_t const* desc_
   TU_ASSERT(p_hid); // not enough interface, try to increase CFG_TUH_HID
   tu_memclr(p_hid, sizeof(*p_hid));
 
-  // Open up to the number of endpoints advertised by this interface. Linux
-  // likewise keeps the descriptors it actually finds when fewer are present.
-  uint8_t opened_endpoints = 0;
+  // Upstream usbhid_start() ignores non-interrupt endpoints and retains only
+  // the first interrupt endpoint in each direction. Count every descriptor
+  // against bNumEndpoints, but open only those two transport channels. The
+  // separately bounded raw snapshot retains the descriptors used by Linux.
+  uint8_t described_endpoints = 0;
   uint8_t ep_in = 0;
   uint8_t ep_out = 0;
   uint16_t epin_size = 0;
   uint16_t epout_size = 0;
   p_desc = (uint8_t const*) desc_itf + desc_itf->bLength;
-  while (p_desc < desc_end && opened_endpoints < desc_itf->bNumEndpoints) {
+  while (p_desc < desc_end &&
+         described_endpoints < desc_itf->bNumEndpoints) {
     uint8_t const desc_len = tu_desc_len(p_desc);
     if (TUSB_DESC_INTERFACE == tu_desc_type(p_desc)) break;
 
     if (TUSB_DESC_ENDPOINT == tu_desc_type(p_desc)) {
       tusb_desc_endpoint_t const* desc_ep = (tusb_desc_endpoint_t const*) p_desc;
-      TU_ASSERT(tuh_edpt_open(daddr, desc_ep));
+      described_endpoints++;
 
-      if (tu_edpt_dir(desc_ep->bEndpointAddress) == TUSB_DIR_IN) {
-        ep_in = desc_ep->bEndpointAddress;
-        epin_size = tu_edpt_packet_size(desc_ep);
-      } else {
-        ep_out = desc_ep->bEndpointAddress;
-        epout_size = tu_edpt_packet_size(desc_ep);
+      if (desc_ep->bmAttributes.xfer == TUSB_XFER_INTERRUPT) {
+        bool const is_in =
+            tu_edpt_dir(desc_ep->bEndpointAddress) == TUSB_DIR_IN;
+        if ((is_in && !ep_in) || (!is_in && !ep_out)) {
+          // Keep the HCD side effect outside TinyUSB's assertion macro too.
+          bool const endpoint_opened = tuh_edpt_open(daddr, desc_ep);
+          TU_VERIFY(endpoint_opened);
+          if (is_in) {
+            ep_in = desc_ep->bEndpointAddress;
+            epin_size = tu_edpt_packet_size(desc_ep);
+          } else {
+            ep_out = desc_ep->bEndpointAddress;
+            epout_size = tu_edpt_packet_size(desc_ep);
+          }
+        }
       }
-      opened_endpoints++;
     }
     p_desc += desc_len;
   }
@@ -716,6 +698,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/devmon.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
+        # TinyUSB/FreeRTOS host transport glue. The hybrid usbhid adapters
+        # identify retained Linux semantics and structural boundaries in source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/tinyusb_hid.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/usbhid.c
@@ -726,7 +710,10 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
+        # Split devmon/FreeRTOS half of the Linux-shaped evdev adapter.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_client.c
+        # Linux-derived HID/input sources and explicitly marked registry glue
+        # below follow upstream-porting-rules.md.
         # Deferred hidraw calls are documented inline in hid-core.c.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-input.c
@@ -735,6 +722,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-quirks.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-haptic.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-multitouch.c
+        # USB-only Magic Mouse 2 / Trackpad 2; Bluetooth and legacy IDs remain
+        # visibly disabled beside the upstream match table in the source.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-magicmouse.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
@@ -760,7 +750,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # 573-selector Consumer array; require a dedicated heap stress pass.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-huawei.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-holtek-kbd.c
-        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-holtek-mouse.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-holtek-mouse.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-icade.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ite.c
         # Deferred: broad headset/speakerphone ANY_ID match is outside the

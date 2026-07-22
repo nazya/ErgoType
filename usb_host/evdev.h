@@ -1,3 +1,4 @@
+/* Firmware-only API between Linux-shaped evdev and the devmon/KeyD client. */
 #pragma once
 
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 
 struct input_dev;
 struct input_event;
+struct input_handle;
 struct evdev;
 struct evdev_client;
 struct ff_effect;
@@ -19,7 +21,8 @@ int evdev_prepare_input_device(struct input_dev *src, struct evdev *evdev,
 int evdev_publish_input_device(struct input_dev *src,
 			       struct evdev_client *client);
 bool evdev_client_is_published(const struct evdev_client *client);
-void evdev_unregister_device(struct evdev_client *dev);
+void evdev_unregister_device(struct evdev_client *client,
+			     struct input_handle *handle);
 void __pass_event(struct evdev_client *dev,
 		  const struct input_event *ev);
 int evdev_client_write(struct evdev_client *client,
@@ -29,5 +32,5 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id);
 int evdev_write(struct evdev *evdev, const struct port_input_event *events, size_t count);
 int evdev_upload_ff(struct evdev *evdev, struct ff_effect *effect, struct file *file);
 int evdev_erase_ff(struct evdev *evdev, int effect_id, struct file *file);
-int evdev_activate_hid(struct hid_device *hid);
+void evdev_activate_hid(struct hid_device *hid);
 int evdev_init(void);

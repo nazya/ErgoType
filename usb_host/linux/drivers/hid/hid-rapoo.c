@@ -44,8 +44,14 @@ static int rapoo_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	}
 
 	input = devm_input_allocate_device(&hdev->dev);
-	if (!input)
-		return -ENOMEM;
+	// if (!input)
+	// 	return -ENOMEM;
+	// Upstream leaves the successful hid_hw_start() active when this later
+	// allocation fails. Use the shared stop path before failed-probe cleanup.
+	if (!input) {
+		ret = -ENOMEM;
+		goto err_stop_hw;
+	}
 
 	input->name = "Rapoo 2.4G Wireless Mouse";
 	input->phys = "rapoo/input1";
@@ -59,11 +65,21 @@ static int rapoo_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	__set_bit(KEY_FORWARD, input->keybit);
 
 	ret = input_register_device(input);
-	if (ret)
-		return ret;
+	// if (ret)
+	// 	return ret;
+	// The same upstream post-start lifetime gap applies to registration failure.
+	if (ret) {
+		goto err_stop_hw;
+	}
 
 	hid_set_drvdata(hdev, input);
 
+	return ret;
+
+err_stop_hw:
+	// Upstream has no error label here; release HID input and transport state
+	// before the ordinary failed-probe device/devres cleanup runs.
+	hid_hw_stop(hdev);
 	return ret;
 }
 

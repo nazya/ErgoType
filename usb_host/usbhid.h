@@ -1,3 +1,4 @@
+/* Firmware-only public lifecycle API for the TinyUSB-to-Linux HID adapter. */
 #ifndef USB_HOST_USBHID_H
 #define USB_HOST_USBHID_H
 

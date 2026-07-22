@@ -16,6 +16,7 @@
 #include "pmw3360.h"
 #include "pmw3389.h"
 #include "pointer.h"
+#include "stdio_tusb_cdc.h"
 
 static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;
@@ -148,8 +149,8 @@ void pointing_device_task(void *pvParameters)
     config_t *config = pvParameters;
     struct port_input_dev pmw3360_devices[MAX_PMW3360];
     struct port_input_dev pmw3389_devices[MAX_PMW3389];
-    QueueHandle_t pmw3360_queues[MAX_PMW3360];
-    QueueHandle_t pmw3389_queues[MAX_PMW3389];
+    QueueHandle_t pmw3360_queues[MAX_PMW3360] = {0};
+    QueueHandle_t pmw3389_queues[MAX_PMW3389] = {0};
     struct filter_state *pmw3360_filters = NULL;
     struct filter_state *pmw3389_filters = NULL;
     accel_prepare(&config->move_accel);
@@ -182,9 +183,17 @@ void pointing_device_task(void *pvParameters)
         input_bitmap_set(REL_WHEEL, pmw3360_devices[i].relbit);
         input_bitmap_set(REL_HWHEEL, pmw3360_devices[i].relbit);
         pmw3360_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
-        configASSERT(pmw3360_devices[i].ev_queue);
+        if (!pmw3360_devices[i].ev_queue) {
+            async_msg("ERR: PMW3360_QUEUE");
+            continue;
+        }
         int add_rc = devmon_add_device(&pmw3360_devices[i]);
-        configASSERT(add_rc == 0);
+        if (add_rc != 0) {
+            async_msg("ERR: PMW3360_DEVMON");
+            vQueueDelete(pmw3360_devices[i].ev_queue);
+            pmw3360_devices[i].ev_queue = NULL;
+            continue;
+        }
         pmw3360_queues[i] = pmw3360_devices[i].ev_queue;
 
         pmw3360_init(&config->pmw3360[i]);
@@ -206,9 +215,17 @@ void pointing_device_task(void *pvParameters)
         input_bitmap_set(REL_WHEEL, pmw3389_devices[i].relbit);
         input_bitmap_set(REL_HWHEEL, pmw3389_devices[i].relbit);
         pmw3389_devices[i].ev_queue = xQueueCreate(DEVICE_EVENT_QUEUE_LEN, sizeof(struct port_input_event));
-        configASSERT(pmw3389_devices[i].ev_queue);
+        if (!pmw3389_devices[i].ev_queue) {
+            async_msg("ERR: PMW3389_QUEUE");
+            continue;
+        }
         int add_rc = devmon_add_device(&pmw3389_devices[i]);
-        configASSERT(add_rc == 0);
+        if (add_rc != 0) {
+            async_msg("ERR: PMW3389_DEVMON");
+            vQueueDelete(pmw3389_devices[i].ev_queue);
+            pmw3389_devices[i].ev_queue = NULL;
+            continue;
+        }
         pmw3389_queues[i] = pmw3389_devices[i].ev_queue;
 
         pmw3389_init(&config->pmw3389[i]);
@@ -225,6 +242,8 @@ void pointing_device_task(void *pvParameters)
         vTaskDelay(1);
 
         for (uint8_t i = 0; i < config->nr_pmw3360; ++i) {
+            if (!pmw3360_queues[i])
+                continue;
             if (bits && !(bits & (1u << i)))
                 continue;
             int16_t dx = 0;
@@ -242,6 +261,8 @@ void pointing_device_task(void *pvParameters)
         }
 
         for (uint8_t i = 0; i < config->nr_pmw3389; ++i) {
+            if (!pmw3389_queues[i])
+                continue;
             if (bits && !(bits & (1u << (MAX_PMW3360 + i))))
                 continue;
             int16_t dx = 0;

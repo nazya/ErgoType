@@ -36,35 +36,26 @@ static volatile uint32_t malloc_failure_count;
 
 void vApplicationMallocFailedHook(void)
 {
+  uint32_t count;
+
   /*
    * heap_4 reports failure after leaving its allocator lock and then returns
-   * NULL to the caller. Keep that contract intact: disabling interrupts here
-   * prevents normal -ENOMEM unwinding and leaves this core wedged.
+   * NULL to the caller. Keep that contract intact: a FreeRTOS task critical
+   * region here can prevent normal -ENOMEM unwinding and wedge this core.
+   * The compiler atomic is non-sleeping and also works before the scheduler.
    */
-  if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
-    /* Before SMP scheduling starts, only the boot core can allocate. */
-    if (malloc_failure_count != UINT32_MAX)
-      malloc_failure_count++;
-  } else {
-    taskENTER_CRITICAL();
-    if (malloc_failure_count != UINT32_MAX)
-      malloc_failure_count++;
-    taskEXIT_CRITICAL();
-  }
+  count = __atomic_load_n(&malloc_failure_count, __ATOMIC_RELAXED);
+  while (count != UINT32_MAX &&
+         !__atomic_compare_exchange_n(&malloc_failure_count, &count,
+                                      count + 1u, false,
+                                      __ATOMIC_RELAXED,
+                                      __ATOMIC_RELAXED))
+    ;
 }
 
 uint32_t freertos_malloc_failure_count(void)
 {
-  uint32_t count;
-
-  if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
-    count = malloc_failure_count;
-  } else {
-    taskENTER_CRITICAL();
-    count = malloc_failure_count;
-    taskEXIT_CRITICAL();
-  }
-  return count;
+  return __atomic_load_n(&malloc_failure_count, __ATOMIC_RELAXED);
 }
 
 void vApplicationStackOverflowHook(xTaskHandle pxTask, char *pcTaskName)

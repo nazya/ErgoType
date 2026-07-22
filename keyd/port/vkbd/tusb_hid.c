@@ -18,8 +18,6 @@
 #include "keyd.h"
 #include "vkbd_event.h"
 
-#define HID_READY_WAIT_TICKS 1
-
 #define HID_CTRL 0x1
 #define HID_RIGHTCTRL 0x10
 #define HID_SHIFT 0x2
@@ -322,6 +320,28 @@ static uint8_t mods;
 static uint8_t keys[6];
 static uint8_t mouse_buttons;
 static uint8_t nkro_keys[HID_NKRO_KEY_BYTES];
+static TaskHandle_t vkbd_hid_task_handle;
+
+/*
+ * TODO: Filter wakeups by HID instance if vkbd gains multiple waiters or
+ * profiling shows meaningful cross-endpoint wakeups. A shared notification is
+ * intentional while the sole vkbd task always rechecks the requested instance.
+ */
+void vkbd_hid_notify_recheck(void)
+{
+	TaskHandle_t task = __atomic_load_n(&vkbd_hid_task_handle,
+					  __ATOMIC_ACQUIRE);
+
+	if (task)
+		(void)xTaskNotifyGive(task);
+}
+
+static void vkbd_hid_wait_ready(uint8_t instance)
+{
+	/* A pending notification closes the race between this check and sleep. */
+	while (!tud_hid_n_ready(instance))
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
 
 static uint8_t get_modifier(int code)
 {
@@ -416,8 +436,7 @@ static void send_boot_keyboard_report(void)
 			usages[i] = keyd_hid_table[keys[i]].usage;
 	}
 
-	while (!tud_hid_n_ready(HID_KEYBOARD_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
 
 	tud_hid_n_keyboard_report(HID_KEYBOARD_INSTANCE, 0, mods, usages);
 }
@@ -443,8 +462,7 @@ static int update_nkro_key_state(uint16_t code, int state, uint8_t page)
 
 static void send_nkro_report(void)
 {
-	while (!tud_hid_n_ready(HID_KEYBOARD_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
 
 	tud_hid_n_report(HID_KEYBOARD_INSTANCE, REPORT_ID_KEYBOARD, nkro_keys, sizeof(nkro_keys));
 }
@@ -460,8 +478,7 @@ static void send_consumer_report(void)
 			usages[i] = keyd_hid_table[keys[i]].usage;
 	}
 
-	while (!tud_hid_n_ready(HID_KEYBOARD_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
 
 	tud_hid_n_report(HID_KEYBOARD_INSTANCE, REPORT_ID_CONSUMER, usages, sizeof(usages));
 }
@@ -474,8 +491,7 @@ static void mouse_scroll(int16_t x, int16_t y)
 		.pan = x,
 	};
 
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	/* TinyUSB: wheel=vertical, pan=horizontal. */
 	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
@@ -489,8 +505,7 @@ static void mouse_move(int16_t x, int16_t y)
 		.y = y,
 	};
 
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
@@ -506,16 +521,14 @@ static void mouse_button(uint8_t buttons, int state)
 		.buttons = mouse_buttons,
 	};
 
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_scroll_boot(int16_t x, int16_t y)
 {
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	tud_hid_n_mouse_report(
 		HID_MOUSE_INSTANCE,
@@ -530,8 +543,7 @@ static void mouse_scroll_boot(int16_t x, int16_t y)
 
 static void mouse_move_boot(int16_t x, int16_t y)
 {
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	tud_hid_n_mouse_report(
 		HID_MOUSE_INSTANCE,
@@ -551,8 +563,7 @@ static void mouse_button_boot(uint8_t buttons, int state)
 	else
 		mouse_buttons &= (uint8_t)~buttons;
 
-	while (!tud_hid_n_ready(HID_MOUSE_INSTANCE))
-		vTaskDelay(HID_READY_WAIT_TICKS);
+	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
 
 	tud_hid_n_mouse_report(HID_MOUSE_INSTANCE, 0, mouse_buttons, 0, 0, 0, 0);
 }
@@ -560,6 +571,8 @@ static void mouse_button_boot(uint8_t buttons, int state)
 void vkbd_hid_nkro_task(void *pvParameters)
 {
 	(void)pvParameters;
+	__atomic_store_n(&vkbd_hid_task_handle, xTaskGetCurrentTaskHandle(),
+			 __ATOMIC_RELEASE);
 
 	vkbd_event_t event;
 
@@ -602,6 +615,8 @@ void vkbd_hid_nkro_task(void *pvParameters)
 void vkbd_hid_boot_task(void *pvParameters)
 {
 	(void)pvParameters;
+	__atomic_store_n(&vkbd_hid_task_handle, xTaskGetCurrentTaskHandle(),
+			 __ATOMIC_RELEASE);
 
 	vkbd_event_t event;
 

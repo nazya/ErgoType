@@ -1,6 +1,5 @@
 #include "stdio_tusb_cdc.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #include "tusb.h"
@@ -26,7 +25,6 @@ extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 // Optional producer throttling when the pending ring is close to full.
 // Helps slow producer a bit so USB task can drain, reducing drops.
 // All values in ticks/bytes (no ms conversion inside).
-#define THROTTLE_MIN_FREE_BUFSIZE 512u
 #define THROTTLE_FIRST_WAIT_TICKS (pdMS_TO_TICKS(1024u))
 #define THROTTLE_MAX_WAIT_TICKS 16u
 #define THROTTLE_WAIT_TICKS 2u
@@ -46,6 +44,13 @@ static volatile uint8_t async_msg_pending;
 
 static void stdio_tusb_cdc_kick_cb(void *);
 
+/*
+ * TODO: usbd_defer_func() is valid only after tusb_init() has created the
+ * device event queue. A short logging window remains before main creates the
+ * higher-priority TUD task; the hardware-tested normal boot fits in the ring,
+ * but an early async diagnostic or verbose-log overflow does not have a safe
+ * wake path yet. Resolve that policy in the main repository first.
+ */
 void _async_msg(const char *s)
 {
 	if (async_msg_pending) {
@@ -53,8 +58,9 @@ void _async_msg(const char *s)
 		return;
 	}
 
-	snprintf(async_msgbuf, sizeof(async_msgbuf) - 1u, "%s", s);
-	async_msg_len = strlen(async_msgbuf);
+	/* Fixed diagnostics do not need newlib's large snprintf() stack frame. */
+	async_msg_len = strnlen(s, ASYNC_MSG_TEXT_MAX);
+	memcpy(async_msgbuf, s, async_msg_len);
 	async_msgbuf[async_msg_len++] = '\r';
 	async_msgbuf[async_msg_len++] = '\n';
 	async_msg_pending = 1;
@@ -62,6 +68,12 @@ void _async_msg(const char *s)
 	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
 }
 
+/*
+ * TODO: Revisit only after the equivalent logger change is hardware-proven in
+ * the main repository. A ring-space event may replace the two-tick retries,
+ * but must preserve the first 1024-ms minicom grace and 50-ms DTR settle.
+ * The bounded policy below is the current hardware-tested behavior.
+ */
 static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
 {
     static bool first_throttle = true;

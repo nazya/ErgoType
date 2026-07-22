@@ -13,10 +13,10 @@ struct input_value {
 };
 
 /*
- * Work3 carried a firmware proxy ABI here for copied input batches, raw HID
- * usage taps, device snapshots, and FF-by-id helpers. That ABI is not upstream
- * Linux and is deferred in this asynchronous host slice; keep only the active
- * Linux input definitions and the final KeyD boundary declarations below.
+ * The earlier firmware port carried a proxy ABI here for copied input batches,
+ * raw HID usage taps, device snapshots, and FF-by-id helpers. That ABI is not
+ * upstream Linux and is deferred in this asynchronous host slice; keep only the
+ * active Linux input definitions and the final KeyD boundary declarations.
  */
 
 /* INPUT_CLK_* order follows upstream; port ktime_t stores one scalar value. */
@@ -142,9 +142,9 @@ struct input_dev {
 	struct input_handle *grab;
 
 	spinlock_t event_lock;
-	// Upstream Linux: no equivalent field. The compatibility spinlock cannot
-	// provide task-to-task exclusion, so this mutex implements event_lock's
-	// active task-context critical sections on the firmware port.
+	// Upstream Linux: no equivalent field. Compatibility spinlock operations
+	// are compile-gated, so this mutex implements event_lock's active
+	// task-context critical sections on the firmware port.
 	struct mutex port_event_mutex;
 	struct mutex mutex;
 
@@ -240,20 +240,20 @@ static inline void *input_get_drvdata(struct input_dev *dev)
 	return dev->dev.data;
 }
 
-static inline struct input_dev *input_get_device(struct input_dev *dev)
-{
-	// return dev ? to_input_dev(get_device(&dev->dev)) : NULL;
-	// Port device core has no refcounted struct device lifetime; keep input_dev ownership explicit.
-	return dev;
-}
-
-static inline void input_put_device(struct input_dev *dev)
-{
-	// if (dev)
-	// 	put_device(&dev->dev);
-	// Port device core has no refcounted struct device lifetime; input_unregister_device() frees directly.
-	(void)dev;
-}
+// static inline struct input_dev *input_get_device(struct input_dev *dev)
+// {
+// 	return dev ? to_input_dev(get_device(&dev->dev)) : NULL;
+// }
+// static inline void input_put_device(struct input_dev *dev)
+// {
+// 	if (dev)
+// 		put_device(&dev->dev);
+// }
+// The reduced device core has no input_dev reference-count lifetime.
+struct input_dev *input_get_device(struct input_dev *dev)
+	__attribute__((error("input_get_device needs the firmware device refcount bridge")));
+void input_put_device(struct input_dev *dev)
+	__attribute__((error("input_put_device needs the firmware device refcount bridge")));
 
 struct input_dev *input_allocate_device(void);
 struct input_dev *devm_input_allocate_device(struct device *dev);
@@ -261,31 +261,59 @@ void input_free_device(struct input_dev *dev);
 int input_register_device(struct input_dev *dev);
 void input_unregister_device(struct input_dev *dev);
 int input_register_handler(struct input_handler *handler);
-void input_unregister_handler(struct input_handler *handler);
+// void input_unregister_handler(struct input_handler *handler);
+// Runtime handler removal has no global input lifecycle/RCU bridge.
+void input_unregister_handler(struct input_handler *handler)
+	__attribute__((error("input handler removal needs the firmware lifecycle bridge")));
 bool input_match_device_id(const struct input_dev *dev,
 			   const struct input_device_id *id);
+// int input_handler_for_each_handle(struct input_handler *handler, void *data,
+// 				  int (*fn)(struct input_handle *handle, void *data));
+// The reduced handler list has no RCU read-side lifetime.
 int input_handler_for_each_handle(struct input_handler *handler, void *data,
-				  int (*fn)(struct input_handle *handle, void *data));
+				  int (*fn)(struct input_handle *handle, void *data))
+	__attribute__((error("input handler iteration needs the firmware RCU/lifecycle bridge")));
 int input_register_handle(struct input_handle *handle);
 void input_unregister_handle(struct input_handle *handle);
-int input_grab_device(struct input_handle *handle);
-void input_release_device(struct input_handle *handle);
+// int input_grab_device(struct input_handle *handle);
+// void input_release_device(struct input_handle *handle);
+// Public grab ownership needs the missing firmware RCU/lifecycle bridge.
+int input_grab_device(struct input_handle *handle)
+	__attribute__((error("input grab needs the firmware RCU/lifecycle ownership bridge")));
+void input_release_device(struct input_handle *handle)
+	__attribute__((error("input grab needs the firmware RCU/lifecycle ownership bridge")));
 int input_open_device(struct input_handle *handle);
 void input_close_device(struct input_handle *handle);
-int input_flush_device(struct input_handle *handle, struct file *file);
+// int input_flush_device(struct input_handle *handle, struct file *file);
+// There is no userspace flush owner or input lifecycle mutex in firmware.
+int input_flush_device(struct input_handle *handle, struct file *file)
+	__attribute__((error("input flush needs the firmware lifecycle bridge")));
 void input_event(struct input_dev *dev, unsigned int type, unsigned int code, int value);
 void input_inject_event(struct input_handle *handle, unsigned int type, unsigned int code, int value);
 void input_sync(struct input_dev *dev);
 void input_set_timestamp(struct input_dev *dev, ktime_t timestamp);
 ktime_t *input_get_timestamp(struct input_dev *dev);
-void input_reset_device(struct input_dev *dev);
+// void input_reset_device(struct input_dev *dev);
+// The retained body lacks Linux's lifecycle/event locks and has no active
+// caller. Fail compilation instead of silently enabling that unsafe contract.
+void input_reset_device(struct input_dev *dev)
+	__attribute__((error("input_reset_device needs the firmware input lifecycle lock bridge")));
 void input_set_abs_params(struct input_dev *dev, unsigned int axis,
 			  int min, int max, int fuzz, int flat);
 void input_copy_abs(struct input_dev *dst, unsigned int dst_axis,
 		    const struct input_dev *src, unsigned int src_axis);
 void input_abs_set_res(struct input_dev *dev, unsigned int axis, int resolution);
-void input_set_events_per_packet(struct input_dev *dev, unsigned int n_events);
+// static inline void input_set_events_per_packet(struct input_dev *dev,
+// 					       int n_events)
+// {
+// 	dev->hint_events_per_packet = n_events;
+// }
+// The reduced input core keeps the same helper out of line.
+void input_set_events_per_packet(struct input_dev *dev, int n_events);
 void input_enable_softrepeat(struct input_dev *dev, int delay, int period);
+// The input core uses this setup helper during registration. Firmware evdev
+// clears EV_REP before report publication, so the unlocked repeat callback
+// cannot run. A future consumer retaining EV_REP must add the event-lock bridge.
 void input_set_capability(struct input_dev *dev, unsigned int type, unsigned int code);
 int input_scancode_to_scalar(const struct input_keymap_entry *ke, unsigned int *scancode);
 int input_default_setkeycode(struct input_dev *dev,
@@ -299,8 +327,6 @@ void input_ff_destroy(struct input_dev *dev);
 int input_ff_upload(struct input_dev *dev, struct ff_effect *effect, struct file *file);
 int input_ff_erase(struct input_dev *dev, int effect_id, struct file *file);
 int input_ff_flush(struct input_dev *dev, struct file *file);
-struct input_dev *input_find_device_by_name(const char *name);
-int input_for_each_device(int (*fn)(struct input_dev *dev, void *data), void *data);
 static inline int input_abs_get_val(struct input_dev *dev, unsigned int axis)
 {
 	return dev->absinfo ? dev->absinfo[axis].value : 0;

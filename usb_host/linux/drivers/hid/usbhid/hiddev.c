@@ -7,6 +7,17 @@
  */
 
 /*
+ * PORTING STATUS — DO NOT LINK.
+ *
+ * This file is an inactive firmware hiddev proxy rewrite, not a line-preserving
+ * port of Linux hiddev.c. It intentionally replaces the fd/ioctl/fasync model
+ * with an in-process bounded proxy and therefore does not satisfy
+ * usb_host/upstream-porting-rules.md. Keep CONFIG_USB_HIDDEV/CMake disabled
+ * until the proxy is moved to firmware glue and this Linux-derived file is
+ * restored to an adjacent, reviewable upstream shape.
+ */
+
+/*
  *
  * Should you need to contact me, the author, you can do so either by
  * e-mail - mail your message to Paul Stewart <stewart@wetlogic.net>

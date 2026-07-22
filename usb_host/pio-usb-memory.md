@@ -3,6 +3,11 @@
 This note tracks the RAM cost of adding TinyUSB host through Pico-PIO-USB on
 RP2040.
 
+This is the authority for current RP2040 link layout, static pools, heap size,
+and measured structure/allocation costs. Dated test notes may preserve their
+historical numbers, but other current-design documents should link here rather
+than copy values which drift with every dirty build.
+
 The FreeRTOS heap size is critical for this firmware. Every byte moved into
 static `.data` or `.bss` reduces the maximum possible `configTOTAL_HEAP_SIZE`.
 Task stack tuning can improve free heap at runtime, but it does not fix a link
@@ -10,8 +15,8 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
-With the tested host branch and `configTOTAL_HEAP_SIZE = 232 * 1024`, the link
-failed with:
+The original 232 KiB heap experiment is historical evidence for the static-RAM
+ceiling. With that tested host branch, the link failed with:
 
 ```text
 region `RAM' overflowed by 13868 bytes
@@ -29,42 +34,41 @@ RAM overflow                13868 B
 Meaning:
 
 ```text
-232 KiB heap does not fit with the current host static RAM.
-218 KiB is the approximate upper heap size that should link with the same code.
+232 KiB heap did not fit with that host static RAM.
+About 218 KiB was the practical upper heap size for that code.
 ```
 
 This is not caused by FreeRTOS task stack depth alone. FreeRTOS task stacks are
 allocated from `ucHeap` at runtime. The link failure happens earlier because
 `ucHeap` itself is a static `.bss` array and there is not enough RAM left for it.
 
-The active 2026-07-21 task-side-parser build instead uses a 218.5 KiB heap
+The 2026-07-21 task-side-parser checkpoint instead used a 218.5 KiB heap
 (`(219 * 1024) - 512`). The extra 2 KiB came from keeping the immutable FAT12
 format image in flash and copying it to a task-local RAM buffer only while
 formatting. After adding the audited ELECOM, Kensington, Topre, and EVision
-builtin drivers, the active build linked with `text=505836`, `data=708`, and
-`bss=245364`. The current dirty event-driven-enumeration build links with
-`text=507140`, `data=708`, and `bss=245388`; `__bss_end__` is `0x2003ff44`,
-leaving 188 B before scratch X. Its enum epoch is 52 B, 24 B larger than the
-preceding state because it retains a retry setup tuple and long-configuration
-ownership rather than a permanent large descriptor array.
-The 256-byte reduction from the preceding 218.75 KiB configuration leaves room
-for the additional static driver runtimes; it does not hide a per-device heap
-allocation. Scratch X is 708 B and ends 1,340 B below the core-1 stack. The new
-root/hub reset state remains compact: `usbhid_reset_coordinator` is 36 B and
-the complete heap-owned `usbhid_transport_pool` is 2,756 B, including the one
-aligned 256-byte lifecycle descriptor scratch. `hid_async_request` is 60 B and
-each of ten `hid_async_slot`s is 88 B; their metadata-only 880-byte payload
-occupies an 888-byte heap_4 block. The transport pool occupies a 2,768-byte
-block. The explicit transport mutex is an 84-byte FreeRTOS queue object in a
-96-byte heap_4 block, so these three core allocations total 3,752 B. The report
-executor's remaining ordinary-control queue is a separate 232-byte block; no
-persistent descriptor-time allocation is required. Generic slot-admission
-waiters add no heap or `.bss`: each blocking caller owns a 12-byte stack node,
-and the 24-byte async generation object reuses its former address-zero word as
-the FIFO head. Edge-driven CLEAR_HALT admission reuses the report slot's former
-one-byte retry counter as a capacity latch. Its four independent absolute
-deadlines add 16 B of static state, but no queue, timer, or heap allocation;
-keeping them separate preserves Linux's interrupt-I/O retry epoch across STALL.
+builtin drivers, that historical image linked with `text=505836`, `data=708`,
+and `bss=245364`.
+
+The current dirty simplification candidate still uses the fixed 218.5 KiB
+(`223744`-byte) FreeRTOS heap. It builds and passed repeated automatic driver,
+long-configuration, input, and removal cycles on hardware:
+
+```text
+text/data/bss                 514948 / 788 / 245040 B
+__bss_end__                   0x2003fd38
+main-bank headroom            712 B to 0x20040000
+scratch X                     788 B (0x20040000..0x20040314)
+scratch X / core-1 gap        1260 B to 0x20040800
+candidate UF2 SHA-256         db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242
+hardware verdict              passed 2026-07-22; stable remove plateau, oom=0
+```
+
+These values belong only to that exact dirty build candidate. Do not reuse them
+after another link or attach a later hardware verdict to this hash. The current architecture still has one ordinary
+32-entry TinyUSB event queue with no spill state, a transient long-configuration
+buffer rather than a permanent 4 KiB array, metadata-only physical async slots,
+and stack-owned admission waiters. Exact structure/block sizes below must be
+remeasured whenever those objects change.
 
 The Linux input core's active `event_lock` sections use one equivalent 96-byte
 heap_4 mutex block per live `input_dev`. Its embedded handle changes the
@@ -83,11 +87,12 @@ largest 4096-byte request occupies about 4104 B; a 513-byte request occupies
 528 B. The existing 512-byte static scratch is still present, so this is a
 transient addition to the ordinary baseline, not a replacement for that static
 buffer. It is freed before class `set_config` and Linux HID probe allocations,
-or after the matching EP0 owner drains on error, timeout, or removal. Retrying
-reuses the same buffer rather than allocating again. The control-completion
-callback only records pending state; allocation happens after callback unwind
-in the TinyUSB host-owner service. Successful parse frees immediately inside
-TinyUSB's internal enum continuation; terminal failure frees after EP0 drain.
+or after exact retirement of the matching EP0 owner on error, timeout, or
+removal. Retrying reuses the same buffer rather than allocating again. The
+control-completion callback only records pending state; allocation happens
+after callback unwind in the TinyUSB host-owner service. Successful parse frees
+immediately inside TinyUSB's internal enum continuation; terminal failure frees
+after the PIO abort result or its exact cancel-time FIFO-prefix fence.
 
 Linux normally allocates `value` and `new_value` for every selector in a HID
 field. This port preserves that layout except for INPUT ARRAY fields, whose
@@ -101,7 +106,10 @@ through the report enum's existing sparse `report_list`; typical devices have
 only one to three reports of each type. On the ARM32 ABI this changes
 `sizeof(struct hid_report_enum)` from 1,036 B to 12 B and
 `sizeof(struct hid_device)` from 3,712 B to 640 B, saving exactly 3,072 B per
-attached HID interface without capping report IDs or adding allocations.
+attached HID interface without capping report IDs or adding allocations. The
+later removal of the unused embedded sysfs registry reduces the current object
+again to 608 B; upstream publication calls remain visible but allocate nothing
+until a real firmware attribute proxy exists.
 
 The compatibility layer also avoids constructing the 2,324-byte Linux uevent
 environment for plain lifecycle notifications. No firmware consumer receives
@@ -150,24 +158,25 @@ therefore marks many functions with `__not_in_flash_func`,
 `__no_inline_not_in_flash_func`, or `.time_critical.*`; the linker puts those
 functions into `.data` so they execute from SRAM.
 
-Current map shows about this much RAM-resident Pico-PIO-USB / PIO-HCD code:
+The current candidate map still shows roughly this much RAM-resident
+Pico-PIO-USB / PIO-HCD code:
 
 ```text
 ~12.2 KiB Pico-PIO-USB / hcd_pio_usb time-critical code in .data
 ```
 
-Large entries from the current map:
+Large entries from that candidate map:
 
 ```text
 pio_usb_ll_encode_tx_data             4180 B
 initialize_host_programs              1444 B
 pio_usb_bus_receive_packet_and_handshake 704 B
 handle_endpoint_irq                    692 B
-pio_usb_host_frame                     692 B
+pio_usb_host_frame                     468 B
 crc16_tbl                              512 B
-connection_check                       536 B
-configure_fullspeed_host               264 B
-configure_lowspeed_host                264 B
+connection_check                       508 B
+configure_fullspeed_host               268 B
+configure_lowspeed_host                268 B
 ```
 
 This memory is expensive but not safely removable by configuration. Moving any
@@ -185,18 +194,18 @@ reduced to `8`:
 ~0.2 KiB   pio_port[1]
 ~0.1 KiB   pio_usb_root_port[1]
 ~2.0 KiB   TinyUSB host/HID/hub static state
-~0.3 KiB   usb_host/task debug event ring
 ```
 
-Important current map entries:
+Important entries in the same candidate map:
 
 ```text
-pio_usb_ep_pool[8]       1504 B
-_hidh_epbuf              512 B
-_usbh_epbuf              520 B
-_usbh_devices            430 B
-_usbh_qdef_buf           192 B
-hid_host_events          288 B
+pio_usb_ep_pool[8]          1504 B
+usbhid_report_rx_slots       208 B
+_hidh_epbuf                   32 B
+_usbh_epbuf                  520 B
+_usbh_devices               1720 B
+_usbh_q handle                 4 B
+host event xQueue block      480 B runtime heap (32 x 12-byte payload)
 ```
 
 Non-host RAM that is also visible in the map:
@@ -336,9 +345,10 @@ Tradeoffs:
   staging buffer. Control SET_REPORT is separate.
 
 `CFG_TUH_MEM_SECTION` places TinyUSB's DMA-visible host transfer metadata and
-the port-owned interrupt-IN lifecycle slots in scratch X. In the current
-RP2040 link they occupy 708 B and end 1,340 B below the real core-1 stack. The
-endpoint callback table remains in main SRAM. Per-interface interrupt-IN
+the port-owned interrupt-IN lifecycle slots in scratch X. At the earlier
+direct-IN checkpoint they occupied 708 B and ended 1,340 B below the real
+core-1 stack. The current dirty candidate occupies 788 B and ends 1,260 B below
+that stack, as recorded above. The endpoint callback table remains in main SRAM. Per-interface interrupt-IN
 payload backing is ordinary PIO-visible SRAM from heap_4: normally a 72-byte
 block for 64 bytes, allocated once at start and freed after the detach fence.
 
@@ -361,7 +371,7 @@ exercises the transient enum allocation.
 Device-reset recovery reserves one additional 88-byte async slot which normal
 requests cannot consume. Ten metadata-only slots request 880 B (an 888-byte
 heap_4 block). Device/string pre-probe uses the aligned 256-byte scratch inside
-the 2,756-byte lifecycle transport pool (a 2,768-byte block) and reaches TinyUSB
+the 2,564-byte lifecycle transport pool (a 2,576-byte block) and reaches TinyUSB
 through the same generic control lane as other synchronous USB calls. The
 dedicated recovery slot remains unavailable to normal traffic; moving scratch
 ownership removes 72 B of persistent heap. Replacing the transport's global
@@ -376,9 +386,13 @@ The timer bridge likewise exchanges its 96-byte wake queue for one 96-byte
 mutex. Its task handle and stack-waiter head add 8 B of `.bss`; synchronous
 timer deletion keeps waiter state on the caller stack and adds no heap churn.
 
-The report task has no interrupt-input queue. Its four fixed 32-byte completion
-slots occupy 128 B in scratch X and retain the exact `hid`, `inbuf`, device
-generation, open revision, and raw giveback until task-side parsing finishes.
+At that same earlier direct-IN checkpoint the report task had no
+interrupt-input queue. Its four fixed 32-byte completion slots occupied 128 B
+in scratch X and retained the exact `hid`, `inbuf`, device generation, open
+revision, and raw giveback until task-side parsing finished. Those 32/128-byte
+figures are historical. The current candidate uses four 52-byte slots (208 B
+total); each embeds its own reconciliation bit and generic CLEAR_HALT admission
+node, with no separate reconciliation table or capacity-edge latch.
 Removing the former four-entry input queue returns a 176-byte heap_4 block and
 one 4-byte `.bss` handle; growing the old 20-byte slots adds 48 B to scratch X.
 Net live RAM occupancy falls by 132 B and one persistent heap allocation. The
@@ -395,6 +409,12 @@ TCB because the second notification index was already configured.
 Removing selected-protocol state keeps persistent allocation unchanged: the
 probe slot and per-device transport object retain their aligned sizes, while
 the lifecycle-local probe token shrinks from 16 B to 12 B.
+
+Queued SET snapshots and logical request nodes are freed after completion or
+fenced cancellation. Repeated equal-size traffic must return to the same total
+free-heap plateau. If total `free` returns but `largest` remains lower, mixed
+allocation sizes have left temporary holes; that is fragmentation, not by
+itself a leak.
 
 These are reasonable low-risk reductions for direct one-device testing, but
 they do not recover the full 13-14 KiB needed to keep a 232 KiB heap.

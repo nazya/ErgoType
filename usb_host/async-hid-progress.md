@@ -1,6 +1,14 @@
 # Async HID Progress
 
-## Current Scope
+This is the chronological development and hardware-checkpoint ledger. Newest
+entries come first in `Manual Test Notes`; an older hash keeps exactly the
+verdict recorded for that image and is never promoted by a later build. The
+maintained TinyUSB patch contract lives in
+[`tinyusb-host-port.md`](tinyusb-host-port.md), current RP2040 memory accounting
+in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
+[`upstream-porting-audit.md`](upstream-porting-audit.md).
+
+## Implementation Milestones
 
 - `usb_host/usbhid.c` owns a bounded USB-device cache and fixed probe-identity
   slots allocated before the TinyUSB host starts. Its bounded
@@ -77,7 +85,9 @@
   slots and durable predicates already hand work to the async, report, and
   lifecycle tasks. The remaining common domain couples generation/lifetime
   with recovery admission; splitting it requires a complete owner and lock-order
-  design rather than more heap-backed mutexes.
+  design rather than more heap-backed mutexes. TinyUSB host-event publication
+  now uses its ordinary queue path; the removed spill adapter no longer adds a
+  port-owned critical section at that boundary.
   The task-only workqueue bridge is now a separate execution domain with its
   own priority-inheritance mutex. Durable FIFO/flags are the condition, direct
   task notifications are wake edges, and stack-owned waiters preserve
@@ -92,29 +102,22 @@
   The live workqueue parents are KeyD, the dedicated HID timer/lifecycle tasks,
   and the worker itself; TinyUSB callbacks only publish state to those owners.
   FreeRTOS calls and invariant predicates are evaluated before any
-  `configASSERT()`, so Release builds cannot erase a mutex operation with the
-  assert expression. Rare task-side invariant failures use fixed-size async
-  diagnostics before asserting an already computed boolean; diagnostics found
-  under the workqueue/timer mutex are emitted only after it is released.
-  Transport-mutex failure is special because the helper is also entered by
-  TinyUSB host callbacks: it publishes one fixed bit through lifecycle's
-  existing indexed task notification, and lifecycle alone calls the logger.
-  The callback error path therefore does not recurse through the mutex, enter
-  the device-side deferred-log queue, or invoke a C11 read-modify-write helper
-  that would hide an RP2040 IRQ-masking spinlock.
+  `configASSERT()`, so a Release build cannot erase the mutex operation itself.
+  Startup constructors return allocation/readiness errors normally. Impossible
+  lock misuse remains a debug assertion over an already computed boolean; the
+  lock helpers do not add a second diagnostic/fail-stop state machine or log
+  from a TinyUSB callback.
   The same no-expression assertion rule is now enforced across the async
   executor, USB HID lifecycle, interrupt-report owner, and transport mutex:
   every active `configASSERT()` there receives one precomputed identifier.
   Interrupt-IN tuple failures no longer assert after publishing a bad
-  completion. Host-owner, EP0-abort, and pinned hub-reset completion failures
-  likewise take their existing task-side `-EIO` retirement path; lifecycle
-  emits both diagnostics. A failed hub identity check cannot leave the reserved
-  recovery slot in `HOST_COMPLETING` or retain the global EP0 lane.
-  The shared EP0/interrupt-OUT completion also validates the unique serial's
-  callback tuple before publishing it: EP0 checks its reconstructed setup,
-  buffer, and bounded actual length, while non-control TinyUSB callbacks expose
-  only address/endpoint and length. Invalid giveback metadata completes as
-  task-side `-EIO` rather than reaching a parser or blocked synchronous caller.
+  completion. EP0/OUT and pinned hub-reset completion failures take their
+  existing task-side `-EIO` retirement path and lifecycle emits the bounded
+  diagnostic. A failed hub identity check cannot retain the global EP0 lane.
+  Shared EP0/interrupt-OUT completion validates the retained serial,
+  generation, address/endpoint, and bounded actual length. It deliberately
+  trusts the SHA-pinned TinyUSB callback to return the request it was given
+  instead of rebuilding and comparing the SETUP tuple a second time.
 - HID EP0 GET_REPORT/SET_REPORT now uses direct asynchronous
   `tuh_control_xfer()` requests submitted from the TinyUSB host owner. Each
   transfer carries the request serial in `user_data`, and completion preserves
@@ -228,34 +231,45 @@
   lost to lock contention. Raw GET/SET and interrupt output keep their upstream
   synchronous return contract while using the same asynchronous TinyUSB owner
   underneath.
+- A CTRL/interrupt-OUT head which fails before reaching the wire is retained in
+  a logical `PARKED` state, matching upstream's stopped queue rather than
+  dropping the report or retry-spinning. A later enqueue on that same interface
+  and lane is the upstream-shaped restart edge and preserves FIFO order.
+  Ordinary `hid_hw_wait()` excludes that stopped lane's logical lifetime leases,
+  while disconnect still drains and frees them all. If a parked GET made an
+  ordinary waiter return, its parser-owner task is cleared atomically with the
+  idle decision; a later restart therefore cannot publish completion to an old
+  stack/task owner and falls back to normal report-task parsing. Because this
+  idle predicate can become true at a nonzero lease count, every lease release
+  wakes linked waiters rather than only the final zero transition.
 - Fixed-slot admission now belongs to the generic synchronous USB bridge rather
-  than descriptor callers. Lifecycle and `hid_workqueue_task` register bounded
-  stack-owned FIFO waiters; normal-slot release or matching teardown wakes them,
-  and enqueue retry remains the durable predicate. Existing nonblocking report
-  and CLEAR_HALT producers may use only capacity not logically reserved by a
-  waiter, while HUB_RESET retains its dedicated recovery slot. Admission has
-  its own one-second local deadline before a successfully queued request
-  receives its complete transfer interval. The two descriptor helpers contain
-  no local FreeRTOS retry loop, and `hid_get_class_descriptor()` is
-  upstream-identical. CLEAR_HALT saturation is also condition-driven: the
-  report task atomically claims Linux's reset-work-shaped state, parks it on
-  local `-EBUSY`, and retries only after normal-slot release or a reservation
-  is removed without consuming a slot. A one-byte capacity latch closes the
-  release-during-enqueue race. The former 32-ms admission polling timer is
-  gone; the report task sleeps until a capacity edge or the preserved absolute
-  eight-second local saturation deadline. Unrelated wakes only recheck that
-  same deadline, while the report timer now represents only upstream's
-  protocol-error retry.
+  than descriptor callers. Lifecycle, `hid_workqueue_task`, report requests,
+  and CLEAR_HALT each link a bounded admission node into one FIFO. The oldest
+  eligible endpoint-front may enter when a real normal slot is free; requests
+  do not reserve placeholder slots while waiting. Normal-slot release, waiter
+  unlink, or matching teardown notifies the affected task, which rechecks this
+  durable predicate. HUB_RESET alone retains its separate physical recovery
+  slot. Synchronous admission has its own one-second local deadline before a
+  successfully queued request receives its complete transfer interval. The two
+  descriptor helpers contain no local FreeRTOS retry loop, and
+  `hid_get_class_descriptor()` is upstream-identical. CLEAR_HALT atomically
+  claims Linux's reset-work-shaped state and remains in `WAIT_SLOT` after local
+  `-EBUSY`; its linked admission node owns the next generic capacity wake. The
+  former private capacity latch and 32-ms polling timer are gone. The report
+  task sleeps until a generic admission notification or the preserved absolute
+  eight-second local deadline, then rechecks the same state and predicate.
 - The report executor reserves space for all four queued async requests plus
   the active ordinary control request. Probe-owned GETs do not occupy that
   queue; their current upstream caller issues one request and immediately waits
   for its direct per-interface completion. Interrupt-IN close is reconciled in
-  the TinyUSB owner: abort completion is drained for two SOFs before a raced
-  reopen may arm a new receive. EP0 retirement is also bounded: three two-SOF
-  host-owner fences cover SETUP/DATA/ACK, after which a SHA-pinned TinyUSB helper
-  matches daddr + callback + serial and synthesizes the old owner's TIMEOUT
-  giveback if the PIO completion event was lost. It cannot abort a replacement
-  EP0 owner after address reuse.
+  the TinyUSB owner: an immediate one-shot continuation in TinyUSB's own FIFO
+  fences a raced completion before reopen may arm a new receive. EP0 retirement
+  now uses the same single host-owned transaction as enumeration. Raw abort
+  success completes immediately; a lost race snapshots and drains only the
+  already-queued TinyUSB FIFO prefix, consuming the matching old stage before
+  it can chain DATA/ACK. Prefix exhaustion synthesizes the old owner's TIMEOUT
+  through its exact daddr + callback + serial tuple. It cannot abort a
+  replacement EP0 owner after address reuse.
 - Interrupt IN now uses the first interrupt-IN endpoint directly, matching
   upstream endpoint selection and preserving TinyUSB's exact transfer result
   and actual length. The request length is the largest parsed INPUT report,
@@ -272,8 +286,8 @@
   There is no interrupt-input queue or address-based HID lookup; the bounded
   registry scan validates only the fixed slot owner. The endpoint is rearmed
   only after the slot returns to `STOPPED`. Every arm snapshots the
-  open revision. Close/reopen aborts an old `ARMED` transfer through the same
-  two-SOF fence as `usb_kill_urb()`; an already queued old completion is dropped
+  open revision. Close/reopen aborts an old `ARMED` transfer through the
+  same-queue giveback fence as `usb_kill_urb()`; an already queued old completion is dropped
   and the current open is freshly armed. Non-`ALWAYS_POLL` close waits for that
   report-only owner/parser fence before returning; it does not wait unrelated
   control I/O or physical-detach state. Physical unplug publishes a durable
@@ -284,10 +298,12 @@
   transport open state;
   successful payload is dropped for both `CLOSED` and `RESUMING`, including
   `HID_QUIRK_ALWAYS_POLL` while its client is closed. Non-`ALWAYS_POLL` open
-  retains upstream's `HID_RESUME_RUNNING` 50-ms drain before changing to
-  `OPEN`. This matches upstream's `HID_OPENED`/resume tests even when parsing
-  is deferred across close/reopen, without reading generic HID's separately
-  locked `ll_open_count`.
+  first waits on a stack-owned predicate until TinyUSB's host owner has made
+  Linux's equivalent first `usb_submit_urb()` attempt, then retains upstream's
+  `HID_RESUME_RUNNING` 50-ms drain before changing to `OPEN`. This matches
+  upstream's `HID_OPENED`/resume tests even when parsing is deferred across
+  close/reopen, without reading generic HID's separately locked
+  `ll_open_count`.
   Non-success payload never reaches the HID parser. There is no port-only
   BOOT-mode gate; Linux usbhid relies on the USB reset-default Report protocol.
   STALL queues the standard
@@ -303,10 +319,12 @@
   the old failure and reconciles only the new open. FAILED/TIMEOUT follows upstream's
   13/26/52/104-ms delayed retry for about one second. Clear-halt transfer
   failure, exhausted protocol retry, or failure to reset the local PIO DATA0
-  state now queues the upstream device-reset fallback. Reset publication is
-  versioned with `report_revision`, matching close's upstream
-  `cancel_work_sync()` boundary: a close/reopen which wins the publication race
-  rearms only the new open instead of parking it or reviving the old reset.
+  state now queues the upstream device-reset fallback. Each report interface
+  owns one bit in a generation-scoped reset claimant mask. Close cancels only
+  its own still-queued claim; a sibling interface's claim survives, and a reset
+  already claimed by lifecycle is deliberately uncancellable like running
+  upstream `reset_work`. The report revision still prevents a close/reopen from
+  parking the new open or reviving old report recovery.
   The firmware lifecycle
   retains no HID pointer: it snapshots the physical topology, closes the exact
   old cache epoch, waits for HID/descriptor/async retirement, and performs full
@@ -321,8 +339,11 @@
   recovery slot as reusable. The host-core edge also covers native hub
   GET_STATUS/CLEAR_FEATURE chains, abort, remove, and watchdog release. A
   rejected root attach parks until that edge or the one global enum terminal;
-  it never self-kicks. A matching enumeration is checked atomically at root
-  admission. Root attach is serialized in the TinyUSB host owner;
+  it never self-kicks. The one global enumeration owner is retained from every
+  active publication through its terminal even when it began before reset took
+  the gate; root and hub admission check it atomically, and time spent behind it
+  cannot consume the reset phase timeout. Exact-topology enumeration state still
+  decides reset success/failure. Root attach is serialized in the TinyUSB host owner;
   a hub child makes up to three pinned `hub_port_reset()` attempts. An exact
   fully mounted native replacement may win only before the first wire reset is
   published. Once reset outcome can be ambiguous, raced mounts are exclusions:
@@ -344,25 +365,40 @@
   sole TinyUSB event pump keeps processing REMOVE and duplicate ATTACH while an
   enumeration delay is active. A foreign ATTACH is deduplicated in a compact
   host-owned topology FIFO instead of being sent with an infinite wait back into
-  that pump's own queue; REMOVE prunes stale entries and the next host-service
-  iteration after terminal/mount unwind starts the oldest survivor directly.
+  that pump's own queue. An idle same-topology duplicate first runs normal
+  TinyUSB removal, but remains fenced until the firmware's asynchronous
+  Linux/cache generation retires. REMOVE revokes only stale attach intent, not
+  that lifetime fence; a genuinely later ATTACH can reassert intent. The next
+  host-service iteration after terminal/mount/retirement unwind starts the
+  oldest ready survivor directly. Fresh and duplicate-restart entry points now
+  also require a reusable Linux device-cache epoch. If all fixed epochs are
+  active or retiring, the ATTACH remains in that FIFO and final lifecycle
+  release wakes TinyUSB to recheck capacity; no polling or additional cache
+  slot is used. A parked restart releases the physical enumeration owner
+  through an explicit state callback without falsely completing or failing a
+  pending reset.
   The public host loop is again exactly `while (1) tuh_task();`. Inside the
-  generated TinyUSB core, an armed continuation, no-progress watchdog, or
-  physical-drain fence shortens only the next private queue wait to its exact
-  deadline; HCD/deferred events wake that wait earlier. With nothing armed the
-  queue wait is indefinite, and there is no fixed periodic wake. Failed
+  generated TinyUSB core, an armed continuation or no-progress watchdog
+  shortens only the next private queue wait to its exact deadline; HCD/deferred
+  events wake that wait earlier. Cancel retirement instead consumes the exact
+  FIFO prefix already present when the PIO abort loses its race. With nothing
+  armed the queue wait is indefinite, and there is no fixed periodic wake. Failed
   enumeration-control completion snapshots its callback-local setup tuple into
   the enum epoch, arms TinyUSB's original 100-ms retry deadline, and returns.
   Shallow host-owner service reconstructs and resubmits the transfer only after
   callback unwind and global EP0 idle. The existing retry count and transfer-
   buffer ownership are preserved without a blocking delay, periodic poll, Pico
   timer, FreeRTOS timer, or extra queue.
+- TinyUSB host events use one ordinary 32-entry FreeRTOS queue. The generated
+  dynamic queue definition avoids OSAL's otherwise-dead static backing array;
+  no spill FIFO, overflow flag, or firmware-specific fail-stop remains.
 - The same compatibility generation pins `hid_host.c` and preserves its full
   `hidh_open()` and `hidh_set_config()` blocks commented beside their two
   replacements. A bounded two-pass scanner accepts the
   HID descriptor in the current interface extras (including after endpoint[0]),
-  opens no more than `bNumEndpoints`, and publishes the class slot only after
-  endpoint success. Enumeration performs neither SET_IDLE nor SET_PROTOCOL and
+  ignores non-interrupt endpoints, opens only the first interrupt IN/OUT pair
+  exactly as upstream `usbhid_start()` does, and publishes the class slot only
+  after endpoint success. Enumeration performs neither SET_IDLE nor SET_PROTOCOL and
   mounts without borrowing the shared enumeration buffer; mount publishes only
   its ephemeral class identity. Lifecycle builds the retained interface, then
   upstream-shaped `usbhid_parse()` sends Linux's SET_IDLE and owns the one
@@ -405,8 +441,8 @@
   context and waits for KeyD to make its reserved queue slot available.
 - The standard HID Haptics path is linked through `hid-haptic`,
   `hid-multitouch`, ff-core, evdev, and the firmware workqueue. Broader gaming
-  FF drivers remain deferred. Hiddev remains in its bounded firmware-proxy
-  form.
+  FF drivers remain deferred. The bounded firmware hiddev proxy remains an
+  unlinked source; no active HID claims it.
 - Haptic effect storage is bounded to five firmware application slots rather
   than Linux's 96 userspace slots. Each slot still owns
   the upstream per-effect report snapshot, but unused slots no longer consume
@@ -429,7 +465,38 @@
 
 ## Manual Test Notes
 
-- 2026-07-22: the current dirty host-core step replaces TinyUSB's last blocking
+- 2026-07-22: the teardown-result fix, exact UF2 SHA256
+  `db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242`,
+  passed repeated automatic ELECOM, Kensington, Topre, EVision, and
+  `cafe:1005` long-configuration cycles. Input continued and the former false
+  `HID_TEARDOWN_WAIT` diagnostic disappeared; the log contained no `ERR` or
+  `WARN`. Removal repeatedly returned to `free=60784..60800`, minimum observed
+  heap was 39,872 B, and `oom=0`. Host watermarks remained at least 265 words
+  for TinyUSB, 410 for async, 348 for work/timer, 226 for lifecycle, and 862
+  for report.
+- 2026-07-22: the combined simplification image, exact UF2 SHA256
+  `eabe0f7d200b51ccd0272303565391395e397b0885653c6e96e23c3b6c82087d`,
+  completed repeated automatic ELECOM, Kensington, Topre, EVision, and
+  `cafe:1005` long-configuration cycles. Input continued, removals returned to
+  a stable `free=60800..60816` plateau, the minimum observed heap was 39,888 B,
+  and `oom=0`. Every interface removal emitted the misleading
+  `ERR: HID_TEARDOWN_WAIT`: the fence had completed, but its common wait helper
+  returned `-ENODEV` because `transport_stopping` was true. The following
+  dirty candidate treats that required teardown state as success and is
+  hardware-verified above.
+- 2026-07-22: superseded, build-only combined dirty audit image, UF2 SHA256
+  `0a7ff16341260c7d78300989142b30fecb30b8314c0b6316f2a7a353a3586ba7`,
+  clean-builds with `text=519612`, `data=788`, and `bss=245320`. It combines
+  the later lifecycle/reset/queue-lifetime and Linux-diff fixes, event-driven
+  cache-epoch admission, first-interrupt endpoint selection, and the
+  then-current compatibility lifetime changes, the USB-only upstream Magic
+  Mouse 2 / Trackpad 2
+  driver, and the already-tested long-configuration path. The Apple path is
+  build-audited but still needs its dedicated hardware fixture.
+  No hardware verdict was recorded for this exact image. It is retained only
+  as an unverified historical build and must not be treated as the current
+  artifact or promoted into a hardware checkpoint.
+- 2026-07-22: the long-configuration/retry checkpoint replaces TinyUSB's last blocking
   100-ms enumeration retry with a host-owned deadline/continuation and adds
   exact transient full configuration-descriptor storage for 513..4096 bytes.
   Host UF2 SHA256
@@ -563,6 +630,20 @@
 
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
+- Verify the newly linked USB Magic Trackpad 2 driver on both its mouse and
+  non-mouse interfaces. Require the probe-time `{ 0x02, 0x01 }` mode SET
+  (success and accepted `-EIO`), native report ID `0x02`, one/two-contact input,
+  unplug during SET, repeated reconnect, and a stable removal heap plateau.
+  Upstream returns early for USB Magic Mouse 2, so report `0x12` must not be
+  described as proof of a wired mode-switch path that Linux itself does not run.
+- Exercise cache backpressure with at least two fast remove/replug epochs before
+  lifecycle has released the earlier objects. The later ATTACH must resume
+  without `HID_USB_DEV_ALLOC_FAIL`, `HID_ATTACH_OVERFLOW`, or a stuck reset
+  gate, and the heap must return to its prior plateau.
+- Add one HID fixture with `bulk IN, interrupt IN, bulk OUT, interrupt OUT` and
+  another with two interrupt endpoints per direction. Verify that only the
+  first interrupt pair opens and both input/output still work; ordinary haptic
+  coverage does not prove this endpoint-filter branch.
 - Verify task-side `usbhid_parse()` report-descriptor fetch with normal enumeration,
   haptic allocation, direct unplug/replug, and a hub subtree reconnect. Also
   exercise a report descriptor larger than 512 bytes. Record free heap and the
@@ -584,10 +665,10 @@
 - Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
   fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
   must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or
-  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap. Only the ordinary-
-  control report queue remains (232 B of startup heap); removing the input queue
-  returns 176 B and one allocation block. The reconcile table adds 32 B of
-  static RAM, while four 32-byte direct-IN slots occupy 128 B in scratch X.
+  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap. Historical queue/slot
+  sizes belong to their dated checkpoints above; use
+  [`pio-usb-memory.md`](pio-usb-memory.md) for current linked-image and
+  allocation accounting.
 - Verify task-side probe SET_IDLE with a fixture that records class requests:
   exactly one SET_IDLE must precede the report-descriptor GET, a SET_IDLE STALL
   must not abort probe, and no generic SET_PROTOCOL may appear. Exercise the

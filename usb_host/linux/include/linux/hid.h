@@ -919,13 +919,20 @@ int hid_report_raw_event(struct hid_device *hid, enum hid_report_type type, u8 *
 			 size_t bufsize, u32 size, int interrupt);
 int hid_add_device(struct hid_device *hdev);
 bool hid_is_usb(const struct hid_device *hdev);
+/* Firmware parser-cap diagnostic; implementation stays in transport glue. */
+void hid_port_usage_cap_drop(struct hid_device *hdev);
 bool hid_match_one_id(const struct hid_device *hdev, const struct hid_device_id *id);
 const struct hid_device_id *hid_match_id(const struct hid_device *hdev, const struct hid_device_id *id);
 const struct hid_device_id *hid_match_device(struct hid_device *hdev, const struct hid_driver *hdrv);
 bool hid_compare_device_paths(struct hid_device *hdev_a, struct hid_device *hdev_b, char separator);
 bool hid_ignore(struct hid_device *hdev);
-int hid_quirks_init(char **quirks_param, __u16 bus, int count);
-void hid_quirks_exit(__u16 bus);
+// int hid_quirks_init(char **quirks_param, __u16 bus, int count);
+// void hid_quirks_exit(__u16 bus);
+// Runtime dynamic quirks have no firmware writer or mutex/module lifecycle.
+int hid_quirks_init(char **quirks_param, __u16 bus, int count)
+	__attribute__((error("dynamic HID quirks need a firmware writer and mutex lifecycle")));
+void hid_quirks_exit(__u16 bus)
+	__attribute__((error("dynamic HID quirks need a firmware writer and mutex lifecycle")));
 unsigned long hid_lookup_quirk(const struct hid_device *hdev);
 int hid_core_init(void);
 int linux_module_initcalls_init(void);

@@ -41,19 +41,17 @@
 #include "../../include/linux/hid-input.h"
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
-// Firmware reports runtime usage-table cap drops through the async CDC logger.
-#include "stdio_tusb_cdc.h"
 #include "hid-ids.h"
 
 /*
  * Version Information
  */
 
-// #define DRIVER_DESC "HID core driver"
+#define DRIVER_DESC "HID core driver"
 
 static int hid_ignore_special_drivers = 0;
-// module_param_named(ignore_special_drivers, hid_ignore_special_drivers, int, 0600);
-// MODULE_PARM_DESC(ignore_special_drivers, "Ignore any special drivers and handle all devices by generic driver");
+module_param_named(ignore_special_drivers, hid_ignore_special_drivers, int, 0600);
+MODULE_PARM_DESC(ignore_special_drivers, "Ignore any special drivers and handle all devices by generic driver");
 
 /*
  * Convert a signed n-bit integer to signed 32-bit integer.
@@ -202,7 +200,11 @@ static int open_collection(struct hid_parser *parser, unsigned type)
 	unsigned usage;
 	int collection_index;
 
-	usage = parser->local.usage[0];
+	// usage = parser->local.usage[0];
+	// Upstream's embedded parser-local array is zero-filled even when a
+	// malformed COLLECTION has no preceding Usage. Preserve that default while
+	// the firmware array is still unallocated.
+	usage = parser->local.usage_index ? parser->local.usage[0] : 0;
 
 	if (parser->collection_stack_ptr == parser->collection_stack_size) {
 		unsigned int *collection_stack;
@@ -1130,10 +1132,11 @@ static int hid_scan_report(struct hid_device *hid)
 	 * be robust against hid errors. Those errors will be raised by
 	 * hid_open_report() anyway.
 	 */
+	// while ((start = fetch_item(start, end, &item)) != NULL)
+	// 	dispatch_type[item.type](parser, &item);
+	// Dynamic parser storage can return -ENOMEM, so the firmware preserves that
+	// result instead of silently completing the pre-scan with a wrong group.
 	while ((start = fetch_item(start, end, &item)) != NULL) {
-		// dispatch_type[item.type](parser, &item);
-		// Upstream ignores scan dispatch errors; dynamic parser storage can return
-		// -ENOMEM, which must abort this pre-scan cleanly.
 		ret = dispatch_type[item.type](parser, &item);
 		if (ret == -ENOMEM) {
 			hid->group = HID_GROUP_GENERIC;
@@ -1168,10 +1171,14 @@ static int hid_scan_report(struct hid_device *hid)
 	}
 
 out:
+	/* Upstream embeds parser locals/stack; the RAM-bounded port allocates them. */
 	kfree(parser->local.usage);
 	kfree(parser->local.usage_size);
 	kfree(parser->local.collection_index);
 	kfree(parser->collection_stack);
+	// return 0;
+	// Firmware's heap-backed parser locals can fail after allocation begins;
+	// propagate that real scan error instead of binding the generic driver.
 	return ret;
 }
 
@@ -1515,6 +1522,7 @@ static int hid_parse_collections(struct hid_device *device)
 	ret = 0;
 
 out:
+	/* Upstream embeds parser locals/stack; the RAM-bounded port allocates them. */
 	kfree(parser->local.usage);
 	kfree(parser->local.usage_size);
 	kfree(parser->local.collection_index);
@@ -1554,9 +1562,7 @@ int hid_open_report(struct hid_device *device)
 		 * on a copy of our report descriptor so it can
 		 * change it.
 		 */
-		// u8 *buf __free(kfree) = kmemdup(start, size, GFP_KERNEL);
-		// This port has no __free(kfree), so free the temporary copy explicitly.
-		u8 *buf = kmemdup(start, size, GFP_KERNEL);
+		u8 *buf __free(kfree) = kmemdup(start, size, GFP_KERNEL);
 
 		if (!buf)
 			return -ENOMEM;
@@ -1569,7 +1575,6 @@ int hid_open_report(struct hid_device *device)
 		 * needs to be cleaned up or not at the end.
 		 */
 		start = kmemdup(start, size, GFP_KERNEL);
-		kfree(buf);
 		if (!start)
 			return -ENOMEM;
 	}
@@ -1882,13 +1887,14 @@ static void hid_input_array_field(struct hid_device *hid,
 					  interrupt);
 
 		// Upstream silently ignores array selectors without a usage entry.
-		// Firmware caps that lookup for RAM, so report a newly dropped selector.
+		// Firmware caps that lookup for RAM, so report a newly dropped selector
+		// through glue rather than coupling this derived parser to CDC logging.
 		if (field->maxusage == HID_MAX_USAGES &&
 		    value[n] >= min &&
 		    value[n] <= field->logical_maximum &&
 		    value[n] - min >= HID_MAX_USAGES &&
 		    search(field->value, value[n], count))
-			async_msg("WARN: HID_USAGE_CAP_DROP");
+			hid_port_usage_cap_drop(hid);
 
 		if (hid_array_value_is_valid(field, value[n]) &&
 		    search(field->value, value[n], count))
@@ -2197,9 +2203,7 @@ static struct hid_report *hid_get_report(struct hid_report_enum *report_enum,
 	// The RP2040 report list is the sparse full-range ID index.
 	report = hid_report_enum_lookup(report_enum, n);
 	if (report == NULL)
-		// dbg_hid("undefined report_id %u received\n", n);
-		// Linux diagnostic is omitted here; control flow stays the same.
-		;
+		dbg_hid("undefined report_id %u received\n", n);
 
 	return report;
 }
@@ -2446,23 +2450,13 @@ int hid_safe_input_report_locked(struct hid_device *hid,
 				 enum hid_report_type type, u8 *data,
 				 size_t bufsize, u32 size, int interrupt)
 {
-	if (!hid || !sema_owned_by_current(&hid->driver_input_lock))
+	if (!sema_owned_by_current(&hid->driver_input_lock))
 		return -EINVAL;
 
 	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
 				  false, /* from_bpf */
 				  true /* lock_already_taken */);
 }
-
-bool hid_is_usb(const struct hid_device *hdev)
-{
-	/*
-	 * Upstream gets this identity from the USB HID transport. The TinyUSB
-	 * mount glue stores BUS_USB in hdev->bus before hid_add_device().
-	 */
-	return hdev->bus == BUS_USB;
-}
-EXPORT_SYMBOL_GPL(hid_is_usb);
 
 bool hid_match_one_id(const struct hid_device *hdev,
 		      const struct hid_device_id *id)
@@ -2472,9 +2466,6 @@ bool hid_match_one_id(const struct hid_device *hdev,
 		(id->vendor == HID_ANY_ID || id->vendor == hdev->vendor) &&
 		(id->product == HID_ANY_ID || id->product == hdev->product);
 }
-// Upstream keeps hid_match_one_id() local to hid-core; this port exports it so
-// lightweight built-in vendor-driver registration glue can reuse upstream match logic.
-EXPORT_SYMBOL_GPL(hid_match_one_id);
 
 const struct hid_device_id *hid_match_id(const struct hid_device *hdev,
 		const struct hid_device_id *id)
@@ -2630,11 +2621,7 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 		bus = "<UNKNOWN>";
 	}
 
-	// ret = device_create_file(&hdev->dev, &dev_attr_country);
-	// if (ret)
-	// 	hid_warn(hdev,
-	// 		 "can't create sysfs country code attribute err: %d\n", ret);
-	ret = device_create_file(&hdev->dev, &dev_attr_country); // In-memory attr, not Linux /sys.
+	ret = device_create_file(&hdev->dev, &dev_attr_country);
 	if (ret)
 		hid_warn(hdev,
 			 "can't create sysfs country code attribute err: %d\n", ret);
@@ -2648,8 +2635,7 @@ EXPORT_SYMBOL_GPL(hid_connect);
 
 void hid_disconnect(struct hid_device *hdev)
 {
-	// device_remove_file(&hdev->dev, &dev_attr_country);
-	device_remove_file(&hdev->dev, &dev_attr_country); // Remove the in-memory attr.
+	device_remove_file(&hdev->dev, &dev_attr_country);
 	if (hdev->claimed & HID_CLAIMED_INPUT)
 		hidinput_disconnect(hdev);
 	if (hdev->claimed & HID_CLAIMED_HIDDEV)
@@ -2887,6 +2873,14 @@ int hid_driver_resume(struct hid_device *hdev)
 EXPORT_SYMBOL_GPL(hid_driver_resume);
 #endif /* CONFIG_PM */
 
+/*
+ * PORTING DEBT: firmware publishes no driver groups (`drv_groups = NULL`), so
+ * new_id_store() is unreachable and every runtime dyn_list remains immutable
+ * after initialization. The retained body below has a local no-scanf parser
+ * and omits Linux's dyn_lock around mutation. Do not expose a runtime new-ID
+ * writer without restoring the upstream parser/locking contract (or moving
+ * the firmware interface out of this Linux-derived file).
+ */
 struct hid_dynid {
 	struct list_head list;
 	struct hid_device_id id;
@@ -2927,7 +2921,9 @@ static struct hid_driver_runtime *hid_driver_runtime(const struct hid_driver *hd
 static ssize_t new_id_store(struct device_driver *drv, const char *buf,
 		size_t count)
 {
-	const struct hid_driver *hdrv = to_hid_driver(drv);
+	// struct hid_driver *hdrv = to_hid_driver(drv);
+	// Mutable registration state lives in the runtime owning @drv instead of
+	// the flash-resident const hid_driver descriptor.
 	struct hid_driver_runtime *rt = hid_driver_runtime_from_driver(drv);
 	struct hid_dynid *dynid;
 	__u32 bus, vendor, product;
@@ -2967,11 +2963,14 @@ static ssize_t new_id_store(struct device_driver *drv, const char *buf,
 	dynid->id.product = product;
 	dynid->id.driver_data = driver_data;
 
-	// spin_lock(&rt->dyn_lock);
+	// spin_lock(&hdrv->dyn_lock);
 	// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
+	// list_add_tail(&dynid->list, &hdrv->dyn_list);
+	// Mutable dynamic IDs live in the separate runtime object.
 	list_add_tail(&dynid->list, &rt->dyn_list);
-	// spin_unlock(&rt->dyn_lock);
+	// spin_unlock(&hdrv->dyn_lock);
 
+	// ret = driver_attach(&hdrv->driver);
 	ret = driver_attach(&rt->driver);
 
 	return ret ? : count;
@@ -2984,36 +2983,43 @@ static struct attribute *hid_drv_attrs[] = {
 };
 ATTRIBUTE_GROUPS(hid_drv);
 
+// static void hid_free_dynids(struct hid_driver *hdrv)
+// Firmware passes the separate mutable state for a const driver descriptor.
 static void hid_free_dynids(struct hid_driver_runtime *rt)
 {
 	struct hid_dynid *dynid, *n;
 
-	// spin_lock(&rt->dyn_lock);
+	// spin_lock(&hdrv->dyn_lock);
 	// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
+	// list_for_each_entry_safe(dynid, n, &hdrv->dyn_list, list) {
+	// Mutable dynamic IDs live in the separate runtime object.
 	list_for_each_entry_safe(dynid, n, &rt->dyn_list, list) {
 		list_del(&dynid->list);
 		kfree(dynid);
 	}
-	// spin_unlock(&rt->dyn_lock);
+	// spin_unlock(&hdrv->dyn_lock);
 }
 
+// const struct hid_device_id *hid_match_device(struct hid_device *hdev,
+// 					     struct hid_driver *hdrv)
+// Imported driver descriptors are immutable; dynamic IDs live in @rt.
 const struct hid_device_id *hid_match_device(struct hid_device *hdev,
 					     const struct hid_driver *hdrv)
 {
 	struct hid_driver_runtime *rt = hid_driver_runtime(hdrv);
 	struct hid_dynid *dynid;
 
-	if (rt) {
-		// spin_lock(&rt->dyn_lock);
-		// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
-		list_for_each_entry(dynid, &rt->dyn_list, list) {
-			if (hid_match_one_id(hdev, &dynid->id)) {
-				// spin_unlock(&rt->dyn_lock);
-				return &dynid->id;
-			}
+	// spin_lock(&hdrv->dyn_lock);
+	// Firmware does not mutate Linux sysfs dynamic driver IDs at runtime.
+	// list_for_each_entry(dynid, &hdrv->dyn_list, list) {
+	// Mutable dynamic IDs live in the separate runtime object.
+	list_for_each_entry(dynid, &rt->dyn_list, list) {
+		if (hid_match_one_id(hdev, &dynid->id)) {
+			// spin_unlock(&hdrv->dyn_lock);
+			return &dynid->id;
 		}
-		// spin_unlock(&rt->dyn_lock);
 	}
+	// spin_unlock(&hdrv->dyn_lock);
 
 	return hid_match_id(hdev, hdrv->id_table);
 }
@@ -3021,6 +3027,8 @@ EXPORT_SYMBOL_GPL(hid_match_device);
 
 static int hid_bus_match(struct device *dev, const struct device_driver *drv)
 {
+	// struct hid_driver *hdrv = to_hid_driver(drv);
+	// Driver descriptors are const; to_hid_driver() resolves through runtime.
 	const struct hid_driver *hdrv = to_hid_driver(drv);
 	struct hid_device *hdev = to_hid_device(dev);
 
@@ -3040,20 +3048,8 @@ static int hid_bus_match(struct device *dev, const struct device_driver *drv)
 bool hid_compare_device_paths(struct hid_device *hdev_a,
 			      struct hid_device *hdev_b, char separator)
 {
-	const char *sep1 = strrchr(hdev_a->phys, separator);
-	const char *sep2 = strrchr(hdev_b->phys, separator);
-	int n1;
-	int n2;
-
-	// int n1 = strrchr(hdev_a->phys, separator) - hdev_a->phys;
-	// int n2 = strrchr(hdev_b->phys, separator) - hdev_b->phys;
-	// TinyUSB phys strings are synthesized by this port and may not contain every
-	// separator used by upstream Logitech receiver matching.
-	if (!sep1 || !sep2)
-		return false;
-
-	n1 = sep1 - hdev_a->phys;
-	n2 = sep2 - hdev_b->phys;
+	int n1 = strrchr(hdev_a->phys, separator) - hdev_a->phys;
+	int n2 = strrchr(hdev_b->phys, separator) - hdev_b->phys;
 
 	if (n1 != n2 || n1 <= 0 || n2 <= 0)
 		return false;
@@ -3062,6 +3058,10 @@ bool hid_compare_device_paths(struct hid_device *hdev_a,
 }
 EXPORT_SYMBOL_GPL(hid_compare_device_paths);
 
+// static bool hid_check_device_match(struct hid_device *hdev,
+// 				   struct hid_driver *hdrv,
+// 				   const struct hid_device_id **id)
+// Matching never mutates the flash-resident descriptor.
 static bool hid_check_device_match(struct hid_device *hdev,
 				   const struct hid_driver *hdrv,
 				   const struct hid_device_id **id)
@@ -3082,9 +3082,15 @@ static bool hid_check_device_match(struct hid_device *hdev,
 	return !hid_ignore_special_drivers && !(hdev->quirks & HID_QUIRK_IGNORE_SPECIAL_DRIVER);
 }
 
-static void hid_set_group(struct hid_device *hdev)
+// static void hid_set_group(struct hid_device *hdev)
+// Firmware's parser-local tables allocate from the constrained RTOS heap, so
+// the pre-scan must preserve -ENOMEM instead of silently binding the wrong group.
+static int hid_set_group(struct hid_device *hdev)
 {
-	int ret;
+	// int ret;
+	// The port returns only a real allocation failure, so initialize the value
+	// for the upstream branch which intentionally performs no scan.
+	int ret = 0;
 
 	if (hid_ignore_special_drivers) {
 		hdev->group = HID_GROUP_GENERIC;
@@ -3094,8 +3100,12 @@ static void hid_set_group(struct hid_device *hdev)
 		if (ret)
 			hid_warn(hdev, "bad device descriptor (%d)\n", ret);
 	}
+
+	return ret == -ENOMEM ? ret : 0;
 }
 
+// static int __hid_device_probe(struct hid_device *hdev, struct hid_driver *hdrv)
+// Probe callbacks receive the immutable descriptor; runtime state stays on bus.
 static int __hid_device_probe(struct hid_device *hdev, const struct hid_driver *hdrv)
 {
 	const struct hid_device_id *id;
@@ -3285,10 +3295,8 @@ int hid_add_device(struct hid_device *hdev)
 	static atomic_t id = ATOMIC_INIT(0);
 	int ret;
 
-	// if (WARN_ON(hdev->status & HID_STAT_ADDED))
-	// 	return -EBUSY;
-	// Current TinyUSB/DJ callers add fresh hid_device objects once; keep the
-	// upstream double-add guard visible without changing port behavior here.
+	if (WARN_ON(hdev->status & HID_STAT_ADDED))
+		return -EBUSY;
 
 	hdev->quirks = hid_lookup_quirk(hdev);
 
@@ -3318,7 +3326,12 @@ int hid_add_device(struct hid_device *hdev)
 	/*
 	 * Scan generic devices for group information
 	 */
-	hid_set_group(hdev);
+	// hid_set_group(hdev);
+	// Dynamic scan tables can fail under real RP2040 heap pressure; do not let
+	// a multitouch/haptic device fall through and bind as generic after OOM.
+	ret = hid_set_group(hdev);
+	if (ret)
+		return ret;
 
 	hdev->id = atomic_inc_return(&id);
 	/* XXX hack, any other cleaner solution after the driver core
@@ -3378,7 +3391,6 @@ struct hid_device *hid_allocate_device(void)
 		goto out_sync_err;
 	kref_init(&hdev->ref);
 
-	// #ifdef CONFIG_HID_BATTERY_STRENGTH
 #ifdef CONFIG_HID_BATTERY_STRENGTH
 	INIT_LIST_HEAD(&hdev->batteries);
 #endif
@@ -3436,6 +3448,8 @@ EXPORT_SYMBOL_GPL(hid_destroy_device);
 
 static int __hid_bus_reprobe_drivers(struct device *dev, void *data)
 {
+	// struct hid_driver *hdrv = data;
+	// Reprobe matching does not mutate the flash-resident descriptor.
 	const struct hid_driver *hdrv = data;
 	struct hid_device *hdev = to_hid_device(dev);
 
@@ -3449,9 +3463,14 @@ static int __hid_bus_reprobe_drivers(struct device *dev, void *data)
 
 static int __hid_bus_driver_added(struct device_driver *drv, void *data)
 {
+	// struct hid_driver *hdrv = to_hid_driver(drv);
+	// to_hid_driver() resolves the immutable descriptor through its runtime.
 	const struct hid_driver *hdrv = to_hid_driver(drv);
 
 	if (hdrv->match) {
+		// bus_for_each_dev(&hid_bus_type, NULL, hdrv,
+		// 		 __hid_bus_reprobe_drivers);
+		// The compatibility callback takes void *, while @hdrv is const.
 		bus_for_each_dev(&hid_bus_type, NULL, (void *)hdrv,
 				 __hid_bus_reprobe_drivers);
 	}
@@ -3475,9 +3494,9 @@ int __hid_register_driver(const struct hid_driver *hdrv, struct module *owner,
 	struct hid_driver_runtime *rt = hid_builtin_driver_runtime(hdrv);
 	int ret;
 
-	// rt = kzalloc_obj(*rt);
-	// if (!rt)
-	// 	return -ENOMEM;
+	// Upstream needs no allocation here: mutable driver-core and dynid state is
+	// embedded in struct hid_driver. Firmware keeps that imported descriptor in
+	// flash and therefore supplies a separate mutable runtime object.
 	// Builtin port drivers supply static runtime storage; non-builtin callers
 	// retain the separate allocation used before static registration.
 	if (!rt) {
@@ -3507,32 +3526,37 @@ int __hid_register_driver(const struct hid_driver *hdrv, struct module *owner,
 	// ret = driver_register(&hdrv->driver);
 	ret = driver_register(&rt->driver);
 	if (ret) {
-		// kfree(rt);
 		// Builtin runtime storage is static; only the fallback allocation is owned here.
 		kfree(allocated_rt);
 		return ret;
 	}
 
-	bus_for_each_drv(&hid_bus_type, NULL, NULL,
-			 __hid_bus_driver_added);
+	// if (ret == 0)
+	// 	bus_for_each_drv(&hid_bus_type, NULL, NULL,
+	// 			 __hid_bus_driver_added);
+	// Registration failure returned above after releasing port-owned runtime.
+	if (ret == 0)
+		bus_for_each_drv(&hid_bus_type, NULL, NULL,
+				 __hid_bus_driver_added);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(__hid_register_driver);
 
+// void hid_unregister_driver(struct hid_driver *hdrv)
+// Imported descriptors are const; only their separate runtime is destroyed.
 void hid_unregister_driver(const struct hid_driver *hdrv)
 {
 	struct hid_driver_runtime *rt = hid_driver_runtime(hdrv);
 
-	if (!rt)
-		return;
-
 	// driver_unregister(&hdrv->driver);
 	driver_unregister(&rt->driver);
+	// hid_free_dynids(hdrv);
 	hid_free_dynids(rt);
 
+	// bus_for_each_drv(&hid_bus_type, NULL, hdrv, __bus_removed_driver);
 	bus_for_each_drv(&hid_bus_type, NULL, (void *)hdrv, __bus_removed_driver);
-	// kfree(rt);
+	// Upstream owns no separate object to free here.
 	// Linker-section builtin runtime storage lives in .bss, not the FreeRTOS heap.
 	if (rt != hid_builtin_driver_runtime(hdrv))
 		kfree(rt);
@@ -3607,7 +3631,9 @@ static void __exit hid_exit(void)
 	// hidraw_exit();
 	// hidraw char-device/proxy runtime is deferred.
 	bus_unregister(&hid_bus_type);
-	hid_quirks_exit(HID_BUS_ANY);
+	// hid_quirks_exit(HID_BUS_ANY);
+	// Firmware has no module unload or runtime dynamic-quirk owner; the matching
+	// mutation API is compile-gated in hid-quirks.c.
 }
 
 // module_init(hid_init);

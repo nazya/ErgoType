@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <string.h>
 
 #include "FreeRTOS.h"
@@ -16,7 +17,9 @@
 #include "usbhid_report.h"
 
 /*
- * Interrupt-IN executor. Upstream's per-interface inbuf remains stable from
+ * TinyUSB/FreeRTOS interrupt-IN executor; this is transport glue rather than a
+ * line-preserving copy of drivers/hid/usbhid/hid-core.c. Upstream's
+ * per-interface inbuf remains stable from
  * arm through task-side parsing. The exact TinyUSB endpoint callback publishes
  * its raw result and length into the fixed slot which already retains that
  * buffer; the endpoint is not rearmed until the report task consumes the slot.
@@ -25,19 +28,13 @@
  *
  *   STOPPED -> ARMED -> QUEUED -> ACTIVE -> STOPPED
  *
- * A host-defer reservation is tracked separately because it also retains the
- * hid pointer. close() reconciles an already armed transfer on the TinyUSB
- * host task; a concurrent reopen either keeps that transfer or rearms it after
- * the abort completes.
+ * Host-owner reconciliation is tracked by report_host_pending while the fixed
+ * RX slot retains the hid pointer. close() reconciles an already armed transfer
+ * on the TinyUSB host task; a concurrent reopen either keeps that transfer or
+ * rearms it after the abort completes.
  */
 #define USBHID_CONTROL_REPORT_SLOTS (HID_ASYNC_REQUEST_QUEUE_LEN + 1)
 #define USBHID_CONTROL_REPORT_QUEUE_LEN USBHID_CONTROL_REPORT_SLOTS
-#define USBHID_REPORT_NOTIFY_INDEX 1u
-_Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >
-		USBHID_REPORT_NOTIFY_INDEX,
-	       "HID report lanes require a dedicated task notification index");
-/* PIO-USB may publish a raced completion at the end of a later SOF. */
-#define USBHID_REPORT_ABORT_DRAIN_FRAMES 2u
 /* Preserve the old local saturation bound without its 32-ms polling. */
 #define USBHID_CLEAR_HALT_ADMISSION_TIMEOUT_MS 8000u
 
@@ -47,17 +44,6 @@ enum usbhid_report_owner {
 	USBHID_REPORT_QUEUED,
 	USBHID_REPORT_ACTIVE,
 };
-
-static void usbhid_report_drain_abort_frames(void)
-{
-	/* Keep abort fencing at the TinyUSB HCD boundary, independent of PIO. */
-	u32 start = hcd_frame_number(BOARD_TUH_RHPORT);
-
-	/* FreeRTOS ticks and the independent USB SOF timer need not share phase. */
-	while (hcd_frame_number(BOARD_TUH_RHPORT) - start <
-	       USBHID_REPORT_ABORT_DRAIN_FRAMES)
-		vTaskDelay(1);
-}
 
 enum usbhid_report_host_action {
 	USBHID_REPORT_HOST_NONE,
@@ -84,8 +70,6 @@ enum usbhid_report_detach_state {
 	USBHID_REPORT_DETACH_PENDING,
 	USBHID_REPORT_DETACH_QUEUED,
 	USBHID_REPORT_DETACH_DONE,
-	/* A callback tuple with no live registry owner must never be reused. */
-	USBHID_REPORT_DETACH_QUARANTINED,
 };
 
 struct usbhid_input_report_event {
@@ -115,6 +99,17 @@ struct usbhid_report_reconcile {
 	u32 generation;
 };
 
+/*
+ * Linux hid_start_in() returns only after usb_submit_urb() has made its first
+ * physical submission attempt. The TinyUSB owner must perform that attempt,
+ * so keep this caller-owned handoff alive until its one host pass returns.
+ */
+struct usbhid_report_start_call {
+	struct hid_device *hid;
+	TaskHandle_t waiter;
+	bool done;
+};
+
 struct usbhid_report_rx_slot {
 	struct hid_device *owner;
 	u8 *buffer;
@@ -128,10 +123,12 @@ struct usbhid_report_rx_slot {
 	u8 xfer_result;
 	/* Snapshot upstream HID_OPENED/RESUME_RUNNING at completion. */
 	bool opened_at_completion;
-	/* Capacity may change while CLEAR_HALT is outside the transport mutex. */
-	bool clear_halt_capacity_edge;
+	/* One coalesced host abort/rearm continuation for this exact slot epoch. */
+	bool reconcile_pending;
 	/* TinyUSB closes the HCD endpoint after its application unmount hooks. */
 	u8 detach_state;
+	/* Keep reset_work's broker ticket across event-driven -EBUSY retries. */
+	struct hid_async_admission_node clear_halt_admission;
 };
 
 struct usbhid_report_retry {
@@ -151,10 +148,6 @@ static struct usbhid_report_rx_slot usbhid_report_rx_slots[CFG_TUH_HID];
 static struct usbhid_report_retry usbhid_report_retries[CFG_TUH_HID];
 static u8 usbhid_report_recovery[CFG_TUH_HID];
 static u32 usbhid_report_serial;
-/* report_host_pending retains each hid until the fenced host pass. */
-static struct usbhid_report_reconcile
-	usbhid_report_reconcile_pending[CFG_TUH_HID];
-static u8 usbhid_report_reconcile_drain_mask;
 /* Task-owned round-robin cursor over durable per-interface completions. */
 static u8 usbhid_input_report_cursor;
 
@@ -169,6 +162,20 @@ static bool usbhid_report_process_clear_halt(void);
 static void usbhid_report_clear_halt_complete(
 		const struct hid_async_request *req, int status);
 
+static void usbhid_report_start_on_host(void *data)
+{
+	struct usbhid_report_start_call *call = data;
+	TaskHandle_t waiter = call->waiter;
+
+	/* This wrapper itself runs in TinyUSB's sole host owner. */
+	usbhid_report_reconcile_on_host(call->hid);
+	hid_transport_lock();
+	call->done = true;
+	hid_transport_unlock();
+	/* Publishing done releases the stack-owned call; do not touch it again. */
+	xTaskNotifyGive(waiter);
+}
+
 static void usbhid_report_notify_task(void)
 {
 	TaskHandle_t task;
@@ -177,35 +184,45 @@ static void usbhid_report_notify_task(void)
 	task = usbhid_report_task_handle;
 	hid_transport_unlock();
 	if (task)
-		(void)xTaskNotifyGiveIndexed(task, USBHID_REPORT_NOTIFY_INDEX);
+		(void)xTaskNotifyGive(task);
 }
 
-/*
- * Upstream Linux has no equivalent callback: usbcore admits the blocking
- * usb_clear_halt() from reset_work. The firmware broker has a fixed request
- * pool, so a normal-slot/reservation edge makes its durable reset work
- * runnable again. Caller holds the transport mutex; this must not relock it.
- */
-void usbhid_report_capacity_available_locked(void)
+/* Caller has already retired the corresponding CLEAR_HALT recovery state. */
+static void usbhid_report_clear_halt_cancel_admission_locked(int index)
 {
-	bool wake = false;
+	if (index < 0 || index >= CFG_TUH_HID)
+		return;
+	hid_async_admission_unlink_locked(
+		&usbhid_report_rx_slots[index].clear_halt_admission);
+}
 
+/* Retire one corrupt serial-matched tuple without stopping other HIDs. */
+static void usbhid_report_retire_slot_locked(int index)
+{
+	if (index < 0 || index >= CFG_TUH_HID)
+		return;
+	usbhid_report_clear_halt_cancel_admission_locked(index);
+	memset(&usbhid_report_rx_slots[index], 0,
+	       sizeof(usbhid_report_rx_slots[index]));
+	usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
+	usbhid_report_retries[index].stop_retry = 0;
+	usbhid_report_retries[index].retry_delay = 0;
+	usbhid_report_retries[index].clear_halt_deadline = 0;
+}
+
+/* Retry only admission nodes whose ticket and physical-slot predicate won. */
+static void usbhid_report_admission_wake(void)
+{
+	hid_transport_lock();
 	for (int i = 0; i < CFG_TUH_HID; i++) {
 		if (usbhid_report_recovery[i] ==
-		    USBHID_REPORT_RECOVERY_CLEAR_HALT_WAIT_SLOT) {
+			    USBHID_REPORT_RECOVERY_CLEAR_HALT_WAIT_SLOT &&
+		    hid_async_admission_can_enter_locked(
+			    &usbhid_report_rx_slots[i].clear_halt_admission))
 			usbhid_report_recovery[i] =
 				USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT;
-			usbhid_report_rx_slots[i].clear_halt_capacity_edge = false;
-			wake = true;
-		} else if (usbhid_report_recovery[i] ==
-			   USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE) {
-			/* Close release-between-attempt-and-WAIT lost-wake window. */
-			usbhid_report_rx_slots[i].clear_halt_capacity_edge = true;
-		}
 	}
-	if (wake && usbhid_report_task_handle)
-		(void)xTaskNotifyGiveIndexed(usbhid_report_task_handle,
-					 USBHID_REPORT_NOTIFY_INDEX);
+	hid_transport_unlock();
 }
 
 /*
@@ -252,15 +269,15 @@ static bool usbhid_report_close_idle_locked(struct hid_device *hid)
 	       !usbhid->report_host_pending && transfer_released;
 }
 
-/* Snapshot the waiter in the same publication scope which reaches idle. */
+/* Publish both the close edge and Linux-style wake_up_all() transport edge. */
 static TaskHandle_t usbhid_report_idle_waiter_locked(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
 
+	if (usbhid_report_idle_locked(hid))
+		usbhid_wait_wake_locked(hid);
 	/* Intermediate edges may wake close; its loop rechecks the durable state. */
-	if (usbhid->report_close_waiter)
-		return usbhid->report_close_waiter;
-	return usbhid_report_idle_locked(hid) ? usbhid->wait.task : NULL;
+	return usbhid->report_close_waiter;
 }
 
 bool usbhid_report_idle(struct hid_device *hid)
@@ -478,20 +495,8 @@ static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 			invalid = true;
 			slot->opened_at_completion = false;
 			if (!usbhid) {
-				/* No pointer may escape; permanently retire the orphan slot. */
-				slot->owner = NULL;
-				slot->buffer = NULL;
-				slot->generation = 0;
-				slot->revision = 0;
-				slot->actual_len = 0;
-				slot->bufsize = 0;
-				slot->dev_addr = 0;
-				slot->ep_addr = 0;
-				slot->xfer_result = XFER_RESULT_INVALID;
-				slot->detach_state =
-					USBHID_REPORT_DETACH_QUARANTINED;
-				usbhid_report_recovery[i] =
-					USBHID_REPORT_RECOVERY_NONE;
+				/* No pointer escapes; the retired serial makes reuse unambiguous. */
+				usbhid_report_retire_slot_locked(i);
 				break;
 			}
 
@@ -575,32 +580,25 @@ static void usbhid_report_detach_fence_on_host(void *data)
 }
 
 static bool usbhid_report_queue_reconcile(struct hid_device *hid,
-					   u32 generation, bool drain_sof)
+					   u32 generation)
 {
-	int slot = -1;
+	bool queued = false;
 
 	hid_transport_lock();
 	for (int i = 0; i < CFG_TUH_HID; i++) {
-		if (usbhid_report_reconcile_pending[i].hid == hid &&
-		    usbhid_report_reconcile_pending[i].generation == generation) {
-			slot = i;
+		if (usbhid_report_rx_slots[i].owner == hid &&
+		    usbhid_report_rx_slots[i].generation == generation) {
+			usbhid_report_rx_slots[i].reconcile_pending = true;
+			queued = true;
 			break;
 		}
-		if (slot < 0 && !usbhid_report_reconcile_pending[i].hid)
-			slot = i;
-	}
-	if (slot >= 0) {
-		usbhid_report_reconcile_pending[slot].hid = hid;
-		usbhid_report_reconcile_pending[slot].generation = generation;
-		if (drain_sof)
-			usbhid_report_reconcile_drain_mask |= (u8)BIT(slot);
 	}
 	hid_transport_unlock();
 
-	if (slot < 0)
+	if (!queued)
 		return false;
 
-	/* The pending table is the durable predicate; publish it before waking. */
+	/* The owner slot is the durable predicate; publish it before waking. */
 	usbhid_report_notify_task();
 	return true;
 }
@@ -655,6 +653,7 @@ static bool usbhid_report_cancel_recovery(struct hid_device *hid)
 	TaskHandle_t waiter = NULL;
 	int index = -1;
 	int was_pending;
+	bool cancel_reset = false;
 	bool local_wait = false;
 	bool reconcile = false;
 
@@ -667,8 +666,8 @@ static bool usbhid_report_cancel_recovery(struct hid_device *hid)
 		    recovery == USBHID_REPORT_RECOVERY_CLEAR_HALT_WAIT_SLOT) {
 			usbhid_report_recovery[index] =
 				USBHID_REPORT_RECOVERY_NONE;
-			usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 			usbhid_report_retries[index].clear_halt_deadline = 0;
+			usbhid_report_clear_halt_cancel_admission_locked(index);
 			if (usbhid->report_owner == USBHID_REPORT_STOPPED) {
 				if (usbhid->report_wanted &&
 				    !usbhid->transport_stopping) {
@@ -684,12 +683,42 @@ static bool usbhid_report_cancel_recovery(struct hid_device *hid)
 			timer = &usbhid_report_retries[index].io_retry;
 			/* Keep the static slot from being reused across timer deletion. */
 			usbhid->io_pending++;
+		} else if (recovery == USBHID_REPORT_RECOVERY_DEVICE_RESET) {
+			/* Keep hid/cache alive while canceling its queued reset ticket. */
+			usbhid->io_pending++;
+			cancel_reset = true;
 		}
 	}
 	hid_transport_unlock();
 	if (local_wait) {
 		if (waiter)
 			xTaskNotifyGive(waiter);
+		return reconcile;
+	}
+	if (cancel_reset) {
+		bool const cancelled =
+			usbhid_backend_cancel_device_reset(hid);
+
+		hid_transport_lock();
+		if (cancelled && usbhid_report_rx_slots[index].owner == hid &&
+		    usbhid_report_recovery[index] == recovery) {
+			usbhid_report_recovery[index] =
+				USBHID_REPORT_RECOVERY_NONE;
+			if (usbhid->report_owner == USBHID_REPORT_STOPPED) {
+				if (usbhid->report_wanted &&
+				    !usbhid->transport_stopping) {
+					usbhid->report_host_pending = true;
+					reconcile = true;
+				} else {
+					usbhid->report_host_pending = false;
+				}
+			}
+		}
+		waiter = usbhid_report_idle_waiter_locked(hid);
+		hid_transport_unlock();
+		if (waiter)
+			xTaskNotifyGive(waiter);
+		usbhid_io_put(hid);
 		return reconcile;
 	}
 	if (!timer)
@@ -760,8 +789,8 @@ static bool usbhid_report_process_stopping_recovery(void)
 		    recovery == USBHID_REPORT_RECOVERY_CLEAR_HALT_WAIT_SLOT) {
 			/* No async request owns these pre-wire reset_work states. */
 			usbhid_report_recovery[i] = USBHID_REPORT_RECOVERY_NONE;
-			usbhid_report_rx_slots[i].clear_halt_capacity_edge = false;
 			usbhid_report_retries[i].clear_halt_deadline = 0;
+			usbhid_report_clear_halt_cancel_admission_locked(i);
 			if (usbhid->report_owner == USBHID_REPORT_STOPPED)
 				usbhid->report_host_pending = false;
 			waiter = usbhid_report_idle_waiter_locked(hid);
@@ -846,7 +875,7 @@ static void hid_retry_timeout(struct timer_list *t)
 
 	if (!queue_retry)
 		return;
-	if (usbhid_report_queue_reconcile(hid, generation, false))
+	if (usbhid_report_queue_reconcile(hid, generation))
 		return;
 
 	usbhid_backend_rx_rearm_failed();
@@ -956,7 +985,7 @@ static void usbhid_report_request_device_reset(struct hid_device *hid,
 		xTaskNotifyGive(waiter);
 
 	if (reconcile &&
-	    !usbhid_report_queue_reconcile(hid, generation, false)) {
+	    !usbhid_report_queue_reconcile(hid, generation)) {
 		waiter = NULL;
 		hid_transport_lock();
 		if (index >= 0 && index < CFG_TUH_HID &&
@@ -1077,10 +1106,10 @@ static void hid_io_error(struct hid_device *hid)
 				usbhid_backend_rx_rearm_failed();
 			return;
 		}
-		if (usbhid_report_queue_reconcile(hid, generation, false))
+		if (usbhid_report_queue_reconcile(hid, generation))
 			return;
 
-		/* A full reconcile table cannot retain this current open epoch. */
+		/* The report slot no longer retains this open epoch. */
 		usbhid_backend_rx_rearm_failed();
 		waiter = NULL;
 		hid_transport_lock();
@@ -1216,17 +1245,29 @@ static bool usbhid_report_process_clear_halt(void)
 		hid_transport_unlock();
 		return false;
 	}
-	configASSERT(hid);
+	if (!hid) {
+		usbhid_report_retire_slot_locked(index);
+		hid_transport_unlock();
+		async_msg("ERR: HID_RX_OWNER_LOST");
+		usbhid_backend_rx_invariant_failed();
+		return true;
+	}
 	usbhid = hid->driver_data;
-	configASSERT(usbhid);
+	if (!usbhid) {
+		usbhid_report_retire_slot_locked(index);
+		hid_transport_unlock();
+		async_msg("ERR: HID_RX_STATE_LOST");
+		usbhid_backend_rx_invariant_failed();
+		return true;
+	}
 	if (usbhid_report_rx_slots[index].generation != usbhid->generation ||
 	    usbhid->report_slot != (u8)(index + 1) ||
 	    usbhid->report_owner != USBHID_REPORT_STOPPED ||
 	    !usbhid->report_host_pending || !usbhid->report_wanted ||
-	    usbhid->transport_stopping) {
+		    usbhid->transport_stopping) {
 		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
-		usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 		usbhid_report_retries[index].clear_halt_deadline = 0;
+		usbhid_report_clear_halt_cancel_admission_locked(index);
 		if (usbhid->report_owner == USBHID_REPORT_STOPPED) {
 			usbhid->report_host_pending = false;
 			waiter = usbhid_report_idle_waiter_locked(hid);
@@ -1239,8 +1280,8 @@ static bool usbhid_report_process_clear_halt(void)
 	if (time_after_eq(
 		now, usbhid_report_retries[index].clear_halt_deadline)) {
 		usbhid_report_recovery[index] = USBHID_REPORT_RECOVERY_NONE;
-		usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 		usbhid_report_retries[index].clear_halt_deadline = 0;
+		usbhid_report_clear_halt_cancel_admission_locked(index);
 		usbhid->report_wanted = false;
 		usbhid->report_host_pending = false;
 		waiter = usbhid_report_idle_waiter_locked(hid);
@@ -1254,7 +1295,9 @@ static bool usbhid_report_process_clear_halt(void)
 	/* Claim reset_work before unlock so stop cannot retire this hid pointer. */
 	usbhid_report_recovery[index] =
 		USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE;
-	usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
+	/* The generic admission edge wakes this same report-task notification. */
+	usbhid_report_rx_slots[index].clear_halt_admission.task =
+		usbhid_report_task_handle;
 	generation = usbhid->generation;
 	dev_addr = usbhid->dev_addr;
 	ep_addr = usbhid_report_rx_slots[index].ep_addr;
@@ -1266,11 +1309,12 @@ static bool usbhid_report_process_clear_halt(void)
 	// completion continues the upstream reset_work path asynchronously below.
 	ret = hid_async_device_epoch_snapshot(dev_addr, &async_generation);
 	if (!ret)
-		ret = hid_async_queue_usb_control_msg(hid, dev_addr,
+		ret = hid_async_queue_usb_control_msg_admitted(hid, dev_addr,
 			async_generation, USB_REQ_CLEAR_FEATURE,
 			USB_RECIP_ENDPOINT,
 			USB_ENDPOINT_HALT, ep_addr, NULL, 0,
 			USB_CTRL_SET_TIMEOUT,
+			&usbhid_report_rx_slots[index].clear_halt_admission,
 			usbhid_report_clear_halt_complete, NULL);
 	if (!ret) {
 		hid_transport_lock();
@@ -1278,7 +1322,6 @@ static bool usbhid_report_process_clear_halt(void)
 		    usbhid_report_rx_slots[index].generation == generation &&
 		    usbhid_report_recovery[index] ==
 			USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE) {
-			usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 			usbhid_report_retries[index].clear_halt_deadline = 0;
 		}
 		hid_transport_unlock();
@@ -1294,20 +1337,10 @@ static bool usbhid_report_process_clear_halt(void)
 		    !usbhid->transport_stopping &&
 		    time_before(jiffies,
 			usbhid_report_retries[index].clear_halt_deadline)) {
-			/*
-			 * Slot release during the unlocked attempt is already an edge;
-			 * otherwise sleep on the next broker capacity transition. The
-			 * active requests/admission waiters are bounded, while this task
-			 * itself drains completed parser-owned slots.
-			 */
+			/* The linked admission node owns the next capacity wake edge. */
 			usbhid_report_recovery[index] =
-				usbhid_report_rx_slots[index].clear_halt_capacity_edge ?
-				USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT :
 				USBHID_REPORT_RECOVERY_CLEAR_HALT_WAIT_SLOT;
-			usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 		} else {
-			usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
-			usbhid_report_retries[index].clear_halt_deadline = 0;
 			/*
 			 * usb_clear_halt() has not reached the wire. A local fatal error
 			 * is not the upstream transfer failure which queues
@@ -1317,6 +1350,9 @@ static bool usbhid_report_process_clear_halt(void)
 			       !usbhid->transport_stopping;
 			usbhid_report_recovery[index] =
 				USBHID_REPORT_RECOVERY_NONE;
+			usbhid_report_retries[index].clear_halt_deadline = 0;
+			/* Snapshot failure did not enter the broker; this is still safe. */
+			usbhid_report_clear_halt_cancel_admission_locked(index);
 			if (park)
 				usbhid->report_wanted = false;
 			usbhid->report_host_pending = false;
@@ -1351,7 +1387,6 @@ static void usbhid_report_clear_halt_complete(
 	    usbhid_report_rx_slots[index].owner == hid &&
 	    usbhid_report_recovery[index] ==
 		USBHID_REPORT_RECOVERY_CLEAR_HALT_ACTIVE) {
-		usbhid_report_rx_slots[index].clear_halt_capacity_edge = false;
 		usbhid_report_retries[index].clear_halt_deadline = 0;
 		generation = usbhid_report_rx_slots[index].generation;
 		if (!status && generation == usbhid->generation &&
@@ -1407,7 +1442,7 @@ static void usbhid_report_clear_halt_complete(
 		}
 		return;
 	}
-	if (usbhid_report_queue_reconcile(hid, generation, false))
+	if (usbhid_report_queue_reconcile(hid, generation))
 		return;
 
 	usbhid_backend_rx_rearm_failed();
@@ -1451,13 +1486,18 @@ int usbhid_report_init(void)
 
 int usbhid_report_start(struct hid_device *hid)
 {
+	struct usbhid_report_start_call call = { 0 };
 	struct usbhid_device *usbhid;
+	bool done;
 	bool defer;
 	int slot;
 	int ret;
 
 	if (!hid)
 		return -ENODEV;
+	/* Waiting in either TinyUSB owner would deadlock its own host continuation. */
+	if (!hid_async_sync_call_allowed())
+		return -EAGAIN;
 	usbhid = hid->driver_data;
 	ret = usbhid_report_prepare(hid);
 	if (ret)
@@ -1478,8 +1518,26 @@ int usbhid_report_start(struct hid_device *hid)
 		usbhid->report_host_pending = true;
 	hid_transport_unlock();
 
-	if (defer)
-		usbh_defer_func(usbhid_report_reconcile_on_host, hid, false);
+	if (defer) {
+		call.hid = hid;
+		call.waiter = xTaskGetCurrentTaskHandle();
+		/* Notification is an edge; the stack-owned done bit is the predicate. */
+		(void)ulTaskNotifyTake(pdTRUE, 0);
+		usbh_defer_func(usbhid_report_start_on_host, &call, false);
+		do {
+			hid_transport_lock();
+			done = call.done;
+			hid_transport_unlock();
+			if (!done)
+				(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		} while (!done);
+	}
+	/*
+	 * Upstream returns usb_submit_urb()'s first result. The host pass above has
+	 * already published an arm failure into the report recovery state, so zero
+	 * here means that asynchronous ownership was established and ordered before
+	 * the caller's resume drain.
+	 */
 	return 0;
 }
 
@@ -1487,7 +1545,6 @@ void usbhid_report_close(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid;
 	TaskHandle_t task;
-	TaskHandle_t waiter;
 	bool always_poll;
 	bool close_idle;
 	bool defer = false;
@@ -1532,10 +1589,9 @@ void usbhid_report_close(struct hid_device *hid)
 	/* Relay an idle edge hidden from the broader teardown/hid_hw_wait waiter. */
 	hid_transport_lock();
 	usbhid->report_close_waiter = NULL;
-	waiter = usbhid_report_idle_locked(hid) ? usbhid->wait.task : NULL;
+	if (usbhid_report_idle_locked(hid))
+		usbhid_wait_wake_locked(hid);
 	hid_transport_unlock();
-	if (waiter && waiter != task)
-		xTaskNotifyGive(waiter);
 }
 
 static bool usbhid_input_report_take(struct usbhid_input_report_event *event)
@@ -1676,62 +1732,116 @@ void usbhid_report_unplug(struct hid_device *hid)
 void usbhid_report_release(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid;
-	bool report_stopped = true;
-	bool host_reconciled = true;
-	bool transfer_released = true;
-	bool detach_not_pending = true;
-	bool detach_not_queued = true;
-	int slot;
+	TaskHandle_t task;
+	bool timer_slots[CFG_TUH_HID] = { 0 };
+	bool slot_accounted;
+	bool report_stopped;
+	bool host_reconciled;
+	bool transfer_released;
+	bool detach_released;
+	bool release_safe;
+	bool diagnosed = false;
+	int expected_slot;
+	int owned_slots;
 
 	if (!hid)
 		return;
 	usbhid = hid->driver_data;
+	if (!usbhid) {
+		async_msg("ERR: HID_RX_STATE_LOST");
+		usbhid_backend_rx_invariant_failed();
+		return;
+	}
+	task = xTaskGetCurrentTaskHandle();
 
 	hid_transport_lock();
-	slot = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
+	expected_slot = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		if (usbhid_report_rx_slots[i].owner == hid)
+			timer_slots[i] = true;
+	}
 	hid_transport_unlock();
-	if (slot >= 0 && slot < CFG_TUH_HID)
-		timer_delete_sync(&usbhid_report_retries[slot].io_retry);
+	for (int i = 0; i < CFG_TUH_HID; i++) {
+		if (timer_slots[i])
+			timer_delete_sync(&usbhid_report_retries[i].io_retry);
+	}
+
+	/* Register before the first predicate test, like Linux prepare_to_wait(). */
+	(void)ulTaskNotifyTake(pdTRUE, 0);
 
 	hid_transport_lock();
-	if (slot >= 0 && slot < CFG_TUH_HID &&
-	    usbhid_report_rx_slots[slot].owner == hid) {
+	/* usbhid->mutex has already serialized the sole close/release waiter. */
+	usbhid->report_close_waiter = task;
+	hid_transport_unlock();
+	usbhid_report_notify_task();
+
+	for (;;) {
+		hid_transport_lock();
+		owned_slots = 0;
+		transfer_released = true;
+		detach_released = true;
+		for (int i = 0; i < CFG_TUH_HID; i++) {
+			if (usbhid_report_rx_slots[i].owner != hid)
+				continue;
+			owned_slots++;
+			if (usbhid_report_rx_slots[i].serial)
+				transfer_released = false;
+			if (usbhid_report_rx_slots[i].detach_state ==
+				    USBHID_REPORT_DETACH_PENDING ||
+			    usbhid_report_rx_slots[i].detach_state ==
+				    USBHID_REPORT_DETACH_QUEUED)
+				detach_released = false;
+		}
+		slot_accounted =
+			(expected_slot < 0 && !owned_slots) ||
+			(expected_slot >= 0 && expected_slot < CFG_TUH_HID &&
+			 owned_slots == 1 &&
+			 usbhid_report_rx_slots[expected_slot].owner == hid);
 		report_stopped =
 			usbhid->report_owner == USBHID_REPORT_STOPPED;
 		host_reconciled = !usbhid->report_host_pending;
-		transfer_released = !usbhid_report_rx_slots[slot].serial;
-		detach_not_pending =
-			usbhid_report_rx_slots[slot].detach_state !=
-			USBHID_REPORT_DETACH_PENDING;
-		detach_not_queued =
-			usbhid_report_rx_slots[slot].detach_state !=
-			USBHID_REPORT_DETACH_QUEUED;
-		memset(&usbhid_report_rx_slots[slot], 0,
-		       sizeof(usbhid_report_rx_slots[slot]));
-		usbhid_report_retries[slot].stop_retry = 0;
-		usbhid_report_retries[slot].retry_delay = 0;
-		usbhid_report_retries[slot].clear_halt_deadline = 0;
-		usbhid_report_recovery[slot] = USBHID_REPORT_RECOVERY_NONE;
-	}
-	usbhid->report_slot = 0;
-	usbhid->report_bufsize = 0;
-	hid_transport_unlock();
+		release_safe = slot_accounted && report_stopped && host_reconciled &&
+			transfer_released && detach_released;
+		if (release_safe) {
+			for (int i = 0; i < CFG_TUH_HID; i++) {
+				if (usbhid_report_rx_slots[i].owner != hid)
+					continue;
+				/* Erase only after every HCD/task owner released the slot. */
+				usbhid_report_recovery[i] =
+					USBHID_REPORT_RECOVERY_NONE;
+				usbhid_report_clear_halt_cancel_admission_locked(i);
+				memset(&usbhid_report_rx_slots[i], 0,
+				       sizeof(usbhid_report_rx_slots[i]));
+				usbhid_report_retries[i].stop_retry = 0;
+				usbhid_report_retries[i].retry_delay = 0;
+				usbhid_report_retries[i].clear_halt_deadline = 0;
+			}
+			if (usbhid->report_close_waiter == task)
+				usbhid->report_close_waiter = NULL;
+			usbhid->report_slot = 0;
+			usbhid->report_bufsize = 0;
+			hid_transport_unlock();
+			break;
+		}
+		hid_transport_unlock();
 
-	if (!report_stopped)
-		async_msg("ERR: HID_RX_RELEASE_ACTIVE");
-	configASSERT(report_stopped);
-	if (!host_reconciled)
-		async_msg("ERR: HID_RX_RELEASE_PENDING");
-	configASSERT(host_reconciled);
-	if (!transfer_released)
-		async_msg("ERR: HID_RX_RELEASE_ARMED");
-	configASSERT(transfer_released);
-	if (!detach_not_pending)
-		async_msg("ERR: HID_RX_DETACH_PENDING");
-	configASSERT(detach_not_pending);
-	if (!detach_not_queued)
-		async_msg("ERR: HID_RX_DETACH_QUEUED");
-	configASSERT(detach_not_queued);
+		if (!diagnosed) {
+			if (!slot_accounted)
+				async_msg("ERR: HID_RX_SLOT_LOST");
+			else if (!report_stopped)
+				async_msg("ERR: HID_RX_RELEASE_ACTIVE");
+			else if (!host_reconciled)
+				async_msg("ERR: HID_RX_RELEASE_PENDING");
+			else if (!transfer_released)
+				async_msg("ERR: HID_RX_RELEASE_ARMED");
+			else
+				async_msg("ERR: HID_RX_DETACH_PENDING");
+			usbhid_backend_rx_invariant_failed();
+			diagnosed = true;
+		}
+		/* Hard lifetime fence: an intermediate edge always rechecks state. */
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	}
 }
 
 bool usbhid_report_is_stopping(struct hid_device *hid)
@@ -1776,8 +1886,11 @@ bool usbhid_report_is_stopping(struct hid_device *hid)
 // TinyUSB's host-owner callback is task context, so the shared transport task
 // mutex and owner state replace the IRQ-side spinlock. wanted/stopping/owner
 // are this port's POLLING/DISCONNECTED/RUNNING gates. TinyUSB submits only from
-// its host owner and returns bool, so it cannot preserve Linux's
-// -ENOSPC/HID_NO_BANDWIDTH distinction.
+// its host owner. The current PIO HCD reserves one of its fixed endpoint slots
+// at class open and has no runtime bandwidth scheduler, so a successfully
+// opened interrupt endpoint cannot later return Linux's -ENOSPC here. The
+// typed firmware submit adapter still preserves -ENODEV/-EBUSY/EPIPE/timeout;
+// a future scheduled HCD must add an explicit -ENOSPC result at that adapter.
 static void usbhid_report_reconcile_on_host(void *data)
 {
 	struct hid_device *hid = data;
@@ -1857,10 +1970,10 @@ static void usbhid_report_reconcile_on_host(void *data)
 			 * completed while abort raced its SOF, that old HCD event is already
 			 * ahead of the next host defer and cannot consume the new owner.
 			 */
-			if (usbhid_report_queue_reconcile(hid, generation, true))
+			if (usbhid_report_queue_reconcile(hid, generation))
 				return;
 
-			/* The pending table and its notification-only wake are bounded. */
+			/* The report slot no longer owns a safe host continuation. */
 			usbhid_backend_rx_rearm_failed();
 			hid_transport_lock();
 			usbhid->report_wanted = false;
@@ -2034,39 +2147,41 @@ static bool usbhid_report_process_reconcile(void)
 {
 	struct usbhid_report_reconcile pending[CFG_TUH_HID];
 	bool have_pending = false;
-	u8 drain_mask = 0;
 
+	memset(pending, 0, sizeof(pending));
 	hid_transport_lock();
 	for (int i = 0; i < CFG_TUH_HID; i++) {
-		if (usbhid_report_reconcile_pending[i].hid) {
-			have_pending = true;
-			break;
-		}
-	}
-	if (have_pending) {
-		memcpy(pending, usbhid_report_reconcile_pending, sizeof(pending));
-		memset(usbhid_report_reconcile_pending, 0,
-		       sizeof(usbhid_report_reconcile_pending));
-		drain_mask = usbhid_report_reconcile_drain_mask;
-		usbhid_report_reconcile_drain_mask = 0;
+		if (!usbhid_report_rx_slots[i].reconcile_pending)
+			continue;
+		pending[i].hid = usbhid_report_rx_slots[i].owner;
+		pending[i].generation = usbhid_report_rx_slots[i].generation;
+		usbhid_report_rx_slots[i].reconcile_pending = false;
+		have_pending = true;
 	}
 	hid_transport_unlock();
 
 	if (!have_pending)
 		return false;
 
-	/* Only an abort needs two SOFs before the host-owner fence. */
-	if (drain_mask)
-		usbhid_report_drain_abort_frames();
+	/*
+	 * PIO's alarm IRQ and every HCD abort run on CORE1. The host task therefore
+	 * cannot resume until a completion which raced abort has been published.
+	 * Queueing this one-shot continuation immediately puts it after that event
+	 * in TinyUSB's FIFO; no SOF polling is needed.
+	 */
 	for (int i = 0; i < CFG_TUH_HID; i++) {
 		struct usbhid_device *pending_usbhid;
 		bool reconcile;
 
 		if (!pending[i].hid)
 			continue;
-		pending_usbhid = pending[i].hid->driver_data;
 		hid_transport_lock();
-		reconcile = pending[i].generation == pending_usbhid->generation &&
+		reconcile = usbhid_report_rx_slots[i].owner == pending[i].hid &&
+			    usbhid_report_rx_slots[i].generation ==
+				pending[i].generation;
+		pending_usbhid = reconcile ? pending[i].hid->driver_data : NULL;
+		reconcile = pending_usbhid &&
+			    pending[i].generation == pending_usbhid->generation &&
 			    pending_usbhid->report_host_pending;
 		hid_transport_unlock();
 		if (reconcile)
@@ -2156,6 +2271,10 @@ void usbhid_report_task(void *pvParameters)
 		bool process;
 		int index;
 
+		/* Admission and report work share one coalesced wake edge. */
+		if (ulTaskNotifyTake(pdTRUE, 0))
+			usbhid_report_admission_wake();
+
 		/* TinyUSB callback only published stop; task owns timer cancellation. */
 		if (usbhid_report_process_stopping_recovery())
 			continue;
@@ -2193,14 +2312,9 @@ void usbhid_report_task(void *pvParameters)
 			wait_timeout = usbhid_report_clear_halt_wait_timeout();
 			if (!wait_timeout)
 				continue;
-			/*
-			 * Fixed completion slots, the control queue, and the reconcile table
-			 * are durable predicates. Index 1 is only their wake edge, so
-			 * coalescing notifications cannot lose work.
-			 */
-			(void)ulTaskNotifyTakeIndexed(
-				USBHID_REPORT_NOTIFY_INDEX, pdTRUE,
-				wait_timeout);
+			/* Every queue/state above is durable; notification is only its edge. */
+			if (ulTaskNotifyTake(pdTRUE, wait_timeout))
+				usbhid_report_admission_wake();
 			continue;
 		}
 		prefer_control = true;
@@ -2250,7 +2364,8 @@ void usbhid_report_task(void *pvParameters)
 		// 	usbhid->retry_delay = 0;
 		// Each fixed report slot owns Linux's retry epoch. Reset it before
 		// parsing exactly when its interrupt transfer succeeds.
-		if (status_current && event.xfer_result == XFER_RESULT_SUCCESS &&
+		if (completion_owned &&
+		    event.xfer_result == XFER_RESULT_SUCCESS &&
 		    index >= 0 && index < CFG_TUH_HID &&
 		    usbhid_report_rx_slots[index].owner == event.hid)
 			usbhid_report_retries[index].retry_delay = 0;
@@ -2334,8 +2449,6 @@ void usbhid_report_task(void *pvParameters)
 				    usbhid_report_rx_slots[index].owner == event.hid) {
 					usbhid_report_recovery[index] =
 						USBHID_REPORT_RECOVERY_CLEAR_HALT_SUBMIT;
-					usbhid_report_rx_slots[index].clear_halt_capacity_edge =
-						false;
 					usbhid_report_retries[index].clear_halt_deadline =
 						jiffies + msecs_to_jiffies(
 							USBHID_CLEAR_HALT_ADMISSION_TIMEOUT_MS);

@@ -10,6 +10,11 @@
  * documented at the local FreeRTOS event-lock boundary sites.
  */
 
+// #include <linux/input/mt.h>
+// #include <linux/export.h>
+// #include <linux/slab.h>
+// Firmware builds the same MT implementation through the local compatibility
+// include tree; export and allocation helpers are provided by that tree.
 #include "../../include/linux/input/mt.h"
 #include "input-core-private.h"
 
@@ -293,8 +298,8 @@ void input_mt_drop_unused(struct input_dev *dev)
 
 	if (mt) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// The compatibility spinlock is a no-op; preserve the same upstream
-		// task-context critical section with the per-device event mutex.
+		// Compatibility spinlock operations are compile-gated; preserve the
+		// upstream task-context critical section with the per-device event mutex.
 		mutex_lock(&dev->port_event_mutex);
 		__input_mt_drop_unused(dev, mt);
 		mt->frame++;
@@ -347,8 +352,8 @@ void input_mt_sync_frame(struct input_dev *dev)
 
 	if (mt->flags & INPUT_MT_DROP_UNUSED) {
 		// guard(spinlock_irqsave)(&dev->event_lock);
-		// The compatibility spinlock is a no-op; preserve the same upstream
-		// task-context critical section with the per-device event mutex.
+		// Compatibility spinlock operations are compile-gated; preserve the
+		// upstream task-context critical section with the per-device event mutex.
 		mutex_lock(&dev->port_event_mutex);
 		__input_mt_drop_unused(dev, mt);
 		mutex_unlock(&dev->port_event_mutex);

@@ -38,7 +38,14 @@
 #define USB_CTRL_GET_TIMEOUT 5000
 #define USB_CTRL_SET_TIMEOUT 5000
 #define USB_MAX_SYNCHRONOUS_TIMEOUT 60000
-#define USB_HOST_ENDPOINT_MAX 4
+/*
+ * Linux USB core exposes every endpoint in the active altsetting. TinyUSB has
+ * already opened the HID transport before this compact shim is built, so the
+ * port retains only the first interrupt IN and first interrupt OUT selected by
+ * the same rule as upstream usbhid_start(). No linked HID caller consumes bulk
+ * or duplicate interrupt endpoints from this snapshot.
+ */
+#define USB_HOST_ENDPOINT_MAX 2
 #define USB_DT_ENDPOINT TUSB_DESC_ENDPOINT
 #define USB_ENDPOINT_XFER_INT TUSB_XFER_INTERRUPT
 #define USB_ENDPOINT_DIR_MASK 0x80

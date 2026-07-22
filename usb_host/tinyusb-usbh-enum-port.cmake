@@ -64,9 +64,7 @@ static usbh_dev0_t _dev0;
 // TinyUSB host owner so neither lifecycle nor another core reads private state.
 enum {
   USBH_PORT_ENUM_WATCHDOG_MS = 6000,
-  USBH_PORT_ENUM_DRAIN_MS = 2,
   USBH_PORT_ENUM_RETRY_MS = 100,
-  USBH_PORT_ENUM_DRAIN_PASSES = 3,
   USBH_PORT_TASK_EVENT_BUDGET = 8,
   USBH_PORT_ENUM_EVENT_NONE = 0,
   USBH_PORT_ENUM_EVENT_FAILED,
@@ -87,8 +85,6 @@ enum {
 
 static struct {
   uint32_t progress_ms;
-  uint32_t drain_at_ms;
-  uint32_t drain_event_start;
   uint8_t* retry_buffer;
   uint8_t* config_buffer;
   uintptr_t retry_user_data;
@@ -97,7 +93,6 @@ static struct {
   uint8_t daddr;
   uint8_t retry_daddr;
   uint8_t failed_count;
-  uint8_t drain_passes;
   // Host-task diagnostics survive an immediately chained enumeration epoch.
   uint8_t report_event;
   bool attach_overflow_pending;
@@ -109,31 +104,76 @@ static struct {
   bool removed;
   bool timed_out;
   bool restart_pending;
-  bool foreign_fenced;
-  bool drain_started;
-  bool drain_queue_fencing;
   bool config_fetch_pending;
 } _enum_port;
 
-// Current TinyUSB uses a separate deferred-attach queue. Keep only the
+enum {
+  USBH_PORT_CONTROL_ABORT_SUPPRESS = 0,
+  USBH_PORT_CONTROL_ABORT_FAILED,
+  USBH_PORT_CONTROL_ABORT_TIMEOUT
+};
+
+/*
+ * Upstream TinyUSB: no physical EP0 cancel-completion object. Enumeration and
+ * ordinary HID requests share one global logical control owner, so their
+ * cancel fence must also be one host-owned transaction. It retains values,
+ * never a caller's stack pointer.
+ */
+static struct {
+  uintptr_t user_data;
+  tuh_xfer_cb_t complete_cb;
+  uint16_t events_left;
+  uint8_t daddr;
+  uint8_t mode;
+  bool waiting;
+} _control_abort;
+
+// TinyUSB master 1b5c26b7 uses a separate deferred-attach queue. Keep only the
 // connection topology needed to rebuild an ATTACH event, avoiding both a
 // blocking send back into the sole consumer's queue and another RTOS queue.
 static struct {
   uint8_t rhport;
   uint8_t hub_addr;
   uint8_t hub_port;
+  bool attach_pending;
+  bool retirement_pending;
 } _enum_deferred_attach[TOTAL_DEVICES];
 static uint8_t _enum_deferred_attach_count;
-
-// Upstream TinyUSB: no queue-generation fence. A monotonic dequeue count lets
-// the host prove that one complete FIFO generation passed even when deferred
-// ATTACH events keep the queue permanently non-empty.
-static uint32_t _usbh_port_event_count;
 
 // all devices excluding zero-address
 ]=])
 ergotype_tinyusb_usbh_replace_unique("enumeration owner"
     TINYUSB_USBH_ENUM_STATE_UPSTREAM TINYUSB_USBH_ENUM_STATE_PORT)
+
+set(TINYUSB_USBH_EVENT_QUEUE_STATE_UPSTREAM [=[
+// Event queue
+// usbh_int_set is used as mutex in OS NONE config
+OSAL_QUEUE_DEF(usbh_int_set, _usbh_qdef, CFG_TUH_TASK_QUEUE_SZ, hcd_event_t);
+static osal_queue_t _usbh_q;
+]=])
+set(TINYUSB_USBH_EVENT_QUEUE_STATE_PORT [=[
+// Event queue
+// usbh_int_set is used as mutex in OS NONE config
+// OSAL_QUEUE_DEF(usbh_int_set, _usbh_qdef, CFG_TUH_TASK_QUEUE_SZ, hcd_event_t);
+// FreeRTOS dynamic queues ignore OSAL_QUEUE_DEF's backing array. Define only
+// the metadata here so the single 32-entry queue owns exactly one payload.
+#if CFG_TUSB_OS == OPT_OS_FREERTOS && !configSUPPORT_STATIC_ALLOCATION
+osal_queue_def_t _usbh_qdef = {
+  .depth = CFG_TUH_TASK_QUEUE_SZ,
+  .item_sz = sizeof(hcd_event_t),
+  .buf = NULL,
+#if defined(configQUEUE_REGISTRY_SIZE) && (configQUEUE_REGISTRY_SIZE > 0)
+  .name = "_usbh_qdef",
+#endif
+};
+#else
+OSAL_QUEUE_DEF(usbh_int_set, _usbh_qdef, CFG_TUH_TASK_QUEUE_SZ, hcd_event_t);
+#endif
+static osal_queue_t _usbh_q;
+]=])
+ergotype_tinyusb_usbh_replace_unique("single dynamic host event queue"
+    TINYUSB_USBH_EVENT_QUEUE_STATE_UPSTREAM
+    TINYUSB_USBH_EVENT_QUEUE_STATE_PORT)
 
 set(TINYUSB_USBH_ENUM_HELPERS_UPSTREAM [=[
 static bool enum_new_device(hcd_event_t* event);
@@ -155,16 +195,23 @@ extern bool tuh_reenumerate_begin_cb(uint8_t rhport, uint8_t hub_addr,
 extern void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
                                    uint8_t hub_port, bool active,
                                    bool success);
+extern void tuh_port_enum_parked_cb(uint8_t rhport, uint8_t hub_addr,
+                                    uint8_t hub_port);
 extern void tuh_port_control_idle_cb(void);
+extern void tuh_port_endpoint_idle_cb(uint8_t daddr, uint8_t ep_addr);
 extern void tuh_port_enum_event_cb(uint8_t event);
 extern void* tuh_port_enum_buffer_alloc_on_host(uint16_t length);
 extern void tuh_port_enum_buffer_free_on_host(void* buffer);
+extern bool tuh_port_replace_begin_cb(uint8_t rhport, uint8_t hub_addr,
+                                      uint8_t hub_port);
+extern bool tuh_port_cache_available_cb(void);
 
 // Upstream TinyUSB: no equivalent; forward declaration for exact pre-address
 // hub-control ownership and the host-only terminal state below.
 static void process_enumeration(tuh_xfer_t* xfer);
 TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage);
 static void _control_xfer_complete(uint8_t daddr, xfer_result_t result);
+static bool enum_full_complete(bool success);
 static int usbh_port_enum_service_on_host(uint32_t* wait_ms);
 static bool usbh_port_enum_config_has_interfaces_on_host(
     uint8_t const* config, uint16_t total_len, uint16_t offset,
@@ -221,12 +268,45 @@ static bool usbh_port_scope_contains_device_on_host(uint8_t hub_addr,
   return false;
 }
 
-static bool usbh_port_defer_attach_on_host(hcd_event_t const* event) {
+static int usbh_port_deferred_attach_find_on_host(
+    hcd_event_t const* event) {
   for (uint8_t i = 0; i < _enum_deferred_attach_count; i++) {
     if (_enum_deferred_attach[i].rhport == event->rhport &&
         _enum_deferred_attach[i].hub_addr == event->connection.hub_addr &&
         _enum_deferred_attach[i].hub_port == event->connection.hub_port)
-      return true;
+      return i;
+  }
+  return -1;
+}
+
+static int usbh_port_deferred_topology_find_on_host(uint8_t rhport,
+                                                     uint8_t hub_addr,
+                                                     uint8_t hub_port) {
+  hcd_event_t const event = {
+    .rhport = rhport,
+    .event_id = HCD_EVENT_DEVICE_ATTACH,
+    .connection = {
+      .hub_addr = hub_addr,
+      .hub_port = hub_port
+    }
+  };
+  return usbh_port_deferred_attach_find_on_host(&event);
+}
+
+static void usbh_port_deferred_attach_remove_on_host(uint8_t index) {
+  _enum_deferred_attach_count--;
+  for (uint8_t i = index; i < _enum_deferred_attach_count; i++)
+    _enum_deferred_attach[i] = _enum_deferred_attach[i + 1];
+}
+
+static bool usbh_port_defer_attach_on_host(hcd_event_t const* event,
+                                            bool retirement_pending) {
+  int const existing = usbh_port_deferred_attach_find_on_host(event);
+  if (existing >= 0) {
+    // A later duplicate cannot bypass an older cache-retirement fence.
+    _enum_deferred_attach[existing].attach_pending = true;
+    _enum_deferred_attach[existing].retirement_pending |= retirement_pending;
+    return true;
   }
 
   if (_enum_deferred_attach_count >= TOTAL_DEVICES) return false;
@@ -235,12 +315,41 @@ static bool usbh_port_defer_attach_on_host(hcd_event_t const* event) {
       event->connection.hub_addr;
   _enum_deferred_attach[_enum_deferred_attach_count].hub_port =
       event->connection.hub_port;
+  _enum_deferred_attach[_enum_deferred_attach_count].attach_pending = true;
+  _enum_deferred_attach[_enum_deferred_attach_count].retirement_pending =
+      retirement_pending;
   _enum_deferred_attach_count++;
   return true;
 }
 
+static void usbh_port_deferred_attach_retired_on_host(uint8_t rhport,
+                                                       uint8_t hub_addr,
+                                                       uint8_t hub_port) {
+  for (uint8_t i = 0; i < _enum_deferred_attach_count; i++) {
+    if (_enum_deferred_attach[i].rhport == rhport &&
+        _enum_deferred_attach[i].hub_addr == hub_addr &&
+        _enum_deferred_attach[i].hub_port == hub_port) {
+      _enum_deferred_attach[i].retirement_pending = false;
+      // A physical REMOVE may have revoked the retained ATTACH meanwhile.
+      if (!_enum_deferred_attach[i].attach_pending)
+        usbh_port_deferred_attach_remove_on_host(i);
+      return;
+    }
+  }
+}
+
+static bool usbh_port_deferred_attach_ready_on_host(void) {
+  return _enum_deferred_attach_count != 0 &&
+         _enum_deferred_attach[0].attach_pending &&
+         !_enum_deferred_attach[0].retirement_pending &&
+         tuh_port_cache_available_cb();
+}
+
 static bool usbh_port_take_deferred_attach_on_host(hcd_event_t* event) {
-  if (_enum_deferred_attach_count == 0) return false;
+  if (_enum_deferred_attach_count == 0 ||
+      !_enum_deferred_attach[0].attach_pending ||
+      _enum_deferred_attach[0].retirement_pending ||
+      !tuh_port_cache_available_cb()) return false;
 
   *event = (hcd_event_t) {
     .rhport = _enum_deferred_attach[0].rhport,
@@ -251,10 +360,28 @@ static bool usbh_port_take_deferred_attach_on_host(hcd_event_t* event) {
     }
   };
 
-  _enum_deferred_attach_count--;
-  for (uint8_t i = 0; i < _enum_deferred_attach_count; i++)
-    _enum_deferred_attach[i] = _enum_deferred_attach[i + 1];
+  usbh_port_deferred_attach_remove_on_host(0);
   return true;
+}
+
+static bool usbh_port_deferred_attach_direct_ready_on_host(uint8_t rhport,
+                                                            uint8_t hub_addr,
+                                                            uint8_t hub_port) {
+  int const index = usbh_port_deferred_topology_find_on_host(
+      rhport, hub_addr, hub_port);
+  if (index < 0) return tuh_port_cache_available_cb();
+  return !_enum_deferred_attach[index].retirement_pending &&
+         tuh_port_cache_available_cb();
+}
+
+static void usbh_port_deferred_attach_consume_direct_on_host(uint8_t rhport,
+                                                              uint8_t hub_addr,
+                                                              uint8_t hub_port) {
+  int const index = usbh_port_deferred_topology_find_on_host(
+      rhport, hub_addr, hub_port);
+  if (index < 0) return;
+  // Reset/re-enumeration is the newer attach owner for this exact topology.
+  usbh_port_deferred_attach_remove_on_host((uint8_t) index);
 }
 
 static void usbh_port_retire_deferred_attach_on_host(uint8_t rhport,
@@ -276,6 +403,13 @@ static void usbh_port_retire_deferred_attach_on_host(uint8_t rhport,
       }
     }
 
+    if (retire) {
+      // REMOVE revokes only the pending connection. If Linux still owns the
+      // old generation, retain its fence so a genuinely later ATTACH waits.
+      _enum_deferred_attach[read].attach_pending = false;
+      retire = !_enum_deferred_attach[read].retirement_pending;
+    }
+
     if (!retire) {
       if (write != read)
         _enum_deferred_attach[write] = _enum_deferred_attach[read];
@@ -283,6 +417,18 @@ static void usbh_port_retire_deferred_attach_on_host(uint8_t rhport,
     }
   }
   _enum_deferred_attach_count = write;
+}
+
+static bool usbh_port_topology_mounted_on_host(
+    hcd_event_t const* event) {
+  for (uint8_t dev_id = 0; dev_id < TOTAL_DEVICES; dev_id++) {
+    usbh_device_t const* dev = &_usbh_devices[dev_id];
+    if (dev->connected && dev->rhport == event->rhport &&
+        dev->hub_addr == event->connection.hub_addr &&
+        dev->hub_port == event->connection.hub_port)
+      return true;
+  }
+  return false;
 }
 
 static bool usbh_port_enum_noncontrol_event_retired_on_host(uint8_t daddr) {
@@ -297,6 +443,12 @@ static bool usbh_port_enum_noncontrol_event_retired_on_host(uint8_t daddr) {
 static bool usbh_port_enum_xfer_owned_on_host(uint8_t daddr,
                                                tuh_xfer_cb_t complete_cb) {
   if (!_enum_port.aborting) return false;
+  // A callback suppressed by REMOVE must not immediately claim a fresh EP0
+  // owner before process_removing_device() publishes ordinary class teardown.
+  if (_enum_port.removed && daddr &&
+      usbh_port_scope_contains_device_on_host(
+          _enum_port.removed_hub_addr, _enum_port.removed_hub_port, daddr))
+    return true;
   if (daddr == 0 || (_enum_port.daddr && daddr == _enum_port.daddr)) return true;
   return !_enum_port.daddr && _dev0.hub_addr &&
          daddr == _dev0.hub_addr && complete_cb == process_enumeration;
@@ -311,10 +463,176 @@ static bool usbh_port_enum_control_owned_on_host(void) {
          _ctrl_xfer.complete_cb == process_enumeration;
 }
 
+enum {
+  USBH_PORT_CONTROL_CANCEL_STALE = -1,
+  USBH_PORT_CONTROL_CANCEL_BUSY = -2,
+  USBH_PORT_CONTROL_CANCEL_PENDING = 0,
+  USBH_PORT_CONTROL_CANCEL_CALLBACK_DONE = 1,
+  USBH_PORT_CONTROL_CANCEL_ALREADY_IDLE = 2
+};
+
+static void usbh_port_control_abort_clear_on_host(void) {
+  _control_abort.user_data = 0;
+  _control_abort.complete_cb = NULL;
+  _control_abort.events_left = 0;
+  _control_abort.daddr = 0;
+  _control_abort.mode = USBH_PORT_CONTROL_ABORT_SUPPRESS;
+  _control_abort.waiting = false;
+}
+
+static bool usbh_port_control_abort_owner_matches_on_host(void) {
+  return _ctrl_xfer.stage != CONTROL_STAGE_IDLE &&
+         _ctrl_xfer.daddr == _control_abort.daddr &&
+         _ctrl_xfer.complete_cb == _control_abort.complete_cb &&
+         _ctrl_xfer.user_data == _control_abort.user_data;
+}
+
+/*
+ * Upstream TinyUSB: no physical-cancel completion boundary. PIO USB returns
+ * true only after removing the physical owner; false means a same-CORE1 SOF
+ * completion is already in the host FIFO, or no physical owner remains. Clear
+ * this common state before callbacks because either owner may synchronously
+ * start another logical request.
+ */
+static void usbh_port_control_abort_finish_on_host(void) {
+  bool const owner_matches = usbh_port_control_abort_owner_matches_on_host();
+  uint8_t const mode = _control_abort.mode;
+  uint8_t const daddr = _control_abort.daddr;
+
+  usbh_port_control_abort_clear_on_host();
+  if (owner_matches) {
+    if (mode == USBH_PORT_CONTROL_ABORT_FAILED)
+      _control_xfer_complete(daddr, XFER_RESULT_FAILED);
+    else if (mode == USBH_PORT_CONTROL_ABORT_TIMEOUT)
+      _control_xfer_complete(daddr, XFER_RESULT_TIMEOUT);
+    else
+      _set_control_xfer_stage(CONTROL_STAGE_IDLE);
+  }
+
+  if (_dev0.enumerating && _enum_port.aborting)
+    (void) enum_full_complete(false);
+}
+
+static int usbh_port_control_abort_begin_on_host(uint8_t mode) {
+  bool retired;
+
+  if (_control_abort.waiting)
+    return USBH_PORT_CONTROL_CANCEL_BUSY;
+  if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE)
+    return USBH_PORT_CONTROL_CANCEL_ALREADY_IDLE;
+
+  _control_abort.daddr = _ctrl_xfer.daddr;
+  _control_abort.complete_cb = _ctrl_xfer.complete_cb;
+  _control_abort.user_data = _ctrl_xfer.user_data;
+  _control_abort.mode = mode;
+
+  retired = hcd_edpt_abort_xfer(usbh_get_rhport(_ctrl_xfer.daddr),
+                                _ctrl_xfer.daddr, 0);
+  if (retired) {
+    usbh_port_control_abort_finish_on_host();
+    return USBH_PORT_CONTROL_CANCEL_CALLBACK_DONE;
+  }
+
+  /*
+   * FreeRTOS's queue count snapshots the exact FIFO prefix which existed when
+   * PIO reported that abort lost the race. The host task is its sole consumer;
+   * later producers append behind this prefix and cannot extend the wait.
+   */
+  _control_abort.events_left =
+      (uint16_t) uxQueueMessagesWaiting(_usbh_q);
+  _control_abort.waiting = _control_abort.events_left != 0;
+  if (!_control_abort.waiting) {
+    usbh_port_control_abort_finish_on_host();
+    return USBH_PORT_CONTROL_CANCEL_CALLBACK_DONE;
+  }
+  return USBH_PORT_CONTROL_CANCEL_PENDING;
+}
+
+static bool usbh_port_control_abort_event_on_host(hcd_event_t const* event,
+                                                   bool from_abort_prefix) {
+  if (!from_abort_prefix || !_control_abort.waiting ||
+      event->event_id != HCD_EVENT_XFER_COMPLETE ||
+      tu_edpt_number(event->xfer_complete.ep_addr) != 0 ||
+      event->dev_addr != _control_abort.daddr ||
+      !usbh_port_control_abort_owner_matches_on_host())
+    return false;
+
+  /* Consume the retired stage instead of allowing success to chain DATA/ACK. */
+  usbh_port_control_abort_finish_on_host();
+  return true;
+}
+
+static bool usbh_port_control_abort_prefix_complete_on_host(void) {
+  if (!_control_abort.waiting || _control_abort.events_left != 0)
+    return false;
+
+  /* No matching completion existed in the prefix: the physical owner is gone. */
+  usbh_port_control_abort_finish_on_host();
+  return true;
+}
+
+// Upstream TinyUSB: no exact task-side usb_kill_urb() entry. Start the same
+// global physical cancel fence used by enumeration, but only for this complete
+// callback/user_data identity. No caller-owned storage is retained.
+int usbh_port_control_cancel_on_host(uint8_t daddr,
+                                     tuh_xfer_cb_t complete_cb,
+                                     uintptr_t user_data) {
+  if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE)
+    return USBH_PORT_CONTROL_CANCEL_ALREADY_IDLE;
+
+  if (_ctrl_xfer.daddr != daddr ||
+      _ctrl_xfer.complete_cb != complete_cb ||
+      _ctrl_xfer.user_data != user_data)
+    return USBH_PORT_CONTROL_CANCEL_STALE;
+
+  if (_control_abort.waiting) {
+    if (_control_abort.mode == USBH_PORT_CONTROL_ABORT_TIMEOUT &&
+        usbh_port_control_abort_owner_matches_on_host())
+      return USBH_PORT_CONTROL_CANCEL_PENDING;
+    return USBH_PORT_CONTROL_CANCEL_BUSY;
+  }
+
+  return usbh_port_control_abort_begin_on_host(
+      USBH_PORT_CONTROL_ABORT_TIMEOUT);
+}
+
+// Upstream TinyUSB: no equivalent; async HID submits run only in the host
+// owner and need to distinguish a busy shared resource from a dead device.
+// Return -1 for gone/invalid, 0 for a current owner, and 1 for ready.
+int usbh_port_control_submit_ready_on_host(uint8_t daddr,
+                                           tuh_xfer_cb_t complete_cb) {
+  if (usbh_port_enum_xfer_owned_on_host(daddr, complete_cb)) return -1;
+  if (daddr == 0) {
+    if (!_dev0.enumerating) return -1;
+  } else {
+    usbh_device_t const* dev = get_device(daddr);
+    if (!dev || !dev->connected) return -1;
+  }
+
+  (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
+  bool const ready = _ctrl_xfer.stage == CONTROL_STAGE_IDLE;
+  (void) osal_mutex_unlock(_usbh_mutex);
+  return ready ? 1 : 0;
+}
+
+int usbh_port_edpt_submit_ready_on_host(uint8_t daddr, uint8_t ep_addr) {
+  uint8_t const epnum = tu_edpt_number(ep_addr);
+  uint8_t const dir = (uint8_t) tu_edpt_dir(ep_addr);
+  if (!daddr || !ep_addr || epnum >= CFG_TUH_ENDPOINT_MAX ||
+      usbh_port_enum_noncontrol_event_retired_on_host(daddr)) return -1;
+
+  usbh_device_t* dev = get_device(daddr);
+  if (!dev || !dev->connected) return -1;
+
+  (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
+  bool const ready = !dev->ep_status[epnum][dir].busy &&
+                     !dev->ep_status[epnum][dir].claimed;
+  (void) osal_mutex_unlock(_usbh_mutex);
+  return ready ? 1 : 0;
+}
+
 static void usbh_port_enum_start_on_host(void) {
   _enum_port.progress_ms = tusb_time_millis_api();
-  _enum_port.drain_at_ms = 0;
-  _enum_port.drain_event_start = 0;
   _enum_port.retry_buffer = NULL;
   _enum_port.config_buffer = NULL;
   _enum_port.retry_user_data = 0;
@@ -322,7 +640,6 @@ static void usbh_port_enum_start_on_host(void) {
   _enum_port.daddr = 0;
   _enum_port.retry_daddr = 0;
   _enum_port.failed_count = 0;
-  _enum_port.drain_passes = 0;
   _enum_port.removed_hub_addr = 0;
   _enum_port.removed_hub_port = 0;
   _enum_port.removed_scope_rank = 0;
@@ -331,9 +648,6 @@ static void usbh_port_enum_start_on_host(void) {
   _enum_port.removed = false;
   _enum_port.timed_out = false;
   _enum_port.restart_pending = false;
-  _enum_port.foreign_fenced = false;
-  _enum_port.drain_started = false;
-  _enum_port.drain_queue_fencing = false;
   _enum_port.config_fetch_pending = false;
 }
 
@@ -348,6 +662,99 @@ static void usbh_port_enum_control_progress_on_host(uint8_t daddr) {
 ]=])
 ergotype_tinyusb_usbh_replace_unique("enumeration helpers"
     TINYUSB_USBH_ENUM_HELPERS_UPSTREAM TINYUSB_USBH_ENUM_HELPERS_PORT)
+
+set(TINYUSB_USBH_ENDPOINT_COMPLETE_UPSTREAM [=[
+          dev->ep_status[epnum][ep_dir].busy = 0;
+          dev->ep_status[epnum][ep_dir].claimed = 0;
+
+          if (0 == epnum) {
+]=])
+set(TINYUSB_USBH_ENDPOINT_COMPLETE_PORT [=[
+          dev->ep_status[epnum][ep_dir].busy = 0;
+          dev->ep_status[epnum][ep_dir].claimed = 0;
+
+          // Upstream TinyUSB: no equivalent; wake only the exact async
+          // endpoint resource before its ordinary completion may resubmit it.
+          if (epnum) tuh_port_endpoint_idle_cb(event.dev_addr, ep_addr);
+
+          if (0 == epnum) {
+]=])
+ergotype_tinyusb_usbh_replace_unique("endpoint completion idle publication"
+    TINYUSB_USBH_ENDPOINT_COMPLETE_UPSTREAM
+    TINYUSB_USBH_ENDPOINT_COMPLETE_PORT)
+
+set(TINYUSB_USBH_ENDPOINT_ABORT_UPSTREAM [=[
+    // mark as ready and release endpoint if transfer is aborted
+    dev->ep_status[epnum][dir].busy = false;
+    tu_edpt_release(&dev->ep_status[epnum][dir], _usbh_mutex);
+  }
+]=])
+set(TINYUSB_USBH_ENDPOINT_ABORT_PORT [=[
+    // mark as ready and release endpoint if transfer is aborted
+    dev->ep_status[epnum][dir].busy = false;
+    tu_edpt_release(&dev->ep_status[epnum][dir], _usbh_mutex);
+    // Upstream TinyUSB: no equivalent; publish after both owner bits clear.
+    tuh_port_endpoint_idle_cb(daddr, ep_addr);
+  }
+]=])
+ergotype_tinyusb_usbh_replace_unique("endpoint abort idle publication"
+    TINYUSB_USBH_ENDPOINT_ABORT_UPSTREAM TINYUSB_USBH_ENDPOINT_ABORT_PORT)
+
+set(TINYUSB_USBH_ENDPOINT_RELEASE_UPSTREAM [=[
+bool usbh_edpt_release(uint8_t dev_addr, uint8_t ep_addr) {
+  // Note: addr0 only use tuh_control_xfer
+  usbh_device_t* dev = get_device(dev_addr);
+  TU_VERIFY(dev && dev->connected);
+
+  uint8_t const epnum = tu_edpt_number(ep_addr);
+  uint8_t const dir = tu_edpt_dir(ep_addr);
+
+  TU_VERIFY(tu_edpt_release(&dev->ep_status[epnum][dir], _usbh_mutex));
+  TU_LOG_USBH("[%u] Released EP 0x%02x\r\n", dev_addr, ep_addr);
+
+  return true;
+}
+]=])
+set(TINYUSB_USBH_ENDPOINT_RELEASE_PORT [=[
+bool usbh_edpt_release(uint8_t dev_addr, uint8_t ep_addr) {
+  // Note: addr0 only use tuh_control_xfer
+  usbh_device_t* dev = get_device(dev_addr);
+  TU_VERIFY(dev && dev->connected);
+
+  uint8_t const epnum = tu_edpt_number(ep_addr);
+  uint8_t const dir = tu_edpt_dir(ep_addr);
+
+  TU_VERIFY(tu_edpt_release(&dev->ep_status[epnum][dir], _usbh_mutex));
+  // Upstream TinyUSB: no equivalent; a claim-only failure is an idle edge.
+  tuh_port_endpoint_idle_cb(dev_addr, ep_addr);
+  TU_LOG_USBH("[%u] Released EP 0x%02x\r\n", dev_addr, ep_addr);
+
+  return true;
+}
+]=])
+ergotype_tinyusb_usbh_replace_unique("endpoint claim release publication"
+    TINYUSB_USBH_ENDPOINT_RELEASE_UPSTREAM
+    TINYUSB_USBH_ENDPOINT_RELEASE_PORT)
+
+set(TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_UPSTREAM [=[
+  } else {
+    // HCD error, mark endpoint as ready to allow next transfer
+    ep_state->busy = 0;
+    ep_state->claimed = 0;
+    TU_LOG1("Failed\r\n");
+]=])
+set(TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_PORT [=[
+  } else {
+    // HCD error, mark endpoint as ready to allow next transfer
+    ep_state->busy = 0;
+    ep_state->claimed = 0;
+    // Upstream TinyUSB: no equivalent; wake another exact endpoint waiter.
+    tuh_port_endpoint_idle_cb(dev_addr, ep_addr);
+    TU_LOG1("Failed\r\n");
+]=])
+ergotype_tinyusb_usbh_replace_unique("endpoint submit-failure publication"
+    TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_UPSTREAM
+    TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_PORT)
 
 set(TINYUSB_USBH_ENUM_ABORT_GATE_UPSTREAM [=[
   // Check if device is still connected (enumerating for dev0)
@@ -373,7 +780,7 @@ set(TINYUSB_USBH_SETUP_SUBMIT_UPSTREAM [=[
 set(TINYUSB_USBH_SETUP_SUBMIT_PORT [=[
   if (xfer->complete_cb) {
     // TU_ASSERT( hcd_setup_send(rhport, daddr, (uint8_t const*) &_usbh_epbuf.request) );
-    // Current TinyUSB restores its logical owner when SETUP submission fails.
+    // TinyUSB master 1b5c26b7 restores its logical owner when SETUP submission fails.
     if (!hcd_setup_send(rhport, daddr, (uint8_t const*) &_usbh_epbuf.request)) {
       _set_control_xfer_stage(CONTROL_STAGE_IDLE);
       return false;
@@ -469,14 +876,8 @@ set(TINYUSB_USBH_ATTACH_PORT [=[
             TU_LOG1("[%u:] USBH Device Attach (deferred restart)\r\n",
                     event.rhport);
             _enum_port.restart_pending = true;
-            if (!_enum_port.aborting) {
+            if (!_enum_port.aborting)
               _enum_port.aborting = true;
-              _enum_port.drain_passes = 0;
-              _enum_port.drain_at_ms = tusb_time_millis_api();
-              _enum_port.drain_event_start = 0;
-              _enum_port.drain_started = false;
-              _enum_port.drain_queue_fencing = false;
-            }
             return;
           } else {
             TU_LOG_USBH("[%u:] USBH Defer Attach until current enumeration complete\r\n", event.rhport);
@@ -491,7 +892,7 @@ set(TINYUSB_USBH_ATTACH_PORT [=[
             // }
             // Sending to the sole consumer's own full queue can deadlock. Keep
             // bounded topology for the first host service after terminal unwind.
-            if (!usbh_port_defer_attach_on_host(&event))
+            if (!usbh_port_defer_attach_on_host(&event, false))
               _enum_port.attach_overflow_pending = true;
           }
 ]=])
@@ -503,6 +904,55 @@ set(TINYUSB_USBH_ATTACH_START_UPSTREAM [=[
           enum_new_device(&event);
 ]=])
 set(TINYUSB_USBH_ATTACH_START_PORT [=[
+          // Upstream TinyUSB:
+          // _dev0.enumerating = 1;
+          // enum_new_device(&event);
+          // TinyUSB master removes a mounted device at the same bus topology
+          // before accepting a replacement ATTACH. Linux cannot reuse that
+          // generation until its asynchronous disconnect owners retire, so
+          // retain this ATTACH behind the existing topology FIFO. A repeated
+          // ATTACH only observes the already-published record.
+          int const deferred_attach =
+              usbh_port_deferred_attach_find_on_host(&event);
+          if (deferred_attach >= 0) {
+            (void) usbh_port_defer_attach_on_host(&event, false);
+            return;
+          }
+          if (usbh_port_topology_mounted_on_host(&event)) {
+            bool const retained =
+                usbh_port_defer_attach_on_host(&event, true);
+            if (!retained) {
+              _enum_port.attach_overflow_pending = true;
+              process_removing_device(event.rhport,
+                                      event.connection.hub_addr,
+                                      event.connection.hub_port);
+              return;
+            }
+
+            bool const wait_retire = tuh_port_replace_begin_cb(
+                event.rhport, event.connection.hub_addr,
+                event.connection.hub_port);
+            if (!wait_retire)
+              usbh_port_deferred_attach_retired_on_host(
+                  event.rhport, event.connection.hub_addr,
+                  event.connection.hub_port);
+            process_removing_device(event.rhport,
+                                    event.connection.hub_addr,
+                                    event.connection.hub_port);
+            return;
+          }
+
+          // Linux usbcore retains disconnected device objects until their
+          // final owner drops them. If every bounded firmware cache epoch is
+          // active or retiring, park this physical ATTACH in the existing
+          // topology FIFO. A lifecycle release wakes the host queue; the
+          // durable capacity predicate is rechecked before dequeue.
+          if (!tuh_port_cache_available_cb()) {
+            if (!usbh_port_defer_attach_on_host(&event, false))
+              _enum_port.attach_overflow_pending = true;
+            return;
+          }
+
           _dev0.enumerating = 1;
           // Upstream TinyUSB: no equivalent exact enumeration owner.
           usbh_port_enum_start_on_host();
@@ -546,7 +996,7 @@ set(TINYUSB_USBH_REMOVE_HOST_PORT [=[
             usbh_port_enum_remove_scope_rank_on_host(
                 event.rhport, event.connection.hub_addr,
                 event.connection.hub_port);
-        // Current TinyUSB retires delayed connection events with the removed
+        // TinyUSB master 1b5c26b7 retires delayed connection events with the removed
         // topology. Do this before process_removing_device() clears ancestry.
         usbh_port_retire_deferred_attach_on_host(
             event.rhport, event.connection.hub_addr,
@@ -554,15 +1004,12 @@ set(TINYUSB_USBH_REMOVE_HOST_PORT [=[
 
         if (enum_remove_rank) {
           // Keep the partial device and exact EP0 owner intact until the host
-          // owner service observes completion or finishes the bounded drain.
-          if (!_enum_port.aborting) {
+          // owner service observes its exact cancel/FIFO retirement boundary.
+          if (!_enum_port.aborting)
             _enum_port.aborting = true;
-            _enum_port.drain_passes = 0;
-            _enum_port.drain_at_ms = tusb_time_millis_api();
-            _enum_port.drain_event_start = 0;
-            _enum_port.drain_started = false;
-            _enum_port.drain_queue_fencing = false;
-          }
+          // REMOVE is later than any already consumed duplicate ATTACH. Let it
+          // cancel that restart; a genuinely later ATTACH will set it again.
+          _enum_port.restart_pending = false;
           _enum_port.removed = true;
           if (enum_remove_rank > _enum_port.removed_scope_rank) {
             _enum_port.removed_scope_rank = enum_remove_rank;
@@ -600,8 +1047,10 @@ set(TINYUSB_USBH_RETIRED_EVENT_PORT [=[
         uint8_t const epnum = tu_edpt_number(ep_addr);
         uint8_t const ep_dir = (uint8_t) tu_edpt_dir(ep_addr);
 
-        // Upstream TinyUSB: no terminal enum fence. EP0 must still drain, but
-        // interrupt completions from a removed partial subtree cannot rearm it.
+        // Upstream TinyUSB: no terminal enumeration fence. Interrupt
+        // completions from a removed partial subtree cannot rearm it. EP0
+        // cancel-prefix events were already resolved at the dequeue boundary,
+        // before any verified early return in this switch.
         if (epnum &&
             usbh_port_enum_noncontrol_event_retired_on_host(event.dev_addr))
           break;
@@ -610,6 +1059,33 @@ set(TINYUSB_USBH_RETIRED_EVENT_PORT [=[
 ]=])
 ergotype_tinyusb_usbh_replace_unique("retired enumeration event fence"
     TINYUSB_USBH_RETIRED_EVENT_UPSTREAM TINYUSB_USBH_RETIRED_EVENT_PORT)
+
+set(TINYUSB_USBH_REMOVE_CONTROL_OWNER_UPSTREAM [=[
+        // abort on-going control xfer on this device if any
+        if (_ctrl_xfer.daddr == daddr) _set_control_xfer_stage(CONTROL_STAGE_IDLE);
+]=])
+set(TINYUSB_USBH_REMOVE_CONTROL_OWNER_PORT [=[
+        // Upstream TinyUSB:
+        // // abort on-going control xfer on this device if any
+        // if (_ctrl_xfer.daddr == daddr) _set_control_xfer_stage(CONTROL_STAGE_IDLE);
+        // A generic Linux-style kill may already own the exact completion which
+        // raced into the host FIFO. hcd_device_close() above retired the wire,
+        // but its callback tuple and buffer must remain alive until that fixed
+        // prefix is consumed. tuh_umount_cb() has advanced the device generation
+        // and woken the waiter, so suppress the now-stale callback at the fence;
+        // invoking it would only report a false tuple invariant on normal unplug.
+        // Every other owner retains upstream REMOVE policy.
+        if (_ctrl_xfer.daddr == daddr) {
+          if (_control_abort.waiting &&
+              usbh_port_control_abort_owner_matches_on_host())
+            _control_abort.mode = USBH_PORT_CONTROL_ABORT_SUPPRESS;
+          else
+            _set_control_xfer_stage(CONTROL_STAGE_IDLE);
+        }
+]=])
+ergotype_tinyusb_usbh_replace_unique("remove preserves cancel owner"
+    TINYUSB_USBH_REMOVE_CONTROL_OWNER_UPSTREAM
+    TINYUSB_USBH_REMOVE_CONTROL_OWNER_PORT)
 
 set(TINYUSB_USBH_REMOVE_ISR_UPSTREAM [=[
       // Check if dev0 is removed
@@ -651,7 +1127,7 @@ void tuh_task_ext(uint32_t timeout_ms, bool in_isr) {
   if (!tuh_inited()) return;
 
   // Upstream TinyUSB: the pinned task has no internal delayed continuation.
-  // Current TinyUSB shortens its private queue wait to the nearest call-after
+  // TinyUSB master 1b5c26b7 shortens its private queue wait to the nearest call-after
   // deadline. Keep that mechanism internal so firmware still calls tuh_task().
   uint32_t enum_wait_ms;
   int const enum_event = usbh_port_enum_service_on_host(&enum_wait_ms);
@@ -674,12 +1150,26 @@ set(TINYUSB_USBH_TASK_DEQUEUE_UPSTREAM [=[
 set(TINYUSB_USBH_TASK_DEQUEUE_PORT [=[
     hcd_event_t event;
     if (!osal_queue_receive(_usbh_q, &event, timeout_ms)) return;
-    // Upstream TinyUSB: no dequeue-generation fence. Count before dispatch so
-    // an event branch which returns still advances a waiting physical drain.
-    _usbh_port_event_count++;
+    // Upstream TinyUSB: no cancel-time FIFO-prefix fence. Only events which
+    // were already queued when PIO lost the abort race retire this exact owner;
+    // later producers remain outside the bounded prefix.
+    bool const control_abort_prefix_event =
+        _control_abort.waiting && _control_abort.events_left != 0;
+    if (control_abort_prefix_event) _control_abort.events_left--;
+
+    // The dequeue itself is the cancel-time FIFO boundary. Resolve it before
+    // the ordinary switch because TinyUSB has several verified early returns
+    // (for example a completion whose device was already cleared by REMOVE).
+    if (usbh_port_control_abort_event_on_host(
+            &event, control_abort_prefix_event)) return;
+    if (control_abort_prefix_event)
+      (void) usbh_port_control_abort_prefix_complete_on_host();
 
     switch (event.event_id) {
 ]=])
+# The historical diagnostic label predates the FIFO-prefix implementation.
+# Keep the string unchanged in this comment-only audit; rename it in a later
+# code-changing cleanup if desired.
 ergotype_tinyusb_usbh_replace_unique("host dequeue generation"
     TINYUSB_USBH_TASK_DEQUEUE_UPSTREAM TINYUSB_USBH_TASK_DEQUEUE_PORT)
 
@@ -692,12 +1182,8 @@ set(TINYUSB_USBH_TASK_BUDGET_END_UPSTREAM [=[
 }
 ]=])
 set(TINYUSB_USBH_TASK_BUDGET_END_PORT [=[
-    // Upstream TinyUSB:
-    // #if CFG_TUSB_OS != OPT_OS_NONE && CFG_TUSB_OS != OPT_OS_PICO
-    //   // return if there is no more events, for application to run other background
-    //   if (osal_queue_empty(_usbh_q)) return;
-    // #endif
 #if CFG_TUSB_OS != OPT_OS_NONE && CFG_TUSB_OS != OPT_OS_PICO
+    // return if there is no more events, for application to run other background
     if (osal_queue_empty(_usbh_q)) return;
 #endif
     if (--port_event_budget == 0) return;
@@ -889,6 +1375,8 @@ set(TINYUSB_USBH_ENUM_ADDR0_PORT [=[
     //                                       process_enumeration, ENUM_SET_ADDR),);
     //   break;
     // }
+    // A bare TU_ASSERT return would leave the firmware's explicit enum
+    // terminal owner unresolved after synchronous open/submission rejection.
     case ENUM_ADDR0_DEVICE_DESC: {
       uint8_t const addr0 = 0;
       if (!usbh_edpt_control_open(addr0, 8)) {
@@ -917,6 +1405,8 @@ set(TINYUSB_USBH_ENUM_SET_ADDR_PORT [=[
     case ENUM_SET_ADDR:
       // Upstream TinyUSB:
       // enum_request_set_addr();
+      // Publish a failed terminal when the synchronous SET_ADDRESS submission
+      // is rejected instead of leaving the retained enumeration epoch live.
       if (!enum_request_set_addr()) {
         (void) enum_full_complete(false);
         return;
@@ -975,7 +1465,7 @@ set(TINYUSB_USBH_ENUM_DEVICE_DESC_PORT [=[
     //   break;
     // }
     case ENUM_GET_DEVICE_DESC: {
-      // Current TinyUSB also resumes SET_ADDRESS recovery asynchronously. The
+      // TinyUSB master 1b5c26b7 also resumes SET_ADDRESS recovery asynchronously. The
       // callback's xfer/setup storage is temporary; the exact provisional
       // address is already retained by the firmware enumeration owner.
       uint8_t const new_addr =
@@ -1002,6 +1492,8 @@ set(TINYUSB_USBH_ENUM_CONFIG_9_SUBMIT_PORT [=[
       // Upstream TinyUSB:
       // TU_ASSERT(tuh_descriptor_get_configuration(daddr, config_idx, _usbh_epbuf.ctrl, 9,
       //                                             process_enumeration, ENUM_GET_FULL_CONFIG_DESC),);
+      // TU_ASSERT's bare return cannot release the firmware's explicit enum
+      // owner, so convert synchronous submission rejection to its terminal.
       if (!tuh_descriptor_get_configuration(daddr, config_idx, _usbh_epbuf.ctrl,
                                             9, process_enumeration,
                                             ENUM_GET_FULL_CONFIG_DESC)) {
@@ -1075,6 +1567,8 @@ set(TINYUSB_USBH_ENUM_SET_CONFIG_UPSTREAM [=[
       break;
 ]=])
 set(TINYUSB_USBH_ENUM_SET_CONFIG_PORT [=[
+    // Upstream TinyUSB:
+    // case ENUM_SET_CONFIG:
     case ENUM_SET_CONFIG: {
       uint8_t const* desc_config = _enum_port.config_buffer ?
           _enum_port.config_buffer : _usbh_epbuf.ctrl;
@@ -1158,6 +1652,8 @@ set(TINYUSB_USBH_ENUM_DEFAULT_PORT [=[
       // Upstream TinyUSB:
       // // stop enumeration if unknown state
       // enum_full_complete();
+      // The port terminal publishes success/failure to lifecycle; an unknown
+      // state must therefore use its explicit failed result.
       (void) enum_full_complete(false);
       break;
 ]=])
@@ -1242,7 +1738,7 @@ set(TINYUSB_USBH_ENUM_ROOT_DEBOUNCE_PORT [=[
     // xfer.user_data = ENUM_ADDR0_DEVICE_DESC;
     //
     // process_enumeration(&xfer);
-    // Current TinyUSB uses asynchronous delayed continuations for both reset
+    // TinyUSB master 1b5c26b7 uses asynchronous delayed continuations for both reset
     // and debounce. Keep the event pump runnable and preserve the pinned
     // reset-then-debounce ordering across the firmware host owner.
     _enum_port.progress_ms = tusb_time_millis_api();
@@ -1268,7 +1764,7 @@ set(TINYUSB_USBH_ENUM_HUB_DEBOUNCE_PORT [=[
     // // ENUM_HUB_GET_STATUS
     // TU_ASSERT(hub_port_get_status(_dev0.hub_addr, _dev0.hub_port, _usbh_epbuf.ctrl,
     //                               process_enumeration, ENUM_HUB_CLEAR_RESET_1));
-    // Current TinyUSB uses an asynchronous delayed continuation here. The hub
+    // TinyUSB master 1b5c26b7 uses an asynchronous delayed continuation here. The hub
     // status request is submitted by the same host owner after the deadline.
     uint32_t const debounce_now = tusb_time_millis_api();
     _enum_port.progress_ms = debounce_now;
@@ -1361,7 +1857,7 @@ static uint32_t usbh_port_enum_delay_ms_on_host(uint8_t state) {
 }
 
 static uint32_t usbh_port_enum_delay_deadline_on_host(uint8_t state) {
-  // Current TinyUSB adds one millisecond so a millisecond-quantized clock cannot
+  // TinyUSB master 1b5c26b7 adds one millisecond so a millisecond-quantized clock cannot
   // resume just short of the requested physical delay.
   return _enum_port.progress_ms +
          usbh_port_enum_delay_ms_on_host(state) + 1;
@@ -1662,21 +2158,16 @@ static bool enum_full_complete(bool success) {
   usbh_port_enum_cancel_root_reset_on_host();
   if (success && _enum_port.aborting) success = false;
 
-  // Never clear or abort a foreign EP0. Exact enum EP0 drains physically;
-  // a removed all-tree scope gets its own queue/SOF fence before normal close.
+  // Never clear a live EP0 without a physical retirement proof. Exact enum
+  // owners and foreign owners inside a removed subtree use the same PIO abort
+  // result plus cancel-time FIFO-prefix fence before normal close.
   if (!success && _ctrl_xfer.stage != CONTROL_STAGE_IDLE) {
     bool const owned = usbh_port_enum_control_owned_on_host();
     bool const foreign_in_cleanup =
         !owned && usbh_port_enum_cleanup_contains_control_on_host();
-    if (owned || restart || (foreign_in_cleanup && !_enum_port.foreign_fenced)) {
-      if (!_enum_port.aborting) {
+    if (owned || restart || foreign_in_cleanup) {
+      if (!_enum_port.aborting)
         _enum_port.aborting = true;
-        _enum_port.drain_passes = 0;
-        _enum_port.drain_at_ms = tusb_time_millis_api();
-        _enum_port.drain_event_start = 0;
-        _enum_port.drain_started = false;
-        _enum_port.drain_queue_fencing = false;
-      }
       return false;
     }
   }
@@ -1696,14 +2187,11 @@ static bool enum_full_complete(bool success) {
   usbh_port_enum_config_release_on_host();
 
   _enum_port.progress_ms = 0;
-  _enum_port.drain_at_ms = 0;
-  _enum_port.drain_event_start = 0;
   _enum_port.retry_buffer = NULL;
   _enum_port.retry_user_data = 0;
   _enum_port.daddr = 0;
   _enum_port.retry_daddr = 0;
   _enum_port.failed_count = 0;
-  _enum_port.drain_passes = 0;
   _enum_port.removed_hub_addr = 0;
   _enum_port.removed_hub_port = 0;
   _enum_port.removed_scope_rank = 0;
@@ -1712,9 +2200,6 @@ static bool enum_full_complete(bool success) {
   _enum_port.removed = false;
   _enum_port.timed_out = false;
   _enum_port.restart_pending = false;
-  _enum_port.foreign_fenced = false;
-  _enum_port.drain_started = false;
-  _enum_port.drain_queue_fencing = false;
 
   if (!restart) {
     tuh_port_enum_state_cb(rhport, hub_addr, hub_port, false, success);
@@ -1734,9 +2219,26 @@ static bool enum_full_complete(bool success) {
         .hub_port = hub_port
       }
     };
-    _dev0.enumerating = 1;
-    usbh_port_enum_start_on_host();
-    (void) enum_new_device(&event);
+    // A second duplicate epoch can exhaust the one bounded retiring-cache
+    // spare before Linux releases the first one. Do not bypass the same
+    // event-driven admission used by ordinary ATTACH. Once parked there is no
+    // active TinyUSB enum owner; publish that explicit owner-release state so
+    // a later REMOVE cannot leave firmware's global enum/reset gate held.
+    if (!tuh_port_cache_available_cb()) {
+      bool const retained = usbh_port_defer_attach_on_host(&event, false);
+      if (!retained)
+        _enum_port.attach_overflow_pending = true;
+      // Release the physical enum owner without misreporting this retryable
+      // cache wait as either a successful or failed enumeration terminal.
+      if (retained)
+        tuh_port_enum_parked_cb(rhport, hub_addr, hub_port);
+      else
+        tuh_port_enum_state_cb(rhport, hub_addr, hub_port, false, false);
+    } else {
+      _dev0.enumerating = 1;
+      usbh_port_enum_start_on_host();
+      (void) enum_new_device(&event);
+    }
   }
 
   return success;
@@ -1752,7 +2254,7 @@ static uint32_t usbh_port_wait_until_on_host(uint32_t now,
   return remaining > 0 ? (uint32_t) remaining : 0;
 }
 
-// Current TinyUSB shortens its blocking host-queue receive to the nearest
+// TinyUSB master 1b5c26b7 shortens its blocking host-queue receive to the nearest
 // delayed-call deadline. Derive the same one-shot wait from the pinned enum
 // state: real HCD/deferred events still wake the queue immediately, and idle
 // has no periodic timeout.
@@ -1762,7 +2264,7 @@ static uint32_t usbh_port_enum_next_wait_ms_on_host(uint32_t now) {
     return 0;
 
   if (!_dev0.enumerating) {
-    if (_enum_deferred_attach_count &&
+    if (usbh_port_deferred_attach_ready_on_host() &&
         _ctrl_xfer.stage == CONTROL_STAGE_IDLE)
       return 0;
     return OSAL_TIMEOUT_WAIT_FOREVER;
@@ -1786,46 +2288,19 @@ static uint32_t usbh_port_enum_next_wait_ms_on_host(uint32_t now) {
     return wait_ms;
   }
 
+  if (_control_abort.waiting) return OSAL_TIMEOUT_WAIT_FOREVER;
   if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE) return 0;
-  if (usbh_port_enum_control_owned_on_host()) {
-    if (!_enum_port.drain_started) return 0;
-    return usbh_port_wait_until_on_host(now, _enum_port.drain_at_ms);
-  }
+  if (usbh_port_enum_control_owned_on_host()) return 0;
   if (_enum_port.restart_pending) return OSAL_TIMEOUT_WAIT_FOREVER;
   if (!usbh_port_enum_cleanup_contains_control_on_host()) return 0;
-  if (_enum_port.removed) {
-    if (!_enum_port.drain_started) return 0;
-    return usbh_port_wait_until_on_host(now, _enum_port.drain_at_ms);
-  }
+  if (_enum_port.removed) return 0;
   return OSAL_TIMEOUT_WAIT_FOREVER;
 }
 
-// Upstream TinyUSB: no physical HCD-to-host-queue retirement fence. PIO USB's
-// endpoint abort can meet a transfer already owned by the current 1-ms frame;
-// pio_usb_host_frame() then publishes ep_complete/error/stall and its IRQ queues
-// and clears those bits at frame end. After two milliseconds, either an empty
-// FIFO or one full FIFO-capacity of later dequeues proves every event which was
-// publishable at the deadline has crossed this host owner, even when unrelated
-// HCD traffic keeps the queue continuously non-empty.
-static bool usbh_port_enum_drain_fenced_on_host(uint32_t now) {
-  if (!_enum_port.drain_started ||
-      !usbh_port_time_reached(now, _enum_port.drain_at_ms)) return false;
-
-  if (!_enum_port.drain_queue_fencing) {
-    _enum_port.drain_event_start = _usbh_port_event_count;
-    _enum_port.drain_queue_fencing = true;
-  }
-
-  return osal_queue_empty(_usbh_q) ||
-         (uint32_t) (_usbh_port_event_count -
-                     _enum_port.drain_event_start) >=
-             (uint32_t) CFG_TUH_TASK_QUEUE_SZ;
-}
-
 // Upstream TinyUSB: no no-progress deadline for the pinned enumeration state.
-// Called only at TinyUSB task entry, after each bounded event-drain pass or
-// exact queue deadline. It returns the next internal queue wait; there is no
-// fixed polling interval.
+// Called only at TinyUSB task entry, after each bounded event pass or exact
+// queue deadline. It returns the next internal queue wait; there is no fixed
+// polling interval.
 static int usbh_port_enum_service_on_host(uint32_t* wait_ms) {
   uint32_t const now = tusb_time_millis_api();
   uint8_t const delay_state = _enum_port.delay_state;
@@ -1836,11 +2311,6 @@ static int usbh_port_enum_service_on_host(uint32_t* wait_ms) {
                              USBH_PORT_ENUM_WATCHDOG_MS)) {
     _enum_port.aborting = true;
     _enum_port.timed_out = true;
-    _enum_port.drain_passes = 0;
-    _enum_port.drain_at_ms = now;
-    _enum_port.drain_event_start = 0;
-    _enum_port.drain_started = false;
-    _enum_port.drain_queue_fencing = false;
   }
 
   if (_dev0.enumerating && !_enum_port.aborting &&
@@ -1877,31 +2347,16 @@ static int usbh_port_enum_service_on_host(uint32_t* wait_ms) {
 
   if (_dev0.enumerating && _enum_port.aborting) {
     usbh_port_enum_cancel_root_reset_on_host();
-    if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
+    if (_control_abort.waiting) {
+      if (_control_abort.events_left == 0)
+        (void) usbh_port_control_abort_prefix_complete_on_host();
+    } else if (_ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
       (void) enum_full_complete(false);
     } else if (usbh_port_enum_control_owned_on_host()) {
-      if (!_enum_port.drain_started) {
-        (void) hcd_edpt_abort_xfer(usbh_get_rhport(_ctrl_xfer.daddr),
-                                   _ctrl_xfer.daddr, 0);
-        _enum_port.drain_started = true;
-        _enum_port.drain_queue_fencing = false;
-        // Current TinyUSB delayed calls add one millisecond to guarantee the full
-        // physical interval on a millisecond-quantized clock.
-        _enum_port.drain_at_ms = now + USBH_PORT_ENUM_DRAIN_MS + 1;
-        goto enum_service_report;
-      }
-      if (!usbh_port_enum_drain_fenced_on_host(now))
-        goto enum_service_report;
-
-      _enum_port.drain_passes++;
-      _enum_port.drain_started = false;
-      _enum_port.drain_queue_fencing = false;
-      if (_enum_port.drain_passes >= USBH_PORT_ENUM_DRAIN_PASSES) {
-        // SETUP, DATA, and ACK are the only physical EP0 stages. After three
-        // abort/delay/dequeue fences no completion from this epoch remains.
-        _set_control_xfer_stage(CONTROL_STAGE_IDLE);
-        (void) enum_full_complete(false);
-      }
+      (void) usbh_port_control_abort_begin_on_host(
+          _ctrl_xfer.complete_cb == process_enumeration ?
+              USBH_PORT_CONTROL_ABORT_FAILED :
+              USBH_PORT_CONTROL_ABORT_SUPPRESS);
     } else if (_enum_port.restart_pending) {
       // A fresh enumeration cannot start while an unrelated EP0 owns the one
       // global control pipe. Its own timeout/recovery will eventually release it.
@@ -1909,32 +2364,16 @@ static int usbh_port_enum_service_on_host(uint32_t* wait_ms) {
       // Child rollback cannot touch this sibling/parent owner.
       (void) enum_full_complete(false);
     } else if (_enum_port.removed) {
-      // An ancestor/root REMOVE legitimately closes the whole subtree. Do not
-      // abort its foreign EP0; use the same PIO/FIFO retirement proof before
-      // process_removing_device() performs the ordinary physical-remove close.
-      if (!_enum_port.drain_started) {
-        _enum_port.drain_started = true;
-        _enum_port.drain_queue_fencing = false;
-        // Current TinyUSB delayed calls add one millisecond to guarantee the full
-        // physical interval on a millisecond-quantized clock.
-        _enum_port.drain_at_ms = now + USBH_PORT_ENUM_DRAIN_MS + 1;
-        goto enum_service_report;
-      }
-      if (!usbh_port_enum_drain_fenced_on_host(now))
-        goto enum_service_report;
-
-      _enum_port.drain_passes++;
-      _enum_port.drain_started = false;
-      _enum_port.drain_queue_fencing = false;
-      if (_enum_port.drain_passes >= USBH_PORT_ENUM_DRAIN_PASSES) {
-        _enum_port.foreign_fenced = true;
-        (void) enum_full_complete(false);
-      }
+      // An ancestor/root REMOVE may cancel a foreign EP0 only after ancestry
+      // proved that its daddr belongs to the removed subtree. Suppress its
+      // arbitrary callback; ordinary unmount cancellation wakes the waiter.
+      (void) usbh_port_control_abort_begin_on_host(
+          USBH_PORT_CONTROL_ABORT_SUPPRESS);
     }
   }
 
   if (!_dev0.enumerating && _ctrl_xfer.stage == CONTROL_STAGE_IDLE) {
-    // Current TinyUSB drains its deferred-attach queue on the next host-loop
+    // TinyUSB master 1b5c26b7 drains its deferred-attach queue on the next host-loop
     // iteration after enumeration becomes idle. Do the same from this host
     // service, after the previous terminal's mount callback has fully unwound.
     hcd_event_t event;

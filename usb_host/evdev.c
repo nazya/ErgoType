@@ -11,6 +11,7 @@
 // Firmware post-probe activation groups handles by their owning HID device.
 #include "linux/include/linux/hid.h"
 #include "evdev.h"
+#include "stdio_tusb_cdc.h"
 
 struct evdev {
 	// int open;
@@ -88,7 +89,7 @@ static unsigned int evdev_events(struct input_handle *handle,
 	 * always-on client is externally visible yet and a nonempty queue cannot
 	 * subsequently be added to a FreeRTOS QueueSet.
 	 */
-	if (!evdev_client_is_published(client))
+	if (!client || !evdev_client_is_published(client))
 		return count;
 	evdev_pass_values(client, vals, count, ev_time);
 
@@ -147,6 +148,9 @@ static int evdev_connect(struct input_handler *handler, struct input_dev *dev,
 	// boundary for this input_dev.
 	evdev = kzalloc_obj(struct evdev);
 	if (!evdev) {
+		// Upstream input core logs handler attach failures through pr_err().
+		// Firmware's generic Linux logger is disabled; retain OOM visibility here.
+		async_msg("ERR: EVDEV_CONNECT_NOMEM");
 		error = -ENOMEM;
 		goto err_free_minor;
 	}
@@ -205,12 +209,14 @@ static void evdev_disconnect(struct input_handle *handle)
 	// is too late; keep that for a future close-like client lifecycle.
 	// input_free_minor(MINOR(evdev->dev.devt));
 	// put_device(&evdev->dev);
-	// Firmware tears down the devmon-backed client directly.
-	if (handle->open)
-		input_close_device(handle);
+	// Firmware tears down the devmon-backed client directly. Its helper first
+	// fences KeyD writers and detaches their target, then closes the input handle
+	// without retaining the global writer mutex.
 	// Disconnect may run after connect but before post-probe activation.
 	if (evdev->client)
-		evdev_unregister_device(evdev->client);
+		evdev_unregister_device(evdev->client, handle);
+	else if (handle->open)
+		input_close_device(handle);
 	input_unregister_handle(handle);
 	kfree(evdev);
 }
@@ -237,7 +243,7 @@ static struct input_handler evdev_handler = {
 	.id_table	= evdev_ids,
 };
 
-int evdev_activate_hid(struct hid_device *hid)
+void evdev_activate_hid(struct hid_device *hid)
 {
 	struct input_handle *handle;
 	int error;
@@ -254,8 +260,12 @@ int evdev_activate_hid(struct hid_device *hid)
 
 		evdev = handle->private;
 		error = evdev_prepare_input_device(dev, evdev, &evdev->client);
-		if (error)
-			return error;
+		if (error) {
+			if (error == -ENOMEM)
+				async_msg("ERR: EVDEV_CLIENT_NOMEM");
+			else
+				async_msg("ERR: EVDEV_PREPARE_FAIL");
+		}
 	}
 
 	// error = evdev_open_device(evdev);
@@ -264,30 +274,46 @@ int evdev_activate_hid(struct hid_device *hid)
 	// interrupt-IN endpoint shared by all sibling input_dev objects.
 	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
 		struct input_dev *dev = handle->dev;
-
-		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
-			continue;
-
-		error = input_open_device(handle);
-		if (error)
-			return error;
-	}
-
-	/* Publish writers only after every corresponding Linux input open worked. */
-	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
-		struct input_dev *dev = handle->dev;
 		struct evdev *evdev;
+		struct evdev_client *client;
 
 		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
 			continue;
 
 		evdev = handle->private;
-		error = evdev_publish_input_device(dev, evdev->client);
-		if (error)
-			return error;
+		if (!evdev->client)
+			continue;
+		error = input_open_device(handle);
+		if (!error)
+			continue;
+
+		async_msg("ERR: EVDEV_OPEN_FAIL");
+		client = evdev->client;
+		evdev->client = NULL;
+		evdev_unregister_device(client, handle);
 	}
 
-	return 0;
+	/* Publish surviving writers only after every surviving input open worked. */
+	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
+		struct input_dev *dev = handle->dev;
+		struct evdev *evdev;
+		struct evdev_client *client;
+
+		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
+			continue;
+
+		evdev = handle->private;
+		if (!evdev->client)
+			continue;
+		error = evdev_publish_input_device(dev, evdev->client);
+		if (!error)
+			continue;
+
+		async_msg("ERR: EVDEV_PUBLISH_FAIL");
+		client = evdev->client;
+		evdev->client = NULL;
+		evdev_unregister_device(client, handle);
+	}
 }
 
 // static int __init evdev_init(void)

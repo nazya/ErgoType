@@ -9,10 +9,26 @@
  * blocking USB request machinery those call sites would normally use.
  */
 
-/* Bounded queued-work budget; B4 stores it in pool slots, not a FreeRTOS queue. */
+/* Base queued-work budget used to size fixed async and report slot pools. */
 #define HID_ASYNC_REQUEST_QUEUE_LEN 4u
 
 struct hid_async_request;
+
+/*
+ * Firmware-only equivalent of usbcore endpoint admission. Logical usbhid FIFO
+ * heads and sleeping raw callers share one ticket-ordered list; a node is
+ * linked only while it is ready to enter the bounded physical slot pool.
+ */
+struct hid_async_admission_node {
+	struct hid_async_admission_node *next;
+	TaskHandle_t task;
+	u32 order;
+	u32 generation;
+	u8 dev_addr;
+	u8 ep_addr;
+	bool output_lane;
+	bool linked;
+};
 
 typedef void (*hid_async_complete_t)(const struct hid_async_request *req,
 				     int status);
@@ -46,10 +62,6 @@ struct hid_async_request {
 	u32 timeout_ticks;
 	u32 generation;
 	u32 serial;
-	u8 xfer_result;
-	/* SET_REPORT snapshots are slot-owned; all other buffers are borrowed. */
-	bool data_owned;
-	bool complete_on_cancel;
 	/* True only after TinyUSB accepted the physical transfer submission. */
 	bool wire_started;
 	hid_async_complete_t complete;
@@ -58,36 +70,52 @@ struct hid_async_request {
 
 int hid_async_init(void);
 void hid_async_task(void *pvParameters);
+/*
+ * Admit one already prepared logical usbhid FIFO head to the physical pool.
+ * The caller retains data/context ownership through completion or rejection.
+ */
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
+			   u32 generation,
 			   u8 *data, u16 data_size,
+			   struct hid_async_admission_node *admission,
 			   hid_async_complete_t complete, void *context);
+void hid_async_report_queue_kick(void);
+/* A logical head was promoted or removed; wake physical admission predicates. */
+void hid_async_logical_queue_changed(void);
+/* Caller holds hid_transport_lock(); these never allocate or block. */
+void hid_async_admission_logical_link_locked(
+		struct hid_async_admission_node *node, u8 dev_addr,
+		u32 generation, bool output_lane, u8 ep_addr);
+void hid_async_admission_unlink_locked(
+		struct hid_async_admission_node *node);
+bool hid_async_admission_can_enter_locked(
+		const struct hid_async_admission_node *node);
 int hid_async_control_report_hold(const struct hid_async_request *req);
 void hid_async_control_report_release(struct hid_device *hid, u32 serial);
 int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);
-void hid_async_host_task_register(void);
+bool hid_async_host_task_register(void);
 bool hid_async_sync_call_allowed(void);
-/* Recovery/CLEAR_HALT callers retain a bounded nonblocking queue operation. */
-int hid_async_queue_usb_control_msg(struct hid_device *owner, u8 dev_addr,
-				    u32 generation,
-				    u8 request, u8 requesttype,
-				    u16 value, u16 index,
-				    void *data, u16 size,
-				    int timeout,
-				    hid_async_complete_t complete,
-				    void *context);
+/* TinyUSB host-owner idle edges release durable submit-resource waiters. */
+void hid_async_host_control_ready(void);
+void hid_async_host_endpoint_ready(u8 dev_addr, u8 ep_addr);
+/*
+ * Nonblocking reset-work caller with a stable Linux-waitqueue-style ticket.
+ * -EBUSY leaves @admission linked; every other result consumes it. The caller
+ * must explicitly unlink a still-linked node before its storage can disappear.
+ */
+int hid_async_queue_usb_control_msg_admitted(
+		struct hid_device *owner, u8 dev_addr, u32 generation,
+		u8 request, u8 requesttype, u16 value, u16 index,
+		void *data, u16 size, int timeout,
+		struct hid_async_admission_node *admission,
+		hid_async_complete_t complete, void *context);
 /* Task-side Linux synchronous USB glue waits for fixed-pool admission. */
 int hid_async_wait_queue_usb_control_msg(
 		struct hid_device *owner, u8 dev_addr, u32 generation,
 		u8 request, u8 requesttype, u16 value, u16 index,
 		void *data, u16 size, int timeout,
 		hid_async_complete_t complete, void *context);
-int hid_async_queue_usb_interrupt_out(struct hid_device *owner, u8 dev_addr,
-				      u32 generation,
-				      u8 ep_addr, void *data,
-				      u16 size, int timeout,
-				      hid_async_complete_t complete,
-				      void *context);
 int hid_async_wait_queue_usb_interrupt_out(
 		struct hid_device *owner, u8 dev_addr, u32 generation,
 		u8 ep_addr, void *data, u16 size, int timeout,

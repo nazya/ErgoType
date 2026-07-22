@@ -5,16 +5,14 @@
 
 static inline void atomic_set(atomic_t *v, int i)
 {
-	taskENTER_CRITICAL();
-	*v = i;
-	taskEXIT_CRITICAL();
+	/* Linux non-RMW atomic_set() is unordered. */
+	__atomic_store_n(v, i, __ATOMIC_RELAXED);
 }
 
 static inline void atomic_dec(atomic_t *v)
 {
-	taskENTER_CRITICAL();
-	--*v;
-	taskEXIT_CRITICAL();
+	/* Linux non-returning atomic arithmetic carries no implicit barrier. */
+	(void)__atomic_fetch_sub(v, 1, __ATOMIC_RELAXED);
 }
 
 #endif

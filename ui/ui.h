@@ -23,9 +23,6 @@
 // 128px / 4px = 32 chars max for one full-width 4x8 UI line.
 #define UI_OUTPUT_EVENT_LINE_LEN 32u
 
-// Owned by ui/ui.c, assigned by main.c right after xTaskCreate*().
-extern TaskHandle_t ui_handle;
-
 void ui_task(void *pvParameters);
 
 void ui_led_set_pattern(uint8_t led_idx, uint32_t pattern, bool loop);

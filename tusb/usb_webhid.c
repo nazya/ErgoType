@@ -151,6 +151,20 @@ static void write_reset(void)
     path[0] = '\0';
 }
 
+void webhid_reset(void)
+{
+    /*
+     * TinyUSB invokes this from the sole device owner after the previous
+     * callback has unwound. A read transaction deliberately owns fatfs_mutex
+     * across feature reports; bus reset/unplug is its exact abort edge.
+     * LIST/WRITE retain only heap buffers, which are released here as well.
+     */
+    read_reset();
+    list_reset();
+    write_reset();
+    memset(response, 0, sizeof(response));
+}
+
 static void file_open_read(uint8_t const* buffer, uint16_t bufsize)
 {
     response_begin(CMD_FILE_OPEN_READ);

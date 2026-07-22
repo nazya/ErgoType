@@ -128,6 +128,10 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 			if (!ff->effect_owners[id])
 				break;
 
+		// if (id >= ff->max_effects)
+		// 	return -ENOSPC;
+		// Linux guard() unlocks automatically on return. The FreeRTOS port
+		// must release the explicit mutex before the same return.
 		if (id >= ff->max_effects) {
 			mutex_unlock(&ff->mutex);
 			return -ENOSPC;
@@ -140,6 +144,10 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 		id = effect->id;
 
 		error = check_effect_access(ff, id, file);
+		// if (error)
+		// 	return error;
+		// Linux guard() unlocks automatically on return. The FreeRTOS port
+		// must release the explicit mutex before the same return.
 		if (error) {
 			mutex_unlock(&ff->mutex);
 			return error;
@@ -147,6 +155,10 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 
 		old = &ff->effects[id];
 
+		// if (!check_effects_compatible(effect, old))
+		// 	return -EINVAL;
+		// Linux guard() unlocks automatically on return. The FreeRTOS port
+		// must release the explicit mutex before the same return.
 		if (!check_effects_compatible(effect, old)) {
 			mutex_unlock(&ff->mutex);
 			return -EINVAL;
@@ -154,15 +166,25 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	}
 
 	error = ff->upload(dev, effect, old);
+	// if (error)
+	// 	return error;
+	// Linux guard() unlocks automatically on return. The FreeRTOS port must
+	// release the explicit mutex before the same return.
 	if (error) {
 		mutex_unlock(&ff->mutex);
 		return error;
 	}
 
 	// scoped_guard(spinlock_irq, &dev->event_lock) {
-	// Callback-driven slice has no active input event lock.
+	// 	ff->effects[id] = *effect;
+	// 	ff->effect_owners[id] = file;
+	// }
+	// FreeRTOS has no IRQ-safe Linux event_lock; all active callers are tasks,
+	// and port_event_mutex protects the same input-event state boundary.
+	mutex_lock(&dev->port_event_mutex);
 	ff->effects[id] = *effect;
 	ff->effect_owners[id] = file;
+	mutex_unlock(&dev->port_event_mutex);
 
 	mutex_unlock(&ff->mutex);
 	return 0;
@@ -184,16 +206,25 @@ static int erase_effect(struct input_dev *dev, int effect_id,
 		return error;
 
 	// scoped_guard(spinlock_irq, &dev->event_lock) {
-	// Callback-driven slice has no active input event lock.
+	// 	ff->playback(dev, effect_id, 0);
+	// 	ff->effect_owners[effect_id] = NULL;
+	// }
+	// FreeRTOS task callers use port_event_mutex in place of event_lock.
+	mutex_lock(&dev->port_event_mutex);
 	ff->playback(dev, effect_id, 0);
 	ff->effect_owners[effect_id] = NULL;
+	mutex_unlock(&dev->port_event_mutex);
 
 	if (ff->erase) {
 		error = ff->erase(dev, effect_id);
 		if (error) {
 			// scoped_guard(spinlock_irq, &dev->event_lock)
-			// Callback-driven slice has no active input event lock.
+			// 	ff->effect_owners[effect_id] = file;
+			// FreeRTOS task callers use port_event_mutex in place of
+			// event_lock for the owner rollback.
+			mutex_lock(&dev->port_event_mutex);
 			ff->effect_owners[effect_id] = file;
+			mutex_unlock(&dev->port_event_mutex);
 
 			return error;
 		}
@@ -221,7 +252,9 @@ int input_ff_erase(struct input_dev *dev, int effect_id, struct file *file)
 		return -ENOSYS;
 
 	// guard(mutex)(&ff->mutex);
-	// FreeRTOS port has no Linux guard() helper.
+	// return erase_effect(dev, effect_id, file);
+	// FreeRTOS port has no Linux guard() helper, so preserve its scope with an
+	// explicit lock, call, and unlock around the same operation.
 	mutex_lock(&ff->mutex);
 	error = erase_effect(dev, effect_id, file);
 	mutex_unlock(&ff->mutex);
@@ -247,7 +280,8 @@ int input_ff_flush(struct input_dev *dev, struct file *file)
 	dev_dbg(&dev->dev, "flushing now\n");
 
 	// guard(mutex)(&ff->mutex);
-	// FreeRTOS port has no Linux guard() helper.
+	// FreeRTOS port has no Linux guard() helper; the explicit unlock below
+	// preserves the upstream guard lifetime through the loop.
 	mutex_lock(&ff->mutex);
 
 	for (i = 0; i < ff->max_effects; i++)
@@ -375,8 +409,8 @@ void input_ff_destroy(struct input_dev *dev)
 	if (ff) {
 		if (ff->destroy)
 			ff->destroy(ff);
-		// kfree(ff->private);
-		// Haptic private state is owned by the HID device devres group.
+		kfree(ff->private);
+		/* FreeRTOS-backed mutexes own dynamically allocated semaphore state. */
 		mutex_destroy(&ff->mutex);
 		kfree(ff->effects);
 		kfree(ff);

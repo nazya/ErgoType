@@ -5,12 +5,28 @@
 #include "usb_descriptors.h"
 #include "usb_webhid.h"
 
+void vkbd_hid_notify_recheck(void); // keyd/port/vkbd/tusb_hid.c
+
 // Invoked when sent REPORT successfully to host
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len)
 {
-    (void) instance;
     (void) report;
     (void) len;
+
+    if (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE)
+        vkbd_hid_notify_recheck();
+}
+
+// Invoked when an IN REPORT transfer completes unsuccessfully.
+void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
+                              uint8_t const* report, uint16_t xferred_bytes)
+{
+    (void) report;
+    (void) xferred_bytes;
+
+    if (report_type == HID_REPORT_TYPE_INPUT &&
+        (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE))
+        vkbd_hid_notify_recheck();
 }
 
 // Invoked when received GET_REPORT control request

@@ -14,4 +14,15 @@ static inline bool bitmap_empty(const unsigned long *src, unsigned int nbits)
 	return true;
 }
 
+/* Reduced compatibility implementation of Linux bitmap_weight(). */
+static inline unsigned int bitmap_weight(const unsigned long *src,
+					 unsigned int nbits)
+{
+	unsigned int weight = 0;
+
+	for (unsigned int bit = 0; bit < nbits; bit++)
+		weight += test_bit(bit, src);
+	return weight;
+}
+
 #endif

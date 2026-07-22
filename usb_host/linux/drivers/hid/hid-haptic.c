@@ -157,7 +157,11 @@ static void fill_effect_buf(struct hid_haptic_device *haptic,
 	struct hid_field *field;
 	s32 value;
 	int i, j;
-	u8 *buf = haptic_effect->report_buf;
+	// u8 *buf = haptic_effect->report_buf;
+	// hid_alloc_report_buf() reserves byte zero for an unnumbered report so
+	// .output_report() and .raw_request() can remove the absent report ID.
+	// Keep the haptic payload after that transport byte, as __hid_request() does.
+	u8 *buf = haptic_effect->report_buf + (rep->id == 0);
 
 	mutex_lock(&haptic->manual_trigger_mutex);
 	for (i = 0; i < rep->maxfield; i++) {
@@ -262,6 +266,14 @@ static int hid_haptic_upload_effect(struct input_dev *dev, struct ff_effect *eff
 	}
 	if (ordinal < 1)
 		return -EINVAL;
+
+	/*
+	 * Linux-generic lifetime fix: ff-core may replace an owned effect while its
+	 * previous PLAY work is still queued. manual_trigger_mutex serializes a
+	 * running worker with fill_effect_buf(), but it cannot cancel queued work;
+	 * drain that exact slot before rewriting its caller-owned report buffer.
+	 */
+	cancel_work_sync(&haptic->effect[effect->id].work);
 
 	/* Fill the buffer for the effect id */
 	fill_effect_buf(haptic, &effect->u.haptic, &haptic->effect[effect->id],
@@ -492,6 +504,13 @@ static void hid_haptic_destroy(struct ff_device *ff)
 	haptic->hid_usage_map = NULL;
 
 	module_put(THIS_MODULE);
+
+	/*
+	 * Upstream ff-core frees ff->private after ->destroy(). This object is a
+	 * devm allocation owned by hdev in hid-multitouch, so detach it from the
+	 * generic ff ownership slot before input_ff_destroy() resumes.
+	 */
+	ff->private = NULL;
 }
 
 int hid_haptic_init(struct hid_device *hdev,
@@ -561,8 +580,13 @@ int hid_haptic_init(struct hid_device *hdev,
 	}
 
 	haptic->input_dev = dev;
+	// haptic->manual_trigger_report_len =
+	// 	hid_report_len(haptic->manual_trigger_report);
+	// The lower-level HID output APIs count their reserved byte-zero report-ID
+	// convention even when the wire report itself is unnumbered.
 	haptic->manual_trigger_report_len =
-		hid_report_len(haptic->manual_trigger_report);
+		hid_report_len(haptic->manual_trigger_report) +
+		(haptic->manual_trigger_report->id == 0);
 	mutex_init(&haptic->manual_trigger_mutex);
 	// Linux mutex_init() cannot fail; do not pass a NULL FreeRTOS semaphore to
 	// fill_effect_buf() later in this probe.

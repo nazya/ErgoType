@@ -1,8 +1,10 @@
 #include "tusb.h"
 #include "usb_descriptors.h"
+#include "usb_webhid.h"
 #include "ui/ui.h"
 
 extern uint8_t mode;
+void vkbd_hid_notify_recheck(void); // keyd/port/vkbd/tusb_hid.c
 
 static const char *usb_mode_str(void)
 {
@@ -16,12 +18,16 @@ static const char *usb_mode_str(void)
 // Invoked when device is mounted
 void tud_mount_cb(void)
 {
+    /* Bus reset/configuration change aborts any prior feature transaction. */
+    webhid_reset();
     ui_led_set_pattern(0, 0, true);
+    vkbd_hid_notify_recheck();
 }
 
 // Invoked when device is unmounted
 void tud_umount_cb(void)
 {
+    webhid_reset();
     ui_led_set_pattern(0, LED_PATTERN_FAST, true);
     // watchdog_reboot(0, 0, 0); does not work here
 }
@@ -37,4 +43,5 @@ void tud_suspend_cb(bool remote_wakeup_en)
 void tud_resume_cb(void)
 {
     ui_led_set_pattern(0, 0, true);
+    vkbd_hid_notify_recheck();
 }

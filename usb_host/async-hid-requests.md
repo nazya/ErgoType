@@ -58,19 +58,17 @@ The active implementation now has these properties:
   Known-success recovery enters the pinned `enum_new_device()` path directly
   from the host owner, avoiding a recursive send to TinyUSB's only host queue;
   exact physical and parent generations fence any raced replacement epoch.
-- Generic synchronous USB admission uses the same condition/wake split: a
-  stack-owned FIFO waiter reserves normal broker capacity, enqueue retry is the
-  durable predicate, and normal-slot release or teardown supplies a coalesced
-  task wake. Both lifecycle and `hid_workqueue_task` use it; descriptor helpers
-  no longer contain FreeRTOS-specific admission loops. The recovery slot remains
-  outside this wait queue, and nonblocking report/CLEAR_HALT traffic uses only
-  unreserved surplus. The one-second local admission and transfer deadlines
-  start independently. CLEAR_HALT itself retains a durable report-task wait
-  state on local saturation; normal-slot release or a non-consuming reservation
-  unlink wakes it. Its old 32-ms polling retry is not part of the protocol
-  timer, which remains dedicated to upstream's interrupt-I/O error cadence.
-  The report task's notification wait carries the preserved absolute
-  eight-second local admission bound without another timer object.
+- Generic synchronous callers, logical usbhid report heads, and CLEAR_HALT use
+  one FIFO of durable admission nodes. A waiting node does not reserve a
+  physical slot: the oldest endpoint-front becomes eligible only when a real
+  normal slot is free. Slot release, node unlink, logical-head change, or
+  teardown supplies a coalesced wake. Lifecycle and `hid_workqueue_task` use
+  stack-owned nodes with a one-second admission bound; their transfer deadline
+  starts separately. The dedicated HUB_RESET recovery slot stays outside this
+  FIFO. CLEAR_HALT retains its node and recovery state in the fixed RX owner;
+  the report task sleeps on the common admission edge or its absolute
+  eight-second local bound. Its old 32-ms polling retry is not part of the
+  protocol timer, which remains dedicated to upstream's interrupt-I/O cadence.
 - Arbitrary URBs and synchronous interrupt-IN messages remain deferred. Report
   descriptors are now fetched by task-side `usbhid_parse()` at their
   class-declared size through the generic asynchronous EP0 owner, up to Linux's

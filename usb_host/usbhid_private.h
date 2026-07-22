@@ -5,6 +5,8 @@
 #include "linux/include/linux/hid.h"
 
 struct usbhid_control_input;
+struct usbhid_io_waiter;
+struct usbhid_report_request;
 
 /* TinyUSB replacement for upstream HID_OPENED + HID_RESUME_RUNNING bits. */
 enum usbhid_report_open_state {
@@ -59,9 +61,20 @@ struct usbhid_device {
 	// available. The upstream lifecycle mutex remains above; TinyUSB callbacks
 	// and task continuations use the shared transport mutex in place of the
 	// IRQ-side FIFO spinlock without masking interrupts.
-	// TinyUSB owner tasks, hid_async's physical-endpoint queues, and the bounded
-	// port state below retain the upstream usbhid_device ownership boundary.
-	wait_queue_head_t wait;                                           /* For sleeping */
+	// Embedding Linux's rings would permanently cost about 5 KiB per HID. The
+	// port instead keeps compact dynamically allocated logical entries below,
+	// with the same per-interface CTRL/OUT ownership and one physical head per
+	// lane. hid_async remains only the bounded physical-endpoint executor.
+	// wait_queue_head_t wait;                                        /* For sleeping */
+	// FreeRTOS notifications are wake edges, while this intrusive list keeps
+	// every concurrent hid_hw_wait()/teardown predicate owner durable.
+	struct usbhid_io_waiter *io_waiters;
+	struct usbhid_report_request *ctrl_head;
+	struct usbhid_report_request *ctrl_tail;
+	struct usbhid_report_request *out_head;
+	struct usbhid_report_request *out_tail;
+	u16 ctrl_count;
+	u8 out_count;
 
 	/*
 	 * Upstream Linux gets descriptor ownership and I/O state from USB core,
@@ -104,5 +117,16 @@ struct usbhid_device {
 void usbhid_io_put(struct hid_device *hid);
 /* Caller holds hid_transport_lock(); the returned registry owner is lock-bound. */
 struct hid_device *usbhid_report_owner_lookup_locked(unsigned int slot_index);
+/*
+ * Logical usbhid FIFO hooks used by the physical async executor. The _locked
+ * variants never allocate, free, invoke completions, or acquire the mutex.
+ */
+void usbhid_request_capacity_available_locked(void);
+void usbhid_request_cancel_device_locked(struct hid_device *hid);
+void usbhid_request_cancel_dev_addr_locked(u8 dev_addr);
+bool usbhid_request_queue_idle_locked(struct hid_device *hid);
+bool usbhid_request_process(void);
+/* Caller holds hid_transport_lock(); notification is only a coalesced edge. */
+void usbhid_wait_wake_locked(struct hid_device *hid);
 
 #endif

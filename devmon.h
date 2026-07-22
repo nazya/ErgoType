@@ -94,5 +94,5 @@ struct devmon_event {
 
 extern QueueHandle_t devmon_queue;
 extern QueueSetHandle_t devmon_event_set;
-void devmon_init(void);
+int devmon_init(void);
 int devmon_add_device(const struct port_input_dev *port_dev);

@@ -406,7 +406,9 @@ static void ml_effect_timer(struct timer_list *t)
 	pr_debug("timer: updating effects\n");
 
 	// guard(spinlock_irqsave)(&dev->event_lock);
-	// Callback-driven slice has no active input event lock.
+	// This source is not linked by the firmware. Before enabling ff-memless,
+	// restore an event-lock-equivalent scope around this timer-side update;
+	// running ml_play_effects() unlocked would race upload/playback state.
 	ml_play_effects(ml);
 }
 
@@ -466,7 +468,9 @@ static int ml_ff_upload(struct input_dev *dev,
 	struct ml_effect_state *state = &ml->states[effect->id];
 
 	// guard(spinlock_irq)(&dev->event_lock);
-	// Callback-driven slice has no active input event lock.
+	// This source is not linked by the firmware. Before enabling ff-memless,
+	// restore an event-lock-equivalent scope here that serializes with the
+	// timer and input-event paths; this upload must not run unlocked.
 
 	if (test_bit(FF_EFFECT_STARTED, &state->flags)) {
 		__clear_bit(FF_EFFECT_PLAYING, &state->flags);

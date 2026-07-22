@@ -31,7 +31,12 @@ available before probe.
 Multitouch and the standard HID Haptics Page helper are also in this bucket.
 The lifecycle task completes the multitouch feature GET_REPORT before probe
 continues, while haptic output uses the same asynchronous report owner. Both
-paths have emulator/hardware coverage, including unplug and re-enumeration.
+transport/driver paths have emulator/hardware coverage, including unplug and
+re-enumeration. That fixture's separate boot-mouse interface supplies its
+visible cursor movement: it does not certify the downstream KeyD consumer for
+an MT-only touchpad. Linux already publishes the correct Type-B stream and
+legacy `ABS_X/Y` pointer emulation; the remaining stale-ABS fix, SYN framing,
+and absolute-to-relative product policy belong after the Linux evdev boundary.
 
 Regular FEATURE and raw requests stay on EP0; `.output_report()` remains the
 interrupt-only entry point and returns `-ENOSYS` without an OUT endpoint.
@@ -51,8 +56,9 @@ Current unsupported patterns include:
   beyond the pre-probe product/manufacturer/serial snapshots
 - multi-interface protocols that require a complete USB-core ownership model,
   sibling binding, or `usb_get_intfdata()` coordination
-- protocols that need more reliable/larger request FIFOs than the bounded
-  serialized HID queue currently provides
+- protocols whose init burst exceeds the logical usbhid FIFO's shared 4096-byte
+  node budget (CTRL/OUT ordering and more-than-nine-report bursts are supported;
+  validate a real device before raising this firmware memory policy)
 
 Task-context `usb_control_msg()` and interrupt-OUT `usb_interrupt_msg()` have
 explicit submit, completion, timeout, per-interface cancellation, and
@@ -99,6 +105,12 @@ specific hardware request instead of paying static registry RAM by default.
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
+`CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
+descriptor-fixup drivers, but not the separate On Line Grip game-controller
+driver or optional rumble support. The controller ID is therefore deliberately
+left available to generic HID rather than marked as requiring an absent
+special driver.
+
 `hid-samsung.c` is deferred for this reason: the Samsung IrDA 184-byte path
 forces HIDDEV and disables normal hidinput. The current firmware has no useful
 hiddev consumer/proxy for ErgoType input routing, so the imported source stays
@@ -114,21 +126,44 @@ which need a firmware proxy/API before they are useful in this embedded host.
 On boot-keyboard start, `usbhid` also clears NumLock and submits the complete
 output report through the same route.
 
-## Next In-Scope Driver Candidate
+## Active USB Magic Mouse / Trackpad Boundary
 
-Upstream `hid-magicmouse.c` is the next meaningful work-input import, limited
-to the USB Magic Mouse 2 and Magic Trackpad 2 IDs. The current port already has
-the primitives used by that driver: synchronous raw SET over the async EP0
-owner, input MT slots, delayed work with synchronous cancellation, and the
-timer bridge. It must still receive a dedicated fixture before being linked:
-mode SET success/retry, native multitouch packets, click/motion, disconnect
-during the delayed retry, and repeated reconnect.
+Upstream `hid-magicmouse.c` is now linked for only the USB Magic Mouse 2 and
+Magic Trackpad 2 IDs. The current port already has
+the synchronous raw SET path over the async EP0 owner, input MT slots, and the
+timer bridge. A line-by-line USB-only reachability audit shows that it does not
+require enabling the currently compile-gated delayed-work API: USB Magic Mouse
+2 returns after `hid_hw_start()`, and the USB Trackpad 2 path can reach the
+mode SET but the upstream delayed retry condition selects Magic Mouse 2 only.
+The three unreachable upstream delayed-work calls remain commented beside the
+explained firmware disable rather than adding an unused timer/workqueue
+lifetime model. Bluetooth and legacy IDs likewise remain visible but disabled.
+With `CONFIG_HID_BATTERY_STRENGTH` disabled, the retained
+battery timer performs one harmless failed lookup and does not rearm.
 
-The expected extra live allocation for a 16-contact Trackpad 2 is roughly
-3.1 KiB before generic HID parser/input state (driver state, MT slots/tracking,
-and ABS state). Keep Bluetooth/legacy IDs and the unused battery-strength path
-out of the firmware allowlist. This is a deliberate later import, not a reason
-to enable every Apple HID driver or HID++-style protocol stack.
+Upstream intentionally returns from the USB Magic Mouse 2 probe immediately
+after `hid_hw_start()`: it does not reach the later native-report registration
+or mode SET used by the other paths. Preserve that behavior; these USB IDs do
+not claim the full Bluetooth Mouse 2 touch path. USB Trackpad 2 is the actual
+wired multitouch target, including its separate mouse and non-mouse interfaces.
+
+The larger remaining risk is after Linux input, not in the TinyUSB transport.
+A 15-contact native frame can publish more records than the fixed 64-record
+evdev-to-KeyD queue; later legacy pointer-emulation ABS/SYN records can then be
+dropped even though Linux's MT state is correct. Do not rewrite
+`hid-magicmouse.c` to hide that boundary. Either add a later Linux-to-KeyD
+filter/batched queue contract, or explicitly limit the first hardware claim to
+low-contact traffic with visible drop diagnostics.
+
+Expected extra live heap, including input value storage, is roughly 4.2 KiB
+for Magic Mouse 2 and 5.3 KiB for a 16-contact Trackpad 2, before common HID
+parser/report/evdev allocations. Keep Bluetooth and legacy IDs out of the
+firmware allowlist. A dedicated fixture must cover the Trackpad 2 mouse and
+non-mouse interfaces, accepted `-EIO` mode SET, native report IDs `0x02` and
+`0x12`, multi-contact queue saturation, disconnect during SET, and repeated
+reconnect. Until that pass, the linked driver is build-audited but not
+hardware-verified; it is not a reason to enable every Apple HID driver or
+HID++-style protocol stack.
 
 ## Future Transport Work
 

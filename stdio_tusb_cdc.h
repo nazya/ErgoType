@@ -13,11 +13,12 @@
 
 // TinyUSB CDC log buffer (no pico stdio / no newlib hooks).
 //
-// Write path (any task): buffer bytes only, no tud_* calls.
+// Write path (task context): buffer bytes and queue a deferred TinyUSB wake.
 // Read/flush path (USB task): stdio_tusb_cdc_poll() pumps to tud_cdc_write*.
 //
-// Buffer bytes for later transmit over CDC. Safe to call from any task.
+// Buffer bytes for later transmit over CDC. Not safe to call from an ISR.
 void stdio_tusb_cdc_write(const void *buf, size_t length);
+// Queue one fixed diagnostic. Task context only.
 void _async_msg(const char *s);
 #define async_msg(s) do { \
 	_Static_assert(sizeof(s) - 1u <= ASYNC_MSG_TEXT_MAX, "async_msg too long"); \

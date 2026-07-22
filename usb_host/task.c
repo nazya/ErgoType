@@ -71,7 +71,10 @@ void tusb_host_task(void *pvParameters)
     (void)pvParameters;
 
     /* TinyUSB callbacks and tuh_task() are owned by this task exclusively. */
-    hid_async_host_task_register();
+    if (!hid_async_host_task_register()) {
+        async_msg("ERR: HID_HOST_OWNER");
+        vTaskSuspend(NULL);
+    }
 
     tusb_rhport_init_t host_init = {
         .role = TUSB_ROLE_HOST,
@@ -82,42 +85,37 @@ void tusb_host_task(void *pvParameters)
     ret = hid_core_init();
     if (ret) {
         async_msg("ERR: HID_CORE_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
+        vTaskSuspend(NULL);
     }
 
     ret = evdev_init();
-    if (ret) {
+    if (ret)
         async_msg("ERR: HID_EVDEV_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
-    }
 
     /*
      * Upstream Linux runs module/initcall registration before HID devices bind.
      * Firmware has no module loader, so run the collected initcalls explicitly.
      */
     ret = linux_module_initcalls_init();
-    if (ret) {
+    if (ret)
         async_msg("ERR: HID_INITCALL_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
-    }
 
     ret = hid_builtin_drivers_init();
-    if (ret) {
+    if (ret)
         async_msg("ERR: HID_DRIVER_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
-    }
 
     pio_cfg.pin_dp = PICO_DEFAULT_PIO_USB_DP_PIN;
     pio_cfg.pinout = PIO_USB_PINOUT_DMDP;
+    /*
+     * Leave alarm_pool NULL: PIO creates its SOF alarm on this CORE1 owner.
+     * Post-abort FIFO retirement relies on the IRQ completing publication
+     * before this same-core host task can resume. A foreign-core backend must
+     * provide an explicit cancel-completion edge instead.
+     */
     ret = tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg) ? 0 : -EIO;
     if (ret) {
         async_msg("ERR: TUH_CONFIG_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
+        vTaskSuspend(NULL);
     }
 
     /*
@@ -129,8 +127,7 @@ void tusb_host_task(void *pvParameters)
     ret = tusb_init(BOARD_TUH_RHPORT, &host_init) ? 0 : -EIO;
     if (ret) {
         async_msg("ERR: TUSB_HOST_FAIL");
-        while (1)
-            vTaskDelay(portMAX_DELAY);
+        vTaskSuspend(NULL);
     }
 
     while (1)

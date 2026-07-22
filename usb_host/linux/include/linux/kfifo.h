@@ -3,6 +3,11 @@
 
 #include "hid_compat.h"
 
+/*
+ * PORTING DEBT: no linked source uses this reduced byte FIFO. It omits
+ * Linux kfifo's locking variants, power-of-two sizing contract, and broader
+ * typed API; audit the prospective caller before this header becomes active.
+ */
 struct kfifo {
 	u8 *buffer;
 	unsigned int size;

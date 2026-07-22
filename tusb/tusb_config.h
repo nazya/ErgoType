@@ -126,6 +126,10 @@
 #define CFG_TUH_ENUMERATION_BUFSIZE 512 // Permanent TinyUSB scratch for ordinary configuration descriptors.
 #define ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE 4096 // Larger configurations use one exact-size transient host-owner buffer.
 
+// Keep one ordinary TinyUSB host-event FIFO. The default is 16; 32 retains the
+// same event payload capacity as the removed 16-entry queue plus 16-entry spill.
+#define CFG_TUH_TASK_QUEUE_SZ     32
+
 #ifndef CFG_TUH_MEM_SECTION
 /* Keep DMA-visible host transfer buffers below the core-1 stack in scratch X. */
 #define CFG_TUH_MEM_SECTION      __attribute__((section(".scratch_x.tinyusb_host")))

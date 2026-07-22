@@ -7,14 +7,21 @@
 
 QueueSetHandle_t devmon_event_set;
 
-void devmon_init(void)
+int devmon_init(void)
 {
 	BaseType_t rc;
 
 	devmon_event_set = xQueueCreateSet(DEVICE_EVENT_SET_LEN);
-	configASSERT(devmon_event_set);
+	if (!devmon_event_set)
+		return -ENOMEM;
 	rc = xQueueAddToSet(devmon_queue, devmon_event_set);
-	configASSERT(rc == pdPASS);
+	if (rc != pdPASS) {
+		vQueueDelete(devmon_event_set);
+		devmon_event_set = NULL;
+		return -ENOSPC;
+	}
+
+	return 0;
 }
 
 int devmon_add_device(const struct port_input_dev *port_dev)

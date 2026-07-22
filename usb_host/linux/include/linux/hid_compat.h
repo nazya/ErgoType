@@ -19,7 +19,6 @@
 #include "task.h"
 #include "tusb.h"
 #include "log.h"
-#include "pico/rand.h"
 
 typedef int gfp_t;
 typedef int pm_message_t;
@@ -62,6 +61,7 @@ typedef long loff_t;
 #define CONFIG_HID_ZYDACRON 1
 #define CONFIG_HID_HAPTIC 1
 #define CONFIG_HID_MULTITOUCH 1
+#define CONFIG_HID_MAGICMOUSE 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
@@ -69,8 +69,8 @@ typedef long loff_t;
 // Firmware power_supply proxy is deferred; current linked HID drivers do not
 // require battery class registration.
 // #define CONFIG_HOLTEK_FF 1
-// Holtek force-feedback support is not linked/tested; only the keyboard fixup
-// driver is enabled for this family.
+// Holtek force-feedback support is not linked/tested; only the keyboard and
+// mouse descriptor-fixup drivers are enabled for this family.
 // #define CONFIG_LEDS_CLASS 1
 // Linux LED class proxy is deferred.
 // #define CONFIG_BACKLIGHT_CLASS_DEVICE 1
@@ -139,13 +139,19 @@ static inline int signal_pending(const struct task_struct *task)
 }
 
 struct kref {
-	int refcount;
+	/* Linked firmware owners use the ordinary positive-reference contract. */
+	unsigned int refcount;
 };
 
 struct mutex {
 	SemaphoreHandle_t handle;
 };
 
+/*
+ * PORTING DEBT: this is only zero storage, not Linux's usable static mutex.
+ * No linked caller locks a DEFINE_MUTEX object; require explicit mutex_init()
+ * or compile-gate the caller before enabling one.
+ */
 #define DEFINE_MUTEX(name) struct mutex name = { 0 }
 
 struct semaphore {
@@ -165,7 +171,8 @@ struct work_struct {
 	void (*func)(struct work_struct *work);
 	uint8_t pending;
 	uint8_t running;
-	uint8_t canceling;
+	/* Concurrent cancel_work_sync() callers must all retain the queue gate. */
+	uint8_t cancel_depth;
 	struct workqueue_struct *wq;
 	struct work_struct *next;
 };
@@ -185,11 +192,18 @@ struct delayed_work {
 	uint8_t delayed_pending;
 };
 
-#define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->canceling = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
-void hid_delayed_work_timer(struct timer_list *timer);
-#define INIT_DELAYED_WORK(dwork, fn) do { INIT_WORK(&(dwork)->work, (fn)); timer_setup(&(dwork)->timer, hid_delayed_work_timer, 0); (dwork)->wq = NULL; (dwork)->delayed_pending = 0; } while (0)
+#define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->cancel_depth = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
+/*
+ * Delayed work is intentionally a compile-time port boundary. The former
+ * split timer/workqueue bridge could arm its timer after a synchronous cancel
+ * had already returned. No linked driver uses delayed_work; keep future use
+ * loud until deadlines are owned by the workqueue task itself.
+ */
+void hid_delayed_work_not_supported(void)
+	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
+#define INIT_DELAYED_WORK(dwork, fn) do { hid_delayed_work_not_supported(); } while (0)
 // Upstream deferrable work can skip wakeups for idle CPUs. Firmware has no
-// matching power-idle worker mode, so it uses the regular delayed-work bridge.
+// delayed-work bridge yet, so it retains the same explicit compile-time gate.
 #define INIT_DEFERRABLE_WORK(dwork, fn) INIT_DELAYED_WORK(dwork, fn)
 #define to_delayed_work(work) container_of(work, struct delayed_work, work)
 extern struct workqueue_struct *system_wq;
@@ -202,17 +216,17 @@ bool cancel_work_sync(struct work_struct *work);
 struct workqueue_struct *create_singlethread_workqueue(const char *name);
 void destroy_workqueue(struct workqueue_struct *wq);
 bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-			unsigned long delay);
-bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay);
+			unsigned long delay)
+	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
+	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
 bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-		      unsigned long delay);
-bool cancel_delayed_work_sync(struct delayed_work *dwork);
+		      unsigned long delay)
+	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
+bool cancel_delayed_work_sync(struct delayed_work *dwork)
+	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
 int hid_timer_init(void);
 void hid_timer_task(void *pvParameters);
-static inline bool delayed_work_pending(struct delayed_work *dwork)
-{
-	return dwork->delayed_pending || dwork->work.pending;
-}
 
 struct file {
 	int unused;
@@ -365,15 +379,27 @@ static inline void module_put(struct module *module)
 #define __packed __attribute__((packed))
 #endif
 #define WARN_ON(x) (x)
-#define BUG_ON(x) configASSERT(!(x))
+/*
+ * Linux BUG_ON() always evaluates its condition. No linked caller needs a
+ * release-build fatal policy, so keep the debug assertion without inventing a
+ * silent busy-loop. Evaluate outside configASSERT() so NDEBUG cannot erase it.
+ */
+#define BUG_ON(x) \
+	do { \
+		bool __hid_bug_ok = !(x); \
+		configASSERT(__hid_bug_ok); \
+		(void)__hid_bug_ok; \
+	} while (0)
 #define unlikely(x) (x)
 #define min(x, y) ((x) < (y) ? (x) : (y))
 #define max(x, y) ((x) > (y) ? (x) : (y))
 #define IS_ERR(ptr) ((uintptr_t)(ptr) >= (uintptr_t)-4095)
 #define PTR_ERR(ptr) ((long)(ptr))
 #define ERR_PTR(err) ((void *)(intptr_t)(err))
-// Imported Linux HID code can run from TinyUSB host callbacks in this slice;
-// do not call the firmware logger from those paths.
+// Imported Linux HID code now runs in firmware tasks, but this compatibility
+// layer has no printk sink and generic formatted logging would inflate every
+// derived call site's stack. Selected boundaries publish bounded diagnostics
+// from their owning glue task instead.
 #define pr_err(fmt, ...) do { } while (0)
 #define pr_notice(fmt, ...) do { } while (0)
 #define pr_info(fmt, ...) do { } while (0)
@@ -396,13 +422,23 @@ static inline void module_put(struct module *module)
 #define dev_warn_ratelimited(dev, fmt, ...) dev_warn_once(dev, fmt, ##__VA_ARGS__)
 #define dev_info_ratelimited(dev, fmt, ...) dev_info_once(dev, fmt, ##__VA_ARGS__)
 #define dev_dbg_ratelimited(dev, fmt, ...) dev_dbg_once(dev, fmt, ##__VA_ARGS__)
-#define pm_ptr(ptr) (ptr)
+// #define pm_ptr(_ptr) PTR_IF(IS_ENABLED(CONFIG_PM), (_ptr))
+// Firmware has no power-management core and leaves CONFIG_PM disabled, so the
+// upstream expression folds to NULL without requiring the full Kconfig macro
+// expansion machinery in this reduced compatibility header.
+#define pm_ptr(ptr) NULL
 #define max_t(type, x, y) ((type)(x) > (type)(y) ? (type)(x) : (type)(y))
 #define min_t(type, x, y) ((type)(x) < (type)(y) ? (type)(x) : (type)(y))
 #define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
 #define DIV_ROUND_CLOSEST(x, divisor) (((x) + ((divisor) / 2)) / (divisor))
 #define mult_frac(x, numer, denom) ((x) * (numer) / (denom))
 #define clamp(val, lo, hi) ((val) < (lo) ? (lo) : ((val) > (hi) ? (hi) : (val)))
+/*
+ * PORTING DEBT: unlike Linux array3_size(), this does not saturate on
+ * overflow. Its sole linked caller grows HID collections from a report
+ * descriptor capped at HID_MAX_DESCRIPTOR_SIZE (4096), so the current
+ * product is bounded; audit or replace this helper before adding callers.
+ */
 #define array3_size(a, b, c) ((a) * (b) * (c))
 #define swap(a, b) do { typeof(a) __tmp = (a); (a) = (b); (b) = __tmp; } while (0)
 #define GENMASK(h, l) (((~0UL) - (1UL << (l)) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
@@ -606,27 +642,11 @@ struct device_driver {
 	const struct attribute_group * const *dev_groups;
 	const struct hid_driver *hid_driver;
 	struct list_head bus_node;
-	struct list_head attrs;
 };
 
 struct class {
 	const char *name;
 	const struct attribute_group * const *dev_groups;
-};
-
-struct device_attr_entry {
-	struct list_head node;
-	const struct device_attribute *attr;
-};
-
-struct device_bin_attr_entry {
-	struct list_head node;
-	const struct bin_attribute *attr;
-};
-
-struct driver_attr_entry {
-	struct list_head node;
-	const struct driver_attribute *attr;
 };
 
 struct device {
@@ -639,13 +659,8 @@ struct device {
 	struct kobject kobj;
 	struct list_head bus_node;
 	struct list_head devres;
-	struct list_head attrs;
-	struct list_head bin_attrs;
 	unsigned int uevent_count;
 	enum kobject_action last_uevent_action;
-	unsigned int sysfs_notify_count;
-	const char *last_sysfs_notify_dir;
-	const char *last_sysfs_notify_attr;
 	bool wakeup_enabled;
 	unsigned int refcount;
 	char name[32];
@@ -677,12 +692,13 @@ struct device_node {
 
 static inline int atomic_inc_return(atomic_t *v)
 {
-	int ret;
-
-	taskENTER_CRITICAL();
-	ret = ++*v;
-	taskEXIT_CRITICAL();
-	return ret;
+	/*
+	 * Linux atomic_inc_return() is a fully ordered, non-sleeping RMW.
+	 * GCC atomics keep that contract without taking FreeRTOS's global task
+	 * critical locks. Pico supplies the RP2040 implementation; the same
+	 * compiler interface remains usable by the future ESP port.
+	 */
+	return __atomic_fetch_add(v, 1, __ATOMIC_SEQ_CST) + 1;
 }
 
 static inline int bus_register(const struct bus_type *bus)
@@ -759,18 +775,10 @@ static inline int device_probe(struct device *dev)
 		// Call probe once and retain ENOMEM if no matching driver binds.
 		int probe_ret = bus->probe ? bus->probe(dev) : 0;
 		if (!probe_ret) {
-			int ret = device_sysfs_create_groups(dev, drv->dev_groups);
-
-			if (!ret) {
-				kobject_uevent(&dev->kobj, KOBJ_BIND);
-				return 0;
-			}
-			// Linux driver core propagates post-probe sysfs allocation errors.
-			// Retain OOM in this reduced shim before trying another HID driver.
-			if (ret == -ENOMEM)
-				error = -ENOMEM;
-			if (bus->remove)
-				bus->remove(dev);
+			/* Preserve Linux's publication point; firmware owns no sysfs tree. */
+			(void)device_sysfs_create_groups(dev, drv->dev_groups);
+			kobject_uevent(&dev->kobj, KOBJ_BIND);
+			return 0;
 		}
 		if (probe_ret == -ENOMEM)
 			error = -ENOMEM;
@@ -784,51 +792,23 @@ static inline int device_probe(struct device *dev)
 
 static inline int device_sysfs_create_groups(struct device *dev, const struct attribute_group * const *groups)
 {
-	const struct attribute_group * const *group;
-
-	if (!groups)
-		return 0;
-
-	for (group = groups; *group; group++) {
-		int ret = sysfs_create_group(&dev->kobj, *group);
-
-		if (ret) {
-			while (group != groups) {
-				group--;
-				sysfs_remove_group(&dev->kobj, *group);
-			}
-			return ret;
-		}
-	}
-
+	/* Linux publishes these groups; firmware has no sysfs object tree. */
+	(void)dev;
+	(void)groups;
 	return 0;
 }
 
 static inline void device_sysfs_remove_groups(struct device *dev, const struct attribute_group * const *groups)
 {
-	const struct attribute_group * const *group;
-
-	if (!groups)
-		return;
-
-	for (group = groups; *group; group++)
-		sysfs_remove_group(&dev->kobj, *group);
+	/* No groups were published by device_sysfs_create_groups(). */
+	(void)dev;
+	(void)groups;
 }
 
 static inline void device_sysfs_remove_all(struct device *dev)
 {
-	struct device_attr_entry *attr, *attr_next;
-	struct device_bin_attr_entry *bin_attr, *bin_attr_next;
-
-	list_for_each_entry_safe(attr, attr_next, &dev->attrs, node) {
-		list_del(&attr->node);
-		vPortFree(attr);
-	}
-
-	list_for_each_entry_safe(bin_attr, bin_attr_next, &dev->bin_attrs, node) {
-		list_del(&bin_attr->node);
-		vPortFree(bin_attr);
-	}
+	/* Firmware publishes no sysfs objects, so there is no registry to drain. */
+	(void)dev;
 }
 
 static inline int device_add(struct device *dev)
@@ -839,11 +819,8 @@ static inline int device_add(struct device *dev)
 	INIT_LIST_HEAD(&dev->bus_node);
 	list_add_tail(&dev->bus_node, &bus->devices);
 
-	ret = device_sysfs_create_groups(dev, bus->dev_groups);
-	if (ret) {
-		list_del(&dev->bus_node);
-		return ret;
-	}
+	/* Preserve Linux's publication point; firmware owns no sysfs tree. */
+	(void)device_sysfs_create_groups(dev, bus->dev_groups);
 
 	// if (device_probe(dev) < 0) {
 	// 	list_del(&dev->bus_node);
@@ -858,6 +835,9 @@ static inline int device_add(struct device *dev)
 	ret = device_probe(dev);
 	if (ret < 0) {
 		device_sysfs_remove_groups(dev, bus->dev_groups);
+		// Linux driver core unwinds attributes created during a failed bind.
+		// This reduced device-model shim owns that probe state directly.
+		device_sysfs_remove_all(dev);
 		list_del(&dev->bus_node);
 		return ret;
 	}
@@ -911,22 +891,11 @@ static inline int driver_register(struct device_driver *drv)
 	const struct attribute_group * const *group;
 
 	INIT_LIST_HEAD(&drv->bus_node);
-	INIT_LIST_HEAD(&drv->attrs);
 	list_add_tail(&drv->bus_node, &bus->drivers);
 
 	if (bus->drv_groups)
-		for (group = bus->drv_groups; *group; group++) {
-			int ret = driver_sysfs_create_group(drv, *group);
-
-			if (ret) {
-				while (group != bus->drv_groups) {
-					group--;
-					driver_sysfs_remove_group(drv, *group);
-				}
-				list_del(&drv->bus_node);
-				return ret;
-			}
-		}
+		for (group = bus->drv_groups; *group; group++)
+			(void)driver_sysfs_create_group(drv, *group);
 
 	// Linux driver_register() reaches driver_attach() through the driver core.
 	driver_attach(drv);
@@ -972,8 +941,6 @@ static inline int driver_attach(struct device_driver *drv)
 	struct device *dev;
 
 	list_for_each_entry(dev, &bus->devices, bus_node) {
-		int ret;
-
 		if (dev->driver)
 			continue;
 		if (drv->bus->match && !drv->bus->match(dev, drv))
@@ -983,14 +950,9 @@ static inline int driver_attach(struct device_driver *drv)
 			dev->driver = NULL;
 			continue;
 		}
-		ret = device_sysfs_create_groups(dev, drv->dev_groups);
-		if (ret) {
-			if (drv->bus->remove)
-				drv->bus->remove(dev);
-			dev->driver = NULL;
-		} else {
-			kobject_uevent(&dev->kobj, KOBJ_BIND);
-		}
+		/* Preserve Linux's publication point; firmware owns no sysfs tree. */
+		(void)device_sysfs_create_groups(dev, drv->dev_groups);
+		kobject_uevent(&dev->kobj, KOBJ_BIND);
 	}
 
 	return 0;
@@ -1001,15 +963,10 @@ static inline void device_initialize(struct device *dev)
 	dev->kobj.dev = dev;
 	INIT_LIST_HEAD(&dev->bus_node);
 	INIT_LIST_HEAD(&dev->devres);
-	INIT_LIST_HEAD(&dev->attrs);
-	INIT_LIST_HEAD(&dev->bin_attrs);
 	dev->uevent_count = 0;
 	dev->last_uevent_action = KOBJ_ADD;
-	dev->sysfs_notify_count = 0;
-	dev->last_sysfs_notify_dir = NULL;
-	dev->last_sysfs_notify_attr = NULL;
 	dev->wakeup_enabled = false;
-	dev->refcount = 1;
+	__atomic_store_n(&dev->refcount, 1u, __ATOMIC_RELAXED);
 }
 
 static inline void *dev_get_drvdata(const struct device *dev)
@@ -1024,25 +981,42 @@ static inline void dev_set_drvdata(struct device *dev, void *data)
 
 static inline void put_device(struct device *dev)
 {
-	bool release;
+	unsigned int refs;
 
-	taskENTER_CRITICAL();
-	release = --dev->refcount == 0;
-	taskEXIT_CRITICAL();
-	if (release && dev->release)
+	if (!dev)
+		return;
+	/*
+	 * Linked callers already own a positive reference. Preserve Linux's final
+	 * release edge without importing refcount_t saturation/diagnostic policy.
+	 */
+	refs = __atomic_fetch_sub(&dev->refcount, 1u, __ATOMIC_RELEASE);
+	if (refs != 1u)
+		return;
+
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	if (dev->release)
 		dev->release(dev);
 }
 
 static inline struct device *get_device(struct device *dev)
 {
-	taskENTER_CRITICAL();
-	dev->refcount++;
-	taskEXIT_CRITICAL();
+	/*
+	 * Like Linux get_device(), this requires an existing owned reference. The
+	 * linked haptic probe acquires it before work publication and teardown.
+	 */
+	if (!dev)
+		return NULL;
+	(void)__atomic_fetch_add(&dev->refcount, 1u, __ATOMIC_RELAXED);
 	return dev;
 }
 
 static inline void device_enable_async_suspend(struct device *dev)
 {
+	/*
+	 * Linux only uses this flag to let the PM core schedule this device's
+	 * suspend/resume asynchronously. Firmware has no PM core and leaves
+	 * CONFIG_PM disabled, so there is no scheduler-visible state to retain.
+	 */
 	(void)dev;
 }
 
@@ -1374,50 +1348,36 @@ static inline int devm_release_action(struct device *dev, devm_action_fn action,
 
 static inline int device_create_file(struct device *dev, const struct device_attribute *attr)
 {
-	struct device_attr_entry *entry = pvPortMalloc(sizeof(*entry));
-
-	if (!entry)
-		return -ENOMEM;
-
-	entry->attr = attr;
-	list_add_tail(&entry->node, &dev->attrs);
+	/*
+	 * Linux publishes this attribute through sysfs. Firmware has no sysfs or
+	 * internal attribute consumer, so retain the driver's call and report
+	 * successful publication without allocating a dead registry node.
+	 */
+	(void)dev;
+	(void)attr;
 	return 0;
 }
 
 static inline void device_remove_file(struct device *dev, const struct device_attribute *attr)
 {
-	struct device_attr_entry *entry, *next;
-
-	list_for_each_entry_safe(entry, next, &dev->attrs, node)
-		if (entry->attr == attr) {
-			list_del(&entry->node);
-			vPortFree(entry);
-			return;
-		}
+	/* No sysfs object was published by device_create_file(). */
+	(void)dev;
+	(void)attr;
 }
 
 static inline int device_create_bin_file(struct device *dev, const struct bin_attribute *attr)
 {
-	struct device_bin_attr_entry *entry = pvPortMalloc(sizeof(*entry));
-
-	if (!entry)
-		return -ENOMEM;
-
-	entry->attr = attr;
-	list_add_tail(&entry->node, &dev->bin_attrs);
+	/* See device_create_file(): binary attributes have no firmware consumer. */
+	(void)dev;
+	(void)attr;
 	return 0;
 }
 
 static inline void device_remove_bin_file(struct device *dev, const struct bin_attribute *attr)
 {
-	struct device_bin_attr_entry *entry, *next;
-
-	list_for_each_entry_safe(entry, next, &dev->bin_attrs, node)
-		if (entry->attr == attr) {
-			list_del(&entry->node);
-			vPortFree(entry);
-			return;
-		}
+	/* No sysfs object was published by device_create_bin_file(). */
+	(void)dev;
+	(void)attr;
 }
 
 static inline int sysfs_create_bin_file(struct kobject *kobj, const struct bin_attribute *attr)
@@ -1432,252 +1392,90 @@ static inline void sysfs_remove_bin_file(struct kobject *kobj, const struct bin_
 
 static inline void sysfs_notify(struct kobject *kobj, const char *dir, const char *attr)
 {
-	struct device *dev = kobj_to_dev(kobj);
-
-	dev->sysfs_notify_count++;
-	dev->last_sysfs_notify_dir = dir;
-	dev->last_sysfs_notify_attr = attr;
+	/* Linux wakes sysfs pollers; firmware has no attribute reader to wake. */
+	(void)kobj;
+	(void)dir;
+	(void)attr;
 }
 
 static inline int driver_create_file(struct device_driver *drv, const struct driver_attribute *attr)
 {
-	struct driver_attr_entry *entry = pvPortMalloc(sizeof(*entry));
-
-	if (!entry)
-		return -ENOMEM;
-
-	entry->attr = attr;
-	list_add_tail(&entry->node, &drv->attrs);
+	/* Firmware has no driver-attribute proxy; retain registration as a no-op. */
+	(void)drv;
+	(void)attr;
 	return 0;
 }
 
 static inline void driver_remove_file(struct device_driver *drv, const struct driver_attribute *attr)
 {
-	struct driver_attr_entry *entry, *next;
-
-	list_for_each_entry_safe(entry, next, &drv->attrs, node)
-		if (entry->attr == attr) {
-			list_del(&entry->node);
-			vPortFree(entry);
-			return;
-		}
+	/* No driver sysfs object was published by driver_create_file(). */
+	(void)drv;
+	(void)attr;
 }
 
 static inline int sysfs_create_group(struct kobject *kobj, const struct attribute_group *grp)
 {
-	struct device *dev = kobj_to_dev(kobj);
-	struct attribute * const *attr;
-	const struct bin_attribute * const *bin_attr;
-
-	if (grp->attrs)
-		for (attr = grp->attrs; *attr; attr++) {
-			int n = (int)(attr - grp->attrs);
-			int ret;
-
-			if (grp->is_visible && !grp->is_visible(kobj, *attr, n))
-				continue;
-
-			ret = device_create_file(dev, container_of(*attr, struct device_attribute, attr));
-			if (ret) {
-				while (attr != grp->attrs) {
-					attr--;
-					device_remove_file(dev, container_of(*attr, struct device_attribute, attr));
-				}
-				return ret;
-			}
-		}
-
-	if (grp->bin_attrs)
-		for (bin_attr = grp->bin_attrs; *bin_attr; bin_attr++) {
-			int ret = device_create_bin_file(dev, *bin_attr);
-
-			if (ret) {
-				while (bin_attr != grp->bin_attrs) {
-					bin_attr--;
-					device_remove_bin_file(dev, *bin_attr);
-				}
-				if (grp->attrs)
-					for (attr = grp->attrs; *attr; attr++)
-						device_remove_file(dev, container_of(*attr, struct device_attribute, attr));
-				return ret;
-			}
-		}
-
+	/* Linux publishes the group; firmware intentionally has no sysfs tree. */
+	(void)kobj;
+	(void)grp;
 	return 0;
 }
 
 static inline void sysfs_remove_group(struct kobject *kobj, const struct attribute_group *grp)
 {
-	struct device *dev = kobj_to_dev(kobj);
-	struct attribute * const *attr;
-	const struct bin_attribute * const *bin_attr;
-
-	if (grp->attrs)
-		for (attr = grp->attrs; *attr; attr++)
-			device_remove_file(dev, container_of(*attr, struct device_attribute, attr));
-	if (grp->bin_attrs)
-		for (bin_attr = grp->bin_attrs; *bin_attr; bin_attr++)
-			device_remove_bin_file(dev, *bin_attr);
+	/* No group was published by sysfs_create_group(). */
+	(void)kobj;
+	(void)grp;
 }
 
 static inline int driver_sysfs_create_group(struct device_driver *drv, const struct attribute_group *grp)
 {
-	struct attribute * const *attr;
-
-	for (attr = grp->attrs; *attr; attr++) {
-		int ret = driver_create_file(drv, container_of(*attr, struct driver_attribute, attr));
-
-		if (ret) {
-			while (attr != grp->attrs) {
-				attr--;
-				driver_remove_file(drv, container_of(*attr, struct driver_attribute, attr));
-			}
-			return ret;
-		}
-	}
-
+	/* Linux publishes the group; firmware intentionally has no sysfs tree. */
+	(void)drv;
+	(void)grp;
 	return 0;
 }
 
 static inline void driver_sysfs_remove_group(struct device_driver *drv, const struct attribute_group *grp)
 {
-	struct attribute * const *attr;
-
-	for (attr = grp->attrs; *attr; attr++)
-		driver_remove_file(drv, container_of(*attr, struct driver_attribute, attr));
+	/* No group was published by driver_sysfs_create_group(). */
+	(void)drv;
+	(void)grp;
 }
 
-static inline ssize_t device_attr_show(struct device *dev, const char *name, char *buf)
-{
-	struct device_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->show)
-				return -EPERM;
-			return entry->attr->show(dev, (struct device_attribute *)entry->attr, buf);
-		}
-
-	return -ENOENT;
-}
-
-static inline ssize_t device_attr_store(struct device *dev, const char *name, const char *buf, size_t count)
-{
-	struct device_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->store)
-				return -EPERM;
-			return entry->attr->store(dev, (struct device_attribute *)entry->attr, buf, count);
-		}
-
-	return -ENOENT;
-}
-
-static inline ssize_t device_bin_attr_read(struct device *dev, const char *name,
-					   char *buf, loff_t off, size_t count)
-{
-	struct device_bin_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->bin_attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->read)
-				return -EPERM;
-			return entry->attr->read(NULL, &dev->kobj, entry->attr, buf, off, count);
-		}
-
-	return -ENOENT;
-}
-
-static inline ssize_t device_bin_attr_write(struct device *dev, const char *name,
-					    char *buf, loff_t off, size_t count)
-{
-	struct device_bin_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->bin_attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->write)
-				return -EPERM;
-			return entry->attr->write(NULL, &dev->kobj, entry->attr, buf, off, count);
-		}
-
-	return -ENOENT;
-}
-
-static inline ssize_t driver_attr_show(struct device_driver *drv, const char *name, char *buf)
-{
-	struct driver_attr_entry *entry;
-
-	list_for_each_entry(entry, &drv->attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->show)
-				return -EPERM;
-			return entry->attr->show(drv, buf);
-		}
-
-	return -ENOENT;
-}
-
-static inline ssize_t driver_attr_store(struct device_driver *drv, const char *name, const char *buf, size_t count)
-{
-	struct driver_attr_entry *entry;
-
-	list_for_each_entry(entry, &drv->attrs, node)
-		if (!strcmp(entry->attr->attr.name, name)) {
-			if (!entry->attr->store)
-				return -EPERM;
-			return entry->attr->store(drv, buf, count);
-		}
-
-	return -ENOENT;
-}
-
-static inline int device_attr_for_each(struct device *dev, device_attr_iter_fn fn, void *data)
-{
-	struct device_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->attrs, node) {
-		int ret = fn(dev, entry->attr, data);
-
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-static inline int device_bin_attr_for_each(struct device *dev, device_bin_attr_iter_fn fn, void *data)
-{
-	struct device_bin_attr_entry *entry;
-
-	list_for_each_entry(entry, &dev->bin_attrs, node) {
-		int ret = fn(dev, entry->attr, data);
-
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-static inline int driver_attr_for_each(struct device_driver *drv,
-				       int (*fn)(struct device_driver *drv,
-						 const struct driver_attribute *attr,
-						 void *data),
-				       void *data)
-{
-	struct driver_attr_entry *entry;
-
-	list_for_each_entry(entry, &drv->attrs, node) {
-		int ret = fn(drv, entry->attr, data);
-
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
+/*
+ * Publishing upstream sysfs calls is intentionally a success/no-op above.
+ * Accessing or enumerating attributes needs a real firmware proxy and must not
+ * silently observe an empty fake registry.
+ */
+ssize_t device_attr_show(struct device *dev, const char *name, char *buf)
+	__attribute__((error("device sysfs access needs a firmware proxy")));
+ssize_t device_attr_store(struct device *dev, const char *name,
+			  const char *buf, size_t count)
+	__attribute__((error("device sysfs access needs a firmware proxy")));
+ssize_t device_bin_attr_read(struct device *dev, const char *name,
+			     char *buf, loff_t off, size_t count)
+	__attribute__((error("binary sysfs access needs a firmware proxy")));
+ssize_t device_bin_attr_write(struct device *dev, const char *name,
+			      char *buf, loff_t off, size_t count)
+	__attribute__((error("binary sysfs access needs a firmware proxy")));
+ssize_t driver_attr_show(struct device_driver *drv, const char *name,
+			 char *buf)
+	__attribute__((error("driver sysfs access needs a firmware proxy")));
+ssize_t driver_attr_store(struct device_driver *drv, const char *name,
+			  const char *buf, size_t count)
+	__attribute__((error("driver sysfs access needs a firmware proxy")));
+int device_attr_for_each(struct device *dev, device_attr_iter_fn fn, void *data)
+	__attribute__((error("device sysfs iteration needs a firmware proxy")));
+int device_bin_attr_for_each(struct device *dev, device_bin_attr_iter_fn fn,
+			     void *data)
+	__attribute__((error("binary sysfs iteration needs a firmware proxy")));
+int driver_attr_for_each(struct device_driver *drv,
+			 int (*fn)(struct device_driver *drv,
+				   const struct driver_attribute *attr,
+				   void *data),
+			 void *data)
+	__attribute__((error("driver sysfs iteration needs a firmware proxy")));
 
 // Linux kmalloc(size, flags) compatibility shim.
 static inline void *kmalloc(size_t size, int flags)
@@ -1712,6 +1510,11 @@ static inline void *kvzalloc(size_t size, int flags)
 	return kzalloc(size, flags);
 }
 
+/*
+ * PORTING DEBT: these typed convenience products lack Linux's overflow
+ * checking. Current linked counts are independently bounded; audit the
+ * multiplication before using them with a new or descriptor-sized count.
+ */
 #define kzalloc_objs(obj, count) kzalloc(sizeof(obj) * (count), GFP_KERNEL)
 #define kzalloc_obj(obj) kzalloc(sizeof(obj), GFP_KERNEL)
 #define kzalloc_flex(obj, member, count) kzalloc(sizeof(obj) + sizeof((obj).member[0]) * (count), GFP_KERNEL)
@@ -1758,6 +1561,7 @@ static inline void *devm_kzalloc(struct device *dev, size_t size, gfp_t flags)
 
 static inline void *devm_kcalloc(struct device *dev, size_t n, size_t size, gfp_t flags)
 {
+	/* PORTING DEBT: callers must bound n * size until overflow is checked. */
 	return devm_kzalloc(dev, n * size, flags);
 }
 
@@ -1840,44 +1644,45 @@ static inline bool mutex_is_locked(struct mutex *mutex)
 
 static inline int down_interruptible(struct semaphore *sem)
 {
+	TaskHandle_t task;
+
 	if (xSemaphoreTake(sem->handle, portMAX_DELAY) != pdPASS)
 		return -EINTR;
-	taskENTER_CRITICAL();
-	sem->owner = xTaskGetCurrentTaskHandle();
-	taskEXIT_CRITICAL();
+	task = xTaskGetCurrentTaskHandle();
+	__atomic_store_n(&sem->owner, task, __ATOMIC_RELEASE);
 	return 0;
 }
 
 static inline void down(struct semaphore *sem)
 {
+	TaskHandle_t task;
+
 	xSemaphoreTake(sem->handle, portMAX_DELAY);
-	taskENTER_CRITICAL();
-	sem->owner = xTaskGetCurrentTaskHandle();
-	taskEXIT_CRITICAL();
+	task = xTaskGetCurrentTaskHandle();
+	__atomic_store_n(&sem->owner, task, __ATOMIC_RELEASE);
 }
 
 static inline int down_trylock(struct semaphore *sem)
 {
+	TaskHandle_t task;
+
 	if (xSemaphoreTake(sem->handle, 0) != pdPASS)
 		return 1;
-	taskENTER_CRITICAL();
-	sem->owner = xTaskGetCurrentTaskHandle();
-	taskEXIT_CRITICAL();
+	task = xTaskGetCurrentTaskHandle();
+	__atomic_store_n(&sem->owner, task, __ATOMIC_RELEASE);
 	return 0;
 }
 
 static inline void up(struct semaphore *sem)
 {
-	taskENTER_CRITICAL();
-	sem->owner = NULL;
-	taskEXIT_CRITICAL();
+	__atomic_store_n(&sem->owner, NULL, __ATOMIC_RELEASE);
 	xSemaphoreGive(sem->handle);
 }
 
 static inline void sema_init(struct semaphore *sem, int val)
 {
 	sem->handle = xSemaphoreCreateCounting((UBaseType_t)val, (UBaseType_t)val);
-	sem->owner = NULL;
+	__atomic_store_n(&sem->owner, NULL, __ATOMIC_RELAXED);
 }
 
 /* FreeRTOS semaphore construction can fail; expose it to port constructors. */
@@ -1891,7 +1696,7 @@ static inline void sema_destroy(struct semaphore *sem)
 	SemaphoreHandle_t handle = sem->handle;
 
 	sem->handle = NULL;
-	sem->owner = NULL;
+	__atomic_store_n(&sem->owner, NULL, __ATOMIC_RELEASE);
 	if (handle)
 		vSemaphoreDelete(handle);
 }
@@ -1899,11 +1704,13 @@ static inline void sema_destroy(struct semaphore *sem)
 static inline bool sema_owned_by_task(struct semaphore *sem,
 				      TaskHandle_t task)
 {
-	TaskHandle_t owner;
+	/*
+	 * owner is diagnostic/control-flow metadata beside the real FreeRTOS
+	 * semaphore. An atomic pointer publication avoids a second global kernel
+	 * critical section on every HID report and is portable to the ESP build.
+	 */
+	TaskHandle_t owner = __atomic_load_n(&sem->owner, __ATOMIC_ACQUIRE);
 
-	taskENTER_CRITICAL();
-	owner = sem->owner;
-	taskEXIT_CRITICAL();
 	return task && owner == task;
 }
 
@@ -1924,13 +1731,13 @@ static inline bool hid_compat_scheduler_started(void)
 
 static inline void hid_compat_spin_lock(spinlock_t *lock)
 {
-	// Callback-driven HID slice treats Linux spinlocks as nonblocking no-ops.
+	// Initializer-only shell; public spinlock operations are compile-gated.
 	lock->locked = 1;
 }
 
 static inline void hid_compat_spin_unlock(spinlock_t *lock)
 {
-	// Callback-driven HID slice treats Linux spinlocks as nonblocking no-ops.
+	// Initializer-only shell; public spinlock operations are compile-gated.
 	lock->locked = 0;
 }
 
@@ -1948,12 +1755,19 @@ static inline void hid_compat_spin_unlock_irqrestore(spinlock_t *lock, unsigned 
 
 #define DEFINE_SPINLOCK(name) spinlock_t name = { NULL }
 #define spin_lock_init(lock) hid_compat_spin_lock_init(lock)
-#define spin_lock(lock) hid_compat_spin_lock(lock)
-#define spin_unlock(lock) hid_compat_spin_unlock(lock)
-#define spin_lock_irq(lock) hid_compat_spin_lock(lock)
-#define spin_unlock_irq(lock) hid_compat_spin_unlock(lock)
-#define spin_lock_irqsave(lock, flags) do { (flags) = hid_compat_spin_lock_irqsave(lock); } while (0)
-#define spin_unlock_irqrestore(lock, flags) hid_compat_spin_unlock_irqrestore(lock, flags)
+/*
+ * No linked caller relies on a compatibility spinlock for exclusion. Active
+ * shared state uses an explicit task mutex or an atomic port boundary. Fail a
+ * future driver at compile time instead of silently giving it the old no-op.
+ */
+void hid_compat_spinlock_not_supported(void)
+	__attribute__((error("spinlock use needs an explicit firmware ownership bridge")));
+#define spin_lock(lock) do { (void)(lock); hid_compat_spinlock_not_supported(); } while (0)
+#define spin_unlock(lock) do { (void)(lock); hid_compat_spinlock_not_supported(); } while (0)
+#define spin_lock_irq(lock) do { (void)(lock); hid_compat_spinlock_not_supported(); } while (0)
+#define spin_unlock_irq(lock) do { (void)(lock); hid_compat_spinlock_not_supported(); } while (0)
+#define spin_lock_irqsave(lock, flags) do { (void)(lock); (void)(flags); hid_compat_spinlock_not_supported(); } while (0)
+#define spin_unlock_irqrestore(lock, flags) do { (void)(lock); (void)(flags); hid_compat_spinlock_not_supported(); } while (0)
 
 static inline void init_waitqueue_head(wait_queue_head_t *wait)
 {
@@ -1986,53 +1800,18 @@ static inline void hid_compat_usb_host_delay(unsigned int msecs)
 	vTaskDelay(pdMS_TO_TICKS(msecs));
 }
 
-	#define wait_event_timeout(wq, condition, timeout) \
-		({ \
-			TickType_t __timeout = (TickType_t)(timeout); \
-			TickType_t __deadline = xTaskGetTickCount() + __timeout; \
-			wait_queue_head_t *__wait = &(wq); \
-			TaskHandle_t __task = xTaskGetCurrentTaskHandle(); \
-			long __ret = 0; \
-			__wait->task = __task; \
-			if (condition) { \
-				__ret = __timeout ? (long)__timeout : 1; \
-			} else { \
-				while (time_before((unsigned long)xTaskGetTickCount(), (unsigned long)__deadline)) { \
-					hid_compat_wait_until(__deadline); \
-					if (condition) { \
-						TickType_t __now = xTaskGetTickCount(); \
-						__ret = time_before((unsigned long)__now, (unsigned long)__deadline) ? \
-							(long)(__deadline - __now) : 1; \
-						break; \
-					} \
-				} \
-				if (!__ret && (condition)) \
-					__ret = 1; \
-			} \
-			if (__wait->task == __task) \
-				__wait->task = NULL; \
-			__ret; \
-		})
-
+/*
+ * The former reduced waitqueue stored only one task and could not preserve
+ * Linux's concurrent waiter contract. No linked path uses it; require a real
+ * waiter list at the boundary before a future driver can compile.
+ */
+long hid_compat_waitqueue_not_supported(void)
+	__attribute__((error("wait_event needs the firmware waiter-list bridge")));
+#define wait_event_timeout(wq, condition, timeout) \
+	((void)(&(wq)), (void)sizeof(condition), (void)(timeout), \
+	 hid_compat_waitqueue_not_supported())
 #define wait_event_interruptible_timeout(wq, condition, timeout) \
 	wait_event_timeout((wq), (condition), (timeout))
-
-static inline void get_random_bytes(void *buf, size_t len)
-{
-	uint8_t *bytes = buf;
-	uint32_t word = 0;
-	unsigned int left = 0;
-
-	for (size_t i = 0; i < len; i++) {
-		if (!left) {
-			word = get_rand_32();
-			left = sizeof(word);
-		}
-		bytes[i] = (uint8_t)word;
-		word >>= 8;
-		left--;
-	}
-}
 
 #define SIGIO 29
 #define POLL_IN 1
@@ -2052,37 +1831,54 @@ static inline void kill_fasync(struct fasync_struct **fasync, int sig, int band)
 
 static inline void kref_init(struct kref *kref)
 {
-	kref->refcount = 1;
+	/* Linux kref_init() publishes the first owned reference. */
+	__atomic_store_n(&kref->refcount, 1u, __ATOMIC_RELAXED);
 }
 
 static inline void kref_get(struct kref *kref)
 {
-	kref->refcount++;
+	/* kref_get() requires an existing owned reference. */
+	(void)__atomic_fetch_add(&kref->refcount, 1u, __ATOMIC_RELAXED);
 }
 
-static inline void kref_put(struct kref *kref, void (*release)(struct kref *kref))
+static inline int kref_put(struct kref *kref,
+			   void (*release)(struct kref *kref))
 {
-	kref->refcount--;
-	if (!kref->refcount)
-		release(kref);
+	unsigned int refs;
+
+	/* Linked callers release only references they already own. */
+	refs = __atomic_fetch_sub(&kref->refcount, 1u, __ATOMIC_RELEASE);
+	if (refs != 1u)
+		return 0;
+
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	release(kref);
+	return 1;
 }
 
 static inline void hid_debug_init(void)
 {
+	/* Firmware has no debugfs sink; keep hid-core's unconditional init shape. */
 }
 
 static inline void hid_debug_exit(void)
 {
+	/* Firmware has no debugfs sink; there is no debug registry to release. */
 }
 
 static inline void hid_debug_register(void *hdev, const char *name)
 {
+	/*
+	 * Linux exposes parsed HID reports through debugfs. No debugfs consumer is
+	 * linked here, so registration has no externally observable owner or data.
+	 */
 	(void)hdev;
 	(void)name;
 }
 
 static inline void hid_debug_unregister(void *hdev)
 {
+	/* Paired no-op for the deliberately absent debugfs registration above. */
 	(void)hdev;
 }
 
@@ -2183,84 +1979,103 @@ static inline s32 sign_extend32(u32 value, unsigned int index)
 	return (s32)((value ^ sign) - sign);
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
+/*
+ * Minimal local copy of Linux bitops used by HID/input.
+ *
+ * Linux atomic bitops are non-sleeping and can synchronize task/timer/IRQ
+ * users. GCC __atomic operations preserve that boundary without FreeRTOS task
+ * critical sections. The RP2040 Pico SDK supplies their hardware-spinlock
+ * implementation, while GCC/Clang ESP toolchains provide the same interface.
+ */
 static inline void set_bit(unsigned int nr, unsigned long *addr)
 {
-	taskENTER_CRITICAL();
-	addr[BIT_WORD(nr)] |= BIT_MASK(nr);
-	taskEXIT_CRITICAL();
+	(void)__atomic_fetch_or(&addr[BIT_WORD(nr)], BIT_MASK(nr),
+				__ATOMIC_RELAXED);
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
+/* Linux __set_bit() is deliberately non-atomic; callers provide exclusion. */
 static inline void __set_bit(unsigned int nr, unsigned long *addr)
 {
-	set_bit(nr, addr);
+	addr[BIT_WORD(nr)] |= BIT_MASK(nr);
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
 static inline void clear_bit(unsigned int nr, unsigned long *addr)
 {
-	taskENTER_CRITICAL();
-	addr[BIT_WORD(nr)] &= ~BIT_MASK(nr);
-	taskEXIT_CRITICAL();
+	(void)__atomic_fetch_and(&addr[BIT_WORD(nr)], ~BIT_MASK(nr),
+				 __ATOMIC_RELAXED);
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
+/* Linux __clear_bit() is deliberately non-atomic; callers provide exclusion. */
 static inline void __clear_bit(unsigned int nr, unsigned long *addr)
 {
-	clear_bit(nr, addr);
+	addr[BIT_WORD(nr)] &= ~BIT_MASK(nr);
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
+/* Linux __change_bit() is deliberately non-atomic; callers provide exclusion. */
+static inline void __change_bit(unsigned int nr, unsigned long *addr)
+{
+	addr[BIT_WORD(nr)] ^= BIT_MASK(nr);
+}
+
 static inline int test_bit(unsigned int nr, const unsigned long *addr)
 {
-	return !!(addr[BIT_WORD(nr)] & BIT_MASK(nr));
+	unsigned long value = __atomic_load_n(&addr[BIT_WORD(nr)],
+					      __ATOMIC_RELAXED);
+
+	return !!(value & BIT_MASK(nr));
 }
 
-// Minimal local copy of Linux bitops used by hid-input.
 static inline int test_and_set_bit(unsigned int nr, unsigned long *addr)
 {
-	int old;
+	unsigned long old = __atomic_fetch_or(&addr[BIT_WORD(nr)], BIT_MASK(nr),
+					      __ATOMIC_SEQ_CST);
 
-	taskENTER_CRITICAL();
-	old = !!(addr[BIT_WORD(nr)] & BIT_MASK(nr));
-	addr[BIT_WORD(nr)] |= BIT_MASK(nr);
-	taskEXIT_CRITICAL();
-	return old;
+	return !!(old & BIT_MASK(nr));
 }
 
 static inline int __test_and_set_bit(unsigned int nr, unsigned long *addr)
 {
-	return test_and_set_bit(nr, addr);
+	unsigned long mask = BIT_MASK(nr);
+	unsigned long *word = &addr[BIT_WORD(nr)];
+	int old = !!(*word & mask);
+
+	*word |= mask;
+	return old;
 }
 
-// Minimal local copy of Linux locked bitops; taskENTER_CRITICAL() provides the
-// firmware-side atomicity that Linux gets from the bit lock primitive.
+/* Linux lock bitops acquire only when this caller changes zero to one. */
 static inline int test_and_set_bit_lock(unsigned int nr, unsigned long *addr)
 {
-	return test_and_set_bit(nr, addr);
+	unsigned long old = __atomic_fetch_or(&addr[BIT_WORD(nr)], BIT_MASK(nr),
+					      __ATOMIC_ACQUIRE);
+
+	return !!(old & BIT_MASK(nr));
 }
 
 // Minimal local copy of Linux bitops used by work flags.
 static inline int test_and_clear_bit(unsigned int nr, unsigned long *addr)
 {
-	int old;
+	unsigned long old = __atomic_fetch_and(&addr[BIT_WORD(nr)],
+					       ~BIT_MASK(nr),
+					       __ATOMIC_SEQ_CST);
 
-	taskENTER_CRITICAL();
-	old = !!(addr[BIT_WORD(nr)] & BIT_MASK(nr));
-	addr[BIT_WORD(nr)] &= ~BIT_MASK(nr);
-	taskEXIT_CRITICAL();
-	return old;
+	return !!(old & BIT_MASK(nr));
 }
 
 static inline int __test_and_clear_bit(unsigned int nr, unsigned long *addr)
 {
-	return test_and_clear_bit(nr, addr);
+	unsigned long mask = BIT_MASK(nr);
+	unsigned long *word = &addr[BIT_WORD(nr)];
+	int old = !!(*word & mask);
+
+	*word &= ~mask;
+	return old;
 }
 
 static inline void clear_bit_unlock(unsigned int nr, unsigned long *addr)
 {
-	clear_bit(nr, addr);
+	(void)__atomic_fetch_and(&addr[BIT_WORD(nr)], ~BIT_MASK(nr),
+				 __ATOMIC_RELEASE);
 }
 
 #define for_each_set_bit(bit, addr, size) \

@@ -471,7 +471,9 @@ static const struct hid_device_id hid_have_special_driver[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_GYRATION, USB_DEVICE_ID_GYRATION_REMOTE_3) },
 #endif
 #if IS_ENABLED(CONFIG_HID_HOLTEK)
-	{ HID_USB_DEVICE(USB_VENDOR_ID_HOLTEK, USB_DEVICE_ID_HOLTEK_ON_LINE_GRIP) },
+	// { HID_USB_DEVICE(USB_VENDOR_ID_HOLTEK, USB_DEVICE_ID_HOLTEK_ON_LINE_GRIP) },
+	// This work-focused firmware does not link hid-holtekff; leave the controller
+	// available to generic HID instead of claiming an absent special driver.
 	{ HID_USB_DEVICE(USB_VENDOR_ID_HOLTEK_ALT, USB_DEVICE_ID_HOLTEK_ALT_KEYBOARD) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_HOLTEK_ALT, USB_DEVICE_ID_HOLTEK_ALT_MOUSE_A04A) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_HOLTEK_ALT, USB_DEVICE_ID_HOLTEK_ALT_MOUSE_A067) },
@@ -1140,7 +1142,14 @@ bool hid_ignore(struct hid_device *hdev)
 }
 EXPORT_SYMBOL_GPL(hid_ignore);
 
-/* Dynamic HID quirks list - specified at runtime */
+/*
+ * Dynamic HID quirks list - specified at runtime
+ *
+ * Firmware has no module-parameter ingress or runtime quirk writer. Keep the
+ * complete upstream block visible, but do not compile a mutation API whose
+ * Linux mutex/module lifecycle is absent. Static lookup resumes below.
+ */
+#if 0
 struct quirks_list_struct {
 	struct hid_device_id hid_bl_item;
 	struct list_head node;
@@ -1220,7 +1229,8 @@ static int hid_modify_dquirk(const struct hid_device_id *id,
 	q_new->hid_bl_item.driver_data = quirks;
 
 	// mutex_lock(&dquirks_lock);
-	// Callback-driven generic slice has no runtime dynamic-quirk writer.
+	// Firmware does not call hid_quirks_init(), so this retained writer is
+	// dormant. Initialize and restore dquirks_lock before enabling it.
 
 	list_for_each_entry(q, &dquirks_list, node) {
 
@@ -1239,7 +1249,7 @@ static int hid_modify_dquirk(const struct hid_device_id *id,
 		list_add_tail(&q_new->node, &dquirks_list);
 
 	// mutex_unlock(&dquirks_lock);
-	// See nonblocking callback-driven note above.
+	// See the deferred runtime-quirk contract above.
 
  out:
 	kfree(hdev);
@@ -1260,7 +1270,8 @@ static void hid_remove_all_dquirks(__u16 bus)
 	struct quirks_list_struct *q, *temp;
 
 	// mutex_lock(&dquirks_lock);
-	// Firmware has no runtime dynamic-quirk writer/unload race in this slice.
+	// Firmware neither initializes runtime quirks nor unloads their bus owner;
+	// initialize and restore dquirks_lock if either lifecycle is enabled.
 	list_for_each_entry_safe(q, temp, &dquirks_list, node) {
 		if (bus == HID_BUS_ANY || bus == q->hid_bl_item.bus) {
 			list_del(&q->node);
@@ -1268,7 +1279,7 @@ static void hid_remove_all_dquirks(__u16 bus)
 		}
 	}
 	// mutex_unlock(&dquirks_lock);
-	// See nonblocking firmware-slice note above.
+	// See the deferred runtime-quirk contract above.
 
 }
 
@@ -1322,6 +1333,7 @@ void hid_quirks_exit(__u16 bus)
 	hid_remove_all_dquirks(bus);
 }
 EXPORT_SYMBOL_GPL(hid_quirks_exit);
+#endif
 
 /**
  * hid_gets_squirk - return any static quirks for a HID device
@@ -1369,7 +1381,9 @@ static unsigned long hid_gets_squirk(const struct hid_device *hdev)
 unsigned long hid_lookup_quirk(const struct hid_device *hdev)
 {
 	unsigned long quirks = 0;
-	const struct hid_device_id *quirk_entry = NULL;
+	// const struct hid_device_id *quirk_entry = NULL;
+	// Runtime dynamic quirks are compile-gated in this firmware; only the
+	// upstream static tables participate in the active lookup.
 
 	/* NCR devices must not be queried for reports */
 	if (hdev->bus == BUS_USB &&
@@ -1393,14 +1407,15 @@ unsigned long hid_lookup_quirk(const struct hid_device *hdev)
 	}
 
 	// mutex_lock(&dquirks_lock);
-	// Mount callback must not block; dynamic quirks are not mutated at runtime.
-	quirk_entry = hid_exists_dquirk(hdev);
-	if (quirk_entry)
-		quirks = quirk_entry->driver_data;
-	else
-		quirks = hid_gets_squirk(hdev);
+	// quirk_entry = hid_exists_dquirk(hdev);
+	// if (quirk_entry)
+	// 	quirks = quirk_entry->driver_data;
+	// else
+	// 	quirks = hid_gets_squirk(hdev);
 	// mutex_unlock(&dquirks_lock);
-	// See nonblocking mount-callback note above.
+	// Firmware has no dynamic-quirk writer/module lifecycle. Compile-gating that
+	// incomplete API makes the active read path immutable and lock-free.
+	quirks = hid_gets_squirk(hdev);
 
 	return quirks;
 }

@@ -1,3 +1,4 @@
+/* Firmware-only implementation of the reduced Linux timer contract. */
 #include <stdbool.h>
 
 #include "FreeRTOS.h"
@@ -17,7 +18,6 @@ struct hid_timer_waiter {
 	struct hid_timer_waiter *next;
 	struct timer_list *timer;
 	TaskHandle_t task;
-	bool linked;
 };
 
 /*
@@ -32,7 +32,7 @@ static TaskHandle_t hid_timer_task_handle;
 static struct hid_timer_waiter *hid_timer_waiters;
 static struct timer_list *hid_timer_head;
 
-static bool hid_timer_lock(void)
+static void hid_timer_lock(void)
 {
 	BaseType_t ret;
 	bool ready;
@@ -42,25 +42,15 @@ static bool hid_timer_lock(void)
 	/* Keep every FreeRTOS operation outside configASSERT(). */
 	task_context = !xPortIsInsideInterrupt();
 	configASSERT(task_context);
-	if (!task_context)
-		return false;
 
 	ready = hid_timer_mutex != NULL;
-	if (!ready)
-		async_msg("ERR: HID_TIMER_NOT_READY");
 	configASSERT(ready);
-	if (!ready)
-		return false;
-
 	ret = xSemaphoreTake(hid_timer_mutex, portMAX_DELAY);
 	locked = ret == pdPASS;
-	if (!locked)
-		async_msg("ERR: HID_TIMER_LOCK_FAIL");
 	configASSERT(locked);
-	return locked;
 }
 
-static bool hid_timer_unlock(void)
+static void hid_timer_unlock(void)
 {
 	BaseType_t ret;
 	bool ready;
@@ -69,53 +59,30 @@ static bool hid_timer_unlock(void)
 
 	task_context = !xPortIsInsideInterrupt();
 	configASSERT(task_context);
-	if (!task_context)
-		return false;
 
 	ready = hid_timer_mutex != NULL;
-	if (!ready)
-		async_msg("ERR: HID_TIMER_NOT_READY");
 	configASSERT(ready);
-	if (!ready)
-		return false;
 
 	ret = xSemaphoreGive(hid_timer_mutex);
 	unlocked = ret == pdPASS;
-	if (!unlocked)
-		async_msg("ERR: HID_TIMER_UNLOCK_FAIL");
 	configASSERT(unlocked);
-	return unlocked;
 }
 
-static bool hid_timer_waiter_link_locked(struct hid_timer_waiter *waiter)
+static void hid_timer_waiter_link_locked(struct hid_timer_waiter *waiter)
 {
-	bool valid = waiter && waiter->timer && waiter->task && !waiter->linked;
-
-	if (!valid)
-		return false;
 	waiter->next = hid_timer_waiters;
-	waiter->linked = true;
 	hid_timer_waiters = waiter;
-	return true;
 }
 
-static bool hid_timer_waiter_unlink_locked(struct hid_timer_waiter *waiter)
+static void hid_timer_waiter_unlink_locked(struct hid_timer_waiter *waiter)
 {
 	struct hid_timer_waiter **link = &hid_timer_waiters;
 
-	if (!waiter->linked)
-		return true;
-	while (*link && *link != waiter)
+	/* A stack waiter remains alive until this exact list entry is removed. */
+	while (*link != waiter)
 		link = &(*link)->next;
-	if (!*link) {
-		waiter->next = NULL;
-		waiter->linked = false;
-		return false;
-	}
 	*link = waiter->next;
 	waiter->next = NULL;
-	waiter->linked = false;
-	return true;
 }
 
 static void hid_timer_wake_waiters_locked(struct timer_list *timer)
@@ -128,18 +95,6 @@ static void hid_timer_wake_waiters_locked(struct timer_list *timer)
 			(void)xTaskNotifyGiveIndexed(waiter->task,
 						 HID_TIMER_NOTIFY_INDEX);
 	}
-}
-
-static void hid_timer_wake_task(void)
-{
-	TaskHandle_t task;
-
-	if (!hid_timer_lock())
-		return;
-	task = hid_timer_task_handle;
-	(void)hid_timer_unlock();
-	if (task)
-		(void)xTaskNotifyGiveIndexed(task, HID_TIMER_NOTIFY_INDEX);
 }
 
 int hid_timer_init(void)
@@ -167,10 +122,12 @@ int hid_timer_init(void)
 
 int mod_timer(struct timer_list *timer, unsigned long expires)
 {
+	TaskHandle_t task;
 	int was_pending;
 
-	if (!hid_timer_mutex || !hid_timer_lock())
+	if (!hid_timer_mutex)
 		return 0;
+	hid_timer_lock();
 	was_pending = timer->pending;
 	timer->expires = expires;
 	if (!timer->pending) {
@@ -178,10 +135,12 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 		timer->next = hid_timer_head;
 		hid_timer_head = timer;
 	}
-	(void)hid_timer_unlock();
+	task = hid_timer_task_handle;
+	hid_timer_unlock();
 
 	/* The linked timer is the condition; notification is only its wake edge. */
-	hid_timer_wake_task();
+	if (task)
+		(void)xTaskNotifyGiveIndexed(task, HID_TIMER_NOTIFY_INDEX);
 	return was_pending;
 }
 
@@ -207,10 +166,11 @@ int timer_delete(struct timer_list *timer)
 {
 	int was_pending;
 
-	if (!hid_timer_mutex || !hid_timer_lock())
+	if (!hid_timer_mutex)
 		return 0;
+	hid_timer_lock();
 	was_pending = hid_timer_delete_pending_locked(timer);
-	(void)hid_timer_unlock();
+	hid_timer_unlock();
 	return was_pending;
 }
 
@@ -221,8 +181,6 @@ int timer_delete_sync(struct timer_list *timer)
 		.task = xTaskGetCurrentTaskHandle(),
 	};
 	bool can_wait;
-	bool linked;
-	bool unlinked;
 	int was_pending;
 
 	/*
@@ -230,37 +188,26 @@ int timer_delete_sync(struct timer_list *timer)
 	 * publishes cancellation to the report task, so this wait cannot block the
 	 * host owner which must make USB progress.
 	 */
-	if (!hid_timer_mutex || !hid_timer_lock())
+	if (!hid_timer_mutex)
 		return 0;
+	hid_timer_lock();
 	was_pending = hid_timer_delete_pending_locked(timer);
 	if (!timer->running) {
-		(void)hid_timer_unlock();
+		hid_timer_unlock();
 		return was_pending;
 	}
 
 	/* The sole timer task cannot synchronously wait for its own callback. */
 	can_wait = waiter.task != hid_timer_task_handle;
-	if (!can_wait) {
-		(void)hid_timer_unlock();
-		async_msg("ERR: HID_TIMER_SELF_WAIT");
-		configASSERT(can_wait);
-		return was_pending;
-	}
-	linked = hid_timer_waiter_link_locked(&waiter);
-	if (!linked) {
-		(void)hid_timer_unlock();
-		async_msg("ERR: HID_TIMER_WAITER_BAD");
-		configASSERT(linked);
-		return was_pending;
-	}
-	(void)hid_timer_unlock();
+	configASSERT(can_wait);
+	hid_timer_waiter_link_locked(&waiter);
+	hid_timer_unlock();
 
 	for (;;) {
 		(void)ulTaskNotifyTakeIndexed(HID_TIMER_NOTIFY_INDEX, pdTRUE,
 					       portMAX_DELAY);
 		/* Once linked, keep the stack waiter alive until it is unlinked. */
-		while (!hid_timer_lock())
-			vTaskDelay(1);
+		hid_timer_lock();
 		/*
 		 * A running Linux timer callback may rearm itself. Remove that new
 		 * pending instance before accepting the callback-complete condition;
@@ -268,15 +215,11 @@ int timer_delete_sync(struct timer_list *timer)
 		 */
 		was_pending |= hid_timer_delete_pending_locked(timer);
 		if (!timer->running) {
-			unlinked = hid_timer_waiter_unlink_locked(&waiter);
-			(void)hid_timer_unlock();
-			if (!unlinked) {
-				async_msg("ERR: HID_TIMER_WAITER_LOST");
-				configASSERT(unlinked);
-			}
+			hid_timer_waiter_unlink_locked(&waiter);
+			hid_timer_unlock();
 			return was_pending;
 		}
-		(void)hid_timer_unlock();
+		hid_timer_unlock();
 	}
 }
 
@@ -284,10 +227,9 @@ void hid_timer_task(void *pvParameters)
 {
 	(void)pvParameters;
 
-	while (!hid_timer_lock())
-		vTaskDelay(1);
+	hid_timer_lock();
 	hid_timer_task_handle = xTaskGetCurrentTaskHandle();
-	(void)hid_timer_unlock();
+	hid_timer_unlock();
 
 	for (;;) {
 		struct timer_list **link;
@@ -295,10 +237,7 @@ void hid_timer_task(void *pvParameters)
 		TickType_t wait_ticks = portMAX_DELAY;
 		unsigned long now;
 
-		if (!hid_timer_lock()) {
-			vTaskDelay(1);
-			continue;
-		}
+		hid_timer_lock();
 		now = jiffies;
 		link = &hid_timer_head;
 		while (*link) {
@@ -324,18 +263,17 @@ void hid_timer_task(void *pvParameters)
 				wait_ticks = delta;
 			link = &candidate->next;
 		}
-		(void)hid_timer_unlock();
+		hid_timer_unlock();
 
 		if (timer) {
 			if (timer->function)
 				timer->function(timer);
 
 			/* running retains timer memory; never abandon its release. */
-			while (!hid_timer_lock())
-				vTaskDelay(1);
+			hid_timer_lock();
 			timer->running = 0;
 			hid_timer_wake_waiters_locked(timer);
-			(void)hid_timer_unlock();
+			hid_timer_unlock();
 			continue;
 		}
 

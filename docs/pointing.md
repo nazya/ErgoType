@@ -55,7 +55,7 @@ Important behavior details:
 - SPI clock: the bus speed is set once via `spi_init(spiN, spiN.baud)` inside the pointing task.
 - IRQ polarity: `irq`/MOT is configured as `GPIO_IN` with internal pull-up; interrupts are enabled on the falling edge (idle HIGH, pulse/level LOW).
 - IRQ fan-in: all motion pins share a single GPIO IRQ callback; the ISR notifies the pointing task using a bitmask of “which sensor(s) moved”.
-- Event batching: after wake-up, the pointing task waits 2 ticks (~2ms with the current `configTICK_RATE_HZ=1000`) before reading deltas to coalesce bursts.
+- Event batching: after wake-up, the pointing task waits 1 tick (~1ms with the current `configTICK_RATE_HZ=1000`) before reading deltas to coalesce bursts. The mandatory Motion Burst `tSRAD` delay is handled separately inside each sensor driver.
 - Role mapping: `"mousemove"` devices contribute to mouse x/y; `"scroll"` devices contribute to scroll x/y where x=horizontal (pan) and y=vertical (wheel).
 
 ## Current limitations (as implemented)

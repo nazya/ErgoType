@@ -241,7 +241,11 @@ static void app_task(void *pvParameters)
         // The HID SET_REPORT callback may run as soon as the TinyUSB task starts.
         devmon_queue = xQueueCreate(MAX_DEVICES, sizeof(struct devmon_event));
         configASSERT(devmon_queue);
-        devmon_init();
+        int devmon_rc = devmon_init();
+        bool devmon_ready = devmon_rc == 0;
+        configASSERT(devmon_ready);
+        if (!devmon_ready)
+            vTaskSuspend(NULL);
     }
 
     // if (mode == HID) {
@@ -270,7 +274,6 @@ static void app_task(void *pvParameters)
         TaskHandle_t ui_task_handle = NULL;
         xTaskCreateAffinitySet(ui_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY, CORE1, &ui_task_handle);
         configASSERT(ui_task_handle);
-        ui_handle = ui_task_handle;
     }
 
     

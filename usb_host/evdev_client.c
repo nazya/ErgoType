@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Split adapter for drivers/input/evdev.c. The retained evdev_client fields
+ * and __pass_event() flow stay Linux-shaped below; FreeRTOS queue storage,
+ * devmon publication, and the KeyD reverse-writer lifetime are firmware glue.
+ *
+ * Copyright (c) 1999-2002 Vojtech Pavlik
+ */
 #include <string.h>
 
 #include "FreeRTOS.h"
@@ -243,12 +251,28 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id)
 	return ret;
 }
 
-void evdev_unregister_device(struct evdev_client *client)
+void evdev_unregister_device(struct evdev_client *client,
+			     struct input_handle *handle)
 {
 	struct port_input_event ev = {0};
+	bool published = client->published;
+
+	/*
+	 * Linux file lifetime retains an evdev writer's target; its separate RCU
+	 * fence covers input delivery. Firmware's external reverse writer needs a
+	 * short detach fence: acquiring this mutex waits for the current KeyD
+	 * write/FF call, and clearing the target rejects every later one. HID close
+	 * can then run without holding the global writer mutex.
+	 */
+	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
+	client->evdev = NULL;
+	xSemaphoreGive(evdev_writer_mutex);
+
+	if (handle->open)
+		input_close_device(handle);
 
 	/* A failed activation never exposed this client or added its QueueSet. */
-	if (!client->published) {
+	if (!published) {
 		vQueueDelete(client->buffer);
 		vPortFree(client);
 		return;
@@ -261,10 +285,7 @@ void evdev_unregister_device(struct evdev_client *client)
 	// disconnect, so sending FF cleanup reports to the HID device is too late.
 	// Add that flush only if a real close-like evdev client lifecycle appears.
 	// Keep the client allocation as a disconnected writer tombstone until KeyD
-	// consumes DEVICE_INPUT_REMOVED; only the evdev target is detached here.
-	xSemaphoreTake(evdev_writer_mutex, portMAX_DELAY);
-	client->evdev = NULL;
-	xSemaphoreGive(evdev_writer_mutex);
+	// consumes DEVICE_INPUT_REMOVED; the evdev target was detached above.
 	ev.type = DEVICE_INPUT_REMOVED;
 	// ret = evdev_send_input_reserved(device, &ev, 0);
 	// configASSERT(ret == pdPASS);

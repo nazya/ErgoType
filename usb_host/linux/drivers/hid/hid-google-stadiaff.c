@@ -5,6 +5,16 @@
  * Copyright 2023 Google LLC
  */
 
+/*
+ * PORTING STATUS — DO NOT LINK.
+ *
+ * This inactive experiment calls FreeRTOS semaphore APIs directly from a
+ * Linux-derived driver. That glue belongs behind the compatibility/workqueue
+ * boundary, so this file does not yet satisfy upstream-porting-rules.md. Keep
+ * it out of CMake until the direct RTOS dependency is removed and the Linux
+ * spinlock/lifetime shape is re-audited.
+ */
+
 #include <linux/hid.h>
 #include <linux/input.h>
 #include <linux/slab.h>

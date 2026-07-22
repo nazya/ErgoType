@@ -77,11 +77,7 @@ static int hid_generic_probe(struct hid_device *hdev,
 	if (ret)
 		return ret;
 
-	// return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
-	// HIDRAW/HIDDEV/FF are useful for proxy later, but their buffering and
-	// control paths need explicit async ownership before they run from TinyUSB
-	// callbacks. Keep hid-generic to parsed input devices in this slice.
-	return hid_hw_start(hdev, HID_CONNECT_HIDINPUT);
+	return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 }
 
 static int hid_generic_reset_resume(struct hid_device *hdev)

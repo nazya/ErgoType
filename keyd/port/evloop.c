@@ -21,6 +21,7 @@
 
 #include "keyd.h"
 #include "log.h"
+#include "stdio_tusb_cdc.h"
 
 static long get_time_ms(void)
 {
@@ -138,11 +139,33 @@ int evloop(int (*event_handler)(struct event *ev))
 			continue;
 		}
 
+		/*
+		 * RELEASE BLOCKER: ADD already transferred the live queue/client to
+		 * KeyD. Admission must move before publication before these failures
+		 * can reject only this device. Keep explicit checks because Release
+		 * builds compile configASSERT() out under NDEBUG.
+		 */
+		if (device_table_sz >= MAX_DEVICES) {
+			async_msg("ERR: KEYD_DEVICE_LIMIT");
+			vTaskSuspend(NULL);
+			continue;
+		}
+
 		struct device *dev = pvPortMalloc(sizeof *dev);
-		configASSERT(dev);
+		if (!dev) {
+			async_msg("ERR: KEYD_DEVICE_NOMEM");
+			vTaskSuspend(NULL);
+			continue;
+		}
+
 		int ret = device_init(&devmon_ev.dev, dev);
-		configASSERT(ret == 0);
-		configASSERT(device_table_sz < MAX_DEVICES);
+		if (ret) {
+			vPortFree(dev);
+			async_msg("ERR: KEYD_DEVICE_INIT");
+			vTaskSuspend(NULL);
+			continue;
+		}
+
 		device_table[device_table_sz++] = dev;
 
 		ev.type = EV_DEV_ADD;

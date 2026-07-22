@@ -11,7 +11,7 @@
 
 - Logging macros live in `log.h` and call `_msg()`.
 - `_msg()` in `log.c` formats the line (including ANSI colors) and writes bytes into the CDC backend (`stdio_tusb_cdc_write()`).
-- The USB device task (`tusb_device_task.c`) runs `tud_task(); stdio_tusb_cdc_poll();`.
+- The USB device task (`tusb_device_task.c`) drains TinyUSB events and then runs `stdio_tusb_cdc_poll()`.
 - `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
 - `stdio_tusb_cdc_write()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
@@ -59,7 +59,9 @@ Windows:
 
 - **Very long lines:** if a *single formatted line* exceeds the `_msg()` staging buffer (roughly `BUFSIZE-2` bytes before the newline), the logger forces a `\r\n` flush and starts a new line. The byte that overflowed is dropped. Practically: very long log lines will be split/truncated and are not reliable.
 
-- **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring.
+- **Producer throttling (bounded wait):** after the TinyUSB device stack has started, an incoming write that does not fit kicks the USB device task through `usbd_defer_func()`, waits two ticks, and rechecks the ring. The first such wait may continue for up to 1024ms even before DTR: this deliberately gives Linux time to create `/dev/ttyACM*` and the operator time to open minicom, while exercising that the delay does not stall USB. Later waits are limited to 16 ticks while DTR is high and are skipped while it is low.
+
+- **Pre-TUD startup limitation (deferred):** a short logging window exists before `main` creates the higher-priority TUD task and `tusb_init()` creates TinyUSB's device event queue. The normal hardware-tested boot fits in the ring, but a verbose startup overflow or early `async_msg()` cannot safely use `usbd_defer_func()` yet. Keep this policy unchanged here until the equivalent logger/startup interaction is fixed and hardware-tested in the main repository.
 
 - **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped.
   - If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.

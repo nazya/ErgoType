@@ -6,7 +6,8 @@
 #include "usbhid_backend.h"
 
 /*
- * TinyUSB application callback facade. Callbacks only publish bounded
+ * Upstream TinyUSB/Linux: no equivalent application callback facade.
+ * Callbacks only publish bounded
  * transport state; Linux-shaped probe, remove, parsing, and request completion
  * run in their task owners.
  */
@@ -46,10 +47,36 @@ void tuh_port_enum_state_cb(uint8_t rhport, uint8_t hub_addr,
 	usbhid_backend_enum_state(rhport, hub_addr, hub_port, active, success);
 }
 
+/* Cache pressure parked a still-valid continuation outside the enum owner. */
+void tuh_port_enum_parked_cb(uint8_t rhport, uint8_t hub_addr,
+			     uint8_t hub_port)
+{
+	usbhid_backend_enum_parked(rhport, hub_addr, hub_port);
+}
+
+/* Retain a same-topology ATTACH until Linux's asynchronous remove is complete. */
+bool tuh_port_replace_begin_cb(uint8_t rhport, uint8_t hub_addr,
+			       uint8_t hub_port)
+{
+	return usbhid_backend_native_replace_begin(rhport, hub_addr, hub_port);
+}
+
+/* Backpressure enumeration while every Linux usb_device epoch is retained. */
+bool tuh_port_cache_available_cb(void)
+{
+	return usbhid_backend_cache_available();
+}
+
 /* The host core released its global physical EP0 owner. */
 void tuh_port_control_idle_cb(void)
 {
 	usbhid_backend_host_control_idle();
+}
+
+/* One physical non-control endpoint became available in the host task. */
+void tuh_port_endpoint_idle_cb(uint8_t dev_addr, uint8_t ep_addr)
+{
+	usbhid_backend_host_endpoint_idle(dev_addr, ep_addr);
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,

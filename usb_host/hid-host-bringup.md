@@ -4,6 +4,14 @@ This is the final short record of the HID host regression investigation. It
 replaces the old experiment logs and describes the current design, RAM limits,
 diagnostics, and remaining risks.
 
+Keep this as the operational overview. The exact generated TinyUSB patch and
+upgrade procedure are maintained only in
+[`tinyusb-host-port.md`](tinyusb-host-port.md); current linked-image and runtime
+allocation numbers are maintained only in
+[`pio-usb-memory.md`](pio-usb-memory.md); dated hardware evidence belongs in
+[`async-hid-progress.md`](async-hid-progress.md) and
+[`hid-emulator-coverage.md`](hid-emulator-coverage.md).
+
 ## Current Status
 
 The following paths have produced input events on hardware:
@@ -15,10 +23,12 @@ The following paths have produced input events on hardware:
   multitouch/haptic probe path;
 - the PMW pointing-device path, independently of USB host input.
 
-Working firmware runs before attaching a heavy HID device have reported roughly
-43-48 KiB of free FreeRTOS heap. That is an observed operating margin, not a
-guaranteed allocation size: HID parsing also needs a sufficiently large
-contiguous block while a device is being added.
+Earlier bring-up firmware, before the current heap/static-RAM reductions,
+reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
+device. That range is historical, not the expected value for the current dirty
+artifact and not a guaranteed allocation size: record the current artifact's
+own startup/attach/removal plateaus on hardware, and remember that HID parsing
+also needs a sufficiently large contiguous block while a device is being added.
 
 The original intermittent generic-keyboard failure did not produce a clean
 single-commit regression result. Two independent problems were present:
@@ -97,6 +107,12 @@ control retry: completion snapshots its callback-local request tuple and
 returns, then shallow host-owner service reconstructs it after the deadline and
 global EP0 idle. It does not block the event pump or use Pico/FreeRTOS timers.
 
+Host HCD publication uses one ordinary 32-event TinyUSB/FreeRTOS queue. The
+generated dynamic-OSAL definition omits TinyUSB's otherwise-unused static
+backing array, so there is no second spill FIFO, ordering state, overflow flag,
+or firmware fail-stop callback. Queue publication and full-queue behavior stay
+on TinyUSB's normal path.
+
 The physical publication is intentionally earlier than HID class close: it is
 the producer fence for both ordinary devices and hubs. TinyUSB omits the common
 unmount callback for hubs, so the raw application-driver close remains the
@@ -126,21 +142,25 @@ stop/cancel wake the task immediately. HID report requests and generic control
 messages share same-device EP0 ordering; completed GET_REPORT parser storage no
 longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
 ll-driver contract, but TinyUSB callbacks never wait for request completion or
-run the Linux continuation. If the bounded broker is full, either synchronous
-caller task sleeps through a stack-owned FIFO admission waiter instead of
-polling. A normal
-slot release or matching teardown wakes it to retry the durable enqueue
-predicate for at most one second; the transfer timeout starts only after
-admission. Nonblocking report
-and CLEAR_HALT work cannot steal logically reserved capacity, and recovery's
-dedicated slot remains outside ordinary admission. A saturated CLEAR_HALT does
-not poll that pool: the report task parks its durable reset-work state until a
-normal slot is released or an unused reservation is removed. Capacity changes
-during the unlocked enqueue attempt are latched, so the transition to sleep
-cannot lose the only wake edge. The retry timer is reserved for actual
-interrupt-I/O protocol failures; the report task sleeps until a capacity edge
-or the absolute eight-second local saturation deadline. Unrelated notifications
-only recheck that same durable predicate and deadline, without periodic polling.
+run the Linux continuation. A CTRL/interrupt-OUT head rejected before physical
+submission remains `PARKED`, like upstream after its RUNNING bit is cleared;
+the next same-lane enqueue restarts it in FIFO order without polling. Ordinary
+`hid_hw_wait()` excludes that stopped lane, clears any stale GET parser owner,
+and can therefore finish while teardown remains responsible for freeing the
+logical nodes. Every lease release wakes this potentially nonzero idle
+predicate. If the bounded broker is full, synchronous callers, queued report
+heads, and CLEAR_HALT link admission nodes into one FIFO. The oldest eligible
+endpoint-front enters when a real normal slot is free; no request pre-reserves a
+placeholder slot. Normal-slot release, waiter unlink, or matching teardown
+notifies the affected task to retry the durable enqueue predicate. Synchronous
+callers retain a one-second local admission bound, and their transfer timeout
+starts only after admission. Recovery's dedicated HUB_RESET slot remains
+outside ordinary admission. A saturated CLEAR_HALT stays in its durable
+`WAIT_SLOT` state and its linked node owns the next generic admission wake;
+there is no second capacity latch or private edge. The retry timer is reserved
+for actual interrupt-I/O protocol failures. The report task sleeps until
+notification or the absolute eight-second local deadline and then rechecks the
+same predicate, without periodic polling.
 
 Interrupt OUT is also submitted directly from the host owner. Each asynchronous
 `.request()` SET owns an exact enqueue-time report snapshot until completion,
@@ -168,10 +188,12 @@ HID and KeyD. On unplug, callback-published state is fenced through the report
 and host tasks until TinyUSB has completed class/HCD close; only then may task
 teardown free `inbuf`. The completion callback does not select HID parser
 policy; it snapshots the byte-sized `CLOSED/RESUMING/OPEN` transport state.
-For non-`ALWAYS_POLL` input the report task drops the initial completions during
-Linux's 50-ms `HID_RESUME_RUNNING` drain, then enables parser delivery. It also
-applies stopping/recovery policy under the same exact-generation fence. Linux
-relies on the USB reset-default Report
+For non-`ALWAYS_POLL` input, open first waits until the TinyUSB host owner has
+made Linux's equivalent first interrupt-IN `usb_submit_urb()` attempt. The
+report task then drops initial completions during Linux's 50-ms
+`HID_RESUME_RUNNING` drain before enabling parser delivery. It also applies
+stopping/recovery policy under the same exact-generation fence. Linux relies on
+the USB reset-default Report
 protocol, so there is no retained mode or port-only BOOT suppression. STALL
 queues the standard endpoint clear-halt request
 through the generic per-device EP0 lane. After remote success the TinyUSB host
@@ -193,15 +215,19 @@ publications instead of polling every 10 ms. Its only timed waits are exact
 phase deadlines; hub retry is woken again after the reserved control slot has
 actually been released. TinyUSB's central control-stage transition publishes
 global idle for native hub housekeeping and every abort/remove release too.
-Root admission waits for matching enumeration, global control idle, or the one
-enum terminal instead of repeatedly deferring an attach which the single host
-owner must reject.
+The one global enumeration owner remains visible even when it began before the
+reset gate; root and hub admission wait for its terminal and do not spend their
+phase timeout behind it. Exact-topology state still decides the reset result.
+Each HID report interface owns one queued reset claim, so close removes only its
+own claim; a sibling claim or lifecycle-owned running reset survives just like
+upstream running `reset_work`.
 
 The SHA-pinned TinyUSB HID class now scans the bounded current-interface extras
 instead of assuming strict interface -> HID -> endpoint order. Like Linux's USB
-HID transport, it accepts the HID descriptor after endpoint[0], opens no more
-than the interface's advertised endpoint count, and publishes its class slot
-only after endpoint success. Enumeration now skips SET_IDLE, SET_PROTOCOL, and
+HID transport, it accepts the HID descriptor after endpoint[0], ignores
+non-interrupt endpoints, selects only the first interrupt IN and first
+interrupt OUT, and publishes its class slot only after endpoint success.
+Enumeration now skips SET_IDLE, SET_PROTOCOL, and
 the duplicate report-descriptor read through the shared 512-byte enumeration
 buffer. It mounts with a NULL descriptor pointer and publishes only TinyUSB's
 ephemeral class identity. Each fixed 16-byte probe slot
@@ -232,10 +258,17 @@ injected full-configuration control failure through the 100-ms continuation.
 Remaining fault coverage is REMOVE or a foreign ATTACH while that deadline is
 armed; a normal small device cannot exercise those cancellation/topology races.
 
-EP0 cancellation cannot wait forever for a PIO completion event. The executor
-allows three two-SOF/FIFO fences for TinyUSB's SETUP/DATA/ACK stages. If the
-exact old daddr + callback + serial still owns EP0, a SHA-pinned host helper
-finishes it with a synthetic TIMEOUT; a replacement owner is never touched.
+EP0 cancellation cannot wait forever for a PIO completion event. Enumeration
+and ordinary HID share one exact host-owned transaction for TinyUSB's global
+control owner. PIO's same-CORE1 alarm/abort ownership guarantees that a
+completion which won the physical race is already in the queue when abort
+returns. The host snapshots that finite prefix, consumes a matching old stage
+before it can chain DATA/ACK, and synthesizes TIMEOUT only at exact prefix
+exhaustion. There is no SOF, FreeRTOS-tick, or stage-count polling, and the
+captured daddr + callback + serial tuple never touches a replacement owner.
+If REMOVE invalidates that device generation while the prefix is draining, the
+old tuple remains alive only as a suppressed physical fence; unmount wakes the
+logical waiter and no stale completion callback is delivered.
 
 ## What `HID_REPORT_SKIP` Meant
 
@@ -321,8 +354,8 @@ The working configuration intentionally keeps these changes:
 - explicit usage ranges reserve parser-local storage once at the final bounded
   size instead of repeatedly growing and copying it;
 - `HID_MAX_USAGES=675`, with `HID_USAGE_CAP_DROP` for runtime visibility;
-- the CMake HID source list is the driver allowlist, and `CONFIG_HID_*` symbols
-  in `hid_compat.h` mirror only the linked drivers and supported features;
+- the CMake HID source list is the driver allowlist, and `CONFIG_HID_*` plus
+  special-driver quirk gating mirror the linked drivers and supported features;
 - builtin driver descriptors stay const in flash, while their mutable runtime
   records use linker-owned static `.bss` storage instead of startup heap
   allocations;
@@ -333,35 +366,27 @@ The working configuration intentionally keeps these changes:
 - `cancel_work_sync()` physically unlinks pending work from the FIFO and closes
   the dequeue-to-running race before a driver may free its object.
 
-Before static builtin runtime storage, registering 23 drivers and their
-per-driver state/attribute data consumed 4,952 B of FreeRTOS heap in the tested
-build. The current 19 runtime records occupy 1,064 B of static `.bss`. Static
-`.bss` still consumes physical RAM, but it no longer depletes or fragments the
-runtime heap. Excluding a driver from CMake also excludes its runtime record
-while leaving its source in the repository.
+Builtin driver runtime state now uses linker-owned `.bss` instead of startup
+heap allocations. Static `.bss` still consumes physical RAM, but it no longer
+depletes or fragments the runtime heap. Excluding a driver from CMake also
+excludes its runtime record while leaving its source in the repository. Exact
+current sizes are recorded in `pio-usb-memory.md`.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
-Cypress, ELECOM, EVision, Holtek keyboard, ITE, Kensington, Kye, Primax, PXRC,
-Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic multitouch.
+Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
+Kye, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic
+multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2 driver.
+Holtek's separate On Line Grip game-controller driver remains unlinked and its
+ID is not advertised as requiring a special driver.
 
-Current memory-related settings are:
+The current heap, task-stack, TinyUSB, and Pico-PIO-USB settings are maintained
+in [`pio-usb-memory.md`](pio-usb-memory.md). Do not copy a dirty build's exact
+link or allocation figures into this overview.
 
-```text
-configTOTAL_HEAP_SIZE       218.5 KiB
-configMINIMAL_STACK_SIZE    384 words
-hid_async_task              512 words
-keyd_task                   5,120 words
-TinyUSB host task           512 words
-HID report task             1,024 words
-PIO_USB_EP_POOL_CNT         8
-PIO_USB_DEVICE_CNT          4
-PIO_USB_ROOT_PORT_CNT       1
-```
-
-The workqueue, timer, and HID lifecycle split still costs three tasks. The
-first two use 384-word stacks and lifecycle uses 512 words; together with task
-overhead they consumed about 6.6 KiB in the measured build. Consolidating them
-is a later architecture change, not part of this bring-up fix.
+The workqueue, timer, and HID lifecycle split still costs three tasks.
+Consolidating them is a later architecture change, not part of this bring-up
+fix; their current stack sizes and measured watermarks belong in the memory
+note.
 The workqueue task now owns a notification wake rather than a one-entry queue;
 its producers and synchronous cancellation paths share a dedicated
 priority-inheritance mutex and wait on durable conditions without masking
@@ -383,21 +408,18 @@ path increments the UI warning counter before dropping the newer text.
 Incoming HID reports and KeyD output injection now share Linux input state
 through a per-`input_dev` priority-inheritance mutex. It replaces the active
 task-context sections of upstream `event_lock`; TinyUSB callbacks never acquire
-it. Each live input device therefore consumes a 96-byte heap_4 mutex plus 8 B
-from growth/alignment of its `input_dev` block, 104 B total. Disconnect releases
-the mutex before handler close/unregister, and no protected section waits for
-USB, workqueue, or timer completion.
+it. Disconnect releases the mutex before handler close/unregister, and no
+protected section waits for USB, workqueue, or timer completion. Its current
+per-device allocation cost is tracked in the memory note.
 
-The callback-safe lifecycle transport pool now has a 2,756 B payload (plus
-allocator overhead) in the FreeRTOS heap at startup with the current
-`CFG_TUH_DEVICE_MAX=4`, `CFG_TUH_HUB=1`,
-`CFG_TUH_HID=4` configuration. It includes four 16-byte probe-identity slots
-and the single aligned 256-byte device/string descriptor scratch; callbacks own
-neither payload. Lifecycle serializes probe, so
+The callback-safe lifecycle transport pool includes fixed probe-identity slots
+and one device/string descriptor scratch; callbacks own neither payload.
+Lifecycle serializes probe, so
 `usbhid_parse()` allocates at most one exact-size report descriptor transiently
 (up to 4 KiB), owns it through asynchronous completion/cancel, and frees it
-before returning. Include both the persistent pool and transient descriptor in
-post-enumeration and haptic heap checks.
+before returning. Include the persistent pool and transient descriptor in
+post-enumeration and haptic heap checks; use the memory note for their current
+sizes.
 
 Enumeration may now own a different exact-size transient for a 513..4096-byte
 full configuration descriptor. A 4096-byte request occupies about 4104 B in
@@ -407,59 +429,13 @@ class-open scan, before class set-config and lifecycle enter Linux
 probe peak. Failure, timeout, and remove release it only after the matching EP0
 owner is drained; a retry reuses the same allocation.
 
-The report executor now has one persistent queue. Five 28-byte ordinary-control
-results plus the 84-byte FreeRTOS queue object request 224 B and occupy a
-232-byte heap_4 block. Direct interrupt-IN completion instead uses four fixed
-32-byte slots (128 B in scratch X), with no queue allocation or address-based
-HID lookup. Completion validates the slot through its one live registry owner.
-Removing the former four-entry input queue returns its 176-byte heap_4 block
-and removes one 4-byte queue handle from `.bss`; expanding the old 20-byte slots
-adds 48 B to scratch X. Net live RAM occupancy falls by 132 B and one persistent
-heap block, with no allocation churn per report. Probe-owned GET completion
-bypasses the remaining control queue and reuses its request buffer through one
-per-interface pointer; the former global handoff is gone. Relative to that
-earlier implementation this separately saved 24 B of persistent heap and 36 B
-of `.bss`; the temporary GET header is 16 B. The coalesced reconcile table
-costs 32 B of static RAM. The async request is 60 B and its slot is 88 B. Ten
-metadata slots request 880 B from heap_4 and occupy an 888 B block.
-Device/string policy and its aligned 256-byte scratch live in the existing
-lifecycle transport pool, whose 2,756-byte payload occupies a 2,768-byte block.
-Together those two persistent blocks use 3,656 B, before synchronization. The
-explicit transport mutex occupies a 96-byte heap_4 block; these three core
-transport allocations therefore use 3,752 B. The remaining 232-byte control
-queue is additional. All are startup allocations and do not churn during
-attach/report traffic. Lifecycle's indexed notification removes its former
-96-byte queue block. Exact endpoint callbacks add 1,280 B of TinyUSB state.
-Each attached HID interface also owns the two priority-inheritance mutexes
-present in upstream's lifecycle: generic HID's `ll_open_lock` and
-`usbhid->mutex`, 96 B each in FreeRTOS. Restoring the latter's 4-byte handle
-also rounds its heap_4 object up by 8 B, for a total lifecycle cost of 200 B per
-interface (600 B for a three-interface emulator). These objects are allocated
-once at probe and destroyed after the complete disconnect fence; attach/report
-traffic does not churn them.
-The workqueue similarly replaces its former 96-byte one-entry wake queue with
-one 96-byte mutex block, so runtime heap use is unchanged; its task handle and
-stack-waiter head add 8 B of `.bss`. The timer makes the same 96-byte
-queue-to-mutex exchange; its task handle and stack-waiter head add another 8 B
-of `.bss` without changing persistent heap use.
-Direct IN/OUT leave one-byte class placeholders. Each attached HID interface
-owns one task-allocated receive buffer of
-`max(64, round_up(input_size, wMaxPacketSize))` bytes. A normal 64-byte backing
-costs a 72-byte heap_4 block; the 16 KiB logical limit plus worst packet tail
-can cost up to a 16,456-byte block. There is no allocation or free per report.
-Host transfer storage now occupies 708 B in scratch X and ends 1,340 B below
-the core-1 stack. Removing transitional descriptor ownership first shrank
-`struct usbhid_device` from 248 B to 240 B. Restoring upstream's lifecycle
-mutex handle and the stack-owned close-fence waiter makes it 248 B and returns
-its heap_4 block from 248 B to 256 B per attached HID. The linked image reports
-243,136 B of `.bss` and keeps 200 B of main-SRAM link headroom.
-
-Queued asynchronous SET reports now allocate their upstream-style snapshot at
-the exact report size and release it after completion or fenced cancellation.
-heap_4 coalesces adjacent frees, so repeated equal-size LED/haptic traffic must
-not produce a falling `free` value. Mixed report sizes interleaved with
-persistent device allocations can still leave temporary holes: `largest` may
-fall even after total `free` returns, which is fragmentation rather than a leak.
+Direct IN uses one persistent per-interface receive allocation; completion
+metadata stays in fixed ownership slots and no allocation occurs per report.
+Logical CTRL/OUT entries and SET snapshots are allocated only while queued and
+are freed after completion or fenced cancellation. Exact structure sizes,
+scratch-X placement, mutex/queue blocks, the shared request-memory budget, and
+the distinction between fragmentation and a leak are maintained in
+[`pio-usb-memory.md`](pio-usb-memory.md).
 
 The haptic driver now allocates at most five application effect records and
 five report snapshots. The adjacent commented upstream allocation remains 96
@@ -485,8 +461,15 @@ wrote into adjacent `mt_device` state on RP2040.
 | --- | --- |
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
-| `ERR: HID_EVDEV_ACTIVATE_FAIL` | Driver probe completed, but post-probe devmon publication or input open failed; the fully bound HID is torn down. |
-| `ERR: HID_USB_DEV_ALLOC_FAIL` | The bounded physical-device cache has no reusable slot. |
+| `ERR: HID_EVDEV_FAIL` | The evdev input handler itself could not register. TinyUSB and the HID core continue for other input consumers. |
+| `ERR: HID_INITCALL_FAIL` | At least one linked Linux module initcall failed; every remaining initcall still ran and host startup continued. |
+| `ERR: HID_DRIVER_FAIL` | At least one linked HID driver failed to register; unrelated drivers and host startup continued. |
+| `ERR: EVDEV_CONNECT_NOMEM` | The evdev handler could not allocate its private handle; as in Linux, the HID and other input consumers remain registered. |
+| `ERR: EVDEV_CLIENT_NOMEM` | The automatic firmware evdev client or its queue could not be allocated; that client is skipped without unbinding the HID. |
+| `ERR: EVDEV_PREPARE_FAIL` | Automatic evdev client preparation failed for a reason other than allocation; that client is skipped. |
+| `ERR: EVDEV_OPEN_FAIL` | Opening one automatic evdev client failed; its private state is released and the HID remains bound. |
+| `ERR: EVDEV_PUBLISH_FAIL` | One evdev client could not join devmon; it is closed and released without unbinding the HID. |
+| `ERR: HID_USB_DEV_ALLOC_FAIL` | Device publication reached the bounded cache without the required admission slot. Ordinary cache pressure is now parked event-first, so this indicates an admission/lifetime invariant failure rather than expected OOM. |
 | `ERR: HID_PROBE_DEFER_FAIL` | Mount/pre-probe identity could not be retained, the bounded probe slots were occupied, or device-descriptor pre-probe exhausted its attempts. |
 | `ERR: HID_PROBE_NOMEM` | A parser/probe allocation failed, including the transient exact-size report-descriptor buffer. |
 | `ERR: HID_USB_PARENT_MISSING` | A child was observed after its hub cache epoch disappeared; it was rejected instead of attached to the root hub. |
@@ -495,11 +478,13 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_RX_STALL` | Interrupt IN stalled. Payload was discarded and asynchronous endpoint clear-halt recovery started. |
 | `DBG: HID_CLEAR_HALT_OK` | Remote endpoint halt was cleared; the host owner may now reset the local PIO toggle to DATA0 and rearm. |
 | `ERR: HID_CLEAR_HALT_FAIL` | Remote clear-halt transfer failed; terminal recovery queues coordinated device teardown/re-enumeration. |
-| `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. |
+| `ERR: HID_RX_XFER_FAIL` | Interrupt IN failed or timed out. Payload was discarded and upstream-style delayed retry started. One occurrence immediately adjacent to physical REMOVE can be abort-before-remove ordering; repetition while attached or missing resumed input is a failure. |
 | `ERR: HID_RX_INVARIANT` | Interrupt-IN completion did not match its live owner/epoch/buffer tuple. The callback parked it before parser publication. |
-| `ERR: HID_ASYNC_HOST_OWNER` / `HID_EP0_ABORT_OWNER` | A deferred TinyUSB call ran outside the registered host owner, or a validated physical EP0 abort found no matching TinyUSB logical owner. |
 | `ERR: HID_ASYNC_XFER_TUPLE` | A serial-matched broker completion violated its address/epoch/endpoint/payload tuple; the existing task-side `-EIO` retirement path ran. Zero-data EP0 completion is normalized from TinyUSB/PIO's eight-byte SETUP accounting to Linux's zero payload bytes before this check. |
 | `ERR: HID_ASYNC_HUB_PIN` | A pinned hub-reset slot changed identity during its immediate host-owner completion handoff. |
+| `ERR: HID_WAIT_UNLINK` | The intrusive task waiter could not be removed exactly once under the transport mutex. Linking is unconditional under that mutex and has no separate diagnostic. |
+| `ERR: HID_WAIT_TIMEOUT` | Ordinary upstream-shaped `hid_hw_wait()` did not reach its durable idle predicate within 10 seconds. Teardown uses a separate unbounded lifetime fence. |
+| `ERR: HID_TEARDOWN_WAIT` | The combined IN/CTRL/OUT teardown fence returned an error after producers were stopped; the HID lifetime must not be considered cleanly retired. |
 | `DBG: HID_RESET_Q` | Terminal report recovery published an exact physical-device reset to lifecycle. |
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
@@ -507,22 +492,25 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_CTRL_DISPATCH_FAIL` | A completed control GET could not be published to its ordinary report queue or direct probe owner. |
 | `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request exceeded its bounded timeout. Pre-probe allows one second for local slot admission without consuming a wire attempt, then uses the normal five-second Linux USB GET timeout; other generic messages use their caller-supplied timeout. |
 | `ERR: HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` / `HID_DEV_DESC_TYPE` | One full device-descriptor refetch attempt failed, returned fewer than 18 bytes, or returned the wrong descriptor type. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
-| `ERR: HID_EP0_EVENT_LOST` | Three bounded SETUP/DATA/ACK drains found the same exact EP0 owner; TinyUSB received a synthetic TIMEOUT giveback for the lost HCD event. |
-| `ERR: HID_EP0_CALLBACK_LOST` | TinyUSB EP0 was already idle after bounded drains, but the async slot had no callback completion; teardown remains bounded. |
-| `ERR: HID_EP0_OWNER_MISMATCH` | The serial-safe recovery helper found a different live EP0 owner and deliberately left it untouched. |
+| `ERR: HID_EP0_CALLBACK_LOST` | Exact host cancellation reported that it invoked the terminal callback, but the retained async slot did not observe it. |
+| `ERR: HID_EP0_OWNER_MISMATCH` | The cancel helper found a different live daddr + callback + serial owner and deliberately left it untouched. |
 | `ERR: HID_ATTACH_OVERFLOW` | More distinct topologies arrived during one enumeration than the bounded device table can retain. The excess ATTACH was dropped instead of blocking TinyUSB on its own queue. |
 | `ERR: HID_ENUM_CONFIG_NOMEM` | A validated 513..4096-byte full configuration descriptor could not obtain its exact transient host buffer; the enumeration epoch failed cleanly. |
 | `ERR: HID_ENUM_CONFIG_TOO_LARGE` | The short configuration header declared `wTotalLength` above the firmware's 4096-byte bound; no full GET was submitted. |
 | `ERR: HID_ENUM_CONFIG_INVALID` | The short header or completed full configuration descriptor was short, malformed, or inconsistent with its retained `wTotalLength`; no class parser received it. |
-| `ERR: HID_WQ_NOT_READY` / `HID_WQ_LOCK_FAIL` / `HID_WQ_UNLOCK_FAIL` | A task-side workqueue mutex invariant failed. The checked FreeRTOS call was evaluated before the following assert. |
-| `ERR: HID_WQ_WAITER_BAD` / `HID_WQ_WAITER_LOST` / `HID_WQ_SELF_WAIT` | A synchronous workqueue waiter invariant failed outside TinyUSB callback context. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
-| `ERR: HID_LOCK_NOT_READY` / `HID_LOCK_TAKE_FAIL` / `HID_LOCK_GIVE_FAIL` | The shared transport mutex failed an invariant. Its callback-safe path publishes this reason as a lifecycle-notification bit; only lifecycle enters the logger, and the following assert uses the precomputed boolean. |
+| `ERR: HID_LOCK_INIT_TWICE` | Shared transport synchronization was initialized twice. Ordinary lock misuse is debug-asserted after evaluating the FreeRTOS call; it has no separate async diagnostic/fail-stop path. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |
+| `WARN: HID_CTRL_QUEUE_FULL` / `WARN: HID_OUT_QUEUE_FULL` | One per-HID logical `.request()` FIFO reached the corresponding upstream-effective limit (255 CTRL or 63 OUT entries); the void request was dropped as Linux does on a full ring. |
+| `WARN: HID_REPORT_QUEUE_MEMORY` | Compact logical FIFO nodes reached the shared 4096-byte firmware budget before the upstream count limit. Increase it only after measuring heap with the target work device. |
 | `DBG: EVDEV_KEY_Q` | A key event reached the evdev-to-KeyD queue. |
 | `WARN: EVDEV_BATCH_CAP` | An unusual input device computed more than the bounded 62-value host batch; input remains best-effort. |
+
+The retired aggregate message `HID_ASYNC_INVARIANT` and the former
+`HID_ASYNC_HOST_OWNER` check are not present in the current firmware. Classify
+completion failures by `HID_ASYNC_XFER_TUPLE` and `HID_ASYNC_HUB_PIN` above.
 
 The old `USB_MOUNT_CB` and `HID_MOUNT_CB` callback markers are intentionally
 gone: callback context no longer calls the logger. A connection that never

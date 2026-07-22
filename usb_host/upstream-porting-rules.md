@@ -167,6 +167,28 @@ usb_host/linux/drivers/hid/hid-input.c
 usb_host/linux/drivers/input/input.c
 ```
 
+## Compatibility Headers Are Contracts
+
+The reduced headers under `usb_host/linux/include/linux/` are firmware
+compatibility contracts, not line-for-line copies of the complete kernel
+headers. They are the narrow exception to adjacent retention of every omitted
+upstream header line. This exception does not apply to Linux-derived `.c`
+files.
+
+For each active compatibility primitive:
+
+1. Preserve the Linux-visible type, return value, ownership, and ordering
+   semantics used by every linked caller.
+2. Document any reduced behavior beside the definition; do not hide an active
+   operation behind a silent no-op.
+3. Compile-gate an unsupported primitive so a newly linked driver fails at
+   build time instead of receiving weaker behavior silently.
+4. Re-audit the header contract whenever a new Linux-derived caller or driver
+   is linked.
+
+Firmware-only registries such as `hid-drivers.c` must identify themselves as
+port glue even when build layout keeps them beside Linux-derived sources.
+
 ## Diff Review Checklist
 
 For every diff against upstream, answer:

@@ -2442,9 +2442,6 @@ void hidinput_reset_resume(struct hid_device *hid)
 }
 EXPORT_SYMBOL_GPL(hidinput_reset_resume);
 
-// #ifdef CONFIG_HID_KUNIT_TEST
-// #include "hid-input-test.c"
-// #endif
-// Firmware build does not include Linux KUnit test objects.
-
-/* Device capability summary is implemented by the firmware evdev/device queue. */
+#ifdef CONFIG_HID_KUNIT_TEST
+#include "hid-input-test.c"
+#endif

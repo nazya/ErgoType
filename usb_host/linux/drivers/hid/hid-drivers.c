@@ -19,50 +19,44 @@ __attribute__((used, section("linux_initcalls"))) = NULL;
 int linux_module_initcalls_init(void)
 {
 	linux_initcall_t const *initcall;
+	int first_error = 0;
 	int ret;
 
 	for (initcall = __start_linux_initcalls; initcall < __stop_linux_initcalls; initcall++) {
 		if (!*initcall)
 			continue;
 		ret = (*initcall)();
-		if (ret)
-			return ret;
+		/* Linux records a failed initcall and continues booting the others. */
+		if (ret && !first_error)
+			first_error = ret;
 	}
 
-	return 0;
+	return first_error;
 }
 
 int hid_builtin_drivers_init(void)
 {
 	const struct hid_builtin_driver *driver;
+	int first_error = 0;
 	int ret;
 
 	for (driver = __start_hid_drivers; driver < __stop_hid_drivers; driver++) {
-#if 0
-		/*
-		 * Earlier WIP tried to make hid-drivers.c decide which imported
-		 * drivers are safe. Keep selection in CMake instead, so this loop
-		 * stays Linux-shaped and registers the linked allowlist only.
-		 */
-		ret = hid_register_driver(*driver);
-		if (ret)
-			return ret;
-#endif
 		/*
 		 * This source slice only links hid-generic plus vendor drivers whose
 		 * active hooks are covered by the current port layers selected in
-		 * CMake: input mapping/report fixups, callback-safe raw_event handlers,
-		 * report GET/SET async paths, hiddev proxy users, and timer/workqueue
-		 * users that do not need deferred Linux subsystem proxies.
+		 * CMake: input mapping/report fixups, task-owned raw_event handlers,
+		 * report GET/SET async paths, and bounded timer/workqueue users. Hiddev
+		 * proxy users and drivers needing deferred subsystem proxies stay unlinked.
 		 */
 		// ret = hid_register_driver(*driver);
 		// The linker entry now pairs the descriptor with runtime storage looked up by hid-core.
 		ret = hid_register_driver(driver->hid_driver);
-		if (ret)
-			return ret;
+		/* One failed Linux module must not suppress unrelated HID drivers. */
+		if (ret && !first_error)
+			first_error = ret;
 	}
 
-	return 0;
+	return first_error;
 }
 
 // Upstream Linux: no equivalent; registration and unregister use this port
