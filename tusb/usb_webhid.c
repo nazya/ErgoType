@@ -22,6 +22,7 @@ enum command {
     CMD_FILE_LIST_READ_CHUNK,
     CMD_FILE_DELETE,
     CMD_FILE_READ_END,
+    CMD_SESSION_RESET,
 };
 
 enum status {
@@ -725,6 +726,11 @@ void webhid_set_report(uint8_t report_id, hid_report_type_t report_type,
         break;
     case CMD_FILE_READ_END:
         file_read_end();
+        break;
+    case CMD_SESSION_RESET:
+        webhid_reset();
+        response_begin(CMD_SESSION_RESET);
+        response_status(STATUS_OK, FR_OK);
         break;
     default:
         response_status(STATUS_UNKNOWN_COMMAND, FR_OK);
