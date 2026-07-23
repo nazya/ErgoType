@@ -57,13 +57,11 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     ui_led_set_pattern(0, (leds & 0x02u) ? 0xFFFFFFFFu : 0u, true);
 
     // KeyD owns the physical device table, so route host LED state through its queue.
-    struct devmon_event ev = {
+    struct devmon_event event = {
+        .type = DEVMON_LED,
+        .code = LED_CAPSL,
+        .value = !!(leds & 0x02u),
         .is_virtual = true,
-        .event = {
-            .type = EV_LED,
-            .code = LED_CAPSL,
-            .value = !!(leds & 0x02u),
-        },
     };
-    xQueueSendToBack(devmon_queue, &ev, portMAX_DELAY);
+    xQueueSendToBack(devmon_queue, &event, portMAX_DELAY);
 }

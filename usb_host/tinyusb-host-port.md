@@ -558,6 +558,31 @@ configuration, so the 32-entry queue has exactly one payload allocation. Full-
 queue behavior is TinyUSB's ordinary `queue_event()` behavior; the firmware no
 longer adds a separate overflow policy.
 
+Upstream `hcd_event_t` identifies an interrupt completion only by device address
+and endpoint. If an already-produced event survives abort/rearm while both
+values are reused, the ordinary dequeue path clears the new endpoint owner and
+reconstructs the callback from the new device table. That lets an old
+completion falsely finish a new Linux request. For the current PIO/direct-HID
+path, the generated host core snapshots the nonzero `tuh_edpt_xfer()`
+callback and `user_data` serial beside each event and compares that tuple before
+changing `busy`/`claimed`. A mismatched completion is given back to its saved
+old callback without touching the new owner. This is the firmware equivalent
+of retaining Linux URB identity through the queued-completion boundary; merely
+dropping the old event would strand the old request and block lifecycle
+retirement.
+
+On 32-bit targets the wrapper adds eight bytes to each of the 32 queue entries,
+or 256 bytes of runtime heap. All current direct HID submissions use nonzero,
+wrap-safe request serials and stable function callbacks. Built-in class events
+retain their upstream null/zero identity and ordinary FIFO behavior.
+
+This is deliberately not claimed as a generic HCD cancel-completion contract.
+An HCD which produces an old completion only after a later owner has already
+replaced TinyUSB's callback tuple cannot be disambiguated from
+`hcd_event_t`; its backend must carry a stable submit token or prevent endpoint
+reuse until exact cancel completion. In particular, an ESP host port must audit
+that contract instead of copying the PIO queue snapshot as a universal fence.
+
 PIO endpoint capacity is a separate enumeration-time boundary. The backend
 owns eight fixed endpoint slots and has no periodic bandwidth scheduler;
 failure to reserve a slot happens in `tuh_edpt_open()` before the firmware
@@ -668,6 +693,8 @@ Required hardware coverage for a TinyUSB port update:
 - overlapping remove/replug epochs that temporarily exhaust the bounded Linux
   device-cache spare and then resume from the deferred ATTACH FIFO;
 - output/feature requests and haptic response;
+- interrupt-OUT haptic replay after remove/reconnect, with no false EP0
+  fallback from a reused address/endpoint;
 - stalled/failed interrupt IN, clear-halt, and rearm;
 - reset/re-enumeration and lost-completion recovery fixtures where available;
 - repeated add/remove with stable heap and safe stack high-water marks.

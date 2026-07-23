@@ -18,9 +18,6 @@
 #include "queue.h"
 #include "semphr.h"
 
-#include <linux/types.h>
-#include <uapi/linux/input.h>
-
 #include "flash.h"
 #include "devmon.h"
 #include "keyd.h"
@@ -82,10 +79,7 @@ static void app_task(void *pvParameters);
 
 void on_layout_change(const char *name)
 {
-    enum { HID_HAPTIC_WAVEFORM_PRESS = 0x1006 };
-    // Hardware test hook: layout changes alternate haptic Press and erase/STOP.
     static bool initial_layout_notified;
-    static int haptic_test_effect_id = -1;
 
     ui_notify_layout(name);
 
@@ -94,39 +88,15 @@ void on_layout_change(const char *name)
         return;
     }
 
-    if (haptic_test_effect_id >= 0) {
-        for (size_t i = 0; i < device_table_sz; i++) {
-            struct device *dev = device_table[i];
+    // Queue one preloaded Press PLAY through the same virtual path as host LEDs.
+    struct devmon_event event = {
+        .type = DEVMON_HAPTIC,
+        .code = HAPTIC_EFFECT_PRESS,
+        .value = 1,
+        .is_virtual = true,
+    };
 
-            if (dev && device_erase_ff(dev, haptic_test_effect_id) == 0) {
-                haptic_test_effect_id = -1;
-                return;
-            }
-        }
-        haptic_test_effect_id = -1;
-    }
-
-    for (size_t i = 0; i < device_table_sz; i++) {
-        struct device *dev = device_table[i];
-
-        if (!dev || !dev->writer.upload_ff)
-            continue;
-
-        struct ff_effect effect = {
-            .type = FF_HAPTIC,
-            .id = -1,
-            .u.haptic = {
-                .hid_usage = HID_HAPTIC_WAVEFORM_PRESS,
-                .intensity = 100,
-            },
-        };
-
-        if (device_upload_ff(dev, &effect) == 0) {
-            haptic_test_effect_id = effect.id;
-            device_set_ff(dev, effect.id, 1);
-            return;
-        }
-    }
+    (void)xQueueSendToBack(devmon_queue, &event, 0);
 }
 
 int8_t init_and_read_pin(int pin) {

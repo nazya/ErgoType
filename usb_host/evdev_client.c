@@ -83,6 +83,7 @@ static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
 	port_dev.vendor = vendor;
 	port_dev.product = product;
 	port_dev.name = src->name ? src->name : "usb-hid";
+	port_dev.has_haptic = src->ff && test_bit(FF_HAPTIC, src->ffbit);
 	memcpy(port_dev.keybit, src->keybit, sizeof(port_dev.keybit));
 	memcpy(port_dev.relbit, src->relbit, sizeof(port_dev.relbit));
 	memcpy(port_dev.absbit, src->absbit, sizeof(port_dev.absbit));
@@ -300,7 +301,6 @@ void evdev_unregister_device(struct evdev_client *client,
 	// KeyD owns the client after this removal event and frees it together with
 	// its device; keeping it alive makes the synchronous writer pointer safe.
 }
-
 void __pass_event(struct evdev_client *client,
 		  const struct input_event *event)
 {

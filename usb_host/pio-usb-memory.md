@@ -49,19 +49,16 @@ formatting. After adding the audited ELECOM, Kensington, Topre, and EVision
 builtin drivers, that historical image linked with `text=505836`, `data=708`,
 and `bss=245364`.
 
-The current checkpoint excludes Stadia/`ff-memless` from the link and uses the
-fixed 218.5 KiB (`223744`-byte) FreeRTOS heap. Its rebuilt UF2 is byte-identical
-to the previously hardware-verified pre-Stadia image, which passed repeated
-automatic driver, long-configuration, input, and removal cycles:
+The current checkpoint excludes Stadia/`ff-memless` from the link. It uses the
+fixed 218.5 KiB (`223744`-byte) FreeRTOS heap and clean-builds as:
 
 ```text
-text/data/bss                 514948 / 788 / 245040 B
+text/data/bss                 514752 / 788 / 245040 B
 __bss_end__                   0x2003fd38
 main-bank headroom            712 B to 0x20040000
 scratch X                     788 B (0x20040000..0x20040314)
 scratch X / core-1 gap        1260 B to 0x20040800
-verified UF2 SHA-256          db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242
-hardware verdict              passed 2026-07-22; stable remove plateau, oom=0
+hardware verdict              passed 2026-07-23; stable removal heap, oom=0
 ```
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
@@ -97,14 +94,14 @@ transport, and reconnect paths while making the teardown race observable. The
 targeted run covered upload/play, automatic timer stop, and same-ID replay; it
 did not issue the explicit stop or erase client calls.
 
-Relative to the verified image, the build-only linked pair added 3,256 B of
-text and 48 B of BSS, reducing main-bank headroom by 48 B. Those values belong
-only to exact image `5491f7e...`; the current unlinked build is the exact
-`db3ecf...` image above. The current architecture still has one ordinary
-32-entry TinyUSB event queue with no spill state, a transient long-configuration
-buffer rather than a permanent 4 KiB array, metadata-only physical async slots,
-and stack-owned admission waiters. Exact structure/block sizes below must be
-remeasured whenever those objects change.
+Relative to the then-verified 514,948-byte-text image, the build-only linked
+pair added 3,256 B of text and 48 B of BSS, reducing main-bank headroom by 48 B.
+Those values belong only to the optional linked build; the current unlinked
+build is the checkpoint above. The current architecture still has one ordinary
+32-entry TinyUSB event queue with no spill state, a transient
+long-configuration buffer rather than a permanent 4 KiB array, metadata-only
+physical async slots, and stack-owned admission waiters. Exact structure/block
+sizes below must be remeasured whenever those objects change.
 
 The Linux input core's active `event_lock` sections use one equivalent 96-byte
 heap_4 mutex block per live `input_dev`. Its embedded handle changes the
@@ -241,7 +238,7 @@ _hidh_epbuf                   32 B
 _usbh_epbuf                  520 B
 _usbh_devices               1720 B
 _usbh_q handle                 4 B
-host event xQueue block      480 B runtime heap (32 x 12-byte payload)
+host event xQueue block      736 B runtime heap (32 x 20-byte payload)
 ```
 
 Non-host RAM that is also visible in the map:

@@ -74,6 +74,7 @@ struct port_input_dev {
 	uint16_t vendor;
 	uint16_t product;
 	const char *name;
+	bool has_haptic;
 	unsigned long keybit[INPUT_BITS_TO_LONGS(KEY_CNT)];
 	unsigned long relbit[INPUT_BITS_TO_LONGS(REL_CNT)];
 	unsigned long absbit[INPUT_BITS_TO_LONGS(ABS_CNT)];
@@ -82,13 +83,24 @@ struct port_input_dev {
 	struct input_absinfo_snapshot abs_y;
 };
 
+typedef enum {
+	DEVMON_LED,
+	DEVMON_HAPTIC,
+} devmon_event_type_t;
+
 /*
- * TinyUSB host LED reports have no source input device. is_virtual carries
- * their event through the existing devmon queue into the KeyD task.
+ * Application output requests are not Linux input_event records. Keep their
+ * type domain separate and let the KeyD consumer translate it explicitly.
+ */
+/*
+ * Virtual output requests have no source input device. is_virtual carries
+ * them through the existing devmon queue into the KeyD task.
  */
 struct devmon_event {
 	struct port_input_dev dev;
-	struct port_input_event event;
+	int32_t value;
+	uint16_t code;
+	devmon_event_type_t type;
 	bool is_virtual;
 };
 

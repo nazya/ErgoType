@@ -115,6 +115,43 @@ specific hardware request instead of paying static registry RAM by default.
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
+## Planned HIDRAW and Logitech HID++ Boundary
+
+HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard
+and mouse input does not need it, and Logitech HID++ kernel drivers can use
+`.raw_event` plus `hid_hw_raw_request()` without a Linux `/dev/hidraw` file.
+Some other useful drivers and a future WebHID/raw proxy do expect the HIDRAW
+lifecycle, so the planned firmware boundary is deliberately smaller than the
+Linux character-device ABI:
+
+- retain upstream `hidraw_connect()` / `hidraw_disconnect()` and
+  `HID_CLAIMED_HIDRAW` ownership;
+- give each object generation-safe disconnect/reconnect lifetime;
+- deliver raw input to an optional internal subscriber through a bounded
+  queue, with an explicit drop counter and no producer wait when no subscriber
+  exists;
+- route GET, SET, and OUTPUT through the existing asynchronous HID transport;
+- do not add `/dev`, file descriptors, `read()`, `ioctl()`, `poll()`, or VFS
+  emulation until a real external proxy client needs them.
+
+After that compatibility layer, port Logitech support in this order:
+
+1. Direct USB HID++ 1.0/2.0 request/response, including timeout and
+   generation-safe cancellation when a reply is pending during disconnect.
+2. Battery state, identity/serial/version, high-resolution wheel, extra
+   buttons, and touchpad raw XY.
+3. `hid-logitech-dj` receiver ownership: first one paired mouse, then keyboard
+   plus mouse, then per-child disconnect/reconnect, then several receiver
+   slots with measured heap use.
+
+The first device matrix should cover M560 or M705, K400 or K750, T650, a
+combined Unifying keyboard/mouse receiver, and a direct-USB MX Vertical.
+Logitech Bolt must be treated as a separate protocol/device check rather than
+assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
+USB transport until a Bluetooth HID backend exists. Wacom and simple
+LetSketch-like tablets are the next useful family after Logitech because they
+exercise the same raw-report and multitouch boundaries.
+
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller
 driver or optional rumble support. The controller ID is therefore deliberately
@@ -155,7 +192,8 @@ Upstream intentionally returns from the USB Magic Mouse 2 probe immediately
 after `hid_hw_start()`: it does not reach the later native-report registration
 or mode SET used by the other paths. Preserve that behavior; these USB IDs do
 not claim the full Bluetooth Mouse 2 touch path. USB Trackpad 2 is the actual
-wired multitouch target, including its separate mouse and non-mouse interfaces.
+wired multitouch target and exposes four HID interfaces: one mouse and three
+non-mouse. The current `CFG_TUH_HID=4` fits that standalone device exactly.
 
 The larger remaining risk is after Linux input, not in the TinyUSB transport.
 A 15-contact native frame can publish more records than the fixed 64-record
@@ -168,11 +206,12 @@ low-contact traffic with visible drop diagnostics.
 Expected extra live heap, including input value storage, is roughly 4.2 KiB
 for Magic Mouse 2 and 5.3 KiB for a 16-contact Trackpad 2, before common HID
 parser/report/evdev allocations. Keep Bluetooth and legacy IDs out of the
-firmware allowlist. A dedicated fixture must cover the Trackpad 2 mouse and
-non-mouse interfaces, accepted `-EIO` mode SET, native report IDs `0x02` and
-`0x12`, multi-contact queue saturation, disconnect during SET, and repeated
-reconnect. Until that pass, the linked driver is build-audited but not
-hardware-verified; it is not a reason to enable every Apple HID driver or
+firmware allowlist. A dedicated fixture must cover all four Trackpad 2
+interfaces, mode SET, native report ID `0x02`, and repeated reconnect. The
+combined two-Pico pass on 2026-07-23 hardware-verified that normal low-contact
+path, including removal and reconnect. Accepted `-EIO`, disconnect during SET,
+contact ID 32, and multi-contact queue saturation remain separate fault tests.
+This bounded USB result is not a reason to enable every Apple HID driver or an
 HID++-style protocol stack.
 
 ## Future Transport Work

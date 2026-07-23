@@ -142,7 +142,7 @@
 #define CFG_TUH_HUB              1  // USB hub class support. 1 costs one host hub/device slot plus hub state; 0 saves roughly 100-200 B but external hubs stop working.
 #define CFG_TUH_DEVICE_MAX       4  // Max directly managed non-hub USB devices. Direct ErgoType-to-ErgoType needs 1; exact endpoint callbacks make each slot larger.
 #define CFG_TUH_API_EDPT_XFER    1  // Preserve result/user_data for direct interrupt IN/OUT. Costs 1280 B with 5 host slots and 16 endpoint numbers.
-#define CFG_TUH_HID              4  // Max HID interfaces, not report IDs. Peer ErgoType NKRO needs 3: keyboard/consumer, mouse, WebHID. Each extra costs HID state plus IN/OUT buffers.
+#define CFG_TUH_HID              4  // Max HID interfaces, not report IDs. Peer ErgoType NKRO needs 3; USB Magic Trackpad 2 needs all 4. Each extra costs HID state plus IN/OUT buffers.
 #define CFG_TUH_HID_EPIN_BUFSIZE 1  // Direct endpoint IN owns its request buffer; retain a one-byte class placeholder and save 240 B of aligned staging.
 #define CFG_TUH_HID_EPOUT_BUFSIZE 1  // Direct endpoint OUT owns its request buffer; retain a one-byte class placeholder and save 240 B of unused staging.
 

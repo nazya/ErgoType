@@ -235,6 +235,9 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   a logical `PARKED` state, matching upstream's stopped queue rather than
   dropping the report or retry-spinning. A later enqueue on that same interface
   and lane is the upstream-shaped restart edge and preserves FIFO order.
+  TinyUSB reporting a currently owned EP0/endpoint is not such a submit
+  failure: the accepted report remains queued until the exact owner-idle edge
+  or cancellation, with no firmware-only one-second pre-wire timeout.
   Ordinary `hid_hw_wait()` excludes that stopped lane's logical lifetime leases,
   while disconnect still drains and frees them all. If a parked GET made an
   ordinary waiter return, its parser-owner task is cleared atomically with the
@@ -449,6 +452,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   than Linux's 96 userspace slots. Each slot still owns
   the upstream per-effect report snapshot, but unused slots no longer consume
   the shared probe heap.
+- Post-probe evdev publication snapshots `FF_HAPTIC` support. KeyD preloads the
+  five standard waveform IDs once per device, keeps their ff-core IDs local to
+  that device lifetime, and receives layout feedback as a virtual
+  `DEVMON_HAPTIC` request through the same devmon queue used for host LEDs.
+  Disconnect drops the local map and reconnect uploads fresh IDs; no global
+  effect ID crosses device lifetimes.
 - Haptic upload/erase/destroy now preserve the upstream ff-core ordering while
   closing three lifecycle holes: replacing or erasing the last Press/Release
   effect restores DEVICE auto-trigger mode, an erased slot cannot race a queued
@@ -467,6 +476,15 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-23: repeated hot-plug and cold-start runs completed all three haptic
+  transport profiles: numbered interrupt OUT,
+  unnumbered report ID 0 interrupt OUT, and unnumbered report ID 0 EP0
+  fallback. The run covered five-slot playback, same-ID replay, replacement,
+  erase/re-upload, HOST/DEVICE mode changes, queued-work unplug, remove, and
+  reconnect. The same image passed USB Magic Trackpad 2 mode SET, all four
+  interfaces, native low-contact/release/button parsing, and reconnect.
+  Minimum heap was 11,368 B on cold start and 11,376 B on hot plug; complete
+  removal repeatedly returned to 60,848 B free with `oom=0`.
 - 2026-07-22: before the audited Stadia/`ff-memless` pair was returned to the
   deferred CMake set, a targeted two-Pico `FF_RUMBLE` test validated it. The
   temporary linked/instrumented host image had SHA256
@@ -645,10 +663,15 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
-- Verify the newly linked USB Magic Trackpad 2 driver on both its mouse and
-  non-mouse interfaces. Require the probe-time `{ 0x02, 0x01 }` mode SET
-  (success and accepted `-EIO`), native report ID `0x02`, one/two-contact input,
-  unplug during SET, repeated reconnect, and a stable removal heap plateau.
+- The normal USB Magic Trackpad 2 path is hardware-verified on all four HID
+  interfaces: one mouse and three non-mouse. The probe-time `{ 0x02, 0x01 }`
+  mode SET, native report ID `0x02`, one/two-contact input, repeated reconnect,
+  and stable removal heap plateau passed on 2026-07-23. Accepted `-EIO`, unplug
+  during SET, contact ID 32, and multi-contact queue saturation still need
+  deterministic fault injection.
+  `CFG_TUH_HID=4` admits that standalone device exactly; Trackpad plus another
+  HID interface is a separate capacity/RAM configuration, not part of this
+  certification.
   Upstream returns early for USB Magic Mouse 2, so report `0x12` must not be
   described as proof of a wired mode-switch path that Linux itself does not run.
 - Exercise cache backpressure with at least two fast remove/replug epochs before
@@ -671,16 +694,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 - Exercise REMOVE and a foreign ATTACH while the 100-ms retry deadline is
   armed. The successful error-only continuation itself is hardware-verified;
   these remaining cases target cancellation and competing topology only.
-- Verify the output-routing/startup-LED checkpoint on hardware: a boot keyboard
-  without interrupt OUT must receive the enumeration-time NumLock reset over
-  EP0, and an OUTPUT request on an interface with interrupt OUT must use that
-  endpoint. For the direct-OUT checkpoint also verify normal input after boot,
-  unplug/replug, and haptic or LED output without `HID_REPORT_OUT_FAIL`,
-  `HID_SUBMIT_TO`, or `HID_XFER_TO`. Keep these as separate observations.
-- Verify the direct-control checkpoint with the haptic-touchpad or hi-res-wheel
-  fixture: descriptor pre-probe, feature GET/SET, input events, and unplug/replug
-  must all complete without `HID_SUBMIT_TO`, `HID_XFER_TO`, or
-  `HID_CTRL_DISPATCH_FAIL`. Record post-attachment heap. Historical queue/slot
+- The haptic lifecycle fixture hardware-verified interrupt OUT and EP0 fallback
+  output, feature control traffic, input, and repeated unplug/replug without
+  `HID_REPORT_OUT_FAIL`, `HID_XFER_TO`, or `HID_CTRL_DISPATCH_FAIL`. The
+  independent boot-keyboard startup-NumLock observation remains: a keyboard
+  without interrupt OUT must receive it over EP0, while one with interrupt OUT
+  must use that endpoint.
+  Historical queue/slot
   sizes belong to their dated checkpoints above; use
   [`pio-usb-memory.md`](pio-usb-memory.md) for current linked-image and
   allocation accounting.

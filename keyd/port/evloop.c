@@ -124,16 +124,27 @@ int evloop(int (*event_handler)(struct event *ev))
 		if (xQueueReceive(devmon_queue, &devmon_ev, 0) != pdPASS)
 			continue;
 
-		// TinyUSB host LED reports enter KeyD without a source input device.
+		// Virtual output requests enter KeyD without a source input device.
 		if (devmon_ev.is_virtual) {
 			struct device_event devev = {
-				.type = DEV_LED,
-				.code = devmon_ev.event.code,
-				.pressed = devmon_ev.event.value,
+				.code = devmon_ev.code,
+				.pressed = devmon_ev.value,
 			};
 
+			switch (devmon_ev.type) {
+			case DEVMON_LED:
+				devev.type = DEV_LED;
+				break;
+			case DEVMON_HAPTIC:
+				devev.type = DEV_HAPTIC;
+				break;
+			default:
+				async_msg("ERR: DEVMON_EVENT_TYPE");
+				continue;
+			}
+
 			ev.type = EV_DEV_EVENT;
-			ev.dev = NULL; // Virtual LED event has no physical source device.
+			ev.dev = NULL; // Virtual output event has no physical source device.
 			ev.devev = &devev;
 			timeout = event_handler(&ev);
 			continue;

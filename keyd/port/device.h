@@ -19,6 +19,17 @@
 #define CAP_KEYBOARD	0x4
 #define CAP_KEY		0x8 // Can emit keys, but is not necessarily a keyboard
 
+enum haptic_effect_index {
+	HAPTIC_EFFECT_CLICK,
+	HAPTIC_EFFECT_BUZZ,
+	HAPTIC_EFFECT_RUMBLE,
+	HAPTIC_EFFECT_PRESS,
+	HAPTIC_EFFECT_RELEASE,
+	HAPTIC_EFFECT_COUNT,
+};
+
+struct haptic_state;
+
 struct device {
 	QueueHandle_t ev_queue;
 	struct evdev_writer writer;
@@ -34,6 +45,8 @@ struct device {
 	int32_t _pending_abs_x;
 	int32_t _pending_abs_y;
 	uint8_t _pending_abs;
+	// Port: optional device-local FF effect IDs initialized from the add snapshot.
+	struct haptic_state *haptic;
 	void *data;
 };
 
@@ -41,6 +54,7 @@ struct device_event {
 	enum {
 		DEV_KEY,
 		DEV_LED,
+		DEV_HAPTIC,
 
 		DEV_MOUSE_MOVE,
 		/* All absolute values are relative to a resolution of 1024x1024. */
@@ -64,8 +78,12 @@ extern size_t device_table_sz;
 int device_init(const struct port_input_dev *port_dev, struct device *dev);
 struct device_event *device_read_event(struct device *dev);
 void device_set_led(const struct device *dev, int led, int state);
-void device_set_ff(const struct device *dev, int effect_id, int value);
-int device_upload_ff(const struct device *dev, struct ff_effect *effect);
-int device_erase_ff(const struct device *dev, int effect_id);
+void haptic_init(struct device *dev);
+void haptic_cleanup(struct device *dev);
+int device_haptic_upload(struct device *dev, enum haptic_effect_index effect,
+			 const struct ff_effect *upload);
+int device_haptic_play(const struct device *dev,
+		       enum haptic_effect_index effect, int value);
+int device_haptic_erase(struct device *dev, enum haptic_effect_index effect);
 
 #endif

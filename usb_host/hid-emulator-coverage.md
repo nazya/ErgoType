@@ -47,29 +47,77 @@ the error-only enumeration retry, and repeated lifecycle cleanup. None of the
 four Linux drivers adds transport calls, tasks, heap allocations, or a new
 Linux subsystem.
 
-Historical dedicated-pass checksums (the mutable `build/` paths are where these
-files were produced, not a claim that those paths still contain these bytes):
+### Hardware-verified haptic lifecycle and Magic Trackpad 2 fixture
 
-- host path at the time of the pass:
-  `./build/ErgoType.uf2`, SHA-256
-  `63e935043eb04b95c8fe5c377024f6d7b7b9897b82ed04626a502bf9f98fca2f`
-- emulator path at the time of the pass:
-  `../ErgoType-hid-devices/build/ErgoType.uf2`,
-  SHA-256
-  `58d309156aa7fb4a8152f6623ff2a4a4e1e2c7c0fcebe44f90afcdc307eef496`
+Repeated hot-plug and cold-start runs on 2026-07-23 verified:
 
-## Build Status
+- numbered interrupt OUT (`cafe:1006`), unnumbered report ID 0 interrupt OUT
+  (`cafe:1007`), and unnumbered report ID 0 EP0 fallback (`cafe:1008`);
+- all five HID Haptics waveforms, same-ID replay, in-place replacement,
+  erase/re-upload, HOST/DEVICE mode changes, queued-work unplug, removal, and
+  fresh-ID replay after reconnect;
+- USB Magic Trackpad 2 probe on all four interfaces, `{ 0x02, 0x01 }` mode
+  SET, native report `0x02` low-contact/release/button parsing, removal, and
+  reconnect.
 
-Last targeted build and hardware pass: 2026-07-22
+The runs completed with `oom=0` and a stable removal heap plateau. The
+automatic compatibility pass below separately verifies unplug while the mode
+SET is pending. Still unverified are accepted `-EIO` during that SET,
+high-contact queue saturation/contact ID 32, and a real physical touchpad.
 
-- host repo: `cmake --build build -j4` passed
-- emulator repo: `device/work-input-drivers` built and completed repeated
-  five-identity hardware cycles
+### Hardware-verified automatic USB keyboard compatibility pass
 
-At the time of that pass the emulator repo was on
-`device/work-input-drivers`. Both repositories' `build/ErgoType.uf2` paths are
-mutable last-built artifacts, not stable per-branch archives; the exact
-hardware-tested SHA-256 values are recorded above.
+The emulator branch `device/usb-keyboard-test` contains one automatic
+two-board test. It changes identity only while its own D+ pull-up is down, so
+the operator does not need to unplug a cable or hit a timing window. The
+emulator reconnects itself after two seconds where a reconnect is part of the
+case. Results are visible only through the host board's existing CDC log.
+
+The verified input sequence was:
+
+| Host-visible input | Device/case proved |
+| --- | --- |
+| `a` | `cafe:1100`: BULK precedes INTERRUPT and duplicate same-direction interrupt endpoints do not hide the first usable interrupt IN/OUT pair |
+| `b` | USB Magic Trackpad 2: D+ disappears after mode-SET data but before EP0 status, then a fresh mode SET completes after reconnect |
+| `c` | `cafe:1102`: D+ disappears during endpoint `CLEAR_HALT`, reconnect completes, and input resumes |
+| `d` | `cafe:1103`: `CLEAR_HALT` is rejected, terminal host reset/re-enumeration completes, and input resumes |
+| `e`, `f`, `g` | valid configuration descriptors of exactly 512, 513, and 4096 bytes |
+| no key; `ERR: HID_ENUM_CONFIG_TOO_LARGE` | `cafe:1107`: declared configuration length 4097 is rejected before a full transfer |
+| no key; `ERR: HID_ENUM_CONFIG_INVALID` | `cafe:1108`: malformed `wTotalLength` is rejected without publishing a device |
+| `h` | `cafe:1109`: a valid 4096-byte HID report descriptor is fetched and parsed |
+| `f10` | every preceding case completed |
+
+The `c` marker reached KeyD as `key c` and `input c`. No `vkbd output c` is
+expected with the tested KeyD configuration because `c` is assigned to the
+set-layout action rather than a forwarded key.
+
+Three `f12` presses are the emulator's terminal failure marker. For the
+terminal reset case, the normal diagnostic chain is
+`HID_RX_STALL`, `HID_CLEAR_HALT_FAIL`, `HID_RESET_Q`, and `HID_RESET_OK`.
+Those short diagnostics may coalesce in the one-entry async message slot; the
+later `d` event is the stronger end-to-end result. The corresponding rule
+applies to `b` and `c`: removal plus a later marker proves that the old USB
+epoch retired and a new one became usable.
+
+A complete hardware run on 2026-07-24 reached `f10` with no `f12`, allocation
+failure, reset failure, wait timeout, or teardown diagnostic. The deliberately
+requested `HID_RX_STALL`, `HID_CLEAR_HALT_FAIL`,
+`HID_ENUM_CONFIG_TOO_LARGE`, and `HID_ENUM_CONFIG_INVALID` diagnostics were
+followed by the expected recovery markers.
+
+The run kept `oom=0`; its minimum-ever free heap was 13,072 bytes. Repeated
+ordinary attached states returned to 46,976 bytes free, and the removal
+snapshot repeatedly returned to 60,832 bytes free with a 55,176-byte largest
+block. That snapshot is taken before KeyD releases the removed client's queue
+and wrapper. The 4096-byte report-descriptor case temporarily reduced the
+attached-state heap to 42,944 bytes, then the next ordinary profile returned
+to 46,976 bytes, so no cumulative heap loss was observed. The final `f10`
+identity intentionally remains attached.
+
+`WARN: HID_IGNORED` for an unsupported auxiliary Magic Trackpad interface and
+`WARN: EVDEV_BATCH_CAP` did not prevent the mode-SET/reconnect result. The
+latter remains the reason this pass does not certify maximum-contact
+multitouch batches.
 
 ### Superseded unverified dirty checkpoint
 
@@ -128,12 +176,14 @@ multitouch conversion. Record each as unverified unless its targeted fixture
 was actually run.
 
 The combined host also links the upstream USB-only Magic Mouse 2 / Trackpad 2
-driver. It remains a separate unverified target: a fixture or real Trackpad 2
-must expose both USB interfaces, observe the `{ 0x02, 0x01 }` feature SET,
-deliver native report ID `0x02`, exercise one/two contacts, unplug during that
-SET, and reconnect without a falling heap plateau. Upstream itself returns
-early for USB Magic Mouse 2, so a synthetic `0x12` stream is not evidence of a
-wired mode-switch path.
+driver. The 2026-07-23 combined fixture exposed all four Trackpad 2 HID
+interfaces (one mouse and three non-mouse), required the `{ 0x02, 0x01 }`
+feature SET, delivered native report ID `0x02`, exercised one/two contacts plus
+release, and repeated the full handshake after reconnect. `CFG_TUH_HID=4` fits
+that standalone device exactly. Accepted `-EIO` and unplug while the mode SET
+is pending remain separate fault-injection checks. Upstream returns early for
+USB Magic Mouse 2, so a synthetic `0x12` stream is not evidence of a wired
+mode-switch path.
 
 ### Historical interrupt-IN STALL fixture
 
@@ -215,10 +265,11 @@ claims for unrelated drivers.
 | 2026-07-19 | `device/haptic-touchpad` | active multitouch/haptic build enumerates, pointer events move the cursor, and haptic output produces the emulator cursor-feedback signal |
 | 2026-07-21 | dirty `device/haptic-touchpad` STALL fixture | one interrupt-IN STALL is cleared remotely and reset to DATA0 locally; marker `s` proves rearm and resumed input, and the programmed reconnect repeats the same active heap plateau |
 | 2026-07-22 | `device/work-input-drivers` (`67c1aea`) | ELECOM, Kensington, Topre, and EVision driver signals pass; three `cafe:1005` cycles recover the injected full-configuration GET failure and reach the HID interface at byte 575 of a 600-byte configuration; removal returns to stable `free=60936/60944` plateaus with `oom=0` |
+| 2026-07-23 | combined haptic lifecycle / Magic Trackpad 2 fixture | all three numbered/ID0 haptic transports, five-slot replacement/erase/replay/unplug/reconnect, and the four-interface Magic Trackpad 2 mode/native/reconnect path pass in repeated hot- and cold-start runs with `oom=0` |
 
 ## Recorded Emulator Branches
 
-Branch heads recorded for the 2026-07-22 build pass:
+Recorded emulator branches:
 
 | Branch | Commit |
 | --- | --- |
@@ -241,6 +292,7 @@ Branch heads recorded for the 2026-07-22 build pass:
 | `device/saitek-rat7` | `1d3d945` |
 | `device/zydacron-remote` | `40ee6a8` |
 | `device/work-input-drivers` | `67c1aea` |
+| `device/haptic-lifecycle` | `05607cc` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -311,13 +363,13 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; Holtek mouse still needs a fixture |
+| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; `holtek-mouse` fixture written, hardware pass pending |
 | `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-zydacron` | `work-input-drivers`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
 | driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| workqueue callback | `hid-input` LED work and active `hid-haptic` effect/stop work | LED path via `holtek-kbd-a055`; `haptic-touchpad` covers the basic haptic worker path, with replacement/teardown races still pending below |
+| workqueue callback | `hid-input` LED work and active `hid-haptic` effect/stop work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies five-slot replacement, erase/replay, queued-work unplug, teardown, and reconnect |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
@@ -325,15 +377,18 @@ drivers are not counted here.
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
-| USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | no dedicated fixture or real-device pass yet |
+| USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
-## Active Drivers Without Dedicated Fixtures
+## Pending Dedicated Hardware Passes
 
 `hid-holtek-mouse` is active so `CONFIG_HID_HOLTEK` no longer marks six mouse
-IDs as special without linking their report fixup, but it has no dedicated
-emulator fixture yet. The USB-only Magic Mouse 2 / Trackpad 2 driver is also
-active and build-audited but has no dedicated fixture or real-device pass.
+IDs as special without linking their report fixup. Its unverified
+`device/holtek-mouse` fixture preserves the broken `0x7fff` descriptor fields,
+checks the repaired `0x2fff` boundary, pointer input, and reconnect. The normal
+USB Magic Trackpad 2 route is hardware-verified above; accepted mode-SET
+`-EIO`, disconnect during that SET, and queue saturation remain targeted fault
+passes rather than normal-driver gaps.
 Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
@@ -349,10 +404,10 @@ reuse an already tested hook shape.
 
 ## Coverage Decision
 
-The existing emulator set plus the hardware-verified work-input fixture covers
-the previously active allowlist and the long-enumeration success path. The new
-Holtek mouse linkage and the USB-only Magic Mouse 2 / Trackpad 2 linkage are
-build-audited but remain driver-specific fixture gaps. Stadia's existing
+The existing emulator set plus the hardware-verified work-input and combined
+haptic/Trackpad fixtures covers the previously active allowlist,
+long-enumeration success path, and the normal USB Magic Trackpad 2 path. The
+Holtek mouse driver-specific hardware result remains pending. Stadia's existing
 fixture covers its deferred mutex-conversion path if it is relinked later.
 
 Reasoning:
@@ -374,11 +429,11 @@ target is another
 
 The Stadia fixture covers the retained, currently unlinked mutex conversion:
 simple memless rumble, automatic stop, same-ID replay, unplug during a running
-driver work, remove, and reconnect. The standard HID Haptics Page path remains
-active, and the haptic-touchpad fixture covers its basic probe, pointer, and
-output flow. In-place effect replacement, explicit erase/reuse, multiple
-simultaneous effects, and stress beyond the deterministic teardown window
-remain relevant FF gaps if Stadia is enabled for a product client.
+driver work, remove, and reconnect. The active standard HID Haptics Page path
+has separate coverage for in-place replacement, explicit erase/reuse, all five
+slots, queued-work unplug, remove, and reconnect. Stadia-specific stress beyond
+its deterministic teardown window remains relevant only if that deferred
+driver gains a product client.
 
 ## Hardware Test Matrix
 
@@ -526,16 +581,16 @@ Hardware Verified until their signals are observed.
 ### Future FF client boundary
 
 The concise client recipe and lifetime rules are in the
-`Future firmware FF client hook` section of `hid-host-bringup.md`. The full
-available client sequence is:
+`Future firmware FF client hook` section of `hid-host-bringup.md`. The
+historical temporary Stadia client exercised this conceptual sequence:
 
 ```text
-device_upload_ff(id=-1) -> assigned effect ID
-device_set_ff(id, 1)    -> play
+upload FF_RUMBLE id=-1  -> assigned effect ID
+write EV_FF(id, 1)      -> play
 ff-memless timer        -> automatic stop at replay.length
-device_set_ff(id, 1)    -> replay the same uploaded slot
-device_set_ff(id, 0)    -> optional explicit stop
-device_erase_ff(id)     -> release the slot
+write EV_FF(id, 1)      -> replay the same uploaded slot
+write EV_FF(id, 0)      -> optional explicit stop
+erase effect ID         -> release the slot
 ```
 
 The targeted Stadia run exercised upload, play, automatic timer stop, and
@@ -544,31 +599,35 @@ generic future-client sequence.
 
 All calls belong to a task-owned client. Never make them from a TinyUSB
 callback. An effect ID dies with its `struct device`: clear it on
-`EV_DEV_REMOVE` and upload a new `id = -1` effect after reconnect. The temporary
-test changed `device_set_ff()` to return the immediate writer result only for
-diagnostics; that is not USB completion and is not part of the current void
-API. The `EV_FF` echo may reach the current KeyD reader as
+`EV_DEV_REMOVE` and upload a new `id = -1` effect after reconnect. The
+temporary raw helpers are not part of the current API; an immediate writer
+result was not USB completion. The `EV_FF` echo may reach the current KeyD reader as
 `unrecognized evdev event type: 21`; that message is a downstream-consumer gap,
 not a failed FF request.
 
-## Still Not Covered
+## Remaining Gaps
 
 The active `hid-haptic` driver creates an FF device through `ff-core.c`, and
-the generic evdev/input output plumbing is live:
+the indexed KeyD policy exercises the generic evdev/input output plumbing:
 
-- `device_upload_ff()` reaches `input_ff_upload()`
-- `device_erase_ff()` reaches `input_ff_erase()`
-- `device_set_ff()` sends `EV_FF` through `evdev_write()` /
+- `device_haptic_upload()` reaches `input_ff_upload()`
+- `device_haptic_erase()` reaches `input_ff_erase()`
+- `device_haptic_play()` sends `EV_FF` through `evdev_write()` /
   `input_inject_event()`
 
-The standard HID Haptics Page touchpad fixture already exercises
-`hid-haptic.c`, `hid-multitouch.c`, asynchronous feature GET_REPORT probe, and
-basic output. It does not yet force in-place effect replacement, rapid
-PLAY-to-erase/reuse, unplug during queued PLAY, all five effect slots, or mode
-restoration after the final Press/Release effect. It does not use the retained,
-unlinked `ff-memless`/Stadia path: the ordinary layout-change hook produces
-`FF_HAPTIC`, whereas Stadia requires `FF_RUMBLE`. The targeted test recorded
-above covers that deferred path independently.
+The 2026-07-23 lifecycle pass exercised `hid-haptic.c`,
+`hid-multitouch.c`, asynchronous feature GET_REPORT probe, all five waveform
+slots, same-ID replay, in-place replacement, erase/re-upload, HOST/DEVICE mode
+changes, queued-work unplug, removal, and fresh replay after reconnect. It
+covered numbered interrupt OUT (`cafe:1006`), unnumbered report ID 0 interrupt
+OUT (`cafe:1007`), and unnumbered report ID 0 EP0 fallback (`cafe:1008`).
+The exact diagnostic generator and transport/parser oracles were then removed;
+none of their delays, markers, or fixture identities is product behavior.
+
+This standard HID Haptics coverage is independent of the retained, unlinked
+`ff-memless`/Stadia path. The ordinary layout-change hook queues a virtual
+request for a preloaded `FF_HAPTIC`, whereas Stadia requires `FF_RUMBLE`; the
+separate Stadia result above covers that deferred path.
 
 The post-probe activation step also needs a composite regression: all input
 devices must receive one devmon ADD with final capabilities and no writer may
@@ -598,12 +657,10 @@ without turning this transport test into an artificial queue-overload test.
 The refined run must produce neither `EVDEV_INPUT_DROP` nor a QueueSet assert;
 unplug after the stream must still deliver every removal.
 
-The current `device/haptic-touchpad` descriptor uses numbered output report ID
-6. It therefore does not cover the generic unnumbered-report convention fixed
-in the current host tree: byte zero is transport padding for report ID 0 and
-must not replace the first haptic payload byte. A dedicated fixture should
-exercise both an unnumbered interrupt-OUT report and the EP0 raw-request
-fallback before that path is marked hardware-verified.
+The older `device/haptic-touchpad` descriptor uses only numbered output report
+ID 6. The lifecycle pass hardware-verified the generic unnumbered-report
+convention on both interrupt OUT and EP0 fallback: byte zero is transport
+padding for report ID 0 and does not replace the first haptic payload byte.
 
 Heavier FF drivers should stay deferred for now:
 
@@ -656,6 +713,10 @@ and emulator CDC lines under each item.
     unplug/replug; attach/peak/removal heap and stack values:
   - exact replacement/erase/queued-PLAY cases exercised, if any:
   - verdict:
+- [x] 2026-07-23 haptic lifecycle and Magic Trackpad 2 certification
+  - verdict: repeated hot and cold passes for three haptic output profiles,
+    five-slot lifecycle/unplug/reconnect, and four-interface Trackpad 2
+    mode/native/reconnect; `oom=0`
 - [x] `device/razer-blackwidow`
   - host: Razer raw SET_REPORT completes; macro usage reaches KeyD as
     unsupported code `0x290`.

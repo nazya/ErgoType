@@ -41,12 +41,13 @@ compatibility priority-inheritance mutexes. A targeted `FF_RUMBLE` client
 retested that conversion on 2026-07-22 in a temporary linked/instrumented host
 image: two full cycles separated by reconnect passed timer stop, same-ID
 replay, running-work unplug, and remove. The pair is now unlinked until
-firmware has a product client; the ordinary layout hook emits `FF_HAPTIC` and
-remains a separate active path.
+firmware has a product client; the ordinary layout hook publishes a virtual
+`DEVMON_HAPTIC` request that plays a preloaded `FF_HAPTIC` effect and remains a
+separate active path.
 Upstream `hid-multitouch` plus `hid-haptic` remain linked, and their separate
 two-Pico OUTPUT path has hardware cursor-feedback coverage.
 
-The current dirty tree descends from hardware-verified `usb: complete event-driven enumeration path`; its latest
+The current source descends from hardware-verified `usb: complete event-driven enumeration path`; its latest
 pre-audit executable checkpoint also passed repeated automatic driver,
 long-configuration, input, haptic, and removal cycles. Exact current image
 identity and hardware status live only in
@@ -620,20 +621,26 @@ contains a hypothetical NULL check that no current caller can exercise.
   `hid_add_device()` returns from the complete multitouch/haptic probe. The
   final `EV_FF`/`FF_HAPTIC` state is therefore atomic at the firmware client
   boundary without a READY/update side channel.
-- The temporary manual layout-change hook ignores the startup notification,
-  builds and uploads/plays a HID Haptics Press effect, then erases/stops it on
-  the next change. Effect state is caller-owned; no test helper or field was
-  added to the evdev/KeyD device structures. It emits `FF_HAPTIC`, not
-  `FF_RUMBLE`, so it does not exercise Stadia.
+- The final post-probe evdev snapshot publishes whether that input supports
+  `FF_HAPTIC`. KeyD then owns a small per-device map of five standard HID
+  Haptics effects, uploads them once on ADD, and discards the local IDs on
+  REMOVE; reconnect therefore uploads a fresh set for the new evdev lifetime.
+  The layout hook ignores the startup notification and queues a nonblocking
+  virtual `DEVMON_HAPTIC` Press request through the same devmon path as virtual
+  LEDs. It does not emit `FF_RUMBLE`, so it does not exercise Stadia. Preloading
+  Press/Release retains HOST haptic mode for the attachment. The 2026-07-23
+  lifecycle pass confirmed HOST/DEVICE transitions, replacement, erase, and
+  fresh preload after reconnect; the ordinary layout-change trigger remains
+  the product client rather than the removed test generator.
 - ff-core retains an old definition throughout replacement upload and retains
   an erased definition while the driver callback runs. `hid-haptic` uses those
   upstream contracts to decide HOST/DEVICE ownership; it cancels a slot's
   pending PLAY before rewriting it and drains all effect/STOP work before
   teardown frees its dependencies.
-- Fixture `ErgoType-hid-devices:device/haptic-touchpad` exposes the reports;
-  it coalesces upstream STOP-to-PLAY into PLAY/up, while explicit STOP moves
-  the cursor down. Both UF2s build; enumeration and cursor feedback pass on
-  hardware. Full output-order, unplug, and stack-watermark checks remain.
+- The combined haptic lifecycle fixture hardware-verified all five preloaded
+  effects, replacement, erase/re-upload, HOST/DEVICE transitions, numbered and
+  unnumbered output, queued-work unplug, remove, and reconnect. Runtime results
+  are recorded in `hid-emulator-coverage.md`.
 - Fixture `ErgoType-hid-devices:device/google-stadiaff` passed the retained
   mutex conversion before deferral with a temporary targeted `FF_RUMBLE`
   client, including timer stop, replay, running-work unplug, clean remove, and
@@ -658,6 +665,9 @@ contains a hypothetical NULL check that no current caller can exercise.
   idle decision so later restart cannot notify a returned stack owner. Since
   this predicate may become idle at a nonzero lease count, every lease release
   publishes the upstream-shaped waiter wake.
+  A transient TinyUSB `BUSY` is instead physical endpoint ownership, not
+  `usb_submit_urb()` failure. The accepted head waits for the exact idle or
+  cancel edge without the former firmware-only one-second submit watchdog.
   Rather than embedding about 5 KiB of rings in every live HID, compact nodes
   are allocated on demand with the upstream count limits and a shared 4096-byte
   logical-node budget. Allocation/budget exhaustion is diagnosed and drops the
@@ -672,10 +682,12 @@ contains a hypothetical NULL check that no current caller can exercise.
   payload and counts the reserved byte exactly as `__hid_request()` does.
   Numbered reports, including tested `cafe:1004` report ID 6, are unchanged;
   unnumbered EP0 fallback and interrupt OUT now both remove the zero transport
-  byte before sending the complete payload. A dedicated ID-zero fixture is
-  still required before claiming hardware coverage for this generic bug fix.
-- The emulator confirms the active multitouch `FF_HAPTIC` output path. A real
-  touchpad and the remaining teardown/order checks are not hardware-verified.
+  byte before sending the complete payload. The 2026-07-23 lifecycle pass
+  hardware-verified both ID-zero routes (`cafe:1007` interrupt OUT and
+  `cafe:1008` EP0 fallback).
+- The emulator confirms the active multitouch `FF_HAPTIC` output and teardown
+  paths. A real physical touchpad, accepted mode-SET `-EIO`, unplug during that
+  SET, and high-contact queue saturation are not hardware-verified.
 - The compatibility delayed-work API has no active linked caller and is now an
   explicit compile-time port boundary. The removed split implementation could
   publish `delayed_pending`, lose a synchronous cancel, and then arm its timer;
@@ -1027,6 +1039,10 @@ Verified through hardware checkpoint `usb: complete event-driven enumeration pat
   600-byte long-configuration paths passed their dedicated hardware fixture
 - built and exercised `device/work-input-drivers`, including three repeated
   `cafe:1005` cycles after its injected full-configuration GET failure
+- exercised the haptic/Magic Trackpad 2 paths on 2026-07-23:
+  three haptic transport profiles, five-slot lifecycle, queued-work unplug and
+  reconnect, four Trackpad interfaces, native input, and reconnect all passed
+  in repeated hot- and cold-start runs with `oom=0`
 - `git diff --check`
 - observed two-board haptic cursor feedback
 

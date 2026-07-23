@@ -491,7 +491,7 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
 | `ERR: HID_CTRL_DISPATCH_FAIL` | A completed control GET could not be published to its ordinary report queue or direct probe owner. |
-| `ERR: HID_SUBMIT_TO` / `ERR: HID_XFER_TO` | A request exceeded its bounded timeout. Pre-probe allows one second for local slot admission without consuming a wire attempt, then uses the normal five-second Linux USB GET timeout; other generic messages use their caller-supplied timeout. |
+| `ERR: HID_XFER_TO` | A request which reached TinyUSB exceeded its active wire timeout. Synchronous generic USB messages retain their caller-supplied timeout from accepted queueing; asynchronous `hid_hw_request()` reports wait on the exact EP0/endpoint-idle event and have no firmware-only pre-wire timeout, matching the upstream URB queue. |
 | `ERR: HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` / `HID_DEV_DESC_TYPE` | One full device-descriptor refetch attempt failed, returned fewer than 18 bytes, or returned the wrong descriptor type. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
 | `ERR: HID_EP0_CALLBACK_LOST` | Exact host cancellation reported that it invoked the terminal callback, but the retained async slot did not observe it. |
 | `ERR: HID_EP0_OWNER_MISMATCH` | The cancel helper found a different live daddr + callback + serial owner and deliberately left it untouched. |
@@ -555,35 +555,19 @@ remove. Exact fixture and image identities are recorded in
 
 ### Future firmware FF client hook
 
-The Linux drivers expose force feedback to the firmware client through the
-task-context KeyD/evdev boundary, not through TinyUSB callbacks:
+The Linux drivers expose force feedback through the task-context evdev
+reverse-writer boundary, not through TinyUSB callbacks. The active standard
+HID Haptics policy snapshots `has_haptic` after complete probe, preloads five
+waveforms per KeyD device, and turns a virtual `DEVMON_HAPTIC` request into an
+indexed PLAY. Its upload/play/erase helpers are deliberately scoped to that
+policy rather than exported as a generic FF API.
 
-```c
-struct ff_effect effect = {
-    .type = FF_RUMBLE,
-    .id = -1,
-    .replay = {
-        .length = 300,
-    },
-    .u.rumble = {
-        .strong_magnitude = 0x6000,
-        .weak_magnitude = 0xffff,
-    },
-};
-
-if (device_upload_ff(dev, &effect) == 0) {
-    int effect_id = effect.id;
-
-    device_set_ff(dev, effect_id, 1); /* play; length stops it later */
-    /* A later device_set_ff(dev, effect_id, 0) explicitly stops it. */
-    /* A later device_set_ff(dev, effect_id, 1) replays the same slot. */
-    /* device_erase_ff(dev, effect_id) releases the slot when finished. */
-}
-```
-
-The Stadia run tested upload, play, automatic timer stop, and same-ID replay.
-The explicit stop and erase calls shown above are the available client API,
-but that targeted run did not exercise them.
+The historical Stadia run temporarily added a targeted raw client which
+performed the Linux userspace sequence: upload an `FF_RUMBLE` definition with
+`id = -1`, write `EV_FF` with the returned ID to play or stop it, then erase
+that ID. It tested upload, play, automatic timer stop, and same-ID replay; the
+temporary raw client was removed when Stadia and `ff-memless` returned to the
+deferred set.
 
 The client owns the returned effect ID only for that `struct device` lifetime.
 Discard both on `EV_DEV_REMOVE`; after reconnect, upload again with `id = -1`.
@@ -592,26 +576,30 @@ For `ff-memless`, a nonzero play value is the repeat count and
 asynchronous/fire-and-forget: a successful writer call is not USB completion.
 
 The known Stadia test selected `18d1:9400` directly. A future generic client
-should publish the Linux `EV_FF`/`ffbit` capabilities across the evdev-to-KeyD
-boundary instead of identifying devices by VID/PID or probing with failed
+must extend the current `has_haptic` snapshot to the required Linux `ffbit`
+capabilities instead of identifying devices by VID/PID or probing with failed
 uploads. `FF_RUMBLE` and the standard HID Haptics Page's `FF_HAPTIC` are
 different effect types; use only a capability advertised by that input device.
 The firmware definition of `struct ff_effect` comes from
-`usb_host/linux/include/uapi/linux/input.h`; keep that import in a thin glue
-module rather than spreading Linux UAPI details through KeyD.
+`usb_host/linux/include/uapi/linux/input.h`; keep that dependency in the
+evdev/KeyD FF glue rather than spreading it through unrelated code.
 
 The generic `ff-core`, `hid-haptic`, `hid-multitouch`, evdev
 upload/play/stop/erase boundary, workqueue bridge, and async output transport
 are active for the standard haptic-touchpad path. The two-Pico emulator has
-verified enumeration, pointer input, and haptic cursor feedback. A real
-touchpad, strict output ordering, repeated teardown, and the new exact-control
-completion checkpoint still need hardware coverage.
+verified enumeration, pointer input, haptic cursor feedback, strict five-slot
+output ordering, numbered and report-ID-zero output routes, queued-work unplug,
+repeated teardown, and reconnect. A real physical touchpad and deterministic
+control-failure injection still need hardware coverage.
 
-The current dirty haptic lifecycle step additionally restores DEVICE
-auto-trigger after the final Press/Release replacement or erase, cancels a
-queued PLAY before its slot buffer is rewritten, and drains every PLAY/STOP
-work item before the HID reference and buffers are released. These cases still
-need the next hardware pass before they become a checkpoint.
+The current haptic lifecycle restores DEVICE auto-trigger after the final
+Press/Release replacement or erase, cancels a queued PLAY before its slot
+buffer is rewritten, and drains every PLAY/STOP work item before the HID
+reference and buffers are released. The KeyD policy deliberately keeps its
+preloaded Press/Release definitions for the attachment, so normal operation
+remains in HOST mode until removal. The replacement, erase, output-routing,
+queued-work unplug, teardown, and reconnect paths passed the 2026-07-23
+hardware fixture.
 
 The evdev writer lifetime fix remains active because keyboard LED writes share
 the same KeyD-versus-disconnect ownership boundary even without an FF driver.
