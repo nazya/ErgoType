@@ -2,7 +2,7 @@ name: Build and Test ErgoType Firmware
 
 on:
   push:
-    branches: [main]
+    branches: [main, multi-platform]
   pull_request:
     branches: [main]
 
