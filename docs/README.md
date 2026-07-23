@@ -1,0 +1,17 @@
+# ErgoType Docs
+
+- [Quickstart](quickstart.md)
+- [Config: `config.json`](config-json.md)
+- [Keymap](keymap.md)
+- [Pointing / PMW3360 / PMW3389](pointing.md)
+- [keyd config support](keyd.md)
+- [Keyd OS overlays](keyd-overlays.md)
+- [Layouts and host sync](layouts.md)
+- [Examples](examples.md)
+- [Debugging](debugging.md)
+- [Logging / console IO](logging.md)
+- [Boot modes (MSC vs HID)](modes.md)
+- [Runtime architecture](runtime.md)
+- [Waveshare ESP32-S3-Pico](boards/waveshare-esp32s3-pico.md)
+- [DFRobot FireBeetle 2 ESP32-P4](boards/firebeetle2-esp32p4.md)
+- [WebHID editor](webhid/README.md)

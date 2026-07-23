@@ -1,0 +1,9 @@
+{
+  "led_pins": [3],
+  "gpio_rows": [31, 32],
+  "gpio_cols": [20, 21],
+  "keymap": [
+    ["a", "b"],
+    ["c", "capslock"]
+  ]
+}

@@ -1,0 +1,12 @@
+{
+    "folders": [
+        {
+            "name": "DFRobot FireBeetle 2 ESP32-P4",
+            "path": "platform/esp-idf/esp32p4"
+        },
+        {
+            "name": "Waveshare ESP32-S3-Pico",
+            "path": "platform/esp-idf/esp32s3"
+        }
+    ]
+}

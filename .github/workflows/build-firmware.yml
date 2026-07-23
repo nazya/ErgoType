@@ -1,0 +1,105 @@
+name: Build and Test ErgoType Firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read  # Required by actions/checkout
+
+jobs:
+  build-rp2:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: pico
+            slug: raspberry-pi-pico
+          - board: pico2
+            slug: rp2350
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive  # Clone submodules recursively
+
+    - name: Install Dependencies
+      run: |
+        sudo apt update
+        sudo apt install cmake gcc-arm-none-eabi build-essential -y
+
+    - name: Setup Pico SDK
+      run: |
+        mkdir -p ~/.pico-sdk
+        git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git --branch 2.1.1 ~/.pico-sdk
+    
+    - name: Configure FatFs
+      run: |
+        sed -i 's/^#define FF_USE_STRFUNC.*/#define FF_USE_STRFUNC  1/' ~/.pico-sdk/lib/tinyusb/lib/fatfs/source/ffconf.h
+        sed -i 's/^#define FF_FS_TINY.*/#define FF_FS_TINY       1/' ~/.pico-sdk/lib/tinyusb/lib/fatfs/source/ffconf.h
+        grep -E '^#define (FF_USE_STRFUNC|FF_FS_TINY)' ~/.pico-sdk/lib/tinyusb/lib/fatfs/source/ffconf.h
+
+    - name: Configure Pico SDK Path
+      run: echo "PICO_SDK_PATH=$HOME/.pico-sdk" >> $GITHUB_ENV
+
+    - name: Build Project
+      env:
+        PICO_SDK_PATH: ${{ env.PICO_SDK_PATH }}
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DPICO_BOARD=${{ matrix.board }}
+        make -j$(nproc)
+
+    - name: Package Firmware Binary
+      run: |
+        cp build/ErgoType.uf2 build/ErgoType-${{ matrix.slug }}.uf2
+        test -f build/ErgoType-${{ matrix.slug }}.uf2
+
+    - name: Upload Firmware Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.slug }}
+        path: build/ErgoType-${{ matrix.slug }}.uf2
+
+  build-esp:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: esp32s3
+            slug: waveshare-esp32s3-pico
+          - target: esp32p4
+            slug: dfrobot-firebeetle2-esp32p4
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Build ${{ matrix.target }}
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v6.0.2
+        target: ${{ matrix.target }}
+        path: .
+        command: platform/esp-idf/build-firmware.sh ${{ matrix.target }}
+
+    - name: Verify Firmware Binaries
+      run: |
+        test -f platform/esp-idf/${{ matrix.target }}/firmware/ErgoType-${{ matrix.slug }}-full-0x000000.bin
+        test -f platform/esp-idf/${{ matrix.target }}/firmware/ErgoType-${{ matrix.slug }}-app-0x010000.bin
+
+    - name: Upload Firmware Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.slug }}
+        path: |
+          platform/esp-idf/${{ matrix.target }}/firmware/ErgoType-${{ matrix.slug }}-full-0x000000.bin
+          platform/esp-idf/${{ matrix.target }}/firmware/ErgoType-${{ matrix.slug }}-app-0x010000.bin

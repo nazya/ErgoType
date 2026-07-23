@@ -1,0 +1,8 @@
+build/
+build-*/
+managed_components/
+sdkconfig
+dependencies.lock
+!platform/esp-idf/*/dependencies.lock
+platform/esp-idf/*/firmware/
+eim_config.toml

@@ -1,0 +1,46 @@
+# Runtime architecture
+
+This page describes the high-level runtime wiring (tasks + queues) as implemented in this repo.
+
+## Main tasks (startup)
+
+`app_start()` performs platform initialization and starts `app_task` on core
+0. The RP2 entrypoint then starts the FreeRTOS scheduler; ESP-IDF calls its
+entrypoint with the scheduler already running. `app_task`:
+- parses `config.json` (`parse()` in `jconfig.c`)
+- resolves boot mode (MSC vs HID)
+- starts the USB device task (`platform_usb_device_task`)
+- in HID mode, starts keyboard + keyd tasks
+- optionally starts pointing task and binds motion IRQs
+- optionally starts LED tasks
+
+## USB device loop
+
+The RP2 backend in `platform/rp2/usb_tinyusb.c` and the ESP-IDF backend in
+`platform/esp-idf/common/usb_tinyusb.c` initialize their respective USB PHY and
+then run the same device loop:
+- `tud_task()` (TinyUSB device processing)
+- `platform_cdc_poll()` (flushes buffered log output to CDC when host is connected)
+
+## Keyboard input pipeline (matrix → keyd → HID)
+
+In HID mode:
+
+1. `keyscan_task` (`keyscan.c`) scans the matrix periodically and sends `struct device_event` into `input_event_queue`.
+2. `keyd` event loop (`keyd/port/evloop.c`) receives `device_event` entries and feeds them into the keyd engine (`kbd_process_events` in `keyd/port/keyboard.c`).
+3. keyd outputs actions via the vkbd backend (`keyd/port/vkbd/vkbd.c`), which enqueues `key_event_t` into `vkbd_event_queue`.
+4. `vkbd_hid_task` (`keyd/port/vkbd/tusb_hid.c`) consumes `vkbd_event_queue` and sends HID reports through `platform/hid.h`.
+
+## Pointing pipeline (PMW33xx → keyd → HID)
+
+If `drivers.pmw3360` and/or `drivers.pmw3389` are configured:
+
+- `pointing_device_task` (`pointing/pointer.c`) initializes SPI buses + sensors.
+- Each sensor’s `irq` pin is wired to the shared GPIO IRQ callback (`pointing_motion_irq_init()`).
+- On motion IRQ, the ISR notifies the pointing task; the task reads deltas and sends `DEV_MOUSE_MOVE` or `DEV_MOUSE_SCROLL` into `input_event_queue`.
+
+keyd consumes the same input queue as matrix events, so keyd scroll mode can affect pointing motion before events reach the HID backend.
+
+## Logging / console output
+
+See [`docs/logging.md`](logging.md).

@@ -1,0 +1,9 @@
+{
+  "ws2812_pin": 21,
+  "gpio_rows": [1, 2],
+  "gpio_cols": [4, 5],
+  "keymap": [
+    ["a", "b"],
+    ["c", "capslock"]
+  ]
+}
