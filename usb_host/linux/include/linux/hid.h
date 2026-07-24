@@ -1063,6 +1063,13 @@ static inline const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const 
 						 unsigned int *size) { return rdesc; }
 int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, u32 size, int interrupt);
 int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, size_t bufsize, u32 size, int interrupt);
+/*
+ * Firmware probe activation may need a driver's raw_event response matcher
+ * before ordinary input clients are published. This port-only entry performs
+ * the same validated ingress but deliberately stops before field/input parsing.
+ */
+int hid_safe_raw_event_only(struct hid_device *hid, enum hid_report_type type,
+			    u8 *data, size_t bufsize, u32 size, int interrupt);
 /* Port control completions may re-enter while their task already owns driver_input_lock. */
 int hid_safe_input_report_locked(struct hid_device *hid, enum hid_report_type type,
 				 u8 *data, size_t bufsize, u32 size, int interrupt);

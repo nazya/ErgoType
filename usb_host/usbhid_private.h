@@ -69,6 +69,12 @@ struct usbhid_device {
 	// FreeRTOS notifications are wake edges, while this intrusive list keeps
 	// every concurrent hid_hw_wait()/teardown predicate owner durable.
 	struct usbhid_io_waiter *io_waiters;
+	/*
+	 * Upstream USB core wakes a driver's protocol wait when disconnect makes
+	 * its answer impossible. The first HID++ slice has one send_mutex-
+	 * serialized wait queue, bound to this exact interface generation.
+	 */
+	wait_queue_head_t *protocol_wait;
 	struct usbhid_report_request *ctrl_head;
 	struct usbhid_report_request *ctrl_tail;
 	struct usbhid_report_request *out_head;

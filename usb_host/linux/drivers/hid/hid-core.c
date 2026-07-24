@@ -2329,9 +2329,15 @@ EXPORT_SYMBOL_GPL(hid_report_raw_event);
  * Upstream Linux full input-report entry with Linux driver lock/BPF/debugfs
  * hooks skipped where this port has no matching subsystem.
  */
+// static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
+// 			      u8 *data, size_t bufsize, u32 size, int interrupt, u64 source,
+// 			      bool from_bpf, bool lock_already_taken)
+// Firmware adds a protocol-only ingress that runs the driver's raw_event
+// matcher during probe without publishing ordinary fields or input events.
 static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 			      u8 *data, size_t bufsize, u32 size, int interrupt, u64 source,
-			      bool from_bpf, bool lock_already_taken)
+			      bool from_bpf, bool lock_already_taken,
+			      bool raw_event_only)
 {
 	struct hid_report_enum *report_enum;
 	// struct hid_driver *hdrv;
@@ -2388,7 +2394,12 @@ static int __hid_input_report(struct hid_device *hid, enum hid_report_type type,
 			goto unlock;
 	}
 
-	ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
+	// ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
+	// Protocol-only ingress stops after the driver raw_event matcher; ordinary
+	// ingress retains upstream field parsing and input publication.
+	if (!raw_event_only)
+		ret = hid_report_raw_event(hid, type, data, bufsize, size,
+					   interrupt);
 
 unlock:
 	if (!lock_already_taken)
@@ -2411,9 +2422,14 @@ unlock:
 int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, u32 size,
 		     int interrupt)
 {
+	// return __hid_input_report(hid, type, data, size, size, interrupt, 0,
+	// 			  false, /* from_bpf */
+	// 			  false /* lock_already_taken */);
+	// Ordinary ingress explicitly disables the firmware protocol-only gate.
 	return __hid_input_report(hid, type, data, size, size, interrupt, 0,
 				  false, /* from_bpf */
-				  false /* lock_already_taken */);
+				  false, /* lock_already_taken */
+				  false /* raw_event_only */);
 }
 EXPORT_SYMBOL_GPL(hid_input_report);
 
@@ -2435,16 +2451,38 @@ EXPORT_SYMBOL_GPL(hid_input_report);
 int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data,
 			  size_t bufsize, u32 size, int interrupt)
 {
+	// return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
+	// 			  false, /* from_bpf */
+	// 			  false /* lock_already_taken */);
+	// Ordinary safe ingress explicitly disables the protocol-only gate.
 	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
 				  false, /* from_bpf */
-				  false /* lock_already_taken */);
+				  false, /* lock_already_taken */
+				  false /* raw_event_only */);
 }
 EXPORT_SYMBOL_GPL(hid_safe_input_report);
 
 /*
+ * Upstream Linux: no separate raw-event-only ingress. Firmware keeps ordinary
+ * input behind final evdev activation, while protocol drivers using
+ * hid_device_io_start() must still match interrupt replies during probe.
+ */
+int hid_safe_raw_event_only(struct hid_device *hid,
+			    enum hid_report_type type, u8 *data,
+			    size_t bufsize, u32 size, int interrupt)
+{
+	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
+				  false, /* from_bpf */
+				  false, /* lock_already_taken */
+				  true /* raw_event_only */);
+}
+EXPORT_SYMBOL_GPL(hid_safe_raw_event_only);
+
+/*
  * Port-only control completion entry. Probe-time GET_REPORT is consumed by
  * the lifecycle task which already owns driver_input_lock; interrupt reports
- * must remain gated until that probe finishes.
+ * use the raw-event-only entry above when a protocol driver deliberately
+ * releases the lock with hid_device_io_start().
  */
 int hid_safe_input_report_locked(struct hid_device *hid,
 				 enum hid_report_type type, u8 *data,
@@ -2455,7 +2493,8 @@ int hid_safe_input_report_locked(struct hid_device *hid,
 
 	return __hid_input_report(hid, type, data, bufsize, size, interrupt, 0,
 				  false, /* from_bpf */
-				  true /* lock_already_taken */);
+				  true, /* lock_already_taken */
+				  false /* raw_event_only */);
 }
 
 bool hid_match_one_id(const struct hid_device *hdev,

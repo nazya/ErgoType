@@ -1680,6 +1680,8 @@ void usbhid_report_stop(struct hid_device *hid)
 
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
+	if (usbhid->protocol_wait)
+		hid_compat_waitqueue_cancel(usbhid->protocol_wait);
 	usbhid->report_wanted = false;
 	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;
@@ -1707,6 +1709,8 @@ void usbhid_report_unplug(struct hid_device *hid)
 
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
+	if (usbhid->protocol_wait)
+		hid_compat_waitqueue_cancel(usbhid->protocol_wait);
 	usbhid->report_wanted = false;
 	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;
@@ -2266,6 +2270,7 @@ void usbhid_report_task(void *pvParameters)
 		bool io_error = false;
 		bool payload_valid;
 		bool completion_owned;
+		bool protocol_only;
 		bool status_current;
 		bool transfer_failed;
 		bool process;
@@ -2340,6 +2345,14 @@ void usbhid_report_task(void *pvParameters)
 		 */
 		process = status_current && usbhid->driver_ready;
 		/*
+		 * hid_device_io_start() lets an upstream protocol driver receive
+		 * replies during probe. Keep ordinary field/input parsing behind
+		 * driver_ready, but allow the one bound protocol wait to enter only
+		 * its validated raw_event matcher.
+		 */
+		protocol_only = status_current && !usbhid->driver_ready &&
+				usbhid->protocol_wait != NULL;
+		/*
 		 * Previous callback-side port:
 		 *     protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
 		 *     if (protocol_mode == HID_PROTOCOL_BOOT) {
@@ -2373,8 +2386,10 @@ void usbhid_report_task(void *pvParameters)
 		// 		break;
 		// The completion snapshot mirrors upstream's HID_OPENED and
 		// HID_RESUME_RUNNING tests without racing deferred parsing against open.
-		if (!event.opened_at_completion)
+		if (!event.opened_at_completion) {
 			process = false;
+			protocol_only = false;
+		}
 		// 	usbhid_mark_busy(usbhid);
 		// Runtime-PM busy tracking is absent at this firmware boundary.
 		hid_transport_unlock();
@@ -2395,6 +2410,13 @@ void usbhid_report_task(void *pvParameters)
 						HID_INPUT_REPORT,
 						event.data, event.bufsize,
 						event.len, 1);
+		else if (protocol_only &&
+			 event.xfer_result == XFER_RESULT_SUCCESS &&
+			 payload_valid)
+			(void)hid_safe_raw_event_only(event.hid,
+						     HID_INPUT_REPORT,
+						     event.data, event.bufsize,
+						     event.len, 1);
 		// 		/*
 		// 		 * autosuspend refused while keys are pressed
 		// 		 * because most keyboards don't wake up when

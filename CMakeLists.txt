@@ -725,6 +725,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # USB-only Magic Mouse 2 / Trackpad 2; Bluetooth and legacy IDs remain
         # visibly disabled beside the upstream match table in the source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-magicmouse.c
+        # Direct USB HID++ request/reply checkpoint. The source retains the
+        # upstream capability and receiver paths behind an explicit stage gate.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-hidpp.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c

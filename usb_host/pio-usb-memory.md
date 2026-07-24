@@ -61,6 +61,56 @@ scratch X / core-1 gap        1260 B to 0x20040800
 hardware verdict              passed 2026-07-23; stable removal heap, oom=0
 ```
 
+The diagnostic direct-HID++ request/reply checkpoint adds one flash-resident
+driver descriptor and one 48-byte builtin-driver runtime block. It builds as:
+
+```text
+text/data/bss                 517976 / 788 / 245088 B
+__bss_end__                   0x2003fd68
+main-bank headroom            664 B to 0x20040000
+scratch X                     788 B (0x20040000..0x20040314)
+scratch X / core-1 gap        1260 B to 0x20040800
+candidate UF2 SHA-256         9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902
+hardware verdict              passed twice 2026-07-24; hot lifecycle, oom=0
+```
+
+Relative to the current verified checkpoint, this is `+3224 B` text,
+unchanged `.data`, and `+48 B` `.bss`; main-bank headroom decreases by exactly
+48 bytes. `sizeof(struct hid_device)` remains 608 bytes. Adding the
+generation-bound protocol-wait pointer changes `struct usbhid_device` from 216
+to 220 bytes and its heap_4 block from 224 to 232 bytes, an 8-byte live cost
+for each HID interface.
+
+A matching HID++ interface additionally owns one 264-byte `hidpp_device`
+inside a 288-byte devres/heap_4 block and one 96-byte FreeRTOS mutex block:
+384 bytes persistent. Each RAP or FAP wrapper uses one sequential 64-byte
+message allocation, a 72-byte heap_4 block, while its response remains on the
+work-task stack. BUSY retries reuse that allocation, and input reports allocate
+nothing in the HID++ matcher. Hardware acceptance still requires identical
+post-removal `free`/`largest`/`blocks` plateaus across repeated cycles,
+`oom=0`, and stable nonzero task stack watermarks; the 384-word `hid-work`
+stack must retain at least 64 words after the full timeout/reconnect profile.
+
+Removing the fixed diagnostic strings, BUSY trace state, and otherwise unused
+RAP/FAP probe produces the production-clean pair:
+
+```text
+host text/data/bss            517376 / 788 / 245088 B
+host __bss_end__              0x2003fd68
+host main-bank headroom       664 B to 0x20040000
+host UF2 SHA-256              a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b
+emulator text/data/bss        60964 / 0 / 254960 B
+emulator UF2 SHA-256          31aa4485df67432e0d146a2d8fda3b46e93d2d4b70daab7e42e8016408a40149
+hardware verdict              accepted post-test cleanup; no separate run
+```
+
+This removes 600 bytes of host text and changes no host `.data`, `.bss`,
+structure size, or dynamic allocation. Protocol detection still uses the same
+72-byte transient message block and the same generation-bound wait/cancel
+bridge. The exact diagnostic pair above remains the hardware evidence; the
+user explicitly accepted the reproducibly built cleaned pair without another
+hardware run.
+
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
 priority-inheritance mutexes. It builds as:

@@ -662,13 +662,101 @@ ID 6. The lifecycle pass hardware-verified the generic unnumbered-report
 convention on both interrupt OUT and EP0 fallback: byte zero is transport
 padding for report ID 0 and does not replace the first haptic payload byte.
 
+## Direct HID++ Request/Reply Diagnostic Checkpoint
+
+Host candidate
+`9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902`
+and emulator branch `device/logitech-hidpp-direct`, UF2
+`2a0ff72e47fb4a8bff7e46a2550b69b5f58f0be3bb8ee91eb2e4d6d837a8ca4b`,
+have reproducible clean-build and descriptor coverage. The emulator builds as
+`text/data/bss = 61804 / 0 / 254960 B`. Two exact-pair hardware runs passed on
+2026-07-24.
+
+The automatic fixture exposes the selected upstream direct identity
+`046d:c08d` with HID++ reports `0x10` and `0x11`, then advances profiles by its
+own D+ disconnect/reconnect sequence:
+
+1. HID++ 1.0: answer the protocol ping with the expected INVALID_SUBID status,
+   then answer the read-only `GET_REGISTER(HIDPP_REG_FEATURES)` request. Host
+   must emit `HIDPP10_REPLY_OK`, ordinary pointer input, and `f1`.
+2. HID++ 2.0: answer the protocol ping, return BUSY once for the ordinary root
+   feature query, then return its successful response. Host must emit the
+   single-slot-safe combined marker `HIDPP_BUSY_REPLY_OK`, pointer input, and
+   `f2`.
+3. Protocol status: answer the ping with a non-version protocol status. Host
+   must emit `HIDPP_PROTOCOL_STATUS`, pointer input, and `f3`, not either
+   reply-success marker.
+4. Timeout: accept the request but send no response. The pinned upstream loop
+   performs three five-second attempts; host must eventually emit
+   `HIDPP_REPLY_TIMEOUT`, pointer input, and `f4`, and must not emit
+   `HIDPP_BUSY_REPLY_OK`.
+5. Pending-response disconnect: turn D+ off only after receiving the request,
+   so the SET_REPORT has completed but its response is pending. Host must emit
+   `HIDPP_REPLY_CANCEL` promptly. A fresh generation must then reconnect and
+   complete with `HIDPP20_REPLY_OK`, pointer input, and `f5`.
+6. Perform an additional HID++ 1.0 hot cycle with `HIDPP10_REPLY_OK`, pointer
+   input, and `f6`.
+7. Finish attached as HID++ 2.0 with `HIDPP20_REPLY_OK`, pointer input, and
+   `f10`. Three `f12` reports instead mean the emulator stopped before the
+   terminal profile.
+
+Both runs completed every marker and input step, reached `f10`, and emitted no
+`f12`. The first returned to
+`free/largest/blocks = 60832/53384/4` after each of its six removals. The
+second kept `free=60864` and `blocks=8` after all six removals; its largest
+block grew from the first warm-up snapshot to `52960` and then stayed there.
+Both reported `oom=0`. Minimum stack watermarks were 265 words for TinyUSB,
+191 for HID work, 348 for the timer, 224 for lifecycle, 860 or 871 for report,
+and 658 for KeyD. The separate duplicate-GPIO validation was intentional and
+is excluded from this USB result.
+
+Run the full sequence from cold boot through its seven automatic hot reconnects.
+After each complete detach, `free`, `largest`, and `blocks` must return
+to the first detached plateau with no monotonic loss and `oom=0`; record the
+minimum-ever heap separately. Every host task watermark must remain nonzero and
+stabilize after the first full cycle, with at least 64 words left in
+`hid-work`. Ordinary pointer input after each successful protocol profile must
+still reach the existing input boundary. Battery, identity publication,
+high-resolution wheel, extra buttons, touchpad behavior, HIDRAW, receiver
+children, Bluetooth, FF, and delayed initialization are not covered by this
+candidate.
+
+### Production-clean request/reply post-test cleanup
+
+The diagnostic-only host markers, BUSY marker state, and unused RAP/FAP probe
+are absent from host UF2
+`a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`.
+Matching emulator UF2
+`31aa4485df67432e0d146a2d8fda3b46e93d2d4b70daab7e42e8016408a40149`
+checks the exact requests internally and reports progress through the existing
+host key log:
+
+1. `f1`: HID++ 1.0 protocol detection.
+2. `f2`: short BUSY response to the protocol ping, a second ping, then HID++
+   2.0 success.
+3. `f3`: non-version protocol status.
+4. `f4`: three unanswered five-second attempts.
+5. Automatic D+ removal after the next ping's completed SET_REPORT, followed
+   by a fresh-generation HID++ 2.0 success and `f5`.
+6. `f6`: an additional HID++ 1.0 hot reconnect.
+7. `f10`: the final HID++ 2.0 generation remains attached.
+
+Three `f12` reports remain the distinct incomplete-sequence signal. This exact
+cleaned pair has reproducible build/descriptor coverage. The user accepted it
+without another hardware run because the cleanup removed temporary markers,
+trace state, otherwise unused RAP/FAP traffic, and the matching emulator delay
+without changing the host wait/reply/cancel implementation or memory
+structures. The hardware verdict remains attached only to the exact diagnostic
+pair above; the production-clean SHA pair is recorded as accepted post-test
+cleanup, not as a separate hardware run.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
 - `hid-playstation.c`
 - `hid-nintendo.c`
 - `hid-lg.c` / `hid-lg4ff.c`
-- `hid-logitech-hidpp.c`
+- the broader FF/capability paths in `hid-logitech-hidpp.c`
 
 Those drivers mix FF with larger request/response protocols, LEDs, sysfs,
 device state, or controller-specific workers.
@@ -697,6 +785,28 @@ fixup, mapping, mapped, event, simple probe, or raw event.
 Use this checklist when logs come back from hardware. Paste the relevant host
 and emulator CDC lines under each item.
 
+- [x] production-clean direct HID++ post-test cleanup
+  `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
+  with emulator
+  `31aa4485df67432e0d146a2d8fda3b46e93d2d4b70daab7e42e8016408a40149`
+  - build/descriptor result: reproducible; host
+    `text/data/bss=517376/788/245088`, emulator
+    `60964/0/254960`
+  - hardware basis: the exact diagnostic pair below completed the same
+    wait/reply/BUSY/timeout/cancel/reconnect implementation twice
+  - verdict: accepted by the user without a separate post-cleanup hardware run;
+    do not relabel these exact production SHA values as directly flashed
+- [x] direct HID++ request/reply host
+  `9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902`
+  - emulator branch `device/logitech-hidpp-direct`, UF2
+    `2a0ff72e47fb4a8bff7e46a2550b69b5f58f0be3bb8ee91eb2e4d6d837a8ca4b`:
+  - host: HID++ 1.0, HID++ 2.0, BUSY retry, protocol status, timeout,
+    pending-response D+ disconnect, fresh-generation reconnect, and ordinary
+    pointer input; terminal `f10` and no triple `f12`: complete twice
+  - post-detach `free` / `largest` / `blocks`, minimum heap, `oom`, and every
+    task stack watermark for the cold boot plus seven hot reconnects: stable
+    values recorded above, `oom=0`, HID work minimum 191 words
+  - verdict: passed 2026-07-24; diagnostic layer is removed before production
 - [ ] superseded unverified host
   `0a7ff16341260c7d78300989142b30fecb30b8314c0b6316f2a7a353a3586ba7`
   with `device/work-input-drivers`

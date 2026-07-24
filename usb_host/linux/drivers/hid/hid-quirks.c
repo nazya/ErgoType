@@ -540,7 +540,11 @@ static const struct hid_device_id hid_have_special_driver[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_SPACETRAVELLER) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_SPACENAVIGATOR) },
 #endif
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP)
+// #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP)
+// The first firmware HID++ stage intentionally does not bind the G920; do not
+// suppress its generic fallback until that upstream table entry is enabled.
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP) && \
+	!IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G920_WHEEL) },
 #endif
 #if IS_ENABLED(CONFIG_HID_MAGICMOUSE)

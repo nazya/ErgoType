@@ -4313,6 +4313,48 @@ void usbhid_wait_wake_locked(struct hid_device *hid)
 	}
 }
 
+/*
+ * Upstream Linux: USB disconnect wakes protocol wait queues through the
+ * device/driver lifetime machinery. Firmware binds the one HID++ waiter to the
+ * exact TinyUSB interface generation so callback-side stop can publish an
+ * allocation-free cancellation edge before lifecycle teardown.
+ */
+int hid_compat_waitqueue_bind(wait_queue_head_t *wait, struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	int ret = 0;
+
+	hid_transport_lock();
+	if (usbhid->transport_stopping) {
+		ret = -ENODEV;
+	} else {
+		usbhid->protocol_wait = wait;
+	}
+	hid_transport_unlock();
+	return ret;
+}
+
+void hid_compat_waitqueue_unbind(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	hid_transport_lock();
+	usbhid->protocol_wait = NULL;
+	hid_transport_unlock();
+}
+
+void hid_compat_waitqueue_state_lock(wait_queue_head_t *wait)
+{
+	(void)wait;
+	hid_transport_lock();
+}
+
+void hid_compat_waitqueue_state_unlock(wait_queue_head_t *wait)
+{
+	(void)wait;
+	hid_transport_unlock();
+}
+
 static void usbhid_waiter_link_locked(struct usbhid_device *usbhid,
 				     struct usbhid_io_waiter *waiter)
 {

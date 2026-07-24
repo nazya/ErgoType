@@ -476,6 +476,33 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-24: the direct HID++ 1.0/2.0 diagnostic checkpoint used exact host
+  UF2 SHA256
+  `9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902`
+  and emulator UF2 SHA256
+  `2a0ff72e47fb4a8bff7e46a2550b69b5f58f0be3bb8ee91eb2e4d6d837a8ca4b`.
+  Two complete runs covered the ordinary RAP/FAP reply, BUSY retry, protocol
+  status, three-attempt timeout, pending-response disconnect, fresh-generation
+  reconnect, and generic input through terminal `f10`; neither emitted the
+  `f12` fallback. The first run returned to
+  `free/largest/blocks=60832/53384/4` after every removal. The second kept
+  `free=60864` and `blocks=8`, with `largest=52960` stable after its first
+  warm-up removal. Both had `oom=0`; the minimum host-work watermark was 191
+  words. The reported duplicate-GPIO validation was intentional and outside
+  this USB result.
+- 2026-07-24: removing that checkpoint's fixed HID++ trace strings, BUSY trace
+  state, and otherwise unused RAP/FAP probe produces production-clean host UF2
+  SHA256
+  `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
+  (`text=517376`, `data=788`, `bss=245088`). Matching emulator UF2 SHA256
+  `31aa4485df67432e0d146a2d8fda3b46e93d2d4b70daab7e42e8016408a40149`
+  validates the remaining protocol ping, BUSY retry on that ping, status,
+  timeout, cancel, reconnect, and input sequence internally. The host CDC
+  criterion is now only `f1`, `f2`, `f3`, `f4`, `f5`, `f6`, then terminal
+  `f10`. The user accepted this reproducibly built pair as post-test cleanup
+  without another hardware run: the exact hardware evidence remains attached
+  to the diagnostic pair above, while the wait/reply/cancel implementation,
+  `.data`, `.bss`, structure sizes, and dynamic allocation are unchanged.
 - 2026-07-23: repeated hot-plug and cold-start runs completed all three haptic
   transport profiles: numbered interrupt OUT,
   unnumbered report ID 0 interrupt OUT, and unnumbered report ID 0 EP0
@@ -652,6 +679,14 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `hid_hw_wait()`, including returned feature data during probe. The bounded
   firmware queue still rejects overload instead of attempting Linux's much
   larger control/output FIFOs.
+- The build-only direct-HID++ candidate additionally uses synchronous
+  `hid_hw_raw_request()` plus `.raw_event` response matching. Its one
+  send-mutex-serialized waiter has a durable predicate, timeout, report-task
+  wake, and exact-generation disconnect cancellation. Probe replies take the
+  port-only raw-event-only ingress while ordinary input stays behind final
+  activation. Only direct USB `046d:c08d` is selected; broader HID++, HIDRAW,
+  battery, DJ, FF, and delayed-init work remains outside this checkpoint until
+  the automatic hardware run recorded in `hid-emulator-coverage.md`.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of

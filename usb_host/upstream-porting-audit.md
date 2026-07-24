@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-07-22
+Updated: 2026-07-24
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -161,11 +161,13 @@ Each linked Linux-derived file was then compared with `git diff --no-index`
 using the function order and exact statements, not only compiled behavior.
 Every active hunk was classified as a missing-kernel-subsystem adapter, an
 RP2040 memory policy, a FreeRTOS ownership primitive, or an explicitly named
-generic bug fix. The original Linux statement/block is retained beside every
-active replacement. The independent lifetime pass also followed each mutex,
-waiter, task notification, callback publisher, and disconnect owner through
-its final release. No unexplained active-path hunk or P0/P1 issue remains in
-the audited scope.
+generic bug fix. Each active replacement retains the original Linux
+statement/block beside it; compile-time capability gates retain the exact
+upstream block in their adjacent inactive branch and state the stage boundary
+locally. The independent lifetime pass also followed each mutex, waiter, task
+notification, callback publisher, and disconnect owner through its final
+release. No unexplained active-path hunk or P0/P1 issue remains in the audited
+scope.
 
 The inactive files were also compared, rather than inferred safe merely because
 CMake omits them. Most differ only by an adjacent, explained immutable driver
@@ -232,9 +234,10 @@ contract remains visible.
 | `ff-memless.c` | Its two upstream `event_lock` scopes use the per-input task-context PI mutex; the original `guard(spinlock_irq*)` lines remain adjacent. |
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
-| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, explicit hidraw omission, and mutable runtime state beside flash-resident driver descriptors. |
+| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, explicit hidraw omission, raw-event-only protocol ingress before final evdev activation, and mutable runtime state beside flash-resident driver descriptors. |
 | `input.c` | Task-context input event mutex, firmware devres/action ownership, direct object release, and Linux presentation/PM/userspace code retained exactly under `#if 0` at its omitted runtime boundary. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
+| `hid-logitech-hidpp.c` | Full pinned source with a direct-request/reply stage gate, sparse report-ID lookup, cross-task response-state lock, exact-interface wait cancellation, one direct USB ID, and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. |
 
@@ -283,6 +286,7 @@ upstream commit IDs.
 | device-side virtual HID | queue plus completion/reset notification bits | Ready and submit execute in the TinyUSB device owner; no readiness polling. |
 | CDC throttle | bounded two-tick retry loop, with a one-time 1024ms ceiling and a later 16-tick ceiling | Intentional device-side logger policy retained from the hardware-tested baseline; it is outside host HID lifecycle/lock acquisition. |
 | `down_trylock()` in `hid-core.c` | one nonblocking semaphore attempt | Exact upstream parser gate, with no retry loop. |
+| direct HID++ response | one send-mutex-serialized waiter, durable response predicate, notification index 1, and absolute five-second attempt deadline | Register-before-test is preserved; report-task response and exact-interface disconnect are durable wake conditions. No callback waits or report-time allocation. This reduced wait contract is valid only for the linked single waiter. |
 | post-abort HCD retirement | one global EP0 cancel transaction plus exact cancel-time FIFO prefix; one-shot non-control fence | No tick/SOF/stage-count polling. Current proof relies on PIO alarm IRQ and HCD abort sharing CORE1; ESP/DWC2 needs an explicit backend cancel-completion edge. |
 
 WebHID's zero-time FAT mutex attempts intentionally return busy from a USB
@@ -294,7 +298,7 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 19 vendor driver descriptor translation units across 18 enabled
+- CMake links 20 vendor driver descriptor translation units across 19 enabled
   vendor `CONFIG_HID_*` families (the compound Holtek config contributes
   keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
   are also linked. Stadia has no reduced config gate and is excluded simply by
@@ -310,6 +314,18 @@ it contains no callback, logging, allocation, or wait.
   visible beside the explained firmware boundary. Full 15-contact behavior is
   not claimed because the later evdev-to-KeyD queue remains a separate bounded
   consumer.
+- The build-only direct-HID++ candidate imports pinned
+  `hid-logitech-hidpp.c` whole but selects only upstream USB ID `046d:c08d`.
+  Its reachable driver hooks are `.probe`, `.remove`, and `.raw_event`; the
+  active request path retains upstream protocol detection, RAP/FAP builders,
+  answer/error matching, send mutex, BUSY retry, and work item. A port-only
+  raw-event-only ingress reuses `hid-core` validation and `driver_input_lock`
+  while stopping before field/input parsing, so `hid_device_io_start()` can
+  receive probe replies without bypassing final evdev activation. Battery,
+  identity publication, sysfs, delayed work, FF, receiver children, wheel,
+  vendor-key, and touchpad paths are compiled out of reach behind the explicit
+  stage gate. This has build/map coverage only; exact-artifact hardware status
+  belongs in `hid-emulator-coverage.md`.
 - `hid-haptic.h` is byte-for-byte baseline. `hid-multitouch.c` retains three
   adjacent, explained `jiffies` member-token substitutions and imports upstream
   `8813b061`: active contacts use a `maxcontacts`-sized bitmap and the RUNNING
@@ -768,12 +784,15 @@ contains a hypothetical NULL check that no current caller can exercise.
   uses it: all firmware control transfers provide a completion callback and are
   owned by the host task plus a waiting non-host task. A future direct caller
   must not treat the null callback form as part of this asynchronous contract.
-- Reduced compatibility `wait_event*()` and spinlock operations now fail a
-  future caller at compile time. Their type/initializer shells remain because
-  active HID objects contain dormant Linux members, but no linked path receives
-  fake waiter-list or mutual-exclusion semantics. A future driver must add a
-  real wait-list or explicit task-context ownership boundary before removing
-  either gate.
+- Reduced compatibility `wait_event_timeout()` implements only the linked
+  HID++ single-waiter contract while retaining Linux's `0`/positive return
+  values: `send_mutex` serializes the waiter, task registration precedes the
+  durable predicate test, and notification index 1 is a wake edge. Exact-bound
+  interface disconnect is a separate durable HID++ condition which the driver
+  maps to `-ENODEV` after the standard wait returns. Spinlock operations and
+  unsupported interruptible wait forms remain compile-gated. A second or
+  concurrent waiter requires a real intrusive waiter list; it must not inherit
+  this reduced contract silently.
 - Compatibility `BUG_ON(expression)` evaluates its condition exactly once into
   a local boolean and passes only that identifier to `configASSERT()`. There is
   no extra silent busy-loop or release-build fail-stop policy. Its current
@@ -843,8 +862,10 @@ contains a hypothetical NULL check that no current caller can exercise.
   longer drops completion:
   success performs the host DATA0 reset and wire failure keeps Linux's device-
   reset decision, while only interrupt-IN rearm depends on the open state.
-  Generic URBs, synchronous interrupt-IN, unaudited hooks,
-  hidraw/hiddev runtime, and PIDFF remain deferred.
+  Generic URBs, synchronous interrupt-IN, unaudited hooks, hidraw/hiddev
+  runtime, and PIDFF remain deferred. The linked direct-HID++ slice uses only
+  the already implemented synchronous raw SET_REPORT plus continuous
+  interrupt-IN response path.
 - `usbhid_start()` again computes the exact upstream per-device `bufsize` from
   INPUT, OUTPUT, and FEATURE reports. GET_REPORT uses that rounded EP0 limit and
   writes directly into completion-owned parser storage. Every asynchronous SET
@@ -1048,10 +1069,14 @@ Verified through hardware checkpoint `usb: complete event-driven enumeration pat
 
 Current checkpoint audit:
 
-- re-diffed all 29 linked Linux-derived C translation units against clean
-  `83f14548` plus the named `8813b061` multitouch fix. Twenty-eight retain an
-  upstream counterpart; `hid-drivers.c` is the documented firmware-only linker
-  registry. No unexplained active-path replacement or P0/P1 divergence remains;
+- retained the prior whole-file audit and diffed the newly linked
+  `hid-logitech-hidpp.c` plus its narrow `hid-core.c` ingress change against
+  clean `83f14548`. There are now 30 linked Linux-derived C translation units;
+  twenty-nine retain an upstream counterpart and `hid-drivers.c` is the
+  documented firmware-only linker registry. The raw-event-only signature and
+  ordinary call sites retain their exact upstream forms beside the added
+  argument, and every direct-stage capability gate states its boundary
+  locally. No unexplained active-path replacement or P0/P1 divergence remains;
   bounded P2 contracts are listed above
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep

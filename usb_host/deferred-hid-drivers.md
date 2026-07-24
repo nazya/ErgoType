@@ -115,7 +115,7 @@ specific hardware request instead of paying static registry RAM by default.
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
-## Planned HIDRAW and Logitech HID++ Boundary
+## HIDRAW and Logitech HID++ Boundary
 
 HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard
 and mouse input does not need it, and Logitech HID++ kernel drivers can use
@@ -134,18 +134,40 @@ Linux character-device ABI:
 - do not add `/dev`, file descriptors, `read()`, `ioctl()`, `poll()`, or VFS
   emulation until a real external proxy client needs them.
 
-After that compatibility layer, port Logitech support in this order:
+Direct HID++ does not depend on HIDRAW. The hardware-tested diagnostic
+checkpoint
+therefore links a deliberately narrow first slice from pinned upstream
+`hid-logitech-hidpp.c` before implementing the separate HIDRAW client:
 
-1. Direct USB HID++ 1.0/2.0 request/response, including timeout and
-   generation-safe cancellation when a reply is pending during disconnect.
-2. Battery state, identity/serial/version, high-resolution wheel, extra
-   buttons, and touchpad raw XY.
-3. `hid-logitech-dj` receiver ownership: first one paired mouse, then keyboard
-   plus mouse, then per-child disconnect/reconnect, then several receiver
-   slots with measured heap use.
+- only the upstream direct-USB `046d:c08d` identity is selected;
+- generic HID input remains active, while the HID++ driver adds only
+  `.probe`, `.remove`, `.raw_event`, and protocol-version detection;
+- a real single-waiter task bridge preserves register-before-test, the durable
+  response predicate, timeout, response wake, and exact-interface disconnect
+  cancellation without polling or report-time allocation;
+- probe-time interrupt replies enter only the driver's validated `raw_event`
+  matcher; ordinary field/input parsing stays behind final evdev activation;
+- identity publication, power supply, sysfs, receiver children, force
+  feedback, high-resolution wheel, extra buttons, touchpad subclasses, and
+  delayed initialization remain visibly gated in their upstream positions.
 
-The first device matrix should cover M560 or M705, K400 or K750, T650, a
-combined Unifying keyboard/mouse receiver, and a direct-USB MX Vertical.
+The exact diagnostic host/emulator pair completed two automatic hardware runs
+on 2026-07-24, including an ordinary HID++ 1.0 RAP request and HID++ 2.0 FAP
+request with BUSY retry. Temporary task-side markers and those otherwise unused
+requests are absent from the production checkpoint. The production-clean pair
+was rebuilt reproducibly and accepted as post-test cleanup without another
+hardware run; the exact hardware verdict remains associated with the
+diagnostic hashes. The staged order from here is:
+
+1. Add the independent minimal HIDRAW lifecycle described above.
+2. Add battery state, identity/serial/version, high-resolution wheel, extra
+   buttons, and touchpad raw XY as separate checkpoints.
+3. Add `hid-logitech-dj` receiver ownership: first one paired mouse, then
+   keyboard plus mouse, then per-child disconnect/reconnect, then several
+   receiver slots with measured heap use.
+
+The later capability/receiver matrix should cover M560 or M705, K400 or K750,
+T650, a combined Unifying keyboard/mouse receiver, and a direct-USB MX Vertical.
 Logitech Bolt must be treated as a separate protocol/device check rather than
 assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
 USB transport until a Bluetooth HID backend exists. Wacom and simple
@@ -211,8 +233,8 @@ interfaces, mode SET, native report ID `0x02`, and repeated reconnect. The
 combined two-Pico pass on 2026-07-23 hardware-verified that normal low-contact
 path, including removal and reconnect. Accepted `-EIO`, disconnect during SET,
 contact ID 32, and multi-contact queue saturation remain separate fault tests.
-This bounded USB result is not a reason to enable every Apple HID driver or an
-HID++-style protocol stack.
+This bounded USB result is not a reason to enable every Apple HID driver or
+the broader HID++ capability/receiver stack.
 
 ## Future Transport Work
 
@@ -238,7 +260,8 @@ by itself is no longer a transport blocker:
 - `hid-letsketch.c`: uses `usb_string()` for tablet string data.
 - `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
   wait-style init dependencies remain unaudited.
-- `hid-logitech-hidpp.c`: request/response protocol with wait queues.
+- broader `hid-logitech-hidpp.c` capability, power, touchpad, and receiver
+  paths beyond the narrow direct request/reply candidate above.
 - `hid-ntrig.c`: USB control-message firmware/query path.
 - `hid-sony.c`, `hid-nintendo.c`, `hid-playstation.c`: controller init uses
   request/response and worker-style state.

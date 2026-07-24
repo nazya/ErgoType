@@ -20,6 +20,8 @@
 #include "tusb.h"
 #include "log.h"
 
+struct hid_device;
+
 typedef int gfp_t;
 typedef int pm_message_t;
 typedef struct {
@@ -27,7 +29,7 @@ typedef struct {
 } spinlock_t;
 typedef struct {
 	TaskHandle_t task;
-	volatile uint32_t sequence;
+	volatile int cancel_status;
 } wait_queue_head_t;
 typedef int ktime_t;
 typedef long loff_t;
@@ -62,6 +64,13 @@ typedef long loff_t;
 #define CONFIG_HID_HAPTIC 1
 #define CONFIG_HID_MULTITOUCH 1
 #define CONFIG_HID_MAGICMOUSE 1
+#define CONFIG_HID_LOGITECH_HIDPP 1
+/*
+ * First direct-USB checkpoint: protocol request/reply only. The imported
+ * upstream source keeps its broader capability code visibly gated until each
+ * subsystem and device family has an independent hardware pass.
+ */
+#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
@@ -1769,17 +1778,25 @@ void hid_compat_spinlock_not_supported(void)
 #define spin_lock_irqsave(lock, flags) do { (void)(lock); (void)(flags); hid_compat_spinlock_not_supported(); } while (0)
 #define spin_unlock_irqrestore(lock, flags) do { (void)(lock); (void)(flags); hid_compat_spinlock_not_supported(); } while (0)
 
+#define HID_COMPAT_WAIT_NOTIFY_INDEX 1u
+_Static_assert(configTASK_NOTIFICATION_ARRAY_ENTRIES >
+	       HID_COMPAT_WAIT_NOTIFY_INDEX,
+	       "HID compatibility waits require notification index 1");
+
 static inline void init_waitqueue_head(wait_queue_head_t *wait)
 {
 	wait->task = NULL;
-	wait->sequence = 0;
+	wait->cancel_status = 0;
 }
 
 static inline void wake_up_interruptible(wait_queue_head_t *wait)
 {
-	wait->sequence++;
-	if (wait->task)
-		xTaskNotifyGive(wait->task);
+	TaskHandle_t task;
+
+	task = __atomic_load_n(&wait->task, __ATOMIC_ACQUIRE);
+	if (task)
+		(void)xTaskNotifyGiveIndexed(task,
+					    HID_COMPAT_WAIT_NOTIFY_INDEX);
 }
 
 static inline void wake_up(wait_queue_head_t *wait)
@@ -1801,17 +1818,83 @@ static inline void hid_compat_usb_host_delay(unsigned int msecs)
 }
 
 /*
- * The former reduced waitqueue stored only one task and could not preserve
- * Linux's concurrent waiter contract. No linked path uses it; require a real
- * waiter list at the boundary before a future driver can compile.
+ * The linked HID++ request path serializes its sole waiter with send_mutex.
+ * Keep that exact single-waiter contract allocation-free, register the task
+ * before testing its durable predicate, and use notification index 1 so a
+ * blocking work item does not consume the workqueue's index-0 wake edge.
+ * Firmware disconnect remains a separate durable predicate inspected by the
+ * HID++ caller, so wait_event_timeout() retains Linux's 0/positive return
+ * contract.
+ * A future linked multi-waiter caller still needs an intrusive waiter list.
  */
-long hid_compat_waitqueue_not_supported(void)
-	__attribute__((error("wait_event needs the firmware waiter-list bridge")));
+int hid_compat_waitqueue_bind(wait_queue_head_t *wait, struct hid_device *hid);
+void hid_compat_waitqueue_unbind(struct hid_device *hid);
+void hid_compat_waitqueue_state_lock(wait_queue_head_t *wait);
+void hid_compat_waitqueue_state_unlock(wait_queue_head_t *wait);
+
+static inline void hid_compat_waitqueue_cancel(wait_queue_head_t *wait)
+{
+	__atomic_store_n(&wait->cancel_status, -ENODEV, __ATOMIC_RELEASE);
+	wake_up(wait);
+}
+
+/*
+ * Firmware-only exact-interface disconnect predicate. HID++ includes it in
+ * the standard wait condition, then maps the published status outside
+ * wait_event_timeout().
+ */
+static inline bool
+hid_compat_waitqueue_cancelled(const wait_queue_head_t *wait)
+{
+	return __atomic_load_n(&wait->cancel_status, __ATOMIC_ACQUIRE) ==
+		-ENODEV;
+}
+
+static inline void hid_compat_waitqueue_prepare(wait_queue_head_t *wait)
+{
+	TaskHandle_t task = xTaskGetCurrentTaskHandle();
+
+	__atomic_store_n(&wait->task, task, __ATOMIC_RELEASE);
+}
+
+static inline void hid_compat_waitqueue_finish(wait_queue_head_t *wait)
+{
+	__atomic_store_n(&wait->task, NULL, __ATOMIC_RELEASE);
+}
+
 #define wait_event_timeout(wq, condition, timeout) \
-	((void)(&(wq)), (void)sizeof(condition), (void)(timeout), \
-	 hid_compat_waitqueue_not_supported())
+	({ \
+		wait_queue_head_t *__wait = &(wq); \
+		TickType_t __deadline = xTaskGetTickCount() + (TickType_t)(timeout); \
+		long __result; \
+		hid_compat_waitqueue_prepare(__wait); \
+		for (;;) { \
+			TickType_t __now; \
+			if (condition) { \
+				__now = xTaskGetTickCount(); \
+				__result = time_before((unsigned long)__now, \
+						      (unsigned long)__deadline) ? \
+					(long)(__deadline - __now) : 1L; \
+				break; \
+			} \
+			__now = xTaskGetTickCount(); \
+			if (!time_before((unsigned long)__now, \
+					 (unsigned long)__deadline)) { \
+				__result = 0; \
+				break; \
+			} \
+			(void)ulTaskNotifyTakeIndexed( \
+				HID_COMPAT_WAIT_NOTIFY_INDEX, pdTRUE, \
+						     __deadline - __now); \
+		} \
+		hid_compat_waitqueue_finish(__wait); \
+		__result; \
+	})
+long hid_compat_waitqueue_interruptible_not_supported(void)
+	__attribute__((error("interruptible wait needs a firmware signal bridge")));
 #define wait_event_interruptible_timeout(wq, condition, timeout) \
-	wait_event_timeout((wq), (condition), (timeout))
+	((void)(&(wq)), (void)sizeof(condition), (void)(timeout), \
+	 hid_compat_waitqueue_interruptible_not_supported())
 
 #define SIGIO 29
 #define POLL_IN 1
