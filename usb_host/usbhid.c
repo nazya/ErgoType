@@ -3395,10 +3395,11 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 	}
 
 	/*
-	 * Upstream may leave driver probe SET_REPORT requests in the usbhid output
-	 * FIFO. Firmware runs direct interrupt IN independently from async EP0/OUT
-	 * and exposes an always-on evdev client, so finish that finite probe I/O
-	 * before client activation can start input or issue output of its own.
+	 * Upstream may leave driver probe GET_REPORT or SET_REPORT requests in the
+	 * usbhid control/output FIFOs. Firmware runs direct interrupt IN
+	 * independently from async EP0/OUT and exposes an always-on evdev client, so
+	 * finish that finite probe I/O before client activation can start input or
+	 * issue output of its own.
 	 * usbhid_wait_io() excludes the continuously armed interrupt-IN transport.
 	 */
 	ret = usbhid_wait_io(hid);
@@ -5088,9 +5089,11 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	input->len = len;
 	/*
 	 * Upstream hid_ctrl() parses in the URB callback. A probe-time GET in this
-	 * port completes on the async task while its lifecycle caller still owns
-	 * driver_input_lock. Select and publish that owner under the same mutex used
-	 * by timeout/teardown abandonment, so no task handle can be stranded between
+	 * port completes on the async task and is routed back to its lifecycle
+	 * caller. That caller may consume it either inside hid_hw_wait(), while it
+	 * still owns driver_input_lock, or at the outer activation fence after probe
+	 * released the lock. Publish the consumer under the same mutex used by
+	 * timeout/teardown abandonment, so no task handle can be stranded between
 	 * the decision and publication.
 	 */
 	hid_transport_lock();
@@ -5137,7 +5140,27 @@ retire:
 	hid_async_logical_queue_changed();
 }
 
-/* Consume only the completion published for this driver_input_lock owner. */
+/*
+ * parser_owner selects the single consumer; it does not keep
+ * driver_input_lock held. An inner hid_hw_wait() consumes while its lifecycle
+ * task still owns the lock, whereas the outer activation fence may consume
+ * after hid_device_probe() released it.
+ */
+static int usbhid_control_input_parse(struct hid_device *hid,
+				      struct usbhid_control_input *input)
+{
+	enum hid_report_type type =
+		(enum hid_report_type)input->request->report->type;
+
+	if (sema_owned_by_current(&hid->driver_input_lock))
+		return hid_safe_input_report_locked(
+			hid, type, input->data, input->bufsize, input->len, 0);
+
+	return hid_safe_input_report(
+		hid, type, input->data, input->bufsize, input->len, 0);
+}
+
+/* Consume only the completion published for this recorded parser task. */
 static bool usbhid_control_input_process_owned(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
@@ -5159,10 +5182,7 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 
 	usbhid_control_report_done(
 		hid, input,
-		process ? hid_safe_input_report_locked(
-			hid, (enum hid_report_type)input->request->report->type,
-			input->data, input->bufsize, input->len, 0) :
-			-ENODEV);
+		process ? usbhid_control_input_parse(hid, input) : -ENODEV);
 	return true;
 }
 
@@ -5375,10 +5395,11 @@ fail:
  * TinyUSB adapter: io_pending is the stronger firmware I/O/lifetime lease,
  * including parser completion. Preserve upstream's outer 10*HZ bound for
  * hid_hw_wait(); teardown itself remains an unbounded lifetime fence like
- * usb_kill_urb(). A probe-owned GET cannot run on the report task because its
- * caller still owns driver_input_lock, so its matching waiter consumes that
- * completion directly. The intrusive waiter list is the firmware waitqueue;
- * task notifications carry only coalesced wake edges.
+ * usb_kill_urb(). A GET queued while probe owns driver_input_lock cannot run on
+ * the report task, so its matching lifecycle waiter consumes that completion
+ * directly, either before or after probe releases the lock. The intrusive
+ * waiter list is the firmware waitqueue; task notifications carry only
+ * coalesced wake edges.
  */
 static bool usbhid_wait_transport_idle(struct hid_device *hid, bool teardown,
 				       TaskHandle_t owner)
@@ -5468,13 +5489,9 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 					} else {
 						usbhid_control_report_done(
 							hid, abandoned,
-							hid_safe_input_report_locked(
+							usbhid_control_input_parse(
 								hid,
-								(enum hid_report_type)
-									abandoned->request->report->type,
-								abandoned->data,
-								abandoned->bufsize,
-								abandoned->len, 0));
+								abandoned));
 					}
 					continue;
 				}

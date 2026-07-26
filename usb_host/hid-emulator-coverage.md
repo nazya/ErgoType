@@ -852,11 +852,11 @@ This stage stops at Linux input/evdev. It does not add KeyD high-resolution
 wheel policy, absolute-touch policy, UI battery presentation, HIDRAW
 subscribers, Bluetooth, Bolt, legacy 27 MHz classes, or force feedback.
 
-## UC-Logic Tablet Candidate
+## UC-Logic Tablet Matrix
 
-Branch `device/uclogic-tablet-matrix` is the automatic fixture for the current
-uncommitted UC-Logic host candidate. It cold-boots as a generic pen, then
-reconnects sequentially as Huion H640P `256c:006d`, Huion Kamvas 13
+Branch `device/uclogic-tablet-matrix` is the automatic fixture for the first
+UC-Logic host stage. It cold-boots as a generic pen, then reconnects
+sequentially as Huion H640P `256c:006d`, Huion Kamvas 13
 `256c:006e`, and XP-Pen Deco 01 V2 `28bd:0905`. A repeated
 `cafe:10ff UC-Logic Test Alert` keyboard makes the result visible solely in
 the host log:
@@ -883,18 +883,48 @@ Both images build:
 ```text
 host text/data/bss       549776 / 788 / 245208 B
 emulator text/data/bss    59720 / 0 / 254432 B
-hardware verdict         pending
+hardware verdict         passed 2026-07-26
 ```
 
-Acceptance requires `f1`, `f2`, `f3`, `f4`, then `f10`, no `f12`, all
-expected Linux input nodes and events, equivalent alert-profile heap plateaus
-after every removal, `oom=0`, and nonzero task watermarks. Deco interface 1 is
-intentionally invalidated by upstream and produces one expected
-`WARN: HID_IGNORED`; other new warnings are not part of the expected result.
-In particular, record the lifecycle watermark because the newly active USB
-string path uses a 256-byte local buffer. Do not infer support for every model
-sharing `256c:006d/006e`; this fixture certifies only its two parameter
-profiles.
+The hardware run reached `f1`, `f2`, `f3`, `f4`, then `f10`, with no `f12`.
+All expected Linux input nodes and events appeared, removal returned to
+equivalent heap plateaus, `oom=0`, and the lifecycle watermark remained
+nonzero at 92 words. Deco interface 1 is intentionally invalidated by upstream
+and produced the one expected `WARN: HID_IGNORED`. This result certifies the
+two emulated Huion parameter profiles, not every retail model sharing
+`256c:006d/006e`.
+
+### Modern UGEE-v2 expansion coverage
+
+Branch `device/uclogic-ugee-v2-matrix` extends the first-stage fixture with
+wired Deco L, its missing-product-string variant, wireless Deco LW, Deco Pro S,
+Pro SW, Pro MW, and a focused USB Magic Trackpad 2 sparse-battery regression.
+It covers Pen, Pad, Mouse, both dial directions, capacity/charging traffic,
+wireless reconnect re-probe, detach with reconnect work queued, the Trackpad
+mode SET, and its report-ID-5 battery GET/input path.
+
+Current builds are:
+
+```text
+host text/data/bss       551888 / 788 / 245208 B
+emulator text/data/bss    61136 /   0 / 254440 B
+hardware verdict         passed 2026-07-27
+```
+
+The host log reached
+`f1, f2, f3, f4, f5, f6, f9, f11, f14, f15, f10` in order, with no `f12` or
+host `ERR`. Seven `WARN: HID_IGNORED` entries are the expected invalid
+interface 1 of each XP-Pen profile. Two `WARN: EVDEV_BATCH_CAP` entries belong
+to the two Trackpad input devices and leave the mode/battery verdict intact,
+but maximum-contact multitouch batches remain uncertified.
+
+Repeated alert-attached heap snapshots stayed within `48376..48384` bytes free,
+alert removals returned to `60736..60744`, minimum-ever free heap was `39672`,
+and `oom=0`. Minimum watermarks remained nonzero: TinyUSB `265`, KeyD `658`,
+async `389`, work `246`, timer `304`, lifecycle `86`, and report `862` words.
+Wireless markers prove their exact battery transfers and reconnect re-probes;
+the noop UI does not independently acknowledge the queued power snapshots.
+UI battery presentation and KeyD tablet policy remain outside this fixture.
 
 Heavier FF drivers should stay deferred for now:
 
@@ -947,14 +977,22 @@ and emulator CDC lines under each item.
     `f10`, no `f12`, and stable equivalent heap/stack plateaus
   - K750 snapshot values remain intentionally unacknowledged by the noop UI
   - verdict: passed 2026-07-26; exactly one expected complete-eQuad OOM
-- [ ] first UC-Logic tablet matrix
+- [x] first UC-Logic tablet matrix
   - emulator branch `device/uclogic-tablet-matrix`
   - require `f1`, `f2`, `f3`, `f4`, terminal `f10`, and no `f12`
   - require Huion Pen/Pad/Touch Strip/Dial and Deco Pen/Pad/Mouse events
   - compare every repeated alert heap plateau; require `oom=0` and nonzero
     lifecycle stack watermark
   - allow exactly one `WARN: HID_IGNORED` for Deco interface 1
-  - verdict: pending exact host/emulator hardware log
+  - verdict: passed 2026-07-26; lifecycle minimum 92 words
+- [x] modern UGEE-v2 tablet expansion
+  - cover Deco L/LW and Deco Pro S/SW/MW exact IDs and shared topology
+  - require dial direction, battery capacity/charging, reconnect re-probe, and
+    detach during reconnect work
+  - include the Magic Mouse/Trackpad generic-battery regression
+  - compare live and removal heap/stack snapshots; require `oom=0`
+  - verdict: passed 2026-07-27; complete markers, no `f12`/host `ERR`, stable
+    plateaus, and 86-word minimum lifecycle watermark
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

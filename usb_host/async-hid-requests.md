@@ -20,11 +20,13 @@ The active implementation now has these properties:
   to the report task.
 - `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
   parsing, matching the upstream caller contract without blocking TinyUSB.
-  Ordinary GET completion is report-task-owned; a probe GET whose caller still
-  owns `driver_input_lock` is returned directly to that lifecycle wait owner.
-  The existing interface wait head receives completion edges while
-  `io_pending` remains the durable predicate, so this wait does not poll or
-  allocate another synchronization object.
+  Ordinary GET completion is report-task-owned; a GET queued while probe owns
+  `driver_input_lock` is returned directly to that lifecycle owner. An inner
+  `hid_hw_wait()` consumes it while retaining the lock, whereas the outer
+  activation fence can consume it after probe releases the lock; glue selects
+  the matching parser entry. The existing interface wait head receives
+  completion edges while `io_pending` remains the durable predicate, so this
+  wait does not poll or allocate another synchronization object.
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.

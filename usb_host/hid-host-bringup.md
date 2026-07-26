@@ -26,6 +26,12 @@ The following paths have produced input events on hardware:
 - the pinned-upstream DJ receiver with standalone and simultaneous M705 and
   ordinary keyboard children, independent unpair, receiver detach, and later
   direct regression;
+- the selected UC-Logic Huion H640P and Kamvas 13 profiles plus XP-Pen Deco 01
+  V2, including their string/interrupt-OUT probes, generated input nodes, and
+  repeated removal;
+- modern XP-Pen Deco L/LW and Deco Pro S/SW/MW profiles, including battery
+  traffic, wireless reconnect re-probe, dial/mouse input, and the USB Magic
+  Trackpad 2 sparse-battery regression;
 - the PMW pointing-device path, independently of USB host input.
 
 The current exact-class stage additionally selects M560 `046d:402d`,
@@ -33,12 +39,20 @@ T650 `046d:4101`, K400 `046d:4024`, and K750 `046d:4002` upstream classes.
 Its byte-exact automatic emulator completed all four class paths and the final
 direct regression on hardware on 2026-07-26.
 
-The next linked candidate imports the complete pinned-upstream UC-Logic
-implementation while selecting only Huion `256c:006d/006e` and XP-Pen Deco 01
-V2 `28bd:0905`. Its Linux-layer work is complete and both host and automatic
-emulator images build. Hardware verification is pending; do not include these
-tablets in the hardware-passed list above until the exact pair produces the
-documented input, heap, and stack result.
+The first linked UC-Logic stage selects only Huion `256c:006d/006e` and XP-Pen
+Deco 01 V2 `28bd:0905` from the complete pinned-upstream table. Its automatic
+matrix completed on hardware on 2026-07-26 with every expected input phase,
+one expected ignored Deco interface, stable removal plateaus, `oom=0`, and a
+92-word minimum lifecycle watermark.
+
+The modern extension keeps that narrow table policy and additionally selects
+XP-Pen Deco L/LW `28bd:0935` and Deco Pro S/SW/MW
+`28bd:0909/0933/0934`. It enables the pinned generic HID battery path for
+wireless UGEE-v2 reports and for the already linked Magic Mouse/Trackpad
+battery path, reusing the reduced firmware power-supply snapshot boundary.
+Its expanded automatic matrix completed on hardware on 2026-07-27 with all
+markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
+`ERR`.
 
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
@@ -104,6 +118,15 @@ nodes. Interface 0 publishes the upstream-generated frame Mouse node and
 interface 1 is intentionally rejected by upstream, producing the host's
 expected `WARN: HID_IGNORED` topology marker. These synchronous-looking calls
 block only the lifecycle task, never TinyUSB's owner.
+
+The selected modern UGEE-v2 models reuse the same three-interface topology.
+Deco L and wireless Deco LW share PID `0935` and are distinguished by the
+optional product string; a missing string retains the wired Deco L behavior.
+The wireless models translate their unsolicited battery report to the
+upstream `0xba` capacity/charging descriptor and schedule the existing
+re-probe work on the exact reconnect event. This stage ends at Linux
+input/evdev and the reduced power snapshot; KeyD tablet policy and UI
+presentation remain separate work.
 
 Interrupt-IN receive is armed from `usbhid_open()` or `usbhid_start()`, not
 from probe. Ignored or failed interfaces therefore do not keep delivering

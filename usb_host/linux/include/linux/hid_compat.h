@@ -32,7 +32,8 @@ typedef struct hid_compat_wait_queue {
 	volatile int cancel_status;
 	struct hid_compat_wait_queue *transport_next;
 } wait_queue_head_t;
-typedef int ktime_t;
+/* Firmware ktime_t is modulo-2^32 milliseconds; wrap ordering is not retained. */
+typedef uint32_t ktime_t;
 typedef long loff_t;
 
 /*
@@ -87,15 +88,15 @@ typedef long loff_t;
  * devices, and force feedback remain outside this stage.
  */
 #define CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES 1
-// Keep the complete pinned hid-uclogic device table in source while the first
-// candidate matches only Huion 256c:006d/006e and XP-Pen 28bd:0905.
+// Keep the complete pinned hid-uclogic device table in source while the active
+// stages match Huion 256c:006d/006e and selected modern XP-Pen UGEE-v2 IDs.
 // #define CONFIG_HID_UCLOGIC_ALL_DEVICES 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
-// #define CONFIG_HID_BATTERY_STRENGTH 1
-// The generic HID battery path remains gated pending separate device coverage.
-// Direct HID++ uses the reduced value-only firmware power_supply boundary.
+#define CONFIG_HID_BATTERY_STRENGTH 1
+// Generic HID battery reports use the reduced value-only firmware power_supply
+// boundary; sysfs, VFS, uevents, and UI presentation remain outside the port.
 // #define CONFIG_HOLTEK_FF 1
 // Holtek force-feedback support is not linked/tested; only the keyboard and
 // mouse descriptor-fixup drivers are enabled for this family.

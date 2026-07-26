@@ -302,7 +302,7 @@ plateau. The following final direct profile returns exactly to the earlier
 direct attached `free/largest/blocks` tuple, establishing that the difference
 is transient rather than cumulative retention.
 
-### UC-Logic tablet candidate
+### UC-Logic tablet stage
 
 Linking the complete pinned-upstream UC-Logic implementation for the selected
 Huion and Deco paths produces:
@@ -312,7 +312,7 @@ host text/data/bss             549776 / 788 / 245208 B
 host __bss_end__               0x2003fe00
 host main-bank headroom        512 B to 0x20040000
 emulator text/data/bss          59720 / 0 / 254432 B
-hardware verdict               pending exact host/emulator pair
+hardware verdict               passed 2026-07-26
 ```
 
 Relative to the hardware-passed M560/T650/K400/K750 checkpoint, this candidate
@@ -321,13 +321,44 @@ does not describe the live tablet graph: Huion generates Pen, Pad, Touch Strip,
 and Dial reports from string 200, while Deco creates three HID interfaces and
 Pen, Pad, and frame-Mouse input nodes after its OUT/string probe.
 
-The lifecycle stack is the new narrow static-runtime boundary.
+The hardware matrix completed every generic, H640P, Kamvas 13, and Deco 01 V2
+phase with one expected ignored Deco interface and `oom=0`. The minimum live
+tablet heaps were `39720` B for H640P, `39680` B for Kamvas 13, and `47136` B
+for Deco. Removal converged to equivalent `60736`/`60752` B plateaus. The
+lifecycle stack remained nonzero at a 92-word minimum.
+
+The lifecycle stack is the narrow static-runtime boundary.
 `uclogic_params_init()` has an approximately 644-byte optimized frame and
 `usb_string()` uses a 256-byte local descriptor buffer inside the existing
-512-word lifecycle task. Hardware acceptance therefore requires its minimum
-watermark to remain nonzero. It must also compare the repeated alert-profile
-heap plateaus after each tablet removal, retain a sufficiently large
-contiguous block for the next parser run, and finish with `oom=0`.
+512-word lifecycle task.
+
+#### Modern UGEE-v2 expansion stage
+
+Selecting Deco L/LW and Deco Pro S/SW/MW and enabling their shared generic HID
+battery boundary produces:
+
+```text
+host text/data/bss             551888 / 788 / 245208 B
+host __bss_end__               0x2003fe00
+host main-bank headroom        512 B to 0x20040000
+emulator text/data/bss          61136 /   0 / 254440 B
+hardware verdict               passed 2026-07-27
+```
+
+Relative to the hardware-passed first UC-Logic stage, the extension adds 1,904
+bytes of text before the final control-parser correction and 2,112 bytes in the
+current build, with no static data or BSS increase. Generic battery support
+adds runtime power-supply/devres/workqueue allocations for wireless profiles.
+
+The expanded run completed every marker with no host `ERR`. Repeated
+alert-attached snapshots stayed within `48376..48384` bytes free, alert
+removals returned to `60736..60744`, minimum-ever free heap was `39672`, and
+`oom=0`. Minimum stack watermarks were TinyUSB `265`, KeyD `658`, async `389`,
+work `246`, timer `304`, lifecycle `86`, and report `862` words. The final
+`uint32_t` timestamp representation retains its four-byte layout. The Apple
+battery test covers the immediate sparse GET/input path; the later
+firmware-selected 90-second repeat interval is not an elapsed-time claim of
+this automatic sequence.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware

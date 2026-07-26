@@ -221,21 +221,29 @@ Logitech Bolt must be treated as a separate protocol/device check rather than
 assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
 USB transport until a Bluetooth HID backend exists.
 
-The first UC-Logic stage is now linked as a hardware candidate. It activates
-only Huion dynamic IDs `256c:006d/006e` and XP-Pen Deco 01 V2 `28bd:0905`;
-the rest of the complete pinned-upstream match table remains visible but
-inactive. The Huion path uses decoded string 201 and raw parameter string 200.
-The three-interface Deco path sends its ten-byte probe through interrupt OUT
-endpoint `0x03`, then reads raw parameter string 100. Both operations run in
-the lifecycle task over the existing async transport owner. No HIDRAW, VFS,
-KeyD tablet policy, UI, LED, or power expansion is part of this stage.
+The first UC-Logic stage is linked and hardware-passed. It activates Huion
+dynamic IDs `256c:006d/006e` and XP-Pen Deco 01 V2 `28bd:0905`; the rest of
+the complete pinned-upstream match table remains visible but inactive. Its
+automatic matrix covered a generic pen, H640P and Kamvas 13 parameter
+profiles, and Deco 01 V2 pen/pad/frame-mouse input. The 2026-07-26 run
+completed with stable removal plateaus, `oom=0`, and a 92-word minimum
+lifecycle watermark.
 
-The matching automatic emulator covers a generic pen, H640P and Kamvas 13
-parameter profiles, and Deco 01 V2 pen/pad/frame-mouse input. This establishes
-specific profile coverage, not every retail model sharing Huion's dynamic
-IDs. Hardware acceptance is still pending and must include full heap recovery,
-`oom=0`, and a nonzero lifecycle stack watermark. Wacom is the next larger
-tablet family after that result.
+The modern UGEE-v2 extension is linked and hardware-passed. It selects the
+common upstream paths for Deco L/LW `28bd:0935` and Deco Pro S/SW/MW
+`28bd:0909/0933/0934`. Deco L and LW share a PID and use the optional product
+string to select battery behavior; a missing string remains the wired profile.
+Pro SW/MW retain the upstream mouse-frame and battery quirks. Unsolicited
+battery reports feed the existing reduced power-supply snapshot, and the exact
+reconnect event schedules the upstream re-probe work. No HIDRAW, VFS, KeyD
+tablet policy, UI, or LED expansion was needed for this stage.
+
+The expanded matrix completed on hardware on 2026-07-27. It covered every
+wired/wireless profile, both dial directions, battery and reconnect traffic,
+detach with reconnect work queued, and the Magic Trackpad sparse battery
+lookup. The run reached its complete marker sequence with `oom=0`, stable heap
+plateaus, nonzero task watermarks, and no host `ERR`. Wacom remains the next
+larger tablet family.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller

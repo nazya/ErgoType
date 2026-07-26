@@ -236,7 +236,7 @@ contract remains visible.
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, and mutable runtime state beside flash-resident driver descriptors. |
 | `input.c` | Task-context input event mutex, firmware devres/action ownership, direct object release, and Linux presentation/PM/userspace code retained exactly under `#if 0` at its omitted runtime boundary. |
-| `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
+| `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receiver `046d:c52b` active and the other upstream receiver IDs retained behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
@@ -514,19 +514,21 @@ contains a hypothetical NULL check that no current caller can exercise.
   queued reports and waits any dequeued parser/completion through its last HID
   access before destruction.
 - Upstream `hid_ctrl()` parses a completed control URB in its callback. This
-  port sends ordinary GET completion to the report task, but a probe GET whose
-  lifecycle caller still owns `driver_input_lock` publishes its request buffer
-  directly to that interface's `.wait()` owner. This avoids a firmware-only
-  queue handoff without opening interrupt input on a half-built device. The
-  existing per-interface wait head now carries the corresponding upstream-style
-  wake edge; the broader firmware `io_pending` lease remains the durable
-  predicate, so `hid_hw_wait()` no longer needs one-tick polling. After producer
-  stop, teardown cancels by exact HID owner and uses the same wait head for a
-  composite `usb_kill_urb()` predicate: no aggregate I/O, async slot,
-  interrupt-IN owner, deferred host pass, or physical-detach fence retains the
-  interface. Every last-owner transition publishes the wake after unlocking;
-  the three former teardown polling barriers are gone without another RTOS
-  object.
+  port sends ordinary GET completion to the report task, but a GET queued while
+  probe owns `driver_input_lock` publishes its request buffer directly to that
+  interface's lifecycle owner. An inner `hid_hw_wait()` consumes it with the
+  lock retained; the outer activation fence can consume it after probe releases
+  the lock, and glue selects the matching parser entry. This avoids a
+  firmware-only queue handoff without opening interrupt input on a half-built
+  device. The existing per-interface wait head carries the corresponding
+  upstream-style wake edge; the broader firmware `io_pending` lease remains
+  the durable predicate, so `hid_hw_wait()` no longer needs one-tick polling.
+  After producer stop, teardown cancels by exact HID owner and uses the same
+  wait head for a composite `usb_kill_urb()` predicate: no aggregate I/O, async
+  slot, interrupt-IN owner, deferred host pass, or physical-detach fence
+  retains the interface. Every last-owner transition publishes the wake after
+  unlocking; the three former teardown polling barriers are gone without
+  another RTOS object.
 - TinyUSB callbacks are task-context publishers in this port. One explicit
   transport mutex replaces the former common FreeRTOS critical domain across
   async slots, lifecycle/cache state, and report ownership. It replaces only
@@ -884,8 +886,9 @@ contains a hypothetical NULL check that no current caller can exercise.
   `hid-uclogic-rdesc.c` remain byte-identical to pinned upstream. Core differs
   only at the unavailable private-usbhid include, the locally explained active
   ID gates, and immutable driver registration; params differs only at that
-  private include and the single allocate/copy/free replacement for upstream
-  `krealloc()`. The original displaced lines remain adjacent.
+  private include, the single allocate/copy/free replacement for upstream
+  `krealloc()`, and a firmware optional-product-string guard. The original
+  displaced lines remain adjacent.
 - UC-Logic activates the existing task-side USB string and interrupt-OUT
   contracts. Reduced `list.h`, `ctype.h`, `string_choices.h`, and KUnit
   visibility headers expose only the reached upstream surface; `__force` is a
@@ -893,8 +896,22 @@ contains a hypothetical NULL check that no current caller can exercise.
   every supported firmware MCU target. The selected string consumers are
   ASCII; the reduced decoder supports BMP code points and substitutes `?` for
   UTF-16 surrogate units, so the ID gate must not widen to a non-BMP consumer
-  without extending that contract. No generic URB, HIDRAW consumer, VFS, KeyD
-  tablet policy, UI, LED, or power contract was added.
+  without extending that contract. The selected wireless UGEE-v2 paths reuse
+  the existing reduced power-supply snapshot through pinned generic HID
+  battery code. No generic URB, HIDRAW consumer, VFS, KeyD tablet policy, UI,
+  or LED contract was added.
+- Enabling generic HID battery also reaches the pinned Magic Mouse/Trackpad
+  battery path. Its upstream dense `report_id_hash` lookup is retained beside
+  the sparse firmware lookup that preserves the full report-ID range. The
+  immediate GET and timer flow remain upstream; firmware changes only the
+  repeated USB battery interval from 60 to 90 seconds, with the displaced
+  constant retained beside the documented policy.
+- Reduced `ktime_t` remains a four-byte modulo-2^32 millisecond value so input
+  object sizes do not grow. It is now unsigned, avoiding signed overflow; the
+  accepted ordinary `a > b` comparison does not retain Linux ordering across
+  the roughly 49.7-day FreeRTOS tick wrap. Its only linked ordering consumer is
+  duplicate unchanged generic-battery notification: first reports, capacity
+  changes, and charging changes bypass that comparison.
 - FreeRTOS queues use the 8-byte `port_input_event`; evdev converts from the
   16-byte kernel `input_event` at the devmon boundary. `__KERNEL__` selects the
   kernel UAPI layout without exposing unavailable newlib ioctl headers.
@@ -1142,9 +1159,13 @@ Current checkpoint audit:
   above
 - audited the newly linked UC-Logic sources against pinned
   `83f1454877cc292b88baf13c829c16ce6937d120`: its complete upstream device
-  table remains visible, while only Huion `256c:006d/006e` and Deco 01 V2
-  `28bd:0905` are active. The matching automatic emulator and host both build;
-  hardware heap/stack/input verification remains pending
+  table remains visible. Huion `256c:006d/006e` and Deco 01 V2 `28bd:0905`
+  completed their automatic hardware matrix on 2026-07-26 with `oom=0` and a
+  92-word minimum lifecycle watermark. The narrow expansion adds only Deco
+  L/LW `28bd:0935` and Deco Pro S/SW/MW `28bd:0909/0933/0934`; its expanded
+  battery/reconnect/input matrix passed on hardware on 2026-07-27 with every
+  completion marker, no host `ERR`, `oom=0`, equivalent cleanup plateaus, and
+  an 86-word minimum lifecycle watermark
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep
   on a mutex, queue, or task notification and recheck a durable predicate. The

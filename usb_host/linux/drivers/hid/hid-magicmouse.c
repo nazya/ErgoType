@@ -60,7 +60,9 @@ MODULE_PARM_DESC(report_undeciphered, "Report undeciphered multi-touch state fie
 #define MOUSE_REPORT_ID    0x29
 #define MOUSE2_REPORT_ID   0x12
 #define DOUBLE_REPORT_ID   0xf7
-#define USB_BATTERY_TIMEOUT_SEC 60
+// #define USB_BATTERY_TIMEOUT_SEC 60
+// Firmware accepts slower battery refresh to reduce periodic USB control I/O.
+#define USB_BATTERY_TIMEOUT_SEC 90
 
 /* These definitions are not precise, but they're close enough.  (Bits
  * 0x03 seem to indicate the aspect ratio of the touch, bits 0x70 seem
@@ -842,7 +844,9 @@ static int magicmouse_fetch_battery(struct hid_device *hdev)
 		return -1;
 
 	report_enum = &hdev->report_enum[bat->report_type];
-	report = report_enum->report_id_hash[bat->report_id];
+	// report = report_enum->report_id_hash[bat->report_id];
+	// RP2040 omits the dense 256-pointer table but preserves the full ID range.
+	report = hid_report_enum_lookup(report_enum, bat->report_id);
 
 	if (!report || report->maxfield < 1)
 		return -1;

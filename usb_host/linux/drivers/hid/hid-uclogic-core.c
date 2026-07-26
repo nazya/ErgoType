@@ -558,9 +558,9 @@ static void uclogic_remove(struct hid_device *hdev)
 
 static const struct hid_device_id uclogic_devices[] = {
 /*
- * Keep the complete pinned-upstream match table visible. The first firmware
- * stage selects the Huion dynamic and XP-Pen Deco 01 V2 paths covered by its
- * emulator; CONFIG_HID_UCLOGIC_ALL_DEVICES restores every upstream match.
+ * Keep the complete pinned-upstream match table visible. Firmware stages
+ * select the Huion dynamic, XP-Pen Deco 01 V2, Deco L/LW, and Deco Pro
+ * S/SW/MW paths; CONFIG_HID_UCLOGIC_ALL_DEVICES restores every upstream match.
  */
 #if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UCLOGIC,
@@ -618,7 +618,6 @@ static const struct hid_device_id uclogic_devices[] = {
 #endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO01_V2) },
-#if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO_L) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
@@ -629,6 +628,7 @@ static const struct hid_device_id uclogic_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO_PRO_SW),
 		.driver_data = UCLOGIC_MOUSE_FRAME_QUIRK | UCLOGIC_BATTERY_QUIRK },
+#if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_STAR06) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,

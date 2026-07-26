@@ -1277,7 +1277,9 @@ static bool uclogic_params_ugee_v2_has_battery(struct hid_device *hdev)
 	    hdev->product == USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO_L) {
 		struct usb_device *udev = hid_to_usb_dev(hdev);
 
-		if (strstarts(udev->product, "Deco LW"))
+		// if (strstarts(udev->product, "Deco LW"))
+		// Firmware keeps USB strings optional when a device omits or rejects them.
+		if (udev->product && strstarts(udev->product, "Deco LW"))
 			return true;
 	}
 

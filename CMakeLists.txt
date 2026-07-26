@@ -802,7 +802,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-topre.c
         # Pinned-upstream UC-Logic/Huion/XP-Pen tablet stack. The driver table
         # keeps every upstream entry visible and activates only the selected
-        # first-stage Huion and Deco 01 V2 IDs.
+        # Huion and modern XP-Pen UGEE-v2 IDs.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-params.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-rdesc.c
@@ -831,11 +831,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         # allowlist.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/video/backlight/backlight.c
-        # Deferred: CONFIG_HID_BATTERY_STRENGTH is disabled until the
-        # generic HID battery path has matching driver/hardware coverage.
+        # Deferred: firmware uses the reduced power_supply boundary below
+        # instead of Linux power_supply core/sysfs infrastructure.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/power/supply/power_supply_core.c
-        # Reduced firmware power_supply class boundary used first by direct
-        # HID++ battery; no sysfs, VFS, uevents, or notifier emulation.
+        # Reduced firmware power_supply class boundary used by direct HID++
+        # and generic HID battery; no sysfs, VFS, uevents, or notifiers.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/power_supply.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
