@@ -61,6 +61,7 @@ typedef long loff_t;
 #define CONFIG_HID_RAZER 1
 #define CONFIG_HID_SAITEK 1
 #define CONFIG_HID_TOPRE 1
+#define CONFIG_HID_UCLOGIC 1
 #define CONFIG_HID_ZYDACRON 1
 #define CONFIG_HID_HAPTIC 1
 #define CONFIG_HID_MULTITOUCH 1
@@ -86,6 +87,9 @@ typedef long loff_t;
  * devices, and force feedback remain outside this stage.
  */
 #define CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES 1
+// Keep the complete pinned hid-uclogic device table in source while the first
+// candidate matches only Huion 256c:006d/006e and XP-Pen 28bd:0905.
+// #define CONFIG_HID_UCLOGIC_ALL_DEVICES 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.

@@ -33,6 +33,13 @@ T650 `046d:4101`, K400 `046d:4024`, and K750 `046d:4002` upstream classes.
 Its byte-exact automatic emulator completed all four class paths and the final
 direct regression on hardware on 2026-07-26.
 
+The next linked candidate imports the complete pinned-upstream UC-Logic
+implementation while selecting only Huion `256c:006d/006e` and XP-Pen Deco 01
+V2 `28bd:0905`. Its Linux-layer work is complete and both host and automatic
+emulator images build. Hardware verification is pending; do not include these
+tablets in the hardware-passed list above until the exact pair produces the
+documented input, heap, and stack result.
+
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
 device. That range is historical, not the expected value for the current
@@ -87,6 +94,16 @@ Each interface of a composite USB device is handled independently. An
 unsupported WebHID interface may produce `WARN: HID_IGNORED` while the keyboard
 and mouse interfaces continue working. CDC is not HID and never enters this
 probe path.
+
+The selected UC-Logic paths use this same per-interface lifecycle. Huion reads
+decoded firmware string 201 and raw parameter string 200 before parsing its
+generated Pen/Pad/Touch Strip/Dial descriptors. Deco 01 V2 exposes three HID
+interfaces; interface 2 performs an exact interrupt-OUT probe on endpoint
+`0x03`, then reads raw parameter string 100 before publishing its Pen and Pad
+nodes. Interface 0 publishes the upstream-generated frame Mouse node and
+interface 1 is intentionally rejected by upstream, producing the host's
+expected `WARN: HID_IGNORED` topology marker. These synchronous-looking calls
+block only the lifecycle task, never TinyUSB's owner.
 
 Interrupt-IN receive is armed from `usbhid_open()` or `usbhid_start()`, not
 from probe. Ignored or failed interfaces therefore do not keep delivering

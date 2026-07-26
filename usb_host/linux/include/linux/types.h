@@ -30,12 +30,15 @@ typedef int16_t __s16;
 typedef signed int __s32;
 typedef int64_t __s64;
 typedef uint16_t __le16;
+typedef uint32_t __le32;
 typedef unsigned long __kernel_ulong_t;
 typedef unsigned long kernel_ulong_t;
 typedef unsigned int umode_t;
 
 #define __BITS_PER_LONG (__SIZEOF_LONG__ * 8)
 #define __user
+/* Sparse-only type annotation; it has no runtime representation in firmware. */
+#define __force
 
 /* The reduced libc-backed type shim is valid only on a Linux-like 32-bit int. */
 _Static_assert(sizeof(u32) == 4 && sizeof(s32) == 4,

@@ -302,6 +302,33 @@ plateau. The following final direct profile returns exactly to the earlier
 direct attached `free/largest/blocks` tuple, establishing that the difference
 is transient rather than cumulative retention.
 
+### UC-Logic tablet candidate
+
+Linking the complete pinned-upstream UC-Logic implementation for the selected
+Huion and Deco paths produces:
+
+```text
+host text/data/bss             549776 / 788 / 245208 B
+host __bss_end__               0x2003fe00
+host main-bank headroom        512 B to 0x20040000
+emulator text/data/bss          59720 / 0 / 254432 B
+hardware verdict               pending exact host/emulator pair
+```
+
+Relative to the hardware-passed M560/T650/K400/K750 checkpoint, this candidate
+adds 12,952 bytes of host text, no data, and 48 bytes of BSS. The static cost
+does not describe the live tablet graph: Huion generates Pen, Pad, Touch Strip,
+and Dial reports from string 200, while Deco creates three HID interfaces and
+Pen, Pad, and frame-Mouse input nodes after its OUT/string probe.
+
+The lifecycle stack is the new narrow static-runtime boundary.
+`uclogic_params_init()` has an approximately 644-byte optimized frame and
+`usb_string()` uses a 256-byte local descriptor buffer inside the existing
+512-word lifecycle task. Hardware acceptance therefore requires its minimum
+watermark to remain nonzero. It must also compare the repeated alert-profile
+heap plateaus after each tablet removal, retain a sufficiently large
+contiguous block for the next parser run, and finish with `oom=0`.
+
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
 priority-inheritance mutexes. It builds as:

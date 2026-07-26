@@ -320,6 +320,9 @@ Recorded emulator branches:
   press/release from a zero-valued report.
 - `device/kye-easypen-m406`: KYE report fixup and probe-time SET_REPORT tablet
   enable path.
+- `device/uclogic-tablet-matrix`: generic pen regression, Huion H640P and
+  Kamvas 13 dynamic string-parameter paths, and the three-interface XP-Pen
+  Deco 01 V2 interrupt-OUT/string path.
 - `device/primax-keyboard`: raw event rewrite and re-entry into the HID parser.
 - `device/pxrc-phoenixrc`: report fixup plus stateful raw axis shuffle.
 - `device/quirks-atmel-ma901`: name-based `hid_ignore()` quirk requiring the
@@ -849,6 +852,50 @@ This stage stops at Linux input/evdev. It does not add KeyD high-resolution
 wheel policy, absolute-touch policy, UI battery presentation, HIDRAW
 subscribers, Bluetooth, Bolt, legacy 27 MHz classes, or force feedback.
 
+## UC-Logic Tablet Candidate
+
+Branch `device/uclogic-tablet-matrix` is the automatic fixture for the current
+uncommitted UC-Logic host candidate. It cold-boots as a generic pen, then
+reconnects sequentially as Huion H640P `256c:006d`, Huion Kamvas 13
+`256c:006e`, and XP-Pen Deco 01 V2 `28bd:0905`. A repeated
+`cafe:10ff UC-Logic Test Alert` keyboard makes the result visible solely in
+the host log:
+
+```text
+f1  generic pen complete
+f2  H640P string 201/200 plus Pen/Pad/Touch Strip/Dial input complete
+f3  Kamvas 13 string 201/200 plus the same input classes complete
+f4  Deco exact interrupt-OUT/string 100 plus Pen/Pad/Mouse input complete
+f10 complete sequence
+f12 + a/b/c/d repeated three times: corresponding phase did not complete
+```
+
+The Huion fixture requires firmware string 201 before the raw 18-byte
+parameter string 200. Deco exposes IN endpoints `0x81/0x82/0x83` and OUT
+endpoint `0x03`; interface 2 must receive exactly
+`02 b0 04 00 00 00 00 00 00 00` before raw string 100 is served. The
+emulator then sends representative position, pressure, tilt, frame-button,
+touch/dial, and relative-mouse reports using the raw report IDs and byte
+offsets transformed by pinned upstream.
+
+Both images build:
+
+```text
+host text/data/bss       549776 / 788 / 245208 B
+emulator text/data/bss    59720 / 0 / 254432 B
+hardware verdict         pending
+```
+
+Acceptance requires `f1`, `f2`, `f3`, `f4`, then `f10`, no `f12`, all
+expected Linux input nodes and events, equivalent alert-profile heap plateaus
+after every removal, `oom=0`, and nonzero task watermarks. Deco interface 1 is
+intentionally invalidated by upstream and produces one expected
+`WARN: HID_IGNORED`; other new warnings are not part of the expected result.
+In particular, record the lifecycle watermark because the newly active USB
+string path uses a 256-byte local buffer. Do not infer support for every model
+sharing `256c:006d/006e`; this fixture certifies only its two parameter
+profiles.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
@@ -900,6 +947,14 @@ and emulator CDC lines under each item.
     `f10`, no `f12`, and stable equivalent heap/stack plateaus
   - K750 snapshot values remain intentionally unacknowledged by the noop UI
   - verdict: passed 2026-07-26; exactly one expected complete-eQuad OOM
+- [ ] first UC-Logic tablet matrix
+  - emulator branch `device/uclogic-tablet-matrix`
+  - require `f1`, `f2`, `f3`, `f4`, terminal `f10`, and no `f12`
+  - require Huion Pen/Pad/Touch Strip/Dial and Deco Pen/Pad/Mouse events
+  - compare every repeated alert heap plateau; require `oom=0` and nonzero
+    lifecycle stack watermark
+  - allow exactly one `WARN: HID_IGNORED` for Deco interface 1
+  - verdict: pending exact host/emulator hardware log
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

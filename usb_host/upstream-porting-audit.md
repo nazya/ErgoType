@@ -879,6 +879,22 @@ contains a hypothetical NULL check that no current caller can exercise.
   imports `hid_compat.h`. Kernel `input.h`, `hid.h`, `usb.h`, `workqueue.h`,
   and `timer.h` remain reduced contracts. The reduced `bitmap.h` provides only
   the upstream `bitmap_empty()` API needed by `hid-multitouch`.
+- The complete pinned `hid-uclogic` core, parameter, and descriptor sources are
+  linked for a narrow ID allowlist. Both descriptor headers and
+  `hid-uclogic-rdesc.c` remain byte-identical to pinned upstream. Core differs
+  only at the unavailable private-usbhid include, the locally explained active
+  ID gates, and immutable driver registration; params differs only at that
+  private include and the single allocate/copy/free replacement for upstream
+  `krealloc()`. The original displaced lines remain adjacent.
+- UC-Logic activates the existing task-side USB string and interrupt-OUT
+  contracts. Reduced `list.h`, `ctype.h`, `string_choices.h`, and KUnit
+  visibility headers expose only the reached upstream surface; `__force` is a
+  no-runtime Sparse annotation and the little-endian conversions are valid for
+  every supported firmware MCU target. The selected string consumers are
+  ASCII; the reduced decoder supports BMP code points and substitutes `?` for
+  UTF-16 surrogate units, so the ID gate must not widen to a non-BMP consumer
+  without extending that contract. No generic URB, HIDRAW consumer, VFS, KeyD
+  tablet policy, UI, LED, or power contract was added.
 - FreeRTOS queues use the 8-byte `port_input_event`; evdev converts from the
   16-byte kernel `input_event` at the devmon boundary. `__KERNEL__` selects the
   kernel UAPI layout without exposing unavailable newlib ioctl headers.
@@ -1117,13 +1133,18 @@ Current checkpoint audit:
 - retained the prior whole-file audit and diffed the newly linked
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`. There are
-  now 31 linked Linux-derived C translation units; thirty have an upstream
+  now 34 linked Linux-derived C translation units; thirty-three have an upstream
   source counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument, and every direct-stage
   capability gate states its boundary locally. No unexplained active-path
   replacement or P0/P1 divergence remains; bounded P2 contracts are listed
   above
+- audited the newly linked UC-Logic sources against pinned
+  `83f1454877cc292b88baf13c829c16ce6937d120`: its complete upstream device
+  table remains visible, while only Huion `256c:006d/006e` and Deco 01 V2
+  `28bd:0905` are active. The matching automatic emulator and host both build;
+  hardware heap/stack/input verification remains pending
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep
   on a mutex, queue, or task notification and recheck a durable predicate. The

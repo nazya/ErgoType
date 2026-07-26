@@ -62,8 +62,6 @@ Current unsupported patterns include:
 
 - `usb_submit_urb()` and request-specific kill/resubmit ownership
 - synchronous interrupt-IN messages
-- `usb_string()` or explicit string-descriptor reads when the string is required
-  beyond the pre-probe product/manufacturer/serial snapshots
 - multi-interface protocols that require a complete USB-core ownership model,
   sibling binding, or `usb_get_intfdata()` coordination
 - protocols whose init burst exceeds the logical usbhid FIFO's shared 4096-byte
@@ -221,9 +219,23 @@ T650, generic simultaneous Unifying keyboard/mouse children, and direct USB
 HID++ regression. A direct-USB MX Vertical capability fixture remains future.
 Logitech Bolt must be treated as a separate protocol/device check rather than
 assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
-USB transport until a Bluetooth HID backend exists. Wacom and simple
-LetSketch-like tablets are the next useful family after Logitech because they
-exercise the same raw-report and multitouch boundaries.
+USB transport until a Bluetooth HID backend exists.
+
+The first UC-Logic stage is now linked as a hardware candidate. It activates
+only Huion dynamic IDs `256c:006d/006e` and XP-Pen Deco 01 V2 `28bd:0905`;
+the rest of the complete pinned-upstream match table remains visible but
+inactive. The Huion path uses decoded string 201 and raw parameter string 200.
+The three-interface Deco path sends its ten-byte probe through interrupt OUT
+endpoint `0x03`, then reads raw parameter string 100. Both operations run in
+the lifecycle task over the existing async transport owner. No HIDRAW, VFS,
+KeyD tablet policy, UI, LED, or power expansion is part of this stage.
+
+The matching automatic emulator covers a generic pen, H640P and Kamvas 13
+parameter profiles, and Deco 01 V2 pen/pad/frame-mouse input. This establishes
+specific profile coverage, not every retail model sharing Huion's dynamic
+IDs. Hardware acceptance is still pending and must include full heap recovery,
+`oom=0`, and a nonzero lifecycle stack watermark. Wacom is the next larger
+tablet family after that result.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller
@@ -316,8 +328,6 @@ by itself is no longer a transport blocker:
 - `hid-ntrig.c`: USB control-message firmware/query path.
 - `hid-sony.c`, `hid-nintendo.c`, `hid-playstation.c`: controller init uses
   request/response and worker-style state.
-- `hid-uclogic-params.c`: USB strings, interface counts, and returned feature
-  data drive parameter setup.
 
 This list is not exhaustive. Reimport one driver at a time and record the
 specific upstream wait/request site and the hardware/emulator check that makes

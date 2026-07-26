@@ -8,4 +8,10 @@ static inline __le16 cpu_to_le16(u16 v)
 	return v;
 }
 
+static inline __le32 cpu_to_le32(u32 v)
+{
+	/* Every supported firmware MCU target is little-endian. */
+	return v;
+}
+
 #endif

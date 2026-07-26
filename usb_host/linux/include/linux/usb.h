@@ -388,8 +388,9 @@ exit:
 
 #if 0
 /*
- * Deferred: enumeration already caches descriptors and strings asynchronously;
- * expose these allocation-heavy USB-core helpers only with a linked consumer.
+ * Deferred: enumeration already caches ordinary descriptors asynchronously;
+ * expose this allocation-heavy generic descriptor helper with a linked
+ * consumer. USB string helpers below are active for hid-uclogic.
  */
 static inline int usb_get_descriptor(struct usb_device *dev, unsigned char desctype,
 				     unsigned char descindex, void *buf, int size)
@@ -418,6 +419,12 @@ static inline int usb_get_descriptor(struct usb_device *dev, unsigned char desct
 
 	return ret;
 }
+#endif
+
+/*
+ * Upstream USB string helpers become reachable with hid-uclogic. They run in
+ * the lifecycle task over the existing synchronous-looking async EP0 bridge.
+ */
 
 static inline int usb_get_string(struct usb_device *dev, unsigned short langid,
 					 unsigned char index, void *buf, int size)
@@ -489,22 +496,24 @@ static inline int usb_string_sub(struct usb_device *dev, unsigned int langid,
 	return rc;
 }
 
-static inline int usb_string_decode(const u8 *desc, int actual, char *buf, size_t size)
+/*
+ * usb_host/usbhid.c has an independent pre-probe decoder in the same
+ * translation unit. Keep this USB-core helper private under a distinct name.
+ * The selected UC-Logic paths use ASCII firmware/button strings. This reduced
+ * decoder supports BMP code points but replaces UTF-16 surrogate code units
+ * with '?'; widen it before enabling an ID that requires non-BMP strings.
+ * Its only caller supplies a nonempty output buffer and a validated string
+ * descriptor of at least two bytes.
+ */
+static inline int usb_core_string_decode(const u8 *desc, int actual,
+					 char *buf, size_t size)
 {
 	size_t out = 0;
 	u8 len;
 
-	if (!size)
-		return -EINVAL;
-
 	buf[0] = '\0';
 
-	if (actual < 2)
-		return -EINVAL;
-
 	len = desc[0];
-	if (desc[1] != USB_DT_STRING)
-		return -EINVAL;
 	if (len > actual)
 		len = (u8)actual;
 
@@ -567,6 +576,10 @@ static inline int usb_get_langid(struct usb_device *dev, unsigned char *tbuf)
 	return 0;
 }
 
+/*
+ * Firmware has no USB suspend state. Unlike upstream, this lifecycle-task
+ * contract uses fixed stack storage instead of a per-call kmalloc()/kfree().
+ */
 static inline int usb_string(struct usb_device *dev, int index, char *buf, size_t size)
 {
 	u8 tbuf[256];
@@ -587,14 +600,19 @@ static inline int usb_string(struct usb_device *dev, int index, char *buf, size_
 	if (err < 0)
 		return err;
 
-	err = usb_string_decode(tbuf, err, buf, size);
-	if (err >= 0 && tbuf[1] != USB_DT_STRING)
+	err = usb_core_string_decode(tbuf, err, buf, size);
+	if (tbuf[1] != USB_DT_STRING)
 		dev_dbg(&dev->dev,
 			"wrong descriptor type %02x for string %d (\"%s\")\n",
 			tbuf[1], index, buf);
 	return err;
 }
 
+#if 0
+/*
+ * Deferred: no linked driver uses USB status through this compact USB-core
+ * shim. Enable it together with a concrete caller and its status semantics.
+ */
 static inline int usb_get_status(struct usb_device *dev,
 				 int recip, int type, int target, void *data)
 {

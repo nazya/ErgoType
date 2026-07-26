@@ -1395,10 +1395,9 @@ static bool usbhid_usb_device_has_string_indexes(const struct usbhid_usb_device 
 }
 
 // Upstream Linux keeps this decode inside drivers/usb/core/message.c::usb_string().
-// Local disabled USB-core shim has this extracted as usb_string_decode() in
-// usb_host/linux/include/linux/usb.h.
-// The allocation-heavy usb_string()/full descriptor helper stays disabled;
-// lifecycle uses its fixed pool scratch after the generic usb_control_msg().
+// The active reduced USB-core shim has a separate usb_core_string_decode() for
+// driver-time requests. Pre-probe enumeration still uses this helper with the
+// lifecycle cache's fixed scratch buffer.
 static int usb_string_decode(const u8 *desc, uint16_t actual,
 			     char *buf, size_t size)
 {
