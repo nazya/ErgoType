@@ -944,7 +944,9 @@ static int hidpp_unifying_get_serial(struct hidpp_device *hidpp, u32 *serial)
 	 * We don't care about LE or BE, we will output it as a string
 	 * with %4phD, so we need to keep the order.
 	 */
-	*serial = *((u32 *)&response.rap.params[1]);
+	// *serial = *((u32 *)&response.rap.params[1]);
+	// Packed HID++ reports may not provide firmware-safe u32 alignment.
+	memcpy(serial, &response.rap.params[1], sizeof(*serial));
 	return 0;
 }
 
@@ -959,7 +961,13 @@ static int hidpp_unifying_init(struct hidpp_device *hidpp)
 	if (ret)
 		return ret;
 
-	snprintf(hdev->uniq, sizeof(hdev->uniq), "%4phD", &serial);
+	// snprintf(hdev->uniq, sizeof(hdev->uniq), "%4phD", &serial);
+	// Firmware libc has no kernel %phD extension; preserve wire byte order.
+	snprintf(hdev->uniq, sizeof(hdev->uniq), "%02x-%02x-%02x-%02x",
+		 (unsigned int)((u8 *)&serial)[0],
+		 (unsigned int)((u8 *)&serial)[1],
+		 (unsigned int)((u8 *)&serial)[2],
+		 (unsigned int)((u8 *)&serial)[3]);
 	dbg_hid("HID++ Unifying: Got serial: %s\n", hdev->uniq);
 
 	name = hidpp_unifying_get_name(hidpp);
@@ -3953,22 +3961,29 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 		hid_compat_waitqueue_state_unlock(&hidpp->wait);
 	}
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY)
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
+	!IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY)
 	/*
 	 * The direct firmware stage covers request/reply plus pre-connect identity.
 	 * Battery, receiver connect events, wheel extensions, and vendor-key
 	 * handling stay in their upstream positions for later tested stages.
 	 */
-	return 0;
+	if (hidpp->hid_dev->group != HID_GROUP_LOGITECH_DJ_DEVICE)
+		return 0;
 #endif
+
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
+	if (hidpp->hid_dev->group == HID_GROUP_LOGITECH_DJ_DEVICE &&
+	    unlikely(hidpp_report_is_connect_event(hidpp, report))) {
 #else
 	if (unlikely(hidpp_report_is_connect_event(hidpp, report))) {
+#endif
 		if (schedule_work(&hidpp->work) == 0)
 			dbg_hid("%s: connect event already queued\n", __func__);
 		return 1;
 	}
 
+#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	if (hidpp->hid_dev->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    data[0] == REPORT_ID_HIDPP_SHORT &&
 	    data[2] == HIDPP_SUB_ID_USER_IFACE_EVENT &&
@@ -4008,7 +4023,10 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 	}
 
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/* Direct USB opens only battery broadcasts after request/reply matching. */
+	/*
+	 * The selected M705 path uses the standard HID wheel event hook below the
+	 * parser. HID++ report wheels, reset work, and vendor keys remain staged.
+	 */
 	return 0;
 #else
 	if (hidpp->quirks & HIDPP_QUIRK_RESET_HI_RES_SCROLL) {
@@ -4284,57 +4302,58 @@ static struct input_dev *hidpp_allocate_input(struct hid_device *hdev)
 static void hidpp_connect_event(struct work_struct *work)
 {
 	struct hidpp_device *hidpp = container_of(work, struct hidpp_device, work);
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	struct hid_device *hdev = hidpp->hid_dev;
 	struct input_dev *input;
 	char *name, *devm_name;
-#endif
 	int ret;
 
 	/* Get device version to check if it is connected */
 	ret = hidpp_root_get_protocol_version(hidpp);
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
+	if (hdev->group != HID_GROUP_LOGITECH_DJ_DEVICE) {
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY)
-	/*
-	 * The upstream repeat-work disconnect path remains in the #else below.
-	 * Direct probe runs this work once, before battery.ps can be registered.
-	 */
-	if (ret)
-		return;
+		/*
+		 * The upstream repeat-work disconnect path continues below for
+		 * receiver children. Direct probe runs this work once, before
+		 * battery.ps can be registered.
+		 */
+		if (ret)
+			return;
 
-	/* Run the upstream battery initialization/query block before direct return. */
-	(void)hidpp_initialize_battery(hidpp);
-	if (hidpp->capabilities & HIDPP_CAPABILITY_HIDPP10_BATTERY) {
-		hidpp10_enable_battery_reporting(hidpp);
-		if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_MILEAGE)
-			hidpp10_query_battery_mileage(hidpp);
-		else
-			hidpp10_query_battery_status(hidpp);
-	} else if (hidpp->capabilities &
-		   HIDPP_CAPABILITY_HIDPP20_BATTERY) {
-		if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_VOLTAGE)
-			hidpp20_query_battery_voltage_info(hidpp);
-		else if (hidpp->capabilities &
-			 HIDPP_CAPABILITY_UNIFIED_BATTERY)
-			hidpp20_query_battery_info_1004(hidpp);
-		else if (hidpp->capabilities &
-			 HIDPP_CAPABILITY_ADC_MEASUREMENT)
-			hidpp20_query_adc_measurement_info_1f20(hidpp);
-		else
-			hidpp20_query_battery_info_1000(hidpp);
-	}
-	if (hidpp->battery.ps)
-		power_supply_changed(hidpp->battery.ps);
+		/* Run the upstream battery initialization/query block before direct return. */
+		(void)hidpp_initialize_battery(hidpp);
+		if (hidpp->capabilities & HIDPP_CAPABILITY_HIDPP10_BATTERY) {
+			hidpp10_enable_battery_reporting(hidpp);
+			if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_MILEAGE)
+				hidpp10_query_battery_mileage(hidpp);
+			else
+				hidpp10_query_battery_status(hidpp);
+		} else if (hidpp->capabilities &
+			   HIDPP_CAPABILITY_HIDPP20_BATTERY) {
+			if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_VOLTAGE)
+				hidpp20_query_battery_voltage_info(hidpp);
+			else if (hidpp->capabilities &
+				 HIDPP_CAPABILITY_UNIFIED_BATTERY)
+				hidpp20_query_battery_info_1004(hidpp);
+			else if (hidpp->capabilities &
+				 HIDPP_CAPABILITY_ADC_MEASUREMENT)
+				hidpp20_query_adc_measurement_info_1f20(hidpp);
+			else
+				hidpp20_query_battery_info_1000(hidpp);
+		}
+		if (hidpp->battery.ps)
+			power_supply_changed(hidpp->battery.ps);
 #else
-	/*
-	 * Identity runs synchronously in probe before hid_connect(). The work item
-	 * retains only upstream protocol detection; battery, scrolling, and
-	 * delayed input remain separately gated.
-	 */
-	(void)ret;
+		/*
+		 * Identity runs synchronously in probe before hid_connect(). The work
+		 * item retains only upstream protocol detection for direct USB.
+		 */
+		(void)ret;
 #endif
-	return;
-#else
+		return;
+	}
+#endif
+
 	if (ret) {
 		hid_dbg(hidpp->hid_dev, "Disconnected\n");
 		if (hidpp->battery.ps) {
@@ -4398,6 +4417,17 @@ static void hidpp_connect_event(struct work_struct *work)
 		}
 	}
 
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
+	/*
+	 * The selected DJ stage ends at Linux wheel publication. Keep the
+	 * upstream battery block below for its separately measured stage.
+	 */
+	hidpp_initialize_hires_scroll(hidpp);
+	if (hidpp->capabilities & HIDPP_CAPABILITY_HI_RES_SCROLL)
+		hi_res_scroll_enable(hidpp);
+	return;
+#endif
+
 	hidpp_initialize_battery(hidpp);
 	if (!hid_is_usb(hidpp->hid_dev))
 		hidpp_initialize_hires_scroll(hidpp);
@@ -4444,7 +4474,6 @@ static void hidpp_connect_event(struct work_struct *work)
 	}
 
 	hidpp->delayed_input = input;
-#endif
 }
 
 static void hidpp_reset_hi_res_handler(struct work_struct *work)
@@ -4603,7 +4632,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
 #else
 	// INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
-	// High-resolution scrolling is a later independently tested checkpoint.
+	// Reset-on-reconnect devices remain outside the selected M705 stage.
 #endif
 	mutex_init(&hidpp->send_mutex);
 	/* Linux embeds an infallible mutex; the firmware mutex owns heap storage. */
@@ -4659,17 +4688,17 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	if (hidpp->quirks & HIDPP_QUIRK_DELAYED_INIT)
 		connect_mask &= ~HID_CONNECT_HIDINPUT;
-#elif IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_IDENTITY)
-	/*
-	 * The selected stage contains one direct USB identity. Keep the upstream
-	 * DJ/receiver identity path gated until its virtual children are enabled.
-	 */
-	hidpp_non_unifying_init(hidpp);
 #else
 	/*
-	 * hidpp_unifying_init()/hidpp_non_unifying_init() are upstream identity
-	 * stages. Keep USB descriptors unchanged in the request/reply checkpoint.
+	 * Direct USB and the selected DJ child now use the corresponding upstream
+	 * pre-connect identity paths.
 	 */
+	if (id->group == HID_GROUP_LOGITECH_DJ_DEVICE)
+		hidpp_unifying_init(hidpp);
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_IDENTITY)
+	else
+		hidpp_non_unifying_init(hidpp);
+#endif
 #endif
 
 	/* Now export the actual inputs and hidraw nodes to the world */
@@ -4723,7 +4752,7 @@ hid_hw_start_fail:
 	 * No upstream sysfs group was published in this checkpoint; release its
 	 * exact-interface wait binding instead of removing that group.
 	 */
-	hid_compat_waitqueue_unbind(hdev);
+	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
 #else
 	sysfs_remove_group(&hdev->dev.kobj, &ps_attribute_group);
 #endif
@@ -4757,7 +4786,7 @@ static void hidpp_remove(struct hid_device *hdev)
 	cancel_work_sync(&hidpp->work);
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/* hid_hw_stop() published disconnect; now release the wait binding. */
-	hid_compat_waitqueue_unbind(hdev);
+	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
 #else
 	cancel_work_sync(&hidpp->reset_hi_res_work);
 #endif
@@ -4775,13 +4804,18 @@ static void hidpp_remove(struct hid_device *hdev)
 static const struct hid_device_id hidpp_devices[] = {
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/*
-	 * Direct USB request/reply, identity, and battery only. Receiver children,
-	 * Bluetooth, wheels, touchpads, and broad Logitech matching remain below.
+	 * Keep direct USB at its measured identity/battery stage and add the
+	 * covered M705 receiver child. Other receiver children, Bluetooth,
+	 * touchpads, and broad Logitech matching remain below.
 	 */
 	{ /* Logitech G502 Lightspeed Wireless Gaming Mouse over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08D) },
 	{ /* MX Vertical over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08A) },
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
+	{ /* Mouse Logitech M705 (firmware RQM17) */
+	  LDJ_DEVICE(0x101b), .driver_data = HIDPP_QUIRK_HI_RES_SCROLL_1P0 },
+#endif
 #else
 	{ /* wireless touchpad */
 	  LDJ_DEVICE(0x4011),
@@ -4974,13 +5008,17 @@ static const struct hid_driver hidpp_driver = {
 	.id_table = hidpp_devices,
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/*
-	 * Input remains generic while the direct stage adds request/reply and
-	 * pre-connect identity. Capability-specific fixup/mapping/event hooks stay
-	 * in their upstream descriptor below.
+	 * M705 high-resolution scrolling needs the upstream usage interception and
+	 * input pointer. Other capability-specific input hooks stay staged.
 	 */
 	.probe = hidpp_probe,
 	.remove = hidpp_remove,
 	.raw_event = hidpp_raw_event,
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
+	.usage_table = hidpp_usages,
+	.event = hidpp_event,
+	.input_configured = hidpp_input_configured,
+#endif
 #else
 	.report_fixup = hidpp_report_fixup,
 	.probe = hidpp_probe,

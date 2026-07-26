@@ -1672,6 +1672,7 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 void usbhid_report_stop(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid;
+	wait_queue_head_t *protocol_wait;
 	bool defer = false;
 
 	if (!hid)
@@ -1680,8 +1681,9 @@ void usbhid_report_stop(struct hid_device *hid)
 
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
-	if (usbhid->protocol_wait)
-		hid_compat_waitqueue_cancel(usbhid->protocol_wait);
+	for (protocol_wait = usbhid->protocol_waits; protocol_wait;
+	     protocol_wait = protocol_wait->transport_next)
+		hid_compat_waitqueue_cancel(protocol_wait);
 	usbhid->report_wanted = false;
 	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;
@@ -1701,6 +1703,7 @@ void usbhid_report_stop(struct hid_device *hid)
 void usbhid_report_unplug(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid;
+	wait_queue_head_t *protocol_wait;
 	int slot;
 
 	if (!hid)
@@ -1709,8 +1712,9 @@ void usbhid_report_unplug(struct hid_device *hid)
 
 	hid_transport_lock();
 	usbhid->transport_stopping = true;
-	if (usbhid->protocol_wait)
-		hid_compat_waitqueue_cancel(usbhid->protocol_wait);
+	for (protocol_wait = usbhid->protocol_waits; protocol_wait;
+	     protocol_wait = protocol_wait->transport_next)
+		hid_compat_waitqueue_cancel(protocol_wait);
 	usbhid->report_wanted = false;
 	usbhid->report_open_state = USBHID_REPORT_CLOSED;
 	usbhid->report_revision++;

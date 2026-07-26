@@ -4413,27 +4413,47 @@ void usbhid_wait_wake_locked(struct hid_device *hid)
  * exact TinyUSB interface generation so callback-side stop can publish an
  * allocation-free cancellation edge before lifecycle teardown.
  */
+static struct hid_device *usbhid_protocol_owner(struct hid_device *hid)
+{
+	/*
+	 * Upstream Linux: a DJ child shares its receiver's USB transport.
+	 * Firmware resolves that physical owner before accessing usbhid state.
+	 */
+	if (hid->group == HID_GROUP_LOGITECH_DJ_DEVICE)
+		return to_hid_device(hid->dev.parent);
+	return hid;
+}
+
 int hid_compat_waitqueue_bind(wait_queue_head_t *wait, struct hid_device *hid)
 {
-	struct usbhid_device *usbhid = hid->driver_data;
+	struct usbhid_device *usbhid =
+		usbhid_protocol_owner(hid)->driver_data;
 	int ret = 0;
 
 	hid_transport_lock();
 	if (usbhid->transport_stopping) {
 		ret = -ENODEV;
 	} else {
-		usbhid->protocol_wait = wait;
+		wait->transport_next = usbhid->protocol_waits;
+		usbhid->protocol_waits = wait;
 	}
 	hid_transport_unlock();
 	return ret;
 }
 
-void hid_compat_waitqueue_unbind(struct hid_device *hid)
+void hid_compat_waitqueue_unbind(wait_queue_head_t *wait,
+				 struct hid_device *hid)
 {
-	struct usbhid_device *usbhid = hid->driver_data;
+	struct usbhid_device *usbhid =
+		usbhid_protocol_owner(hid)->driver_data;
+	wait_queue_head_t **link;
 
 	hid_transport_lock();
-	usbhid->protocol_wait = NULL;
+	link = &usbhid->protocol_waits;
+	while (*link != wait)
+		link = &(*link)->transport_next;
+	*link = wait->transport_next;
+	wait->transport_next = NULL;
 	hid_transport_unlock();
 }
 

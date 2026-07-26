@@ -70,11 +70,11 @@ struct usbhid_device {
 	// every concurrent hid_hw_wait()/teardown predicate owner durable.
 	struct usbhid_io_waiter *io_waiters;
 	/*
-	 * Upstream USB core wakes a driver's protocol wait when disconnect makes
-	 * its answer impossible. The first HID++ slice has one send_mutex-
-	 * serialized wait queue, bound to this exact interface generation.
+	 * Upstream USB core wakes driver protocol waits when disconnect makes
+	 * their answers impossible. HID++ wait heads are linked here without
+	 * allocation and remain bound to this exact interface generation.
 	 */
-	wait_queue_head_t *protocol_wait;
+	wait_queue_head_t *protocol_waits;
 	struct usbhid_report_request *ctrl_head;
 	struct usbhid_report_request *ctrl_tail;
 	struct usbhid_report_request *out_head;

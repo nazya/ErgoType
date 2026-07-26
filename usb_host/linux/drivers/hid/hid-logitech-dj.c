@@ -167,6 +167,11 @@ struct dj_device {
 	struct dj_receiver_dev *dj_receiver_dev;
 	u64 reports_supported;
 	u8 device_index;
+	/*
+	 * Upstream Linux publishes virtual HID input through device core. Firmware
+	 * activates its evdev client separately after the complete child probe.
+	 */
+	bool driver_ready;
 };
 
 #define WORKITEM_TYPE_EMPTY	0
@@ -909,6 +914,7 @@ static void logi_dj_recv_add_djhid_device(struct dj_receiver_dev *djrcv_dev,
 	// Upstream Linux: physical bus registration also publishes input devices.
 	// Firmware virtual children need the same post-probe evdev publication.
 	evdev_activate_hid(dj_hiddev);
+	__atomic_store_n(&dj_dev->driver_ready, true, __ATOMIC_RELEASE);
 
 	return;
 
@@ -1239,6 +1245,20 @@ static void logi_hidpp_recv_queue_notif(struct hid_device *hdev,
 	usbhid_lifecycle_schedule_work(&djrcv_dev->work);
 }
 
+/*
+ * Upstream Linux: virtual children are published with their input path.
+ * Firmware keeps protocol replies reachable during probe, but withholds
+ * ordinary fields until the separate evdev activation has completed.
+ */
+static int logi_dj_child_input_report(struct dj_device *dj_dev, u8 *data,
+				      int size)
+{
+	if (!__atomic_load_n(&dj_dev->driver_ready, __ATOMIC_ACQUIRE))
+		return hid_safe_raw_event_only(dj_dev->hdev, HID_INPUT_REPORT,
+					      data, size, size, 1);
+	return hid_input_report(dj_dev->hdev, HID_INPUT_REPORT, data, size, 1);
+}
+
 static void logi_dj_recv_forward_null_report(struct dj_receiver_dev *djrcv_dev,
 					     struct dj_report *dj_report)
 {
@@ -1254,10 +1274,13 @@ static void logi_dj_recv_forward_null_report(struct dj_receiver_dev *djrcv_dev,
 	for (i = 0; i < NUMBER_OF_HID_REPORTS; i++) {
 		if (djdev->reports_supported & (1 << i)) {
 			reportbuffer[0] = i;
-			if (hid_input_report(djdev->hdev,
-					     HID_INPUT_REPORT,
-					     reportbuffer,
-					     hid_reportid_size_map[i], 1)) {
+			// if (hid_input_report(djdev->hdev,
+			// 		     HID_INPUT_REPORT,
+			// 		     reportbuffer,
+			// 		     hid_reportid_size_map[i], 1)) {
+			// Keep ordinary fields private until firmware evdev activation.
+			if (logi_dj_child_input_report(djdev, reportbuffer,
+						      hid_reportid_size_map[i])) {
 				dbg_hid("hid_input_report error sending null "
 					"report\n");
 			}
@@ -1279,9 +1302,13 @@ static void logi_dj_recv_forward_dj(struct dj_receiver_dev *djrcv_dev,
 		return;
 	}
 
-	if (hid_input_report(dj_device->hdev,
-			HID_INPUT_REPORT, &dj_report->report_type,
-			hid_reportid_size_map[dj_report->report_type], 1)) {
+	// if (hid_input_report(dj_device->hdev,
+	// 		HID_INPUT_REPORT, &dj_report->report_type,
+	// 		hid_reportid_size_map[dj_report->report_type], 1)) {
+	// Keep ordinary fields private until firmware evdev activation.
+	if (logi_dj_child_input_report(
+		    dj_device, &dj_report->report_type,
+		    hid_reportid_size_map[dj_report->report_type])) {
 		dbg_hid("hid_input_report error\n");
 	}
 }
@@ -1290,7 +1317,9 @@ static void logi_dj_recv_forward_report(struct dj_device *dj_dev, u8 *data,
 					int size)
 {
 	/* We are called from atomic context (tasklet && djrcv->lock held) */
-	if (hid_input_report(dj_dev->hdev, HID_INPUT_REPORT, data, size, 1))
+	// if (hid_input_report(dj_dev->hdev, HID_INPUT_REPORT, data, size, 1))
+	// Keep ordinary fields private until firmware evdev activation.
+	if (logi_dj_child_input_report(dj_dev, data, size))
 		dbg_hid("hid_input_report error\n");
 }
 
@@ -1680,6 +1709,16 @@ static void logi_dj_ll_stop(struct hid_device *hid)
 	dbg_hid("%s\n", __func__);
 }
 
+static void logi_dj_ll_set_probe_raw_event(struct hid_device *hid, bool enabled)
+{
+	/*
+	 * The firmware driver_ready ingress gate is stronger: it remains
+	 * raw-event-only through probe completion and final evdev activation.
+	 */
+	(void)hid;
+	(void)enabled;
+}
+
 static bool logi_dj_ll_may_wakeup(struct hid_device *hid)
 {
 	struct dj_device *djdev = hid->driver_data;
@@ -1696,6 +1735,7 @@ static const struct hid_ll_driver logi_dj_ll_driver = {
 	.close = logi_dj_ll_close,
 	.raw_request = logi_dj_ll_raw_request,
 	.may_wakeup = logi_dj_ll_may_wakeup,
+	.set_probe_raw_event = logi_dj_ll_set_probe_raw_event,
 };
 
 static int logi_dj_dj_event(struct hid_device *hdev,
