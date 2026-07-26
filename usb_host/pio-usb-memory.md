@@ -606,7 +606,7 @@ Current wider smoke-test config:
 #define CFG_TUH_API_EDPT_XFER       1
 #define CFG_TUH_HID                 4
 #define CFG_TUH_ENUMERATION_BUFSIZE 512
-#define ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE 4096
+#define USBH_PORT_ENUMERATION_MAX_BUFSIZE 4096
 #define CFG_TUH_HID_EPIN_BUFSIZE    1
 #define CFG_TUH_HID_EPOUT_BUFSIZE   1
 ```
@@ -629,7 +629,7 @@ Tradeoffs:
 - `CFG_TUH_HID=3`: saves roughly 100-150 B versus 4 with current buffers. Enough for ErgoType NKRO. Use `2` only for boot keyboard+mouse. Use more for composite devices with more HID interfaces.
 - `CFG_TUH_ENUMERATION_BUFSIZE=256`: would save 256 B versus the current 512.
   A validated full configuration above the permanent scratch and no larger
-  than `ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE` still uses the exact transient
+  than `USBH_PORT_ENUMERATION_MAX_BUFSIZE` still uses the exact transient
   host-owner path. The build-local TinyUSB HID class separately skips every
   duplicate report-descriptor prefetch; task-side `usbhid_parse()` fetches the
   class-declared report size once through async EP0, up to Linux's 4 KiB limit.

@@ -1,7 +1,7 @@
 # Keep each additional pinned-core delta as one unique, SHA-guarded replacement.
 # The generated source retains the exact upstream statement beside every local
 # replacement, following usb_host/upstream-porting-rules.md.
-macro(ergotype_tinyusb_usbh_replace_unique LABEL UPSTREAM_VAR PORT_VAR)
+macro(tinyusb_usbh_port_replace_unique LABEL UPSTREAM_VAR PORT_VAR)
     string(FIND "${TINYUSB_USBH_PORT_CONTENT}" "${${UPSTREAM_VAR}}"
            TINYUSB_USBH_LOCAL_OFFSET)
     if(TINYUSB_USBH_LOCAL_OFFSET EQUAL -1)
@@ -48,7 +48,7 @@ TU_ATTR_ALWAYS_INLINE static inline void _set_control_xfer_stage(uint8_t stage) 
   if (publish_idle) tuh_port_control_idle_cb();
 }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("global control idle publication"
+tinyusb_usbh_port_replace_unique("global control idle publication"
     TINYUSB_USBH_CONTROL_IDLE_UPSTREAM TINYUSB_USBH_CONTROL_IDLE_PORT)
 
 set(TINYUSB_USBH_ENUM_STATE_UPSTREAM [=[
@@ -142,7 +142,7 @@ static uint8_t _enum_deferred_attach_count;
 
 // all devices excluding zero-address
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration owner"
+tinyusb_usbh_port_replace_unique("enumeration owner"
     TINYUSB_USBH_ENUM_STATE_UPSTREAM TINYUSB_USBH_ENUM_STATE_PORT)
 
 set(TINYUSB_USBH_EVENT_QUEUE_STATE_UPSTREAM [=[
@@ -171,7 +171,7 @@ OSAL_QUEUE_DEF(usbh_int_set, _usbh_qdef, CFG_TUH_TASK_QUEUE_SZ, hcd_event_t);
 #endif
 static osal_queue_t _usbh_q;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("single dynamic host event queue"
+tinyusb_usbh_port_replace_unique("single dynamic host event queue"
     TINYUSB_USBH_EVENT_QUEUE_STATE_UPSTREAM
     TINYUSB_USBH_EVENT_QUEUE_STATE_PORT)
 
@@ -660,7 +660,7 @@ static void usbh_port_enum_control_progress_on_host(uint8_t daddr) {
   }
 }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration helpers"
+tinyusb_usbh_port_replace_unique("enumeration helpers"
     TINYUSB_USBH_ENUM_HELPERS_UPSTREAM TINYUSB_USBH_ENUM_HELPERS_PORT)
 
 set(TINYUSB_USBH_ENDPOINT_COMPLETE_UPSTREAM [=[
@@ -679,7 +679,7 @@ set(TINYUSB_USBH_ENDPOINT_COMPLETE_PORT [=[
 
           if (0 == epnum) {
 ]=])
-ergotype_tinyusb_usbh_replace_unique("endpoint completion idle publication"
+tinyusb_usbh_port_replace_unique("endpoint completion idle publication"
     TINYUSB_USBH_ENDPOINT_COMPLETE_UPSTREAM
     TINYUSB_USBH_ENDPOINT_COMPLETE_PORT)
 
@@ -697,7 +697,7 @@ set(TINYUSB_USBH_ENDPOINT_ABORT_PORT [=[
     tuh_port_endpoint_idle_cb(daddr, ep_addr);
   }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("endpoint abort idle publication"
+tinyusb_usbh_port_replace_unique("endpoint abort idle publication"
     TINYUSB_USBH_ENDPOINT_ABORT_UPSTREAM TINYUSB_USBH_ENDPOINT_ABORT_PORT)
 
 set(TINYUSB_USBH_ENDPOINT_RELEASE_UPSTREAM [=[
@@ -732,7 +732,7 @@ bool usbh_edpt_release(uint8_t dev_addr, uint8_t ep_addr) {
   return true;
 }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("endpoint claim release publication"
+tinyusb_usbh_port_replace_unique("endpoint claim release publication"
     TINYUSB_USBH_ENDPOINT_RELEASE_UPSTREAM
     TINYUSB_USBH_ENDPOINT_RELEASE_PORT)
 
@@ -752,7 +752,7 @@ set(TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_PORT [=[
     tuh_port_endpoint_idle_cb(dev_addr, ep_addr);
     TU_LOG1("Failed\r\n");
 ]=])
-ergotype_tinyusb_usbh_replace_unique("endpoint submit-failure publication"
+tinyusb_usbh_port_replace_unique("endpoint submit-failure publication"
     TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_UPSTREAM
     TINYUSB_USBH_ENDPOINT_SUBMIT_FAIL_PORT)
 
@@ -769,7 +769,7 @@ set(TINYUSB_USBH_ENUM_ABORT_GATE_PORT [=[
   // preceding physical stage drains. Keep the same logical EP0 owner occupied.
   if (usbh_port_enum_xfer_owned_on_host(daddr, xfer->complete_cb)) return false;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration abort gate"
+tinyusb_usbh_port_replace_unique("enumeration abort gate"
     TINYUSB_USBH_ENUM_ABORT_GATE_UPSTREAM TINYUSB_USBH_ENUM_ABORT_GATE_PORT)
 
 set(TINYUSB_USBH_SETUP_SUBMIT_UPSTREAM [=[
@@ -787,7 +787,7 @@ set(TINYUSB_USBH_SETUP_SUBMIT_PORT [=[
     }
   }else {
 ]=])
-ergotype_tinyusb_usbh_replace_unique("async SETUP submission"
+tinyusb_usbh_port_replace_unique("async SETUP submission"
     TINYUSB_USBH_SETUP_SUBMIT_UPSTREAM TINYUSB_USBH_SETUP_SUBMIT_PORT)
 
 set(TINYUSB_USBH_CONTROL_PROGRESS_UPSTREAM [=[
@@ -804,7 +804,7 @@ set(TINYUSB_USBH_CONTROL_PROGRESS_PORT [=[
 
   if (XFER_RESULT_SUCCESS != result) {
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration progress"
+tinyusb_usbh_port_replace_unique("enumeration progress"
     TINYUSB_USBH_CONTROL_PROGRESS_UPSTREAM TINYUSB_USBH_CONTROL_PROGRESS_PORT)
 
 set(TINYUSB_USBH_DATA_SUBMIT_UPSTREAM [=[
@@ -822,7 +822,7 @@ set(TINYUSB_USBH_DATA_SUBMIT_PORT [=[
           }
           return true;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("control DATA submission"
+tinyusb_usbh_port_replace_unique("control DATA submission"
     TINYUSB_USBH_DATA_SUBMIT_UPSTREAM TINYUSB_USBH_DATA_SUBMIT_PORT)
 
 set(TINYUSB_USBH_ACK_SUBMIT_UPSTREAM [=[
@@ -840,7 +840,7 @@ set(TINYUSB_USBH_ACK_SUBMIT_PORT [=[
         }
         break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("control ACK submission"
+tinyusb_usbh_port_replace_unique("control ACK submission"
     TINYUSB_USBH_ACK_SUBMIT_UPSTREAM TINYUSB_USBH_ACK_SUBMIT_PORT)
 
 set(TINYUSB_USBH_ATTACH_UPSTREAM [=[
@@ -896,7 +896,7 @@ set(TINYUSB_USBH_ATTACH_PORT [=[
               _enum_port.attach_overflow_pending = true;
           }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("attach ownership"
+tinyusb_usbh_port_replace_unique("attach ownership"
     TINYUSB_USBH_ATTACH_UPSTREAM TINYUSB_USBH_ATTACH_PORT)
 
 set(TINYUSB_USBH_ATTACH_START_UPSTREAM [=[
@@ -958,7 +958,7 @@ set(TINYUSB_USBH_ATTACH_START_PORT [=[
           usbh_port_enum_start_on_host();
           enum_new_device(&event);
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration begin"
+tinyusb_usbh_port_replace_unique("enumeration begin"
     TINYUSB_USBH_ATTACH_START_UPSTREAM TINYUSB_USBH_ATTACH_START_PORT)
 
 set(TINYUSB_USBH_REMOVE_HOST_UPSTREAM [=[
@@ -1032,7 +1032,7 @@ set(TINYUSB_USBH_REMOVE_HOST_PORT [=[
         break;
       }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("host remove terminal fence"
+tinyusb_usbh_port_replace_unique("host remove terminal fence"
     TINYUSB_USBH_REMOVE_HOST_UPSTREAM TINYUSB_USBH_REMOVE_HOST_PORT)
 
 set(TINYUSB_USBH_RETIRED_EVENT_UPSTREAM [=[
@@ -1057,7 +1057,7 @@ set(TINYUSB_USBH_RETIRED_EVENT_PORT [=[
 
         TU_LOG_USBH("on EP %02X with %u bytes: %s\r\n", ep_addr, (unsigned int) event.xfer_complete.len, tu_str_xfer_result[event.xfer_complete.result]);
 ]=])
-ergotype_tinyusb_usbh_replace_unique("retired enumeration event fence"
+tinyusb_usbh_port_replace_unique("retired enumeration event fence"
     TINYUSB_USBH_RETIRED_EVENT_UPSTREAM TINYUSB_USBH_RETIRED_EVENT_PORT)
 
 set(TINYUSB_USBH_REMOVE_CONTROL_OWNER_UPSTREAM [=[
@@ -1083,7 +1083,7 @@ set(TINYUSB_USBH_REMOVE_CONTROL_OWNER_PORT [=[
             _set_control_xfer_stage(CONTROL_STAGE_IDLE);
         }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("remove preserves cancel owner"
+tinyusb_usbh_port_replace_unique("remove preserves cancel owner"
     TINYUSB_USBH_REMOVE_CONTROL_OWNER_UPSTREAM
     TINYUSB_USBH_REMOVE_CONTROL_OWNER_PORT)
 
@@ -1104,7 +1104,7 @@ set(TINYUSB_USBH_REMOVE_ISR_PORT [=[
       // Firmware keeps all enumeration-owner mutation in the TinyUSB task. The
       // queued REMOVE above reaches the host fence before another ATTACH can run.
 ]=])
-ergotype_tinyusb_usbh_replace_unique("ISR remove ownership"
+tinyusb_usbh_port_replace_unique("ISR remove ownership"
     TINYUSB_USBH_REMOVE_ISR_UPSTREAM TINYUSB_USBH_REMOVE_ISR_PORT)
 
 set(TINYUSB_USBH_TASK_BUDGET_START_UPSTREAM [=[
@@ -1137,7 +1137,7 @@ void tuh_task_ext(uint32_t timeout_ms, bool in_isr) {
   }
   if (enum_wait_ms < timeout_ms) timeout_ms = enum_wait_ms;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("finite host event budget"
+tinyusb_usbh_port_replace_unique("finite host event budget"
     TINYUSB_USBH_TASK_BUDGET_START_UPSTREAM
     TINYUSB_USBH_TASK_BUDGET_START_PORT)
 
@@ -1170,7 +1170,7 @@ set(TINYUSB_USBH_TASK_DEQUEUE_PORT [=[
 # The historical diagnostic label predates the FIFO-prefix implementation.
 # Keep the string unchanged in this comment-only audit; rename it in a later
 # code-changing cleanup if desired.
-ergotype_tinyusb_usbh_replace_unique("host dequeue generation"
+tinyusb_usbh_port_replace_unique("host dequeue generation"
     TINYUSB_USBH_TASK_DEQUEUE_UPSTREAM TINYUSB_USBH_TASK_DEQUEUE_PORT)
 
 set(TINYUSB_USBH_TASK_BUDGET_END_UPSTREAM [=[
@@ -1190,7 +1190,7 @@ set(TINYUSB_USBH_TASK_BUDGET_END_PORT [=[
   }
 }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("finite host event return"
+tinyusb_usbh_port_replace_unique("finite host event return"
     TINYUSB_USBH_TASK_BUDGET_END_UPSTREAM
     TINYUSB_USBH_TASK_BUDGET_END_PORT)
 
@@ -1208,7 +1208,7 @@ static bool _parse_configuration_descriptor (uint8_t dev_addr, tusb_desc_configu
 // physically drained, and rejects a late success after retirement has begun.
 static bool enum_full_complete(bool success);
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration terminal declaration"
+tinyusb_usbh_port_replace_unique("enumeration terminal declaration"
     TINYUSB_USBH_ENUM_COMPLETE_DECL_UPSTREAM
     TINYUSB_USBH_ENUM_COMPLETE_DECL_PORT)
 
@@ -1292,7 +1292,7 @@ set(TINYUSB_USBH_ENUM_RETRY_PORT [=[
   _enum_port.retry_user_data = 0;
   _enum_port.retry_daddr = 0;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration retry epoch"
+tinyusb_usbh_port_replace_unique("enumeration retry epoch"
     TINYUSB_USBH_ENUM_RETRY_UPSTREAM TINYUSB_USBH_ENUM_RETRY_PORT)
 
 set(TINYUSB_USBH_ENUM_HUB_RESET_1_UPSTREAM [=[
@@ -1345,7 +1345,7 @@ set(TINYUSB_USBH_ENUM_HUB_RESET_1_PORT [=[
       }
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("first hub reset completion"
+tinyusb_usbh_port_replace_unique("first hub reset completion"
     TINYUSB_USBH_ENUM_HUB_RESET_1_UPSTREAM
     TINYUSB_USBH_ENUM_HUB_RESET_1_PORT)
 
@@ -1393,7 +1393,7 @@ set(TINYUSB_USBH_ENUM_ADDR0_PORT [=[
       break;
     }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("address-zero descriptor submission"
+tinyusb_usbh_port_replace_unique("address-zero descriptor submission"
     TINYUSB_USBH_ENUM_ADDR0_UPSTREAM TINYUSB_USBH_ENUM_ADDR0_PORT)
 
 set(TINYUSB_USBH_ENUM_SET_ADDR_UPSTREAM [=[
@@ -1413,7 +1413,7 @@ set(TINYUSB_USBH_ENUM_SET_ADDR_PORT [=[
       }
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("set-address submission"
+tinyusb_usbh_port_replace_unique("set-address submission"
     TINYUSB_USBH_ENUM_SET_ADDR_UPSTREAM TINYUSB_USBH_ENUM_SET_ADDR_PORT)
 
 set(TINYUSB_USBH_ENUM_DEVICE_DESC_UPSTREAM [=[
@@ -1479,7 +1479,7 @@ set(TINYUSB_USBH_ENUM_DEVICE_DESC_PORT [=[
       break;
     }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("addressed device descriptor"
+tinyusb_usbh_port_replace_unique("addressed device descriptor"
     TINYUSB_USBH_ENUM_DEVICE_DESC_UPSTREAM
     TINYUSB_USBH_ENUM_DEVICE_DESC_PORT)
 
@@ -1502,7 +1502,7 @@ set(TINYUSB_USBH_ENUM_CONFIG_9_SUBMIT_PORT [=[
       }
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("short configuration submission"
+tinyusb_usbh_port_replace_unique("short configuration submission"
     TINYUSB_USBH_ENUM_CONFIG_9_SUBMIT_UPSTREAM
     TINYUSB_USBH_ENUM_CONFIG_9_SUBMIT_PORT)
 
@@ -1532,7 +1532,7 @@ set(TINYUSB_USBH_ENUM_CONFIG_FULL_PORT [=[
         (void) enum_full_complete(false);
         return;
       }
-      if (total_len > ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE) {
+      if (total_len > USBH_PORT_ENUMERATION_MAX_BUFSIZE) {
         _enum_port.report_event = USBH_PORT_ENUM_EVENT_CONFIG_TOO_LARGE;
         (void) enum_full_complete(false);
         return;
@@ -1557,7 +1557,7 @@ set(TINYUSB_USBH_ENUM_CONFIG_FULL_PORT [=[
       }
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("full configuration submission"
+tinyusb_usbh_port_replace_unique("full configuration submission"
     TINYUSB_USBH_ENUM_CONFIG_FULL_UPSTREAM
     TINYUSB_USBH_ENUM_CONFIG_FULL_PORT)
 
@@ -1594,7 +1594,7 @@ set(TINYUSB_USBH_ENUM_SET_CONFIG_PORT [=[
       break;
     }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("set-configuration submission"
+tinyusb_usbh_port_replace_unique("set-configuration submission"
     TINYUSB_USBH_ENUM_SET_CONFIG_UPSTREAM
     TINYUSB_USBH_ENUM_SET_CONFIG_PORT)
 
@@ -1637,7 +1637,7 @@ set(TINYUSB_USBH_ENUM_CONFIG_DRIVER_PORT [=[
       // before class set_config and the later Linux HID probe need heap.
       usbh_port_enum_config_release_on_host();
 ]=])
-ergotype_tinyusb_usbh_replace_unique("configuration driver parse"
+tinyusb_usbh_port_replace_unique("configuration driver parse"
     TINYUSB_USBH_ENUM_CONFIG_DRIVER_UPSTREAM
     TINYUSB_USBH_ENUM_CONFIG_DRIVER_PORT)
 
@@ -1657,7 +1657,7 @@ set(TINYUSB_USBH_ENUM_DEFAULT_PORT [=[
       (void) enum_full_complete(false);
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("unknown enumeration state"
+tinyusb_usbh_port_replace_unique("unknown enumeration state"
     TINYUSB_USBH_ENUM_DEFAULT_UPSTREAM TINYUSB_USBH_ENUM_DEFAULT_PORT)
 
 set(TINYUSB_USBH_ENUM_TOPOLOGY_UPSTREAM [=[
@@ -1677,7 +1677,7 @@ set(TINYUSB_USBH_ENUM_TOPOLOGY_PORT [=[
 
   if (_dev0.hub_addr == 0) {
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration topology publication"
+tinyusb_usbh_port_replace_unique("enumeration topology publication"
     TINYUSB_USBH_ENUM_TOPOLOGY_UPSTREAM TINYUSB_USBH_ENUM_TOPOLOGY_PORT)
 
 set(TINYUSB_USBH_ENUM_ROOT_DEBOUNCE_UPSTREAM [=[
@@ -1744,7 +1744,7 @@ set(TINYUSB_USBH_ENUM_ROOT_DEBOUNCE_PORT [=[
     _enum_port.progress_ms = tusb_time_millis_api();
     _enum_port.delay_state = USBH_PORT_ENUM_DELAY_ROOT_RESET;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("asynchronous root timing"
+tinyusb_usbh_port_replace_unique("asynchronous root timing"
     TINYUSB_USBH_ENUM_ROOT_DEBOUNCE_UPSTREAM
     TINYUSB_USBH_ENUM_ROOT_DEBOUNCE_PORT)
 
@@ -1770,7 +1770,7 @@ set(TINYUSB_USBH_ENUM_HUB_DEBOUNCE_PORT [=[
     _enum_port.progress_ms = debounce_now;
     _enum_port.delay_state = USBH_PORT_ENUM_DELAY_DEBOUNCE;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("asynchronous hub debounce"
+tinyusb_usbh_port_replace_unique("asynchronous hub debounce"
     TINYUSB_USBH_ENUM_HUB_DEBOUNCE_UPSTREAM
     TINYUSB_USBH_ENUM_HUB_DEBOUNCE_PORT)
 
@@ -1789,7 +1789,7 @@ set(TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_PORT [=[
 
   tusb_control_request_t const request = {
 ]=])
-ergotype_tinyusb_usbh_replace_unique("provisional address owner"
+tinyusb_usbh_port_replace_unique("provisional address owner"
     TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_UPSTREAM
     TINYUSB_USBH_ENUM_PUBLISH_ADDRESS_PORT)
 
@@ -1805,7 +1805,7 @@ void usbh_driver_set_config_complete(uint8_t dev_addr, uint8_t itf_num) {
       _enum_port.daddr != dev_addr) return;
   usbh_device_t* dev = get_device(dev_addr);
 ]=])
-ergotype_tinyusb_usbh_replace_unique("class configuration owner guard"
+tinyusb_usbh_port_replace_unique("class configuration owner guard"
     TINYUSB_USBH_DRIVER_CONFIG_GUARD_UPSTREAM
     TINYUSB_USBH_DRIVER_CONFIG_GUARD_PORT)
 
@@ -1826,7 +1826,7 @@ set(TINYUSB_USBH_DRIVER_SET_CONFIG_PORT [=[
       }
       break;
 ]=])
-ergotype_tinyusb_usbh_replace_unique("class set-config submission"
+tinyusb_usbh_port_replace_unique("class set-config submission"
     TINYUSB_USBH_DRIVER_SET_CONFIG_UPSTREAM
     TINYUSB_USBH_DRIVER_SET_CONFIG_PORT)
 
@@ -2397,5 +2397,5 @@ enum_service_report: ;
   return report_event;
 }
 ]=])
-ergotype_tinyusb_usbh_replace_unique("enumeration terminal and watchdog"
+tinyusb_usbh_port_replace_unique("enumeration terminal and watchdog"
     TINYUSB_USBH_ENUM_TERMINAL_UPSTREAM TINYUSB_USBH_ENUM_TERMINAL_PORT)

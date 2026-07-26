@@ -222,7 +222,7 @@ git diff --no-index \
 inspect the exact macro-managed anchor index and active build inputs:
 
 ```sh
-rg -n '^ergotype_tinyusb_usbh_replace_unique\(' \
+rg -n '^tinyusb_usbh_port_replace_unique\(' \
   usb_host/tinyusb-usbh-enum-port.cmake
 
 rg -n '"file": ".*(tinyusb-(usbh|hid-host|hcd-pio)-port\.c|/hcd_pio_usb\.c|Pico-PIO-USB/src/pio_usb_host\.c)"' \
@@ -376,7 +376,7 @@ Pinned TinyUSB stores every full configuration descriptor in its permanent
 port deliberately keeps that scratch at 512 bytes: ordinary devices add no
 heap allocation and static RP2040 RAM does not grow by the 4 KiB worst case.
 After the nine-byte header is validated, lengths from 513 through
-`ERGOTYPE_TUH_ENUMERATION_MAX_BUFSIZE` (currently 4096) become a durable
+`USBH_PORT_ENUMERATION_MAX_BUFSIZE` (currently 4096) become a durable
 host-owner pending state. The completion callback records only the length and
 returns. At the next shallow `tuh_task_ext()` entry, with global EP0 idle,
 the host owner calls `tuh_port_enum_buffer_alloc_on_host()`, submits the full
