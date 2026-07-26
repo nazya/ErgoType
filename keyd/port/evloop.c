@@ -138,9 +138,6 @@ int evloop(int (*event_handler)(struct event *ev))
 			case DEVMON_HAPTIC:
 				devev.type = DEV_HAPTIC;
 				break;
-			default:
-				async_msg("ERR: DEVMON_EVENT_TYPE");
-				continue;
 			}
 
 			ev.type = EV_DEV_EVENT;

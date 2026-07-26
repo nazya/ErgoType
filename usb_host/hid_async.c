@@ -347,11 +347,6 @@ static u8 hid_async_tinyusb_report_type(enum hid_report_type type)
 	return (u8)type + 1;
 }
 
-static bool hid_async_report_type_valid(enum hid_report_type type)
-{
-	return type >= HID_INPUT_REPORT && type < HID_REPORT_TYPES;
-}
-
 static void hid_async_notify_task(void)
 {
 	TaskHandle_t task;
@@ -370,8 +365,6 @@ void hid_async_report_queue_kick(void)
 
 void hid_async_logical_queue_changed(void)
 {
-	if (!hid_async_slots)
-		return;
 	hid_transport_lock();
 	hid_async_admission_wake_all_locked();
 	hid_transport_unlock();
@@ -381,9 +374,6 @@ void hid_async_logical_queue_changed(void)
 void hid_async_host_control_ready(void)
 {
 	bool wake = false;
-
-	if (!hid_async_slots)
-		return;
 
 	/*
 	 * Like usbcore waking queued URBs when EP0 retires, the callback publishes
@@ -422,9 +412,6 @@ void hid_async_host_endpoint_ready(u8 dev_addr, u8 ep_addr)
 {
 	bool wake = false;
 
-	if (!hid_async_slots || !dev_addr || !ep_addr)
-		return;
-
 	/* Endpoint ownership is independent; never wake on unrelated mouse IN. */
 	hid_transport_lock();
 	for (u8 i = 0; i < HID_ASYNC_SLOT_COUNT; i++) {
@@ -444,19 +431,12 @@ void hid_async_host_endpoint_ready(u8 dev_addr, u8 ep_addr)
 		hid_async_notify_task();
 }
 
-bool hid_async_host_task_register(void)
+void hid_async_host_task_register(void)
 {
-	TaskHandle_t task = xTaskGetCurrentTaskHandle();
-	bool host_owner_valid;
-
 	/* TinyUSB host callbacks and tuh_task() share this single owner task. */
 	hid_transport_lock();
-	host_owner_valid = !hid_async_host_task_handle ||
-		hid_async_host_task_handle == task;
-	if (host_owner_valid)
-		hid_async_host_task_handle = task;
+	hid_async_host_task_handle = xTaskGetCurrentTaskHandle();
 	hid_transport_unlock();
-	return host_owner_valid;
 }
 
 bool hid_async_sync_call_allowed(void)
@@ -586,14 +566,7 @@ static void hid_async_admission_link_locked(
 {
 	struct hid_async_admission_node **link =
 		&hid_async_state.admission_head;
-	/* Device epoch zero is the valid first-boot generation. */
-	bool node_valid = node && node->dev_addr && !node->linked;
 
-	if (!node_valid)
-		async_msg("ERR: HID_ADMIT_NODE");
-	configASSERT(node_valid);
-	if (!node_valid)
-		return;
 	while (*link)
 		link = &(*link)->next;
 	node->next = NULL;
@@ -608,13 +581,6 @@ void hid_async_admission_logical_link_locked(
 		struct hid_async_admission_node *node, u8 dev_addr,
 		u32 generation, bool output_lane, u8 ep_addr)
 {
-	bool node_idle = node && !node->linked;
-
-	if (!node_idle) {
-		async_msg("ERR: HID_ADMIT_NODE");
-		configASSERT(node_idle);
-		return;
-	}
 	memset(node, 0, sizeof(*node));
 	node->generation = generation;
 	node->dev_addr = dev_addr;
@@ -630,7 +596,7 @@ void hid_async_admission_unlink_locked(
 		&hid_async_state.admission_head;
 	bool found;
 
-	if (!node || !node->linked)
+	if (!node->linked)
 		return;
 	while (*link && *link != node)
 		link = &(*link)->next;
@@ -653,8 +619,7 @@ bool hid_async_admission_can_enter_locked(
 	const struct hid_async_admission_node *cursor;
 	u8 older_front = 0;
 
-	if (!node || !node->linked ||
-	    !hid_async_admission_front_locked(node))
+	if (!hid_async_admission_front_locked(node))
 		return false;
 	for (cursor = hid_async_state.admission_head;
 	     cursor && cursor != node; cursor = cursor->next) {
@@ -672,7 +637,6 @@ static int hid_async_slot_queue_locked(const struct hid_async_request *req,
 	struct hid_async_slot *slot = NULL;
 	struct hid_async_slot *tail_slot;
 	bool recovery = req->kind == HID_ASYNC_REQUEST_HUB_RESET;
-	bool recovery_admission_absent;
 	bool tail_valid;
 	bool tail_open;
 	bool head_empty;
@@ -684,17 +648,8 @@ static int hid_async_slot_queue_locked(const struct hid_async_request *req,
 	u8 *tail;
 	u8 id;
 
-	if (!recovery) {
-		if (!hid_async_admission_can_enter_locked(admission))
-			return -EBUSY;
-	} else {
-		recovery_admission_absent = admission == NULL;
-		if (!recovery_admission_absent)
-			async_msg("ERR: HID_RECOVER_ADMIT");
-		configASSERT(recovery_admission_absent);
-		if (!recovery_admission_absent)
-			return -EINVAL;
-	}
+	if (!recovery && !hid_async_admission_can_enter_locked(admission))
+		return -EBUSY;
 
 	/* The recovery slot cannot be retained by ordinary parser/control work. */
 	for (u8 i = first; i < end; i++) {
@@ -943,10 +898,10 @@ static int hid_async_queue_hid_request(struct hid_async_request *req,
 }
 
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
-				   enum hid_class_request reqtype,
-				   u32 generation,
-				   u8 *data, u16 data_size,
-				   struct hid_async_admission_node *admission,
+			   enum hid_class_request reqtype,
+			   u32 generation,
+			   u8 *data,
+			   struct hid_async_admission_node *admission,
 			   hid_async_complete_t complete, void *context)
 {
 	struct usb_device *dev;
@@ -956,15 +911,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 	u32 maxpacket;
 	u32 len;
 	int ret;
-
-	if (!hid_async_slots)
-		return -ENODEV;
-	if (!hid || !report || !admission || !complete || !context ||
-	    !hid_async_report_type_valid(report->type))
-		return -EINVAL;
-
-	if (reqtype != HID_REQ_GET_REPORT && reqtype != HID_REQ_SET_REPORT)
-		return -ENOSYS;
 
 	len = hid_report_len(report);
 	dev = hid_to_usb_dev(hid);
@@ -977,8 +923,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 		len += !len;
 		len = DIV_ROUND_UP(len, maxpacket) * maxpacket;
 		len = min_t(u32, len, usbhid->bufsize);
-		if (len > data_size || (len && !data))
-			return -EMSGSIZE;
 	}
 
 	memset(&req, 0, sizeof(req));
@@ -1008,8 +952,6 @@ int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 		 * The compact logical usbhid FIFO already owns that exact enqueue-time
 		 * snapshot. The physical slot borrows it only while this head is active.
 		 */
-		if (len > data_size || (len && !data))
-			return -EMSGSIZE;
 		if (interrupt_out) {
 			/* hid_output_report() already produced the endpoint wire image. */
 			req.kind = HID_ASYNC_REQUEST_OUTPUT_REPORT;
@@ -1046,7 +988,6 @@ static int hid_async_queue_usb_request(struct hid_async_request *req,
 				       struct hid_async_admission_node *admission)
 {
 	struct usbhid_device *usbhid;
-	bool admission_valid;
 	bool recovery = req->kind == HID_ASYNC_REQUEST_HUB_RESET;
 	int ret;
 
@@ -1071,36 +1012,17 @@ static int hid_async_queue_usb_request(struct hid_async_request *req,
 		req->generation = generation;
 		ret = 0;
 	}
-	if (!ret && !recovery) {
-		admission_valid = admission != NULL;
-		if (!admission_valid)
-			async_msg("ERR: HID_ADMIT_NODE");
-		configASSERT(admission_valid);
-		if (!admission_valid) {
-			ret = -EINVAL;
-		} else if (!admission->linked) {
-			TaskHandle_t task = admission->task;
+	if (!ret && !recovery && !admission->linked) {
+		TaskHandle_t task = admission->task;
 
-			memset(admission, 0, sizeof(*admission));
-			admission->task = task;
-			admission->generation = generation;
-			admission->dev_addr = req->dev_addr;
-			admission->ep_addr = hid_async_lane_is_out(lane) ?
-				req->ep_addr : 0;
-			admission->output_lane = hid_async_lane_is_out(lane);
-			hid_async_admission_link_locked(admission);
-		} else {
-			admission_valid = admission->generation == generation &&
-				admission->dev_addr == req->dev_addr &&
-				admission->output_lane == hid_async_lane_is_out(lane) &&
-				(!admission->output_lane ||
-				 admission->ep_addr == req->ep_addr);
-			if (!admission_valid)
-				async_msg("ERR: HID_ADMIT_KEY");
-			configASSERT(admission_valid);
-			if (!admission_valid)
-				ret = -EINVAL;
-		}
+		memset(admission, 0, sizeof(*admission));
+		admission->task = task;
+		admission->generation = generation;
+		admission->dev_addr = req->dev_addr;
+		admission->ep_addr = hid_async_lane_is_out(lane) ?
+			req->ep_addr : 0;
+		admission->output_lane = hid_async_lane_is_out(lane);
+		hid_async_admission_link_locked(admission);
 	}
 	if (!ret)
 		ret = hid_async_slot_queue_locked(req, lane,
@@ -1262,9 +1184,6 @@ int hid_async_queue_hub_port_reset(u8 hub_addr, u32 generation, u8 hub_port,
 {
 	struct hid_async_request req;
 
-	if (!hub_port || !complete)
-		return -EINVAL;
-
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_HUB_RESET;
 	req.dev_addr = hub_addr;
@@ -1284,11 +1203,6 @@ static int hid_async_queue_usb_control_common(
 		hid_async_complete_t complete, void *context, bool wait)
 {
 	struct hid_async_request req;
-
-	if (size && !data)
-		return -EINVAL;
-	if (timeout <= 0)
-		return -EINVAL;
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_USB_CONTROL;
@@ -1317,8 +1231,6 @@ int hid_async_queue_usb_control_msg_admitted(
 		struct hid_async_admission_node *admission,
 		hid_async_complete_t complete, void *context)
 {
-	if (!admission)
-		return -EINVAL;
 	return hid_async_queue_usb_control_common(owner, dev_addr, generation,
 		request, requesttype, value, index, data, size, timeout,
 		admission, complete, context, false);
@@ -1341,13 +1253,6 @@ static int hid_async_queue_usb_interrupt_out_common(
 		hid_async_complete_t complete, void *context)
 {
 	struct hid_async_request req;
-
-	if (!ep_addr || (ep_addr & TUSB_DIR_IN_MASK))
-		return -EINVAL;
-	if (size && !data)
-		return -EINVAL;
-	if (timeout <= 0)
-		return -EINVAL;
 
 	memset(&req, 0, sizeof(req));
 	req.kind = HID_ASYNC_REQUEST_USB_INTERRUPT;

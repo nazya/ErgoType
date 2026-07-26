@@ -77,7 +77,7 @@ void hid_async_task(void *pvParameters);
 int hid_async_queue_report(struct hid_device *hid, struct hid_report *report,
 			   enum hid_class_request reqtype,
 			   u32 generation,
-			   u8 *data, u16 data_size,
+			   u8 *data,
 			   struct hid_async_admission_node *admission,
 			   hid_async_complete_t complete, void *context);
 void hid_async_report_queue_kick(void);
@@ -94,7 +94,7 @@ bool hid_async_admission_can_enter_locked(
 int hid_async_control_report_hold(const struct hid_async_request *req);
 void hid_async_control_report_release(struct hid_device *hid, u32 serial);
 int hid_async_device_epoch_snapshot(u8 dev_addr, u32 *generation);
-bool hid_async_host_task_register(void);
+void hid_async_host_task_register(void);
 bool hid_async_sync_call_allowed(void);
 /* TinyUSB host-owner idle edges release durable submit-resource waiters. */
 void hid_async_host_control_ready(void);

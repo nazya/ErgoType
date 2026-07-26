@@ -89,7 +89,7 @@ static unsigned int evdev_events(struct input_handle *handle,
 	 * always-on client is externally visible yet and a nonempty queue cannot
 	 * subsequently be added to a FreeRTOS QueueSet.
 	 */
-	if (!client || !evdev_client_is_published(client))
+	if (!evdev_client_is_published(client))
 		return count;
 	evdev_pass_values(client, vals, count, ev_time);
 
@@ -215,8 +215,6 @@ static void evdev_disconnect(struct input_handle *handle)
 	// Disconnect may run after connect but before post-probe activation.
 	if (evdev->client)
 		evdev_unregister_device(evdev->client, handle);
-	else if (handle->open)
-		input_close_device(handle);
 	input_unregister_handle(handle);
 	kfree(evdev);
 }
@@ -260,12 +258,8 @@ void evdev_activate_hid(struct hid_device *hid)
 
 		evdev = handle->private;
 		error = evdev_prepare_input_device(dev, evdev, &evdev->client);
-		if (error) {
-			if (error == -ENOMEM)
-				async_msg("ERR: EVDEV_CLIENT_NOMEM");
-			else
-				async_msg("ERR: EVDEV_PREPARE_FAIL");
-		}
+		if (error)
+			async_msg("ERR: EVDEV_CLIENT_NOMEM");
 	}
 
 	// error = evdev_open_device(evdev);

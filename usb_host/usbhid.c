@@ -4476,18 +4476,15 @@ static void usbhid_waiter_link_locked(struct usbhid_device *usbhid,
 	usbhid->io_waiters = waiter;
 }
 
-static bool usbhid_waiter_unlink_locked(struct usbhid_device *usbhid,
+static void usbhid_waiter_unlink_locked(struct usbhid_device *usbhid,
 					struct usbhid_io_waiter *waiter)
 {
 	struct usbhid_io_waiter **link = &usbhid->io_waiters;
 
-	while (*link && *link != waiter)
+	while (*link != waiter)
 		link = &(*link)->next;
-	if (!*link)
-		return false;
 	*link = waiter->next;
 	waiter->next = NULL;
-	return true;
 }
 
 static bool usbhid_waiter_has_other_ordinary_locked(
@@ -4599,13 +4596,7 @@ static int usbhid_request_charge_locked(struct usbhid_device *usbhid,
 
 static void usbhid_report_charge_release_locked(u16 memory_charge)
 {
-	bool accounting_valid = usbhid_report_queue_bytes >= memory_charge;
-
-	if (!accounting_valid)
-		async_msg("ERR: HID_REQ_FIFO_BYTES");
-	configASSERT(accounting_valid);
-	if (accounting_valid)
-		usbhid_report_queue_bytes -= memory_charge;
+	usbhid_report_queue_bytes -= memory_charge;
 }
 
 static void usbhid_request_append_locked(
@@ -4658,25 +4649,18 @@ static void usbhid_request_append_locked(
 	}
 }
 
-static bool usbhid_request_pop_locked(struct usbhid_report_request *request)
+static void usbhid_request_pop_locked(struct usbhid_report_request *request)
 {
 	struct usbhid_device *usbhid = request->hid->driver_data;
 	struct usbhid_report_request **head;
 	struct usbhid_report_request **tail;
-	bool queue_valid;
 
 	if (request->lane == USBHID_REPORT_LANE_OUT) {
 		head = &usbhid->out_head;
 		tail = &usbhid->out_tail;
-		queue_valid = *head == request && usbhid->out_count != 0;
 	} else {
 		head = &usbhid->ctrl_head;
 		tail = &usbhid->ctrl_tail;
-		queue_valid = *head == request && usbhid->ctrl_count != 0;
-	}
-	if (!queue_valid) {
-		async_msg("ERR: HID_REQ_FIFO_HEAD");
-		return false;
 	}
 
 	*head = request->next;
@@ -4695,7 +4679,6 @@ static bool usbhid_request_pop_locked(struct usbhid_report_request *request)
 			request->lane == USBHID_REPORT_LANE_OUT,
 			request->lane == USBHID_REPORT_LANE_OUT ?
 				usbhid->usb_altsetting.interrupt_out_endpoint : 0);
-	return true;
 }
 
 static bool usbhid_request_runnable_locked(void)
@@ -4805,15 +4788,8 @@ static int usbhid_request_prepare_input(
 	input = kzalloc(allocation_size, GFP_KERNEL);
 	if (!input) {
 		hid_transport_lock();
-		accounted = request->memory_charge >= memory_charge &&
-			usbhid_report_queue_bytes >= memory_charge;
-		if (accounted) {
-			request->memory_charge -= (u16)memory_charge;
-			usbhid_report_queue_bytes -= memory_charge;
-		} else {
-			async_msg("ERR: HID_REQ_FIFO_BYTES");
-		}
-		configASSERT(accounted);
+		request->memory_charge -= (u16)memory_charge;
+		usbhid_report_queue_bytes -= memory_charge;
 		hid_transport_unlock();
 		return -ENOMEM;
 	}
@@ -4832,15 +4808,8 @@ static int usbhid_request_prepare_input(
 		kfree(input);
 		/* The allocation is gone before its conservative charge is reusable. */
 		hid_transport_lock();
-		accounted = request->memory_charge >= memory_charge &&
-			usbhid_report_queue_bytes >= memory_charge;
-		if (accounted) {
-			request->memory_charge -= (u16)memory_charge;
-			usbhid_report_queue_bytes -= memory_charge;
-		} else {
-			async_msg("ERR: HID_REQ_FIFO_BYTES");
-		}
-		configASSERT(accounted);
+		request->memory_charge -= (u16)memory_charge;
+		usbhid_report_queue_bytes -= memory_charge;
 		hid_transport_unlock();
 		return -ENODEV;
 	}
@@ -4896,10 +4865,8 @@ bool usbhid_request_process(void)
 	struct usbhid_report_request *request;
 	struct usbhid_device *usbhid;
 	u8 *data;
-	u16 data_size;
-	bool popped = false;
+	bool retired = false;
 	bool wake_again = false;
-	bool request_current;
 	bool logical_changed = false;
 	int ret;
 
@@ -4918,15 +4885,13 @@ bool usbhid_request_process(void)
 	if (request->cancel_requested || usbhid->transport_stopping) {
 		struct hid_device *hid = request->hid;
 
-		popped = usbhid_request_pop_locked(request);
+		usbhid_request_pop_locked(request);
 		wake_again = usbhid_request_runnable_locked();
 		usbhid_report_queue_kick_pending |= wake_again;
 		hid_transport_unlock();
-		if (popped) {
-			usbhid_request_destroy(request);
-			usbhid_io_put(hid);
-			hid_async_logical_queue_changed();
-		}
+		usbhid_request_destroy(request);
+		usbhid_io_put(hid);
+		hid_async_logical_queue_changed();
 		return true;
 	}
 	request->state = USBHID_REPORT_REQUEST_SUBMITTING;
@@ -4939,34 +4904,27 @@ bool usbhid_request_process(void)
 	if (!ret) {
 		data = request->reqtype == HID_REQ_GET_REPORT ?
 			request->input->data : request->data;
-		data_size = request->reqtype == HID_REQ_GET_REPORT ?
-			request->input->bufsize : request->wire_len;
 		ret = hid_async_queue_report(request->hid, request->report,
 					     (enum hid_class_request)request->reqtype,
-					     request->device_generation,
-					     data, data_size,
+					     request->device_generation, data,
 					     &request->admission,
 					     usbhid_request_complete, request);
 	}
 
 	hid_transport_lock();
 	usbhid = request->hid->driver_data;
-	request_current = usbhid_request_head_locked(
-		usbhid, (enum usbhid_report_lane)request->lane) == request &&
-		request->state == USBHID_REPORT_REQUEST_SUBMITTING;
-	if (!request_current) {
-		async_msg("ERR: HID_REQ_FIFO_STATE");
-	} else if (!ret) {
+	if (!ret) {
 		request->state = USBHID_REPORT_REQUEST_ACTIVE;
 		logical_changed = true;
 	} else if (ret == -EBUSY && !request->cancel_requested &&
 		   !usbhid->transport_stopping) {
 		request->state = USBHID_REPORT_REQUEST_QUEUED;
 	} else {
-		popped = usbhid_request_pop_locked(request);
-		logical_changed = popped;
+		usbhid_request_pop_locked(request);
+		retired = true;
+		logical_changed = true;
 	}
-	if (!ret || popped) {
+	if (!ret || retired) {
 		wake_again = usbhid_request_runnable_locked();
 		usbhid_report_queue_kick_pending |= wake_again;
 	}
@@ -4974,9 +4932,7 @@ bool usbhid_request_process(void)
 	if (logical_changed)
 		hid_async_logical_queue_changed();
 
-	if (!request_current)
-		return true;
-	if (popped) {
+	if (retired) {
 		struct hid_device *hid = request->hid;
 
 		if (ret != -ENODEV)
@@ -5010,7 +4966,6 @@ static void usbhid_control_report_done(struct hid_device *hid, void *context,
 	struct usbhid_control_input *input = context;
 	struct usbhid_report_request *request = input ? input->request : NULL;
 	u32 serial = input ? input->async_serial : 0;
-	bool popped = false;
 	bool wake_again = false;
 
 	if (status < 0 && status != -ENODEV)
@@ -5023,16 +4978,10 @@ static void usbhid_control_report_done(struct hid_device *hid, void *context,
 	if (serial)
 		hid_async_control_report_release(hid, serial);
 	hid_transport_lock();
-	if (request && request->hid == hid &&
-	    request->state == USBHID_REPORT_REQUEST_PARSING)
-		popped = usbhid_request_pop_locked(request);
-	else
-		async_msg("ERR: HID_REQ_PARSE_STATE");
+	usbhid_request_pop_locked(request);
 	wake_again = usbhid_request_runnable_locked();
 	usbhid_report_queue_kick_pending |= wake_again;
 	hid_transport_unlock();
-	if (!popped)
-		return;
 	usbhid_request_destroy(request);
 	usbhid_io_put(hid);
 	hid_async_logical_queue_changed();
@@ -5086,22 +5035,13 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 					    int status)
 {
 	struct usbhid_report_request *request = req->context;
-	struct usbhid_control_input *input = request ? request->input : NULL;
-	struct hid_device *hid = request ? request->hid : NULL;
-	bool popped = false;
-	bool state_valid;
+	struct usbhid_control_input *input = request->input;
+	struct hid_device *hid = request->hid;
 	bool wake_again = false;
-	bool context_valid;
 	bool parked = false;
 	bool publish_owned = false;
 	u16 len;
 	int ret;
-
-	context_valid = request && hid == req->hid && request->report == req->report;
-	if (!context_valid) {
-		async_msg("ERR: HID_REQ_CONTEXT");
-		return;
-	}
 
 	if (status < 0) {
 		if (status != -ENODEV)
@@ -5113,20 +5053,12 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 			 * request and retry only when a later enqueue restarts its lane.
 			 */
 			hid_transport_lock();
-			state_valid = usbhid_request_head_locked(
-				hid->driver_data,
-				(enum usbhid_report_lane)request->lane) == request &&
-				request->state == USBHID_REPORT_REQUEST_ACTIVE;
-			if (state_valid && !request->cancel_requested &&
+			if (!request->cancel_requested &&
 			    !((struct usbhid_device *)hid->driver_data)->transport_stopping) {
 				request->state = USBHID_REPORT_REQUEST_PARKED;
 				parked = true;
 			}
 			hid_transport_unlock();
-			if (!state_valid) {
-				async_msg("ERR: HID_REQ_FIFO_STATE");
-				return;
-			}
 			if (parked)
 				return;
 			/* A concurrent cancel/stop owns retirement, never a parked head. */
@@ -5135,21 +5067,9 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 		goto retire;
 	}
 
-	if (req->reqtype != HID_REQ_GET_REPORT) {
-		context_valid = input == NULL &&
-			request->reqtype == HID_REQ_SET_REPORT;
-		if (!context_valid) {
-			async_msg("ERR: HID_REQ_CONTEXT");
-		}
+	if (req->reqtype != HID_REQ_GET_REPORT)
 		goto retire;
-	}
 
-	context_valid = input != NULL &&
-		request->reqtype == HID_REQ_GET_REPORT;
-	if (!context_valid) {
-		async_msg("ERR: HID_REQ_CONTEXT");
-		goto retire;
-	}
 	len = min_t(u16, req->actual_len, input->bufsize);
 	/*
 	 * TinyUSB adapter: the completion-owned input buffer is also the direct EP0
@@ -5163,17 +5083,8 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 		goto retire;
 	}
 	hid_transport_lock();
-	state_valid = usbhid_request_head_locked(
-			hid->driver_data, USBHID_REPORT_LANE_CTRL) == request &&
-		request->state == USBHID_REPORT_REQUEST_ACTIVE;
-	if (state_valid)
-		request->state = USBHID_REPORT_REQUEST_PARSING;
+	request->state = USBHID_REPORT_REQUEST_PARSING;
 	hid_transport_unlock();
-	if (!state_valid) {
-		async_msg("ERR: HID_REQ_PARSE_STATE");
-		hid_async_control_report_release(hid, req->serial);
-		goto retire;
-	}
 	input->async_serial = req->serial;
 	input->len = len;
 	/*
@@ -5189,16 +5100,12 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 	} else if (request->parser_owner) {
 		struct usbhid_device *usbhid = hid->driver_data;
 
-		if (usbhid->owned_control_input) {
-			ret = -EBUSY;
-		} else {
-			usbhid->owned_control_input = input;
-			publish_owned = true;
-			ret = 0;
-			// wake_up(&usbhid->wait);
-			// The owner must parse and release this input before the queue is idle.
-			usbhid_wait_wake_locked(hid);
-		}
+		usbhid->owned_control_input = input;
+		publish_owned = true;
+		ret = 0;
+		// wake_up(&usbhid->wait);
+		// The owner must parse and release this input before the queue is idle.
+		usbhid_wait_wake_locked(hid);
 	} else {
 		ret = 0;
 	}
@@ -5222,12 +5129,10 @@ static void usbhid_request_complete(const struct hid_async_request *req,
 
 retire:
 	hid_transport_lock();
-	popped = usbhid_request_pop_locked(request);
+	usbhid_request_pop_locked(request);
 	wake_again = usbhid_request_runnable_locked();
 	usbhid_report_queue_kick_pending |= wake_again;
 	hid_transport_unlock();
-	if (!popped)
-		return;
 	usbhid_request_destroy(request);
 	usbhid_io_put(hid);
 	hid_async_logical_queue_changed();
@@ -5239,7 +5144,6 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 	struct usbhid_device *usbhid = hid->driver_data;
 	struct usbhid_control_input *input = NULL;
 	TaskHandle_t task = xTaskGetCurrentTaskHandle();
-	bool input_lock_owned;
 	bool process = false;
 
 	hid_transport_lock();
@@ -5254,13 +5158,6 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 	if (!input)
 		return false;
 
-	input_lock_owned = sema_owned_by_current(&hid->driver_input_lock);
-	if (!input_lock_owned) {
-		async_msg("ERR: HID_INPUT_OWNER");
-		configASSERT(input_lock_owned);
-		usbhid_control_report_done(hid, input, -EIO);
-		return true;
-	}
 	usbhid_control_report_done(
 		hid, input,
 		process ? hid_safe_input_report_locked(
@@ -5310,7 +5207,6 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	u32 snapshot_size = 0;
 	u32 wire_len;
 	u32 generation;
-	BaseType_t lock_ret;
 	bool interrupt_out;
 	bool request_locked = false;
 	bool queue_full = false;
@@ -5360,16 +5256,7 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	 * one task-context PI mutex preserves that construction order without
 	 * masking callbacks or interrupts.
 	 */
-	if (!usbhid_request_mutex) {
-		ret = -ENODEV;
-		goto fail;
-	}
-	lock_ret = xSemaphoreTake(usbhid_request_mutex, portMAX_DELAY);
-	if (lock_ret != pdPASS) {
-		async_msg("ERR: HID_REQ_LOCK");
-		ret = -EIO;
-		goto fail;
-	}
+	(void)xSemaphoreTake(usbhid_request_mutex, portMAX_DELAY);
 	request_locked = true;
 
 	/*
@@ -5536,7 +5423,6 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 	};
 	TickType_t started = xTaskGetTickCount();
 	TickType_t timeout = pdMS_TO_TICKS(10000u);
-	bool unlinked;
 	bool stopping;
 	bool timed_out = false;
 
@@ -5581,24 +5467,15 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 						usbhid_control_report_done(
 							hid, abandoned, -ENODEV);
 					} else {
-						bool input_lock_owned =
-							sema_owned_by_current(
-								&hid->driver_input_lock);
-
-						if (!input_lock_owned)
-							async_msg("ERR: HID_INPUT_OWNER");
-						configASSERT(input_lock_owned);
 						usbhid_control_report_done(
 							hid, abandoned,
-							input_lock_owned ?
-								hid_safe_input_report_locked(
-									hid,
-									(enum hid_report_type)
-										abandoned->request->report->type,
-									abandoned->data,
-									abandoned->bufsize,
-									abandoned->len, 0) :
-								-EIO);
+							hid_safe_input_report_locked(
+								hid,
+								(enum hid_report_type)
+									abandoned->request->report->type,
+								abandoned->data,
+								abandoned->bufsize,
+								abandoned->len, 0));
 					}
 					continue;
 				}
@@ -5611,17 +5488,11 @@ static int usbhid_wait_transport(struct hid_device *hid, bool teardown)
 	}
 
 	hid_transport_lock();
-	unlinked = usbhid_waiter_unlink_locked(usbhid, &waiter);
+	usbhid_waiter_unlink_locked(usbhid, &waiter);
 	stopping = usbhid->transport_stopping;
 	/* A teardown waiter may be sleeping on the last ordinary waiter leaving. */
-	if (unlinked)
-		usbhid_wait_wake_locked(hid);
+	usbhid_wait_wake_locked(hid);
 	hid_transport_unlock();
-	if (!unlinked) {
-		async_msg("ERR: HID_WAIT_UNLINK");
-		configASSERT(unlinked);
-		return -EIO;
-	}
 	if (timed_out) {
 		async_msg("ERR: HID_WAIT_TIMEOUT");
 		return -ETIMEDOUT;

@@ -125,8 +125,6 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	TaskHandle_t task;
 	int was_pending;
 
-	if (!hid_timer_mutex)
-		return 0;
 	hid_timer_lock();
 	was_pending = timer->pending;
 	timer->expires = expires;
@@ -166,8 +164,6 @@ int timer_delete(struct timer_list *timer)
 {
 	int was_pending;
 
-	if (!hid_timer_mutex)
-		return 0;
 	hid_timer_lock();
 	was_pending = hid_timer_delete_pending_locked(timer);
 	hid_timer_unlock();
@@ -188,8 +184,6 @@ int timer_delete_sync(struct timer_list *timer)
 	 * publishes cancellation to the report task, so this wait cannot block the
 	 * host owner which must make USB progress.
 	 */
-	if (!hid_timer_mutex)
-		return 0;
 	hid_timer_lock();
 	was_pending = hid_timer_delete_pending_locked(timer);
 	if (!timer->running) {
