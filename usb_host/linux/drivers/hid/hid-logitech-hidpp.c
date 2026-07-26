@@ -4098,8 +4098,9 @@ static int hidpp_raw_event(struct hid_device *hdev, struct hid_report *report,
 	if (ret != 0)
 		return ret;
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/* WTP and M560 subclass parsing belongs to later capability stages. */
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
+	!IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	/* WTP and M560 subclass parsing belongs to a separately selected stage. */
 	return 0;
 #else
 	if (hidpp->quirks & HIDPP_QUIRK_CLASS_WTP)
@@ -4419,13 +4420,16 @@ static void hidpp_connect_event(struct work_struct *work)
 
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
 	/*
-	 * The selected DJ stage ends at Linux wheel publication. Keep the
-	 * upstream battery block below for its separately measured stage.
+	 * The selected M705 stage ends at Linux wheel publication. Other exact
+	 * DJ classes continue through their upstream battery and delayed-input
+	 * setup below.
 	 */
-	hidpp_initialize_hires_scroll(hidpp);
-	if (hidpp->capabilities & HIDPP_CAPABILITY_HI_RES_SCROLL)
-		hi_res_scroll_enable(hidpp);
-	return;
+	if (hidpp->quirks & HIDPP_QUIRK_HI_RES_SCROLL_1P0) {
+		hidpp_initialize_hires_scroll(hidpp);
+		if (hidpp->capabilities & HIDPP_CAPABILITY_HI_RES_SCROLL)
+			hi_res_scroll_enable(hidpp);
+		return;
+	}
 #endif
 
 	hidpp_initialize_battery(hidpp);
@@ -4602,10 +4606,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	}
 
-	/*
-	 * Keep upstream 27 MHz quirks and WTP/K400 allocation visible below; their
-	 * input capabilities are outside the direct request/reply checkpoint.
-	 */
+	/* Keep the upstream 27 MHz quirk selection outside the direct USB stage. */
 #if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	if (id->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    hidpp_application_equals(hdev, HID_GD_MOUSE))
@@ -4615,7 +4616,14 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	if (id->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    hidpp_application_equals(hdev, HID_GD_KEYBOARD))
 		hidpp->quirks |= HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS;
+#endif
 
+#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) || \
+	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	/*
+	 * The exact M560/T650/K400/K750 stage uses the corresponding upstream
+	 * class allocations without enabling the broad Logitech match table.
+	 */
 	if (hidpp->quirks & HIDPP_QUIRK_CLASS_WTP) {
 		ret = wtp_allocate(hdev, id);
 		if (ret)
@@ -4699,6 +4707,16 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	else
 		hidpp_non_unifying_init(hidpp);
 #endif
+#endif
+
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
+	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	/*
+	 * Upstream delays M560/T650 input publication until their connect worker
+	 * has obtained the device-specific configuration.
+	 */
+	if (hidpp->quirks & HIDPP_QUIRK_DELAYED_INIT)
+		connect_mask &= ~HID_CONNECT_HIDINPUT;
 #endif
 
 	/* Now export the actual inputs and hidraw nodes to the world */
@@ -4804,17 +4822,33 @@ static void hidpp_remove(struct hid_device *hdev)
 static const struct hid_device_id hidpp_devices[] = {
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/*
-	 * Keep direct USB at its measured identity/battery stage and add the
-	 * covered M705 receiver child. Other receiver children, Bluetooth,
-	 * touchpads, and broad Logitech matching remain below.
+	 * Keep direct USB at its measured identity/battery stage and add only
+	 * the separately selected exact receiver-child classes. Bluetooth,
+	 * legacy receiver classes, and broad Logitech matching remain below.
 	 */
 	{ /* Logitech G502 Lightspeed Wireless Gaming Mouse over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08D) },
 	{ /* MX Vertical over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08A) },
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	{ /* wireless touchpad T650 */
+	  LDJ_DEVICE(0x4101),
+	  .driver_data = HIDPP_QUIRK_CLASS_WTP | HIDPP_QUIRK_DELAYED_INIT },
+	{ /* Mouse logitech M560 */
+	  LDJ_DEVICE(0x402d),
+	  .driver_data = HIDPP_QUIRK_DELAYED_INIT | HIDPP_QUIRK_CLASS_M560 },
+#endif
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
 	{ /* Mouse Logitech M705 (firmware RQM17) */
 	  LDJ_DEVICE(0x101b), .driver_data = HIDPP_QUIRK_HI_RES_SCROLL_1P0 },
+#endif
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	{ /* Keyboard logitech K400 */
+	  LDJ_DEVICE(0x4024),
+	  .driver_data = HIDPP_QUIRK_CLASS_K400 },
+	{ /* Solar Keyboard Logitech K750 */
+	  LDJ_DEVICE(0x4002),
+	  .driver_data = HIDPP_QUIRK_CLASS_K750 },
 #endif
 #else
 	{ /* wireless touchpad */
@@ -5008,8 +5042,9 @@ static const struct hid_driver hidpp_driver = {
 	.id_table = hidpp_devices,
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/*
-	 * M705 high-resolution scrolling needs the upstream usage interception and
-	 * input pointer. Other capability-specific input hooks stay staged.
+	 * M705 high-resolution scrolling uses the upstream usage interception.
+	 * Exact M560/T650/K400/K750 classes additionally select only the upstream
+	 * input hooks they reach.
 	 */
 	.probe = hidpp_probe,
 	.remove = hidpp_remove,
@@ -5017,7 +5052,13 @@ static const struct hid_driver hidpp_driver = {
 #if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
 	.usage_table = hidpp_usages,
 	.event = hidpp_event,
+#endif
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0) || \
+	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
 	.input_configured = hidpp_input_configured,
+#endif
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
+	.input_mapping = hidpp_input_mapping,
 #endif
 #else
 	.report_fixup = hidpp_report_fixup,

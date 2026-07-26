@@ -315,9 +315,13 @@ it contains no callback, logging, allocation, or wait.
   visible beside the explained firmware boundary. Full 15-contact behavior is
   not claimed because the later evdev-to-KeyD queue remains a separate bounded
   consumer.
-- The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole but selects
-  only USB IDs `046d:c08d` and `046d:c08a`.
-  Its reachable driver hooks are `.probe`, `.remove`, and `.raw_event`; the
+- The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole. Direct USB
+  matching selects only IDs `046d:c08d` and `046d:c08a`; the current
+  exact-class gate additionally selects DJ child IDs M560 `046d:402d`, T650
+  `046d:4101`, K400 `046d:4024`, and K750 `046d:4002`.
+  The direct IDs reach `.probe`, `.remove`, and `.raw_event`; the exact child
+  classes also reach only their upstream `.input_configured` and
+  `.input_mapping` paths. The
   active request path retains upstream protocol detection, RAP/FAP builders,
   answer/error matching, send mutex, BUSY retry, and work item. A port-only
   raw-event-only ingress reuses `hid-core` validation and `driver_input_lock`
@@ -336,12 +340,19 @@ it contains no callback, logging, allocation, or wait.
   QueueSet consumed by the UI task, not to the ordinary devmon/KeyD path. The
   UI currently discards `ADDED`/`CHANGED` values and
   removes the queue after terminal `REMOVED`; presentation is deliberately
-  deferred. Generic HID battery strength, sysfs, delayed work, FF, wheel,
-  vendor-key, and touchpad paths remain compiled out of reach. The complete
-  automatic sequence later passed with temporary `8/256` parser limits.
+  deferred. Generic HID battery strength, sysfs, delayed work, FF, broad
+  vendor-key classes, Bluetooth, and legacy 27 MHz matching remain compiled
+  out of reach. M705/M560 wheel handling, T650 WTP raw XY, K400, K750 solar,
+  and M560/T650 delayed input initialization are now reachable only through
+  the listed exact DJ IDs. The complete automatic sequence later passed with
+  temporary `8/256` parser limits.
   Hardware also established the retained `64/675` capacity boundary recorded
   in `hid-emulator-coverage.md`: simultaneous M705 and ordinary keyboard
   children fit, while the complete HID++ eQuad keyboard child does not.
+  The exact M560/T650/K400/K750 extension and its byte-exact emulator completed
+  the full automatic hardware sequence on 2026-07-26, including both delayed
+  class generations, K400/K750 input, expected retained-capacity behavior, and
+  the final direct regression.
 - The first reduced single-M705 DJ checkpoint was replaced by the full pinned
   upstream port. Runtime matching enables `046d:c52b`, while the other receiver
   IDs stay behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The upstream

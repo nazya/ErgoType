@@ -254,6 +254,54 @@ composite HID interfaces. Both total free heap and the largest contiguous
 block matter during parsing. A larger-RAM target must be measured with the
 same descriptors rather than assumed to fit.
 
+### Practical exact-class stage
+
+Selecting the exact upstream M560, T650, K400, and K750 child entries changes
+only host text in the current build:
+
+```text
+host text/data/bss            536776 / 788 / 245160 B
+host __bss_end__              0x2003fdd0
+host main-bank headroom       560 B to 0x20040000
+emulator text/data/bss         73480 / 0 / 254964 B
+hardware verdict              passed 2026-07-26; exact classes and cleanup
+```
+
+Relative to the full upstream DJ/HID++ checkpoint above, this is 1,568 bytes
+of host text with unchanged static `.data`, `.bss`, and main-bank headroom.
+The new cost is otherwise dynamic and device-specific: M560 and T650 create
+delayed class input devices, T650 initializes two MT slots in the fixture,
+K400 retains its standard composite child, and K750 registers one reduced
+power-supply object and queue.
+
+The automatic fixture runs those four large children sequentially in fresh
+receiver generations. It therefore measures each exact class without turning
+the result into a new simultaneous-live-graph requirement. Acceptance still
+requires the earlier complete-eQuad phase to add exactly the already measured
+single OOM at `64/675`, all later exact classes and final direct regression to
+complete, and equivalent child/receiver removal plateaus to recover without
+cumulative loss.
+
+The hardware run met that acceptance:
+
+```text
+M560 live / child removed      27008 / 40832 B free, identical twice
+T650 live / child removed      25184 / 40832 B free, identical twice
+K400 live / child removed      16928 / 40832 B free
+K750 live / immediate remove   18536 / 40576 B free
+final direct attached          39408 B free, 39248 B largest, 5 blocks
+minimum heap                   3640 B; largest block then 3552 B
+OOM count                      exactly 1, at complete-eQuad capacity probe
+minimum stack watermarks       tuh=265, keyd=658, async=389, work=117,
+                               timer=348, lifecycle=158, report=841 words
+```
+
+The K750 removal snapshot precedes the UI's asynchronous terminal queue
+cleanup, so its immediate value is 256 bytes below the other child-removal
+plateau. The following final direct profile returns exactly to the earlier
+direct attached `free/largest/blocks` tuple, establishing that the difference
+is transient rather than cumulative retention.
+
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
 priority-inheritance mutexes. It builds as:
@@ -573,7 +621,7 @@ Tradeoffs:
 `CFG_TUH_MEM_SECTION` places TinyUSB's DMA-visible host transfer metadata and
 the port-owned interrupt-IN lifecycle slots in scratch X. At the earlier
 direct-IN checkpoint they occupied 708 B and ended 1,340 B below the real
-core-1 stack. The current dirty candidate occupies 788 B and ends 1,260 B below
+core-1 stack. The current stage occupies 788 B and ends 1,260 B below
 that stack, as recorded above. The endpoint callback table remains in main SRAM. Per-interface interrupt-IN
 payload backing is ordinary PIO-visible SRAM from heap_4: normally a 72-byte
 block for 64 bytes, allocated once at start and freed after the detach fence.

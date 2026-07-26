@@ -130,7 +130,7 @@ verdict:
 - linked ELF: `text=519612`, `data=788`, `bss=245320`; 504 B of main-bank
   link headroom and 1,260 B between scratch X and the core-1 stack
 - hardware verdict: never recorded; this SHA is historical and is not the
-  current dirty build
+  current build
 
 The planned validation for that exact image required the following two separate
 emulator passes. They were not recorded as completed for this SHA; reuse the
@@ -791,6 +791,64 @@ fields, multiple live receiver children, or large composite HID graphs may
 reach the same boundary and need individual measurement or a larger-RAM target.
 See [`pio-usb-memory.md`](pio-usb-memory.md) for the allocation breakdown.
 
+## Hardware-verified practical HID++/Unifying matrix
+
+The host candidate and emulator branch
+`device/logitech-hidpp-unifying-matrix` completed one automatic hardware pass
+on 2026-07-26 for four exact pinned-upstream classes without broad Logitech
+matching:
+
+- M560 `046d:402d`: two full pair/configure/input/unpair generations,
+  including X/Y, left/right, middle/back/forward, vertical high-resolution
+  plus compatibility wheel, and horizontal wheel;
+- T650 `046d:4101`: two full pair/raw-configure/input/unpair generations,
+  including two-contact absolute position/pressure and click release;
+- K400 `046d:4024`: HID++ identity/fallback discovery with standard keyboard
+  and touchpad input;
+- K750 `046d:4002`: solar light-measurement enable, two solar state events,
+  and standard keyboard input around those events.
+
+Each large child runs in its own fresh receiver generation. Earlier generic
+keyboard and complete-eQuad capacity phases now use unmatched product
+`0x4003`, leaving `0x4024` exclusively for the exact K400 stage. The run keeps
+all earlier direct HID++, M705, simultaneous-slot, independent-unpair,
+receiver-detach, and final direct-regression checks.
+
+The emulator compares every required host request byte-for-byte and exposes
+failure only through the alert keyboard: `f12` followed by the failed phase
+letter three times. Emulator CDC is not a verdict source. The hardware run
+completed both generations of M560 and T650, one K400 and one K750, all
+input/removal signals, and terminal direct `f10`, with no `f12`, `ERR`, or
+`WARN`. The retained complete-eQuad capacity phase added the run's only OOM.
+
+The K750 path reaches the existing reduced `power_supply` queue, but the UI
+consumer intentionally reads and ignores snapshots. Keyboard input between and
+after the two solar reports proves continued execution and lifetime cleanup;
+it does not independently expose the capacity/status values. No temporary
+value-level diagnostic was added.
+
+The tested builds are:
+
+```text
+host text/data/bss       536776 / 788 / 245160 B
+emulator text/data/bss    73480 / 0 / 254964 B
+hardware verdict         passed 2026-07-26
+```
+
+Both M560 generations repeated `free=27008` live and `40832` after child
+removal. Both T650 generations repeated `25184` and `40832`. K400 used
+`16928` live and returned to `40832`. K750 used `18536` live; its immediate
+removal snapshot was `40576` while terminal power-queue cleanup remained
+asynchronous. The following direct profile returned exactly to the earlier
+attached tuple `free=39408`, `largest=39248`, `blocks=5`, so there is no
+cumulative retention. Whole-run minimum heap was 3,640 B during the
+simultaneous M705/generic-keyboard phase; all stack watermarks stayed nonzero,
+with `hid-work=117` words at minimum.
+
+This stage stops at Linux input/evdev. It does not add KeyD high-resolution
+wheel policy, absolute-touch policy, UI battery presentation, HIDRAW
+subscribers, Bluetooth, Bolt, legacy 27 MHz classes, or force feedback.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
@@ -835,6 +893,13 @@ and emulator CDC lines under each item.
   - the complete HID++ eQuad keyboard profile exceeds the available RP2040
     heap and adds exactly one OOM count
   - teardown recovers and following standalone devices still work
+- [x] practical exact-class HID++/Unifying matrix
+  - emulator branch `device/logitech-hidpp-unifying-matrix`
+  - two M560 and two T650 generations, then one K400 and one K750 generation
+  - all required Linux input events, independent removals, terminal direct
+    `f10`, no `f12`, and stable equivalent heap/stack plateaus
+  - K750 snapshot values remain intentionally unacknowledged by the noop UI
+  - verdict: passed 2026-07-26; exactly one expected complete-eQuad OOM
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

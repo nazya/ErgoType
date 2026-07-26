@@ -80,6 +80,12 @@ typedef long loff_t;
 #define CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY 1
 // The selected DJ stage enables the upstream M705 HID++ 1.0 wheel path.
 #define CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0 1
+/*
+ * The practical Unifying stage opens only the exact upstream M560, T650,
+ * K400, and K750 child classes. Broad DJ matching, Bluetooth, legacy proxy
+ * devices, and force feedback remain outside this stage.
+ */
+#define CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.

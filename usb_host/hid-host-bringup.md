@@ -21,11 +21,21 @@ The following paths have produced input events on hardware:
 - the Holtek keyboard emulator, including its report-descriptor fixup;
 - the active haptic-touchpad emulator, including pointer events and the
   multitouch/haptic probe path;
+- direct HID++ 1.0/2.0 request/reply, identity, battery, timeout, disconnect,
+  and reconnect paths;
+- the pinned-upstream DJ receiver with standalone and simultaneous M705 and
+  ordinary keyboard children, independent unpair, receiver detach, and later
+  direct regression;
 - the PMW pointing-device path, independently of USB host input.
+
+The current exact-class stage additionally selects M560 `046d:402d`,
+T650 `046d:4101`, K400 `046d:4024`, and K750 `046d:4002` upstream classes.
+Its byte-exact automatic emulator completed all four class paths and the final
+direct regression on hardware on 2026-07-26.
 
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
-device. That range is historical, not the expected value for the current dirty
+device. That range is historical, not the expected value for the current
 artifact and not a guaranteed allocation size: record the current artifact's
 own startup/attach/removal plateaus on hardware, and remember that HID parsing
 also needs a sufficiently large contiguous block while a device is being added.
@@ -362,6 +372,13 @@ separately and simultaneously. With both live, the heap reaches `free=5160`,
 keyboard connection profile (`046d:4024`) does not fit even as the receiver's
 only paired child and adds one OOM count. That profile combines keyboard,
 Consumer, power, media-center, and HID++ descriptors.
+
+Those product values describe the recorded historical fixture. The current
+emulator moves its generic keyboard and complete-eQuad capacity phases
+to unmatched `046d:4003`, reserving `046d:4024` for the exact K400 class.
+M560, T650, K400, and K750 then run sequentially in separate receiver
+generations. The hardware result therefore measures one exact large child at a
+time rather than making a new simultaneous-live-graph promise.
 
 The earlier two-OOM capture used the upstream-sized 256-field table rather than
 the retained 64-field table. Under that configuration, both the second

@@ -139,7 +139,7 @@ without a device or internal consumer that defines their exact contract.
 
 Direct HID++ does not depend on HIDRAW. The hardware-tested request/reply
 foundation links a deliberately narrow slice from pinned upstream
-`hid-logitech-hidpp.c`; the current dirty host extends it:
+`hid-logitech-hidpp.c`; the current host extends it:
 
 - direct USB `046d:c08d` and `046d:c08a` are selected;
 - generic HID input remains active, while the HID++ driver adds `.probe`,
@@ -161,9 +161,11 @@ foundation links a deliberately narrow slice from pinned upstream
   value. The UI task currently reads and ignores value events, then owns queue
   cleanup after terminal `REMOVED`; KeyD and the ordinary devmon path are not
   involved, and UI presentation remains deferred;
-- generic HID battery strength, sysfs, force feedback, high-resolution wheel,
-  extra buttons, touchpad subclasses, and delayed initialization remain
-  visibly gated in their upstream positions.
+- generic HID battery strength, sysfs, force feedback, broad Logitech
+  matching, Bluetooth, and legacy 27 MHz classes remain visibly gated in
+  their upstream positions. The current exact-class stage additionally selects
+  only the exact upstream M560, T650, K400, and K750 DJ child classes,
+  including their class-specific input hooks and delayed initialization.
 
 The first single-M705 receiver checkpoint has since been superseded by the
 pinned-upstream-shaped `hid-logitech-dj.c` port. Runtime matching still enables
@@ -173,6 +175,16 @@ multi-slot virtual-child model, standard mouse/keyboard/Consumer/power/media
 descriptors, HID++ descriptors, and virtual-child raw-request routing through
 the physical receiver. Firmware glue supplies the task-owned work/lifecycle
 boundary and final evdev activation.
+
+The exact-class extension keeps the upstream IDs and quirks:
+M560 `046d:402d`, T650 `046d:4101`, K400 `046d:4024`, and K750
+`046d:4002`. M560 and T650 retain upstream delayed input publication; T650
+uses the WTP raw-XY path, K400 retains its normal composite reports, and K750
+uses the reduced power-supply boundary for solar events. It does not enable a
+wildcard ID, Bluetooth, Bolt, force feedback, or a new HIDRAW consumer. Its
+matching automatic emulator completed the full hardware sequence on
+2026-07-26, including both M560/T650 generations, K400, K750, and the final
+direct regression.
 
 The exact diagnostic host/emulator pair completed two automatic hardware runs
 on 2026-07-24, including an ordinary HID++ 1.0 RAP request and HID++ 2.0 FAP
@@ -194,20 +206,19 @@ Logitech firmware entities.
 
 The staged order from here is:
 
-1. Continue practical direct HID++ with high-resolution wheel, then extra
-   button/vendor-key handling, then T650-style raw XY/multitouch.
-2. Expand real-device DJ coverage across keyboard plus mouse, independent child
-   reconnect, and several receiver slots while measuring each live graph.
-   Virtual-child raw requests already route through the receiver low-level
-   driver.
-3. Extend reduced HIDRAW only when a concrete driver or internal consumer
+1. Keep the hardware-verified exact-class change at the Linux input/evdev
+   boundary. Downstream KeyD
+   policy for high-resolution wheel or absolute touch input is a separate
+   stage.
+2. Extend reduced HIDRAW only when a concrete driver or internal consumer
    requires descriptor or raw-report exchange.
-4. Preserve `64/675` as the current compatibility policy. Do not optimize only
+3. Preserve `64/675` as the current compatibility policy. Do not optimize only
    to force every large descriptor graph onto RP2040; validate those graphs on
    a measured larger-RAM target if that becomes the selected hardware.
 
-The later capability/receiver matrix should cover M560 or M705, K400 or K750,
-T650, a combined Unifying keyboard/mouse receiver, and a direct-USB MX Vertical.
+The current capability/receiver matrix covers M705, M560, K400, K750,
+T650, generic simultaneous Unifying keyboard/mouse children, and direct USB
+HID++ regression. A direct-USB MX Vertical capability fixture remains future.
 Logitech Bolt must be treated as a separate protocol/device check rather than
 assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
 USB transport until a Bluetooth HID backend exists. Wacom and simple
