@@ -1,0 +1,35 @@
+name: nRF52840 NCS build
+
+on:
+  push:
+    branches: [main, nrf]
+  pull_request:
+    branches: [main, nrf]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Initialize pinned NCS workspace
+        run: |
+          west init -l app
+          west update --narrow -o=--depth=1
+      - name: Build
+        run: west build -b nrf52840dk/nrf52840 app -d build --pristine always
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ergotype-nrf52840
+          path: |
+            build/app/zephyr/zephyr.elf
+            build/app/zephyr/zephyr.hex

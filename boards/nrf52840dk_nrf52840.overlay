@@ -1,0 +1,19 @@
+/ {
+	chosen {
+		zephyr,code-partition = &app_partition;
+	};
+};
+
+&flash0 {
+	partitions {
+		/delete-node/ partition@0;
+		/delete-node/ partition@c000;
+		/delete-node/ partition@82000;
+
+		app_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
+			label = "application";
+			reg = <0x00000000 0x000f8000>;
+		};
+	};
+};
