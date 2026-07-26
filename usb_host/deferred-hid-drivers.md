@@ -120,36 +120,59 @@ blocking inside TinyUSB callbacks.
 HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard
 and mouse input does not need it, and Logitech HID++ kernel drivers can use
 `.raw_event` plus `hid_hw_raw_request()` without a Linux `/dev/hidraw` file.
-Some other useful drivers and a future WebHID/raw proxy do expect the HIDRAW
-lifecycle, so the planned firmware boundary is deliberately smaller than the
-Linux character-device ABI:
+Some device families need raw-report access beyond ordinary keyboard and mouse
+input. Firmware now has the first independent HIDRAW lifecycle checkpoint,
+deliberately smaller than the Linux character-device ABI:
 
-- retain upstream `hidraw_connect()` / `hidraw_disconnect()` and
-  `HID_CLAIMED_HIDRAW` ownership;
-- give each object generation-safe disconnect/reconnect lifetime;
-- deliver raw input to an optional internal subscriber through a bounded
-  queue, with an explicit drop counter and no producer wait when no subscriber
-  exists;
-- route GET, SET, and OUTPUT through the existing asynchronous HID transport;
-- do not add `/dev`, file descriptors, `read()`, `ioctl()`, `poll()`, or VFS
-  emulation until a real external proxy client needs them.
+- upstream-shaped `hidraw_connect()`, `hidraw_disconnect()`,
+  `hidraw_report_event()`, and `HID_CLAIMED_HIDRAW` ownership are active;
+- a small per-device object follows HID lifecycle and is revoked before free;
+- no report is retained and no report-time allocation occurs because no raw
+  consumer is linked;
+- there is no subscriber, queue, descriptor API, GET/SET API, `/dev`, file
+  descriptor, `read()`, `ioctl()`, `poll()`, or VFS emulation.
 
-Direct HID++ does not depend on HIDRAW. The hardware-tested diagnostic
-checkpoint
-therefore links a deliberately narrow first slice from pinned upstream
-`hid-logitech-hidpp.c` before implementing the separate HIDRAW client:
+A later real raw-report consumer may add one bounded subscription, explicit
+drop accounting, descriptor access, and GET/SET/OUTPUT over the existing async
+transport. Those parts are not current functionality and must not be added
+without a device or internal consumer that defines their exact contract.
 
-- only the upstream direct-USB `046d:c08d` identity is selected;
-- generic HID input remains active, while the HID++ driver adds only
-  `.probe`, `.remove`, `.raw_event`, and protocol-version detection;
+Direct HID++ does not depend on HIDRAW. The hardware-tested request/reply
+foundation links a deliberately narrow slice from pinned upstream
+`hid-logitech-hidpp.c`; the current dirty host extends it:
+
+- direct USB `046d:c08d` and `046d:c08a` are selected;
+- generic HID input remains active, while the HID++ driver adds `.probe`,
+  `.remove`, `.raw_event`, and protocol-version detection;
 - a real single-waiter task bridge preserves register-before-test, the durable
   response predicate, timeout, response wake, and exact-interface disconnect
   cancellation without polling or report-time allocation;
 - probe-time interrupt replies enter only the driver's validated `raw_event`
   matcher; ordinary field/input parsing stays behind final evdev activation;
-- identity publication, power supply, sysfs, receiver children, force
-  feedback, high-resolution wheel, extra buttons, touchpad subclasses, and
-  delayed initialization remain visibly gated in their upstream positions.
+- the current extension enables upstream pre-connect HID++ 2.0 name
+  and unit-ID/serial discovery before `hid_connect()`; the unit ID remains in
+  Linux HID/input state;
+- the evdev/devmon boundary retains the bounded final name and the KeyD task
+  reports device attachment as `DEVICE: added <vid:pid> <name>`;
+- direct HID++ battery discovery and notifications use a real reduced
+  `power_supply` registration/get-property/change/unregister boundary. Each
+  supply publishes detached full snapshots through its own length-one member
+  of a separate devmon power QueueSet, so pending changes coalesce to the latest
+  value. The UI task currently reads and ignores value events, then owns queue
+  cleanup after terminal `REMOVED`; KeyD and the ordinary devmon path are not
+  involved, and UI presentation remains deferred;
+- generic HID battery strength, sysfs, force feedback, high-resolution wheel,
+  extra buttons, touchpad subclasses, and delayed initialization remain
+  visibly gated in their upstream positions.
+
+The first single-M705 receiver checkpoint has since been superseded by the
+pinned-upstream-shaped `hid-logitech-dj.c` port. Runtime matching still enables
+only receiver `046d:c52b`; the other upstream receiver IDs remain behind
+`CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The active port retains the upstream
+multi-slot virtual-child model, standard mouse/keyboard/Consumer/power/media
+descriptors, HID++ descriptors, and virtual-child raw-request routing through
+the physical receiver. Firmware glue supplies the task-owned work/lifecycle
+boundary and final evdev activation.
 
 The exact diagnostic host/emulator pair completed two automatic hardware runs
 on 2026-07-24, including an ordinary HID++ 1.0 RAP request and HID++ 2.0 FAP
@@ -157,14 +180,31 @@ request with BUSY retry. Temporary task-side markers and those otherwise unused
 requests are absent from the production checkpoint. The production-clean pair
 was rebuilt reproducibly and accepted as post-test cleanup without another
 hardware run; the exact hardware verdict remains associated with the
-diagnostic hashes. The staged order from here is:
+diagnostic hashes. The later full combined emulator sequence passed on RP2040
+with temporary host limits `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256`.
+Hardware testing at the retained `64/675` policy showed that standalone and
+simultaneous M705 and ordinary DJ keyboard children work. The combined graph
+leaves `free=5160`, `min=4008`, and no new OOM. The complete HID++ eQuad
+keyboard connection profile does not fit as a standalone child and adds the
+run's only OOM count. Cleanup recovers, and subsequent M705, ordinary keyboard,
+and direct HID++ phases continue to work. The earlier two-OOM result used the
+upstream-sized 256-field table rather than the retained 64-field table. Pinned
+upstream supplies protocol-version detection but no generic version query for
+Logitech firmware entities.
 
-1. Add the independent minimal HIDRAW lifecycle described above.
-2. Add battery state, identity/serial/version, high-resolution wheel, extra
-   buttons, and touchpad raw XY as separate checkpoints.
-3. Add `hid-logitech-dj` receiver ownership: first one paired mouse, then
-   keyboard plus mouse, then per-child disconnect/reconnect, then several
-   receiver slots with measured heap use.
+The staged order from here is:
+
+1. Continue practical direct HID++ with high-resolution wheel, then extra
+   button/vendor-key handling, then T650-style raw XY/multitouch.
+2. Expand real-device DJ coverage across keyboard plus mouse, independent child
+   reconnect, and several receiver slots while measuring each live graph.
+   Virtual-child raw requests already route through the receiver low-level
+   driver.
+3. Extend reduced HIDRAW only when a concrete driver or internal consumer
+   requires descriptor or raw-report exchange.
+4. Preserve `64/675` as the current compatibility policy. Do not optimize only
+   to force every large descriptor graph onto RP2040; validate those graphs on
+   a measured larger-RAM target if that becomes the selected hardware.
 
 The later capability/receiver matrix should cover M560 or M705, K400 or K750,
 T650, a combined Unifying keyboard/mouse receiver, and a direct-USB MX Vertical.

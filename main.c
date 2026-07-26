@@ -238,7 +238,8 @@ static void app_task(void *pvParameters)
     dbg3config(&config);
     
 
-    if (config.nr_leds != 0 ||
+    if (mode == HID ||
+        config.nr_leds != 0 ||
         config.ws2812_pin != -1 ||
         config.ssd1306.i2c_idx != -1) {
         TaskHandle_t ui_task_handle = NULL;

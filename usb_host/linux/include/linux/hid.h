@@ -32,12 +32,16 @@
 #define HID_DT_HID			(USB_TYPE_CLASS | 0x01)
 #define HID_DT_REPORT			(USB_TYPE_CLASS | 0x02)
 #define HID_MAX_DESCRIPTOR_SIZE 4096
-#define HID_MAX_FIELDS 256
+// At 64/675, simultaneous M705 and ordinary DJ keyboard children fit RP2040.
+// The complete HID++ eQuad keyboard connection profile fit only in the
+// temporary 8/256 hardware checkpoint.
+// #define HID_MAX_FIELDS 256
+// Keep the per-report pointer table bounded on the firmware target. Linux
+// upstream reserves 256 entries.
+#define HID_MAX_FIELDS 64
 // #define HID_MAX_USAGES 12288
-// KeyD discards generic Consumer events above usage 0x02A2. Limit parser
-// usage arrays to 675 entries instead of allocating mappings that cannot
-// reach the current KeyD input boundary. HID_MAX_USAGES also bounds Report
-// Count, so descriptors declaring a larger count are rejected while parsing.
+// KeyD discards generic Consumer events above usage 0x02A2. Limit parser usage
+// arrays to 675 entries; HID_MAX_USAGES also bounds Report Count.
 #define HID_MAX_USAGES 675
 #define HID_DEFAULT_NUM_COLLECTIONS 16
 // #define HID_COLLECTION_STACK_SIZE 4
@@ -840,6 +844,13 @@ struct hid_ll_driver {
 
 	bool (*may_wakeup)(struct hid_device *hdev);
 
+	/*
+	 * Firmware-only lower-layer gate. Ordinary input remains behind final
+	 * activation; a protocol driver may deliberately request raw_event-only
+	 * ingress while its probe owns driver_input_lock.
+	 */
+	void (*set_probe_raw_event)(struct hid_device *hdev, bool enabled);
+
 	unsigned int max_buffer_size;
 };
 
@@ -913,6 +924,9 @@ void hid_destroy_device(struct hid_device *hid);
 struct hid_report *hid_register_report(struct hid_device *device,
 				       enum hid_report_type type, unsigned int id,
 				       unsigned int application);
+// Upstream Linux: no equivalent; report_id_hash[] is omitted to save RP2040 RAM.
+struct hid_report *hid_report_enum_lookup(struct hid_report_enum *report_enum,
+					  unsigned int id);
 int hid_parse_report(struct hid_device *hid, const __u8 *start, unsigned int size);
 u32 hid_field_extract(const struct hid_device *hid, u8 *report, unsigned offset, unsigned n);
 int hid_report_raw_event(struct hid_device *hid, enum hid_report_type type, u8 *data,
@@ -991,6 +1005,7 @@ static inline void hid_device_io_start(struct hid_device *hid) {
 		return;
 	}
 	hid->io_started = true;
+	hid->ll_driver->set_probe_raw_event(hid, true);
 	up(&hid->driver_input_lock);
 }
 
@@ -1010,6 +1025,7 @@ static inline void hid_device_io_stop(struct hid_device *hid) {
 		dev_warn(&hid->dev, "io already stopped\n");
 		return;
 	}
+	hid->ll_driver->set_probe_raw_event(hid, false);
 	hid->io_started = false;
 	down(&hid->driver_input_lock);
 }

@@ -145,12 +145,12 @@ support:
 
 ## Scope
 
-The audit covers all 68 imported HID `.c` files (26 linked and 42 unlinked), all
+The audit covers all 69 imported HID `.c` files (27 linked and 42 unlinked), all
 six files under `linux/drivers/input`, all 53 headers under `linux/include` (45
-compatibility-facing `linux/**` files plus eight asm/dt/UAPI files), all 18
-top-level host glue/header/CMake files, the root CMake wiring, and the SHA-pinned
-generated TinyUSB/Pico-HCD transformations. This is the complete imported/host-
-port tree, not only the Git diff or linked objects.
+compatibility-facing `linux/**` files plus eight asm/dt/UAPI files), the host
+glue/header/CMake files, the root CMake wiring, and the SHA-pinned generated
+TinyUSB/Pico-HCD transformations. This is the complete imported/host-port tree,
+not only the Git diff or linked objects.
 The later `keyd/port/device.c` event consumer was inspected for reachability but
 is not included in the upstream-conformance result above.
 
@@ -234,12 +234,13 @@ contract remains visible.
 | `ff-memless.c` | Its two upstream `event_lock` scopes use the per-input task-context PI mutex; the original `guard(spinlock_irq*)` lines remain adjacent. |
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
-| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, explicit hidraw omission, raw-event-only protocol ingress before final evdev activation, and mutable runtime state beside flash-resident driver descriptors. |
+| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, and mutable runtime state beside flash-resident driver descriptors. |
 | `input.c` | Task-context input event mutex, firmware devres/action ownership, direct object release, and Linux presentation/PM/userspace code retained exactly under `#if 0` at its omitted runtime boundary. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
-| `hid-logitech-hidpp.c` | Full pinned source with a direct-request/reply stage gate, sparse report-ID lookup, cross-task response-state lock, exact-interface wait cancellation, one direct USB ID, and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
+| `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
+| `hid-logitech-dj.c` | Full pinned source with receiver `046d:c52b` active and the other upstream receiver IDs retained behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
-| `usbhid.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. |
+| `usbhid.c`, `hidraw.c`, `power_supply.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots. |
 
 The exact scalar timestamp replacements now retain Linux's `ktime_set()`,
 `ktime_compare()`, and `ktime_get()` lines. The firmware devres path likewise
@@ -298,7 +299,7 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 20 vendor driver descriptor translation units across 19 enabled
+- CMake links 21 vendor driver descriptor translation units across 20 enabled
   vendor `CONFIG_HID_*` families (the compound Holtek config contributes
   keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
   are also linked. Stadia has no reduced config gate and is excluded simply by
@@ -314,18 +315,46 @@ it contains no callback, logging, allocation, or wait.
   visible beside the explained firmware boundary. Full 15-contact behavior is
   not claimed because the later evdev-to-KeyD queue remains a separate bounded
   consumer.
-- The build-only direct-HID++ candidate imports pinned
-  `hid-logitech-hidpp.c` whole but selects only upstream USB ID `046d:c08d`.
+- The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole but selects
+  only USB IDs `046d:c08d` and `046d:c08a`.
   Its reachable driver hooks are `.probe`, `.remove`, and `.raw_event`; the
   active request path retains upstream protocol detection, RAP/FAP builders,
   answer/error matching, send mutex, BUSY retry, and work item. A port-only
   raw-event-only ingress reuses `hid-core` validation and `driver_input_lock`
   while stopping before field/input parsing, so `hid_device_io_start()` can
-  receive probe replies without bypassing final evdev activation. Battery,
-  identity publication, sysfs, delayed work, FF, receiver children, wheel,
-  vendor-key, and touchpad paths are compiled out of reach behind the explicit
-  stage gate. This has build/map coverage only; exact-artifact hardware status
-  belongs in `hid-emulator-coverage.md`.
+  receive probe replies without bypassing final evdev activation. The
+  request/reply foundation has exact-artifact hardware coverage. The current
+  host-only gate additionally reaches upstream HID++ 2.0 pre-connect name and
+  unit-ID/serial discovery; its Linux-only `%4phD` and packed `u32` access have
+  adjacent firmware-safe replacements. The evdev client retains the final
+  bounded name across queued ADD/removal, and the KeyD task reports VID:PID and
+  name. The unit ID remains in Linux HID/input state rather than crossing the
+  firmware-only `port_input_dev` boundary. Direct battery discovery/event paths
+  are active through a reduced managed `power_supply`:
+  `power_supply_changed_work()` overwrites a detached full snapshot in one
+  length-one queue per supply. Those queues belong to a separate devmon power
+  QueueSet consumed by the UI task, not to the ordinary devmon/KeyD path. The
+  UI currently discards `ADDED`/`CHANGED` values and
+  removes the queue after terminal `REMOVED`; presentation is deliberately
+  deferred. Generic HID battery strength, sysfs, delayed work, FF, wheel,
+  vendor-key, and touchpad paths remain compiled out of reach. The complete
+  automatic sequence later passed with temporary `8/256` parser limits.
+  Hardware also established the retained `64/675` capacity boundary recorded
+  in `hid-emulator-coverage.md`: simultaneous M705 and ordinary keyboard
+  children fit, while the complete HID++ eQuad keyboard child does not.
+- The first reduced single-M705 DJ checkpoint was replaced by the full pinned
+  upstream port. Runtime matching enables `046d:c52b`, while the other receiver
+  IDs stay behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The upstream
+  multi-slot child table, mouse/keyboard/Consumer/power/media/HID++ descriptors,
+  pair/unpair/link-loss/connection handling, and virtual-child raw-request
+  routing remain present. Firmware adaptations provide task-owned work,
+  lifecycle destruction, sparse report lookup, and final evdev activation.
+  Hardware comparison proved the complete HID++ eQuad keyboard lifecycle at
+  temporary `8/256`. At retained `64/675`, standalone and simultaneous M705
+  and ordinary keyboard children work; only the standalone complete eQuad
+  keyboard profile reaches the RP2040 capacity boundary documented in
+  `pio-usb-memory.md`. The earlier simultaneous-child limit was measured with
+  the upstream-sized 256-field table.
 - `hid-haptic.h` is byte-for-byte baseline. `hid-multitouch.c` retains three
   adjacent, explained `jiffies` member-token substitutions and imports upstream
   `8813b061`: active contacts use a `maxcontacts`-sized bitmap and the RUNNING
@@ -842,8 +871,11 @@ contains a hypothetical NULL check that no current caller can exercise.
 - FreeRTOS queues use the 8-byte `port_input_event`; evdev converts from the
   16-byte kernel `input_event` at the devmon boundary. `__KERNEL__` selects the
   kernel UAPI layout without exposing unavailable newlib ioctl headers.
-- `hidraw.h` is an extended proxy contract, but hidraw is not linked/claimed.
-  hiddev also remains disabled and active code uses stubs.
+- `hidraw.h` and `hidraw.c` now implement only connect, claim, report-event,
+  disconnect, and a small per-device lifecycle object. With no subscriber,
+  reports are not retained and report ingress allocates nothing. There is no
+  descriptor/GET/SET consumer API, queue, VFS, device node, fd, ioctl, poll, or
+  multi-open state. Hiddev remains disabled and active code uses stubs.
 - Audited task-owned `raw_event`, synchronous HID report request/wait, and
   returned GET data are active. Bounded task-side USB control and interrupt-OUT
   adapters are active with per-interface cancellation. HID report and generic
@@ -862,10 +894,12 @@ contains a hypothetical NULL check that no current caller can exercise.
   longer drops completion:
   success performs the host DATA0 reset and wire failure keeps Linux's device-
   reset decision, while only interrupt-IN rearm depends on the open state.
-  Generic URBs, synchronous interrupt-IN, unaudited hooks, hidraw/hiddev
-  runtime, and PIDFF remain deferred. The linked direct-HID++ slice uses only
-  the already implemented synchronous raw SET_REPORT plus continuous
-  interrupt-IN response path.
+  Generic URBs, synchronous interrupt-IN, unaudited hooks, fuller HIDRAW
+  consumer functionality, hiddev runtime, and PIDFF remain deferred. The
+  linked direct-HID++ slice uses the already implemented synchronous raw
+  SET_REPORT plus continuous interrupt-IN response path. The linked DJ slice
+  uses sparse report lookup, receiver raw requests, and virtual-child report
+  forwarding without generic USB URBs.
 - `usbhid_start()` again computes the exact upstream per-device `bufsize` from
   INPUT, OUTPUT, and FEATURE reports. GET_REPORT uses that rounded EP0 limit and
   writes directly into completion-owned parser storage. Every asynchronous SET
@@ -1070,14 +1104,15 @@ Verified through hardware checkpoint `usb: complete event-driven enumeration pat
 Current checkpoint audit:
 
 - retained the prior whole-file audit and diffed the newly linked
-  `hid-logitech-hidpp.c` plus its narrow `hid-core.c` ingress change against
-  clean `83f14548`. There are now 30 linked Linux-derived C translation units;
-  twenty-nine retain an upstream counterpart and `hid-drivers.c` is the
-  documented firmware-only linker registry. The raw-event-only signature and
-  ordinary call sites retain their exact upstream forms beside the added
-  argument, and every direct-stage capability gate states its boundary
-  locally. No unexplained active-path replacement or P0/P1 divergence remains;
-  bounded P2 contracts are listed above
+  `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
+  `hid-core.c` ingress/lifecycle changes against clean `83f14548`. There are
+  now 31 linked Linux-derived C translation units; thirty have an upstream
+  source counterpart and `hid-drivers.c` is the documented firmware-only
+  linker registry. The raw-event-only signature and ordinary call sites retain
+  their exact upstream forms beside the added argument, and every direct-stage
+  capability gate states its boundary locally. No unexplained active-path
+  replacement or P0/P1 divergence remains; bounded P2 contracts are listed
+  above
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep
   on a mutex, queue, or task notification and recheck a durable predicate. The

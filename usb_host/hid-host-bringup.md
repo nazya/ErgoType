@@ -347,13 +347,63 @@ and the resulting per-field RAM cost is measured. At the current limit, one
 maximal field plus live parser-local arrays is about 33 KiB before allocator
 overhead and the rest of the HID device state.
 
+## Current RP2040 DJ/HID++ Memory Boundary
+
+The retained firmware policy is `HID_MAX_FIELDS=64` and
+`HID_MAX_USAGES=675`, versus 256 and 12,288 in upstream Linux. These limits
+bound individual parser structures; they do not guarantee that every
+combination of otherwise valid fields, reports, interfaces, and virtual
+children fits the shared RP2040 heap.
+
+Hardware testing at the retained `64/675` policy showed that an M705 mouse
+child (`046d:101b`) and an ordinary DJ keyboard child (`046d:4024`) work both
+separately and simultaneously. With both live, the heap reaches `free=5160`,
+`min=4008`, and `largest=4184` without an OOM. The complete HID++ eQuad
+keyboard connection profile (`046d:4024`) does not fit even as the receiver's
+only paired child and adds one OOM count. That profile combines keyboard,
+Consumer, power, media-center, and HID++ descriptors.
+
+The earlier two-OOM capture used the upstream-sized 256-field table rather than
+the retained 64-field table. Under that configuration, both the second
+simultaneous child and the complete eQuad child reached the memory boundary.
+
+The complete eQuad keyboard profile also does not fit at `8/675`, but does fit
+at the temporary `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256` checkpoint. Its
+Consumer descriptor declares usages 1 through 767, so the temporary run covers
+child creation, keyboard input, and lifecycle cleanup while retaining only
+Consumer selectors 1 through 256. The detailed measurements are recorded in
+[`pio-usb-memory.md`](pio-usb-memory.md).
+
+Similar capacity limits may affect devices with wide usage ranges, many report
+fields, several simultaneous receiver children, or several large composite
+HID interfaces. This is not a blanket limitation on keyboards or mice; it is a
+property of the complete live descriptor graph. Treat each new large graph as
+a measured compatibility case.
+
+Two informational messages make the deliberate policy visible:
+
+- `INFO: HID_FIELDS64_UPSTREAM256` is emitted for every
+  `hid_open_report()`; it announces the configured field-table difference and
+  does not mean that a descriptor reached 64 fields.
+- `INFO: HID_USAGES675_UP_12288` is emitted when the DJ HID++ keyboard
+  connection branch is selected. It announces the configured policy and is not
+  itself an allocation result.
+
+Successful attachment still requires the corresponding `DEVICE: added` and
+input marker with no new OOM count. `WARN: HID_USAGE_CAP_DROP` remains a
+separate runtime indication that an actual array selector was outside the
+retained lookup.
+
 ## Retained Memory and Lifecycle Changes
 
 The working configuration intentionally keeps these changes:
 
 - explicit usage ranges reserve parser-local storage once at the final bounded
   size instead of repeatedly growing and copying it;
-- `HID_MAX_USAGES=675`, with `HID_USAGE_CAP_DROP` for runtime visibility;
+- `HID_MAX_FIELDS=64`, with `HID_FIELDS64_UPSTREAM256` on every report open;
+- `HID_MAX_USAGES=675`, with the DJ-connection policy marker
+  `HID_USAGES675_UP_12288` and `HID_USAGE_CAP_DROP` for an actual out-of-range
+  selector;
 - the CMake HID source list is the driver allowlist, and `CONFIG_HID_*` plus
   special-driver quirk gating mirror the linked drivers and supported features;
 - builtin driver descriptors stay const in flash, while their mutable runtime
@@ -501,6 +551,8 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_ENUM_CONFIG_INVALID` | The short header or completed full configuration descriptor was short, malformed, or inconsistent with its retained `wTotalLength`; no class parser received it. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
 | `ERR: HID_LOCK_INIT_TWICE` | Shared transport synchronization was initialized twice. Ordinary lock misuse is debug-asserted after evaluating the FreeRTOS call; it has no separate async diagnostic/fail-stop path. |
+| `INFO: HID_FIELDS64_UPSTREAM256` | A report descriptor is being opened with the firmware's 64-field table rather than upstream Linux's 256-field table. This is a policy marker, not proof that the limit was reached. |
+| `INFO: HID_USAGES675_UP_12288` | The DJ HID++ keyboard-connection path selected the firmware's 675-usage policy rather than upstream Linux's 12,288. This policy marker is not itself an OOM result. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |
 | `DBG: HID_REPORT_SET_Q` / `DBG: HID_REPORT_SET_OK` | `.request()` routed SET_REPORT through EP0 (FEATURE or no interrupt OUT) and it completed. |

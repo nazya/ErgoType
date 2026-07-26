@@ -679,14 +679,43 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `hid_hw_wait()`, including returned feature data during probe. The bounded
   firmware queue still rejects overload instead of attempting Linux's much
   larger control/output FIFOs.
-- The build-only direct-HID++ candidate additionally uses synchronous
+- The hardware-tested direct-HID++ request/reply foundation uses synchronous
   `hid_hw_raw_request()` plus `.raw_event` response matching. Its one
   send-mutex-serialized waiter has a durable predicate, timeout, report-task
   wake, and exact-generation disconnect cancellation. Probe replies take the
   port-only raw-event-only ingress while ordinary input stays behind final
-  activation. Only direct USB `046d:c08d` is selected; broader HID++, HIDRAW,
-  battery, DJ, FF, and delayed-init work remains outside this checkpoint until
-  the automatic hardware run recorded in `hid-emulator-coverage.md`.
+  activation.
+- The current dirty host selects direct USB `046d:c08d` and
+  `046d:c08a`. It reaches upstream pre-connect HID++ 2.0 name and
+  unit-ID/serial discovery, then the direct battery paths. The final name
+  reaches the KeyD device-add log with VID:PID; the unit ID remains in Linux
+  HID/input state and is not copied into `port_input_dev`. Battery values cross
+  a reduced `power_supply` boundary through one coalescing length-one value
+  queue per supply. The queues belong to a separate devmon power QueueSet; the
+  UI task reads and currently ignores detached `ADDED`/`CHANGED` snapshots,
+  then removes the personal queue after terminal `REMOVED`. Power events do
+  not enter KeyD or the ordinary devmon queue, and UI presentation is deferred.
+- HID core now restores the upstream-shaped HIDRAW
+  connect/claim/report/disconnect lifecycle. The reduced object stores no
+  reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
+  API.
+- The first reduced single-M705 checkpoint was superseded by the
+  pinned-upstream-shaped `hid-logitech-dj.c` port. Receiver `046d:c52b` is
+  active; other upstream receiver IDs remain compile-gated. The driver retains
+  multiple virtual-child slots, standard mouse/keyboard/Consumer/power/media
+  descriptors, HID++ descriptors, and raw-request routing through the physical
+  receiver.
+- The full automatic sequence passed with temporary RP2040 parser limits
+  `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256`. At the retained `64/675` policy,
+  standalone M705 and ordinary DJ keyboard children work both separately and
+  simultaneously; the combined graph leaves `free=5160`, `min=4008`, and no
+  new OOM. The complete HID++ eQuad keyboard connection profile reaches the
+  RP2040 heap boundary as a standalone child and adds the run's only OOM count.
+  The earlier two-OOM result used 256 fields. Heap values are in
+  `hid-emulator-coverage.md` and `pio-usb-memory.md`.
+- FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, broader
+  real-device DJ product coverage, and delayed-init work remain outside this
+  candidate.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of
@@ -696,6 +725,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
+- Continue practical HID++ with high-resolution wheel, vendor buttons, then
+  touchpad input. Keep acceptance visible in the host CDC/input log because the
+  emulator CDC is not visible to the user.
+- Measure broader real-device DJ combinations and the same complete HID++ eQuad
+  keyboard profile on the selected larger-RAM target. Do not transfer the
+  temporary `8/256` RP2040 verdict to the retained `64/675` configuration.
 - Keep verifying the linked drivers with targeted emulators or matching
   hardware before claiming hardware coverage.
 - The normal USB Magic Trackpad 2 path is hardware-verified on all four HID

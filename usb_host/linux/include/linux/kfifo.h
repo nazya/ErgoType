@@ -4,9 +4,10 @@
 #include "hid_compat.h"
 
 /*
- * PORTING DEBT: no linked source uses this reduced byte FIFO. It omits
- * Linux kfifo's locking variants, power-of-two sizing contract, and broader
- * typed API; audit the prospective caller before this header becomes active.
+ * Logitech DJ uses this reduced byte FIFO for eight fixed-size workitems.
+ * The caller allocates a 128-byte power-of-two buffer and serializes every
+ * kfifo_in()/kfifo_out() with its receiver mutex. Linux locking variants and
+ * the broader typed API remain unsupported.
  */
 struct kfifo {
 	u8 *buffer;

@@ -2347,11 +2347,11 @@ void usbhid_report_task(void *pvParameters)
 		/*
 		 * hid_device_io_start() lets an upstream protocol driver receive
 		 * replies during probe. Keep ordinary field/input parsing behind
-		 * driver_ready, but allow the one bound protocol wait to enter only
-		 * its validated raw_event matcher.
+		 * driver_ready, but let the driver's explicit probe gate enter only
+		 * its raw_event matcher.
 		 */
 		protocol_only = status_current && !usbhid->driver_ready &&
-				usbhid->protocol_wait != NULL;
+				usbhid->probe_raw_event;
 		/*
 		 * Previous callback-side port:
 		 *     protocol_mode = tuh_hid_get_protocol(dev_addr, instance);

@@ -84,6 +84,8 @@ const struct device_type usb_if_device_type = {
 };
 static struct hid_device *usbhid_devices[HID_HOST_MAX_DEVICES];
 static _Atomic(TaskHandle_t) usbhid_lifecycle_task_handle;
+static struct work_struct *usbhid_lifecycle_work_head;
+static struct work_struct *usbhid_lifecycle_work_tail;
 
 struct usbhid_sync_request {
 	TaskHandle_t task;
@@ -2804,6 +2806,85 @@ static void usbhid_lifecycle_kick(void)
 					 USBHID_LIFECYCLE_NOTIFY_WAKE, eSetBits);
 }
 
+void usbhid_lifecycle_schedule_work(struct work_struct *work)
+{
+	hid_transport_lock();
+	if (work->pending) {
+		hid_transport_unlock();
+		return;
+	}
+	work->pending = 1;
+	if (usbhid_lifecycle_work_tail)
+		usbhid_lifecycle_work_tail->next = work;
+	else
+		usbhid_lifecycle_work_head = work;
+	usbhid_lifecycle_work_tail = work;
+	hid_transport_unlock();
+
+	usbhid_lifecycle_kick();
+}
+
+void usbhid_lifecycle_cancel_work(struct work_struct *work)
+{
+	struct work_struct *queued;
+	struct work_struct *previous = NULL;
+
+	hid_transport_lock();
+	for (queued = usbhid_lifecycle_work_head; queued;
+	     previous = queued, queued = queued->next) {
+		if (queued != work)
+			continue;
+		if (previous)
+			previous->next = work->next;
+		else
+			usbhid_lifecycle_work_head = work->next;
+		if (usbhid_lifecycle_work_tail == work)
+			usbhid_lifecycle_work_tail = previous;
+		work->next = NULL;
+		work->pending = 0;
+		break;
+	}
+	hid_transport_unlock();
+}
+
+static bool usbhid_lifecycle_process_work(void)
+{
+	struct work_struct *work;
+	bool disconnect_pending = false;
+
+	hid_transport_lock();
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; ++i) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid;
+
+		if (!hid)
+			continue;
+		usbhid = hid->driver_data;
+		if (usbhid->disconnect_queued) {
+			disconnect_pending = true;
+			break;
+		}
+	}
+	if (disconnect_pending) {
+		hid_transport_unlock();
+		return true;
+	}
+	work = usbhid_lifecycle_work_head;
+	if (work) {
+		usbhid_lifecycle_work_head = work->next;
+		if (!usbhid_lifecycle_work_head)
+			usbhid_lifecycle_work_tail = NULL;
+		work->next = NULL;
+		work->pending = 0;
+	}
+	hid_transport_unlock();
+	if (!work)
+		return false;
+
+	work->func(work);
+	return true;
+}
+
 static void usbhid_transport_fault(enum usbhid_transport_fault fault)
 {
 	hid_transport_lock();
@@ -3095,6 +3176,9 @@ void usbhid_lifecycle_task(void *pvParameters)
 			(void)usbhid_lifecycle_process_ready_probes();
 		}
 		usbhid_lifecycle_log_transport_faults();
+		/* One virtual-device work item, then recheck physical teardown/reset. */
+		if (usbhid_lifecycle_process_work())
+			continue;
 
 		(void)xTaskNotifyWaitIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
 					     0, UINT32_MAX, NULL,
@@ -3333,6 +3417,7 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 		ret = -ENODEV;
 	else
 		usbhid->driver_ready = true;
+	usbhid->probe_raw_event = false;
 	hid_transport_unlock();
 	if (ret < 0)
 		goto fail_bound;
@@ -3966,6 +4051,15 @@ static int usbhid_open(struct hid_device *hid)
 done:
 	mutex_unlock(&usbhid->mutex);
 	return ret;
+}
+
+static void usbhid_set_probe_raw_event(struct hid_device *hid, bool enabled)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	hid_transport_lock();
+	usbhid->probe_raw_event = enabled;
+	hid_transport_unlock();
 }
 
 static void usbhid_close(struct hid_device *hid)
@@ -5747,6 +5841,7 @@ static const struct hid_ll_driver usb_hid_driver = {
 	.raw_request = usbhid_raw_request,
 	.output_report = usbhid_output_report,
 	.idle = usbhid_idle,
+	.set_probe_raw_event = usbhid_set_probe_raw_event,
 	.max_buffer_size = HID_MAX_BUFFER_SIZE,
 };
 

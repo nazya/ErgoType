@@ -11,6 +11,7 @@
 #include "task.h"
 #include "timers.h"
 
+#include "devmon.h"
 #include "jconfig.h"
 #include "usb_descriptors.h"
 
@@ -413,6 +414,23 @@ static void ui_tick_status_screen(ui_state_t *ui)
     ui_bounce_status_layout(ui);
 }
 
+static void ui_draw_power_supply_events(void)
+{
+    QueueHandle_t event_queue;
+    struct port_power_supply_snapshot event;
+
+    while ((event_queue =
+                xQueueSelectFromSet(power_supply_event_set, 0)) != NULL) {
+        (void)xQueueReceive(event_queue, &event, 0);
+
+        /* TODO: Use the received snapshot to update the power-supply UI. */
+        if (event.event_type == PORT_POWER_SUPPLY_REMOVED) {
+            (void)xQueueRemoveFromSet(event_queue, power_supply_event_set);
+            vQueueDelete(event_queue);
+        }
+    }
+}
+
 void ui_task(void *pvParameters)
 {
     const config_t *config = (const config_t *)pvParameters;
@@ -470,6 +488,9 @@ void ui_task(void *pvParameters)
     for (;;) {
         uint32_t events = 0;
         (void)xTaskNotifyWait(0, UINT32_MAX, &events, portMAX_DELAY);
+
+        if (mode == HID)
+            ui_draw_power_supply_events();
 
         if (events & UI_EVT_LED0) {
             led_ring[0] = ui_led_pattern[0];

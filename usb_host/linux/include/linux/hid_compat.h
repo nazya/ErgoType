@@ -65,18 +65,24 @@ typedef long loff_t;
 #define CONFIG_HID_MULTITOUCH 1
 #define CONFIG_HID_MAGICMOUSE 1
 #define CONFIG_HID_LOGITECH_HIDPP 1
+#define CONFIG_HID_LOGITECH_DJ 1
+// #define CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS 1
+// The current hardware stage enables only the covered 046d:c52b receiver.
 /*
- * First direct-USB checkpoint: protocol request/reply only. The imported
- * upstream source keeps its broader capability code visibly gated until each
- * subsystem and device family has an independent hardware pass.
+ * Direct-USB HID++ is enabled in measured stages. Request/reply remains the
+ * transport umbrella, while identity opens only upstream pre-connect name and
+ * unit-ID discovery. Broader capabilities and device families stay gated until
+ * each has an independent hardware pass.
  */
 #define CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY 1
+#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_IDENTITY 1
+#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY 1
 
 // #define CONFIG_USB_HIDDEV 1
 // Firmware has hiddev proxy code in tree, but no enabled hiddev consumer path.
 // #define CONFIG_HID_BATTERY_STRENGTH 1
-// Firmware power_supply proxy is deferred; current linked HID drivers do not
-// require battery class registration.
+// The generic HID battery path remains gated pending separate device coverage.
+// Direct HID++ uses the reduced value-only firmware power_supply boundary.
 // #define CONFIG_HOLTEK_FF 1
 // Holtek force-feedback support is not linked/tested; only the keyboard and
 // mouse descriptor-fixup drivers are enabled for this family.

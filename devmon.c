@@ -6,6 +6,7 @@
 #include "devmon.h"
 
 QueueSetHandle_t devmon_event_set;
+QueueSetHandle_t power_supply_event_set;
 
 int devmon_init(void)
 {
@@ -19,6 +20,12 @@ int devmon_init(void)
 		vQueueDelete(devmon_event_set);
 		devmon_event_set = NULL;
 		return -ENOSPC;
+	}
+	power_supply_event_set =
+		xQueueCreateSet(POWER_SUPPLY_EVENT_SET_LEN);
+	if (!power_supply_event_set) {
+		vQueueDelete(devmon_event_set);
+		return -ENOMEM;
 	}
 
 	return 0;
@@ -43,4 +50,9 @@ int devmon_add_device(const struct port_input_dev *port_dev)
 	}
 
 	return 0;
+}
+
+void devmon_add_power_supply(QueueHandle_t event_queue)
+{
+	(void)xQueueAddToSet(event_queue, power_supply_event_set);
 }

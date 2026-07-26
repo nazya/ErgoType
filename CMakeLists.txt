@@ -714,8 +714,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_client.c
         # Linux-derived HID/input sources and explicitly marked registry glue
         # below follow upstream-porting-rules.md.
-        # Deferred hidraw calls are documented inline in hid-core.c.
+        # hid-core owns the upstream-shaped reduced HIDRAW lifecycle calls.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-core.c
+        # Reduced HIDRAW lifecycle only: no VFS, device nodes, or report queues
+        # until a concrete firmware raw-report consumer is linked.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hidraw.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-input.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-generic.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-drivers.c
@@ -725,9 +728,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         # USB-only Magic Mouse 2 / Trackpad 2; Bluetooth and legacy IDs remain
         # visibly disabled beside the upstream match table in the source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-magicmouse.c
-        # Direct USB HID++ request/reply checkpoint. The source retains the
-        # upstream capability and receiver paths behind an explicit stage gate.
+        # Staged direct USB HID++ request/reply, pre-connect identity, and
+        # battery. Broader capability and receiver paths remain behind gates.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-hidpp.c
+        # Pinned-upstream Unifying/DJ port, currently gated to the covered
+        # c52b receiver. Other receiver IDs and child HID++ remain gated.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
@@ -820,8 +826,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/video/backlight/backlight.c
         # Deferred: CONFIG_HID_BATTERY_STRENGTH is disabled until the
-        # power_supply proxy has matching driver/hardware coverage.
+        # generic HID battery path has matching driver/hardware coverage.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/power/supply/power_supply_core.c
+        # Reduced firmware power_supply class boundary used first by direct
+        # HID++ battery; no sysfs, VFS, uevents, or notifier emulation.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/power_supply.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c

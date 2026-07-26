@@ -266,6 +266,7 @@ claims for unrelated drivers.
 | 2026-07-21 | dirty `device/haptic-touchpad` STALL fixture | one interrupt-IN STALL is cleared remotely and reset to DATA0 locally; marker `s` proves rearm and resumed input, and the programmed reconnect repeats the same active heap plateau |
 | 2026-07-22 | `device/work-input-drivers` (`67c1aea`) | ELECOM, Kensington, Topre, and EVision driver signals pass; three `cafe:1005` cycles recover the injected full-configuration GET failure and reach the HID interface at byte 575 of a 600-byte configuration; removal returns to stable `free=60936/60944` plateaus with `oom=0` |
 | 2026-07-23 | combined haptic lifecycle / Magic Trackpad 2 fixture | all three numbered/ID0 haptic transports, five-slot replacement/erase/replay/unplug/reconnect, and the four-interface Magic Trackpad 2 mode/native/reconnect path pass in repeated hot- and cold-start runs with `oom=0` |
+| 2026-07-26 | `device/logitech-hidpp-dj-waitqueue` | the combined direct HID++/battery/DJ sequence completes at retained `64/675`; simultaneous M705 + ordinary keyboard works with `free=5160`, `min=4008`, and no new OOM, while the complete HID++ eQuad keyboard profile reaches the measured RP2040 memory boundary and adds the run's only OOM count; later device phases complete and teardown recovers without cumulative heap loss |
 
 ## Recorded Emulator Branches
 
@@ -750,6 +751,46 @@ structures. The hardware verdict remains attached only to the exact diagnostic
 pair above; the production-clean SHA pair is recorded as accepted post-test
 cleanup, not as a separate hardware run.
 
+## Full DJ/HID++ RP2040 Capacity Checkpoint
+
+The later automatic fixture exercises these DJ graphs:
+
+- a standalone M705 mouse child (`046d:101b`);
+- a standalone ordinary DJ keyboard child (`046d:4024`);
+- simultaneous M705 mouse and ordinary DJ keyboard children;
+- a complete HID++ eQuad keyboard connection child (`046d:4024`) with
+  keyboard, Consumer, power, media-center, and HID++ descriptors.
+
+At the retained `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=675` policy, the
+standalone M705 and standalone ordinary keyboard both attach and deliver input,
+and both children also work simultaneously. The combined graph leaves
+`free=5160`, `min=4008`, `largest=4184`, and `oom=0`. The complete eQuad
+keyboard child cannot be created when it is the only paired child and adds the
+run's only OOM count. The following M705, ordinary keyboard, and direct HID++
+phases still work, and receiver removal returns to the established heap
+plateau.
+
+The earlier two-OOM capture used the upstream-sized 256-field table: under that
+configuration the second simultaneous child and the complete eQuad child each
+reached the memory boundary. At `32/675`, `8/675`, and the retained `64/675`,
+simultaneous M705 and ordinary keyboard children both fit, but the complete
+eQuad keyboard child still does not. The entire automatic sequence passes at
+the temporary `8/256` policy. With that profile live, the heap reaches
+`free=4480`, `min=2744`, and `largest=2624`, with `oom=0`; child removal
+returns to 42,512 B free and full receiver removal returns to 60,400 B.
+
+The eQuad keyboard Consumer descriptor declares usages 1 through 767. Under
+the temporary `8/256` policy only selectors 1 through 256 are retained.
+Consequently that run verifies child creation, keyboard input, and lifecycle
+cleanup, while Consumer selector mappings 257 through 767 remain outside the
+temporary checkpoint.
+
+This is a bounded allocation-capacity result rather than cumulative heap loss
+or a broken DJ lifecycle. Other devices with similarly wide usage arrays, many
+fields, multiple live receiver children, or large composite HID graphs may
+reach the same boundary and need individual measurement or a larger-RAM target.
+See [`pio-usb-memory.md`](pio-usb-memory.md) for the allocation breakdown.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
@@ -785,6 +826,15 @@ fixup, mapping, mapped, event, simple probe, or raw event.
 Use this checklist when logs come back from hardware. Paste the relevant host
 and emulator CDC lines under each item.
 
+- [x] full direct HID++/battery/DJ lifecycle at temporary RP2040 limits
+  - `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256`
+  - verdict: all current automatic device graphs completed with stable cleanup
+    and `oom=0`; temporary capacity/lifecycle checkpoint only
+- [x] retained `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=675` capacity boundary
+  - standalone and simultaneous M705 and ordinary keyboard children work
+  - the complete HID++ eQuad keyboard profile exceeds the available RP2040
+    heap and adds exactly one OOM count
+  - teardown recovers and following standalone devices still work
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

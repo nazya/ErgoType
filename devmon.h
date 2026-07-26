@@ -9,6 +9,8 @@
 #include <linux/input-event-codes.h>
 
 #define MAX_DEVICES 8
+#define PORT_POWER_SUPPLY_MAX 4
+#define POWER_SUPPLY_EVENT_SET_LEN PORT_POWER_SUPPLY_MAX
 #define DEVICE_EVENT_QUEUE_LEN 16
 /*
  * Standard hid-input MT buffering uses 60 values plus two input-core framing
@@ -22,6 +24,18 @@
 #define DEVICE_INPUT_RESET	0xfffeu
 #define INPUT_BITS_PER_LONG	(sizeof(unsigned long) * 8u)
 #define INPUT_BITS_TO_LONGS(nr)	(((nr) + INPUT_BITS_PER_LONG - 1u) / INPUT_BITS_PER_LONG)
+
+#define PORT_POWER_SUPPLY_NAME_LEN 32u
+#define PORT_POWER_SUPPLY_MODEL_LEN 32u
+#define PORT_POWER_SUPPLY_SERIAL_LEN 64u
+
+enum {
+	PORT_POWER_SUPPLY_HAS_STATUS = 1u << 0,
+	PORT_POWER_SUPPLY_HAS_ONLINE = 1u << 1,
+	PORT_POWER_SUPPLY_HAS_CAPACITY = 1u << 2,
+	PORT_POWER_SUPPLY_HAS_CAPACITY_LEVEL = 1u << 3,
+	PORT_POWER_SUPPLY_HAS_VOLTAGE_NOW = 1u << 4,
+};
 
 /*
  * Same fields as Linux struct input_absinfo. Keep the snapshot type local so
@@ -64,9 +78,9 @@ struct evdev_writer {
 
 /*
  * devmon_queue carries this compact snapshot by value. Producers may build it
- * from a full Linux input_dev, but KeyD only needs the EVIOCGBIT-style bitmaps
- * and EVIOCGABS ranges below during device add; the full input_dev pointer
- * stays owned by the Linux input layer.
+ * from a full Linux input_dev, but KeyD only needs the bounded identity,
+ * EVIOCGBIT-style bitmaps, and EVIOCGABS ranges below during device add; the
+ * full input_dev pointer stays owned by the Linux input layer.
  */
 struct port_input_dev {
 	QueueHandle_t ev_queue;
@@ -81,6 +95,27 @@ struct port_input_dev {
 	unsigned long propbit[INPUT_BITS_TO_LONGS(INPUT_PROP_CNT)];
 	struct input_absinfo_snapshot abs_x;
 	struct input_absinfo_snapshot abs_y;
+};
+
+enum port_power_supply_event_type {
+	PORT_POWER_SUPPLY_ADDED,
+	PORT_POWER_SUPPLY_CHANGED,
+	PORT_POWER_SUPPLY_REMOVED,
+};
+
+/* Value-only power_supply event consumed by the UI task. */
+struct port_power_supply_snapshot {
+	enum port_power_supply_event_type event_type;
+	uint32_t proxy_id;
+	uint32_t fields;
+	int32_t status;
+	int32_t capacity;
+	int32_t capacity_level;
+	int32_t voltage_now_uv;
+	bool online;
+	char name[PORT_POWER_SUPPLY_NAME_LEN];
+	char model[PORT_POWER_SUPPLY_MODEL_LEN];
+	char serial[PORT_POWER_SUPPLY_SERIAL_LEN];
 };
 
 typedef enum {
@@ -106,5 +141,7 @@ struct devmon_event {
 
 extern QueueHandle_t devmon_queue;
 extern QueueSetHandle_t devmon_event_set;
+extern QueueSetHandle_t power_supply_event_set;
 int devmon_init(void);
 int devmon_add_device(const struct port_input_dev *port_dev);
+void devmon_add_power_supply(QueueHandle_t event_queue);

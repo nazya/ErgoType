@@ -42,6 +42,7 @@
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
 #include "hid-ids.h"
+#include "../../../../stdio_tusb_cdc.h"
 
 /*
  * Version Information
@@ -96,7 +97,9 @@ static u32 s32ton(__s32 value, unsigned int n)
  * RP2040 keeps the same 8-bit ID semantics through the already-owned sparse
  * report list, avoiding three 256-pointer tables in every hid_device.
  */
-static struct hid_report *hid_report_enum_lookup(
+// static struct hid_report *hid_report_enum_lookup(
+// RP2040 DJ glue shares the sparse report-ID lookup used by hid-core.
+struct hid_report *hid_report_enum_lookup(
 		struct hid_report_enum *report_enum, unsigned int id)
 {
 	struct hid_report *report;
@@ -1551,6 +1554,8 @@ int hid_open_report(struct hid_device *device)
 	if (WARN_ON(device->status & HID_STAT_PARSED))
 		return -EBUSY;
 
+	async_msg("INFO: HID_FIELDS64_UPSTREAM256");
+
 	start = device->bpf_rdesc;
 	if (WARN_ON(!start))
 		return -ENODEV;
@@ -2304,11 +2309,10 @@ int hid_report_raw_event(struct hid_device *hid, enum hid_report_type type, u8 *
 		hid->hiddev_report_event(hid, report);
 	if (hid->claimed & HID_CLAIMED_HIDRAW) {
 		// ret = hidraw_report_event(hid, data, size);
-		// hidraw char/proxy runtime is not wired; keep the upstream
-		// reconnect point visible and drop at this boundary for now.
-		ret = 0;
-		if (ret)
-			return ret;
+		// if (ret)
+		// 	return ret;
+		// Firmware HIDRAW has no report subscriber and cannot reject input.
+		(void)hidraw_report_event(hid, data, size);
 	}
 
 	if (hid->claimed != HID_CLAIMED_HIDRAW && report->maxfield) {
@@ -2594,10 +2598,8 @@ int hid_connect(struct hid_device *hdev, unsigned int connect_mask)
 			!hdev->hiddev_connect(hdev,
 				connect_mask & HID_CONNECT_HIDDEV_FORCE))
 		hdev->claimed |= HID_CLAIMED_HIDDEV;
-	// if ((connect_mask & HID_CONNECT_HIDRAW) && !hidraw_connect(hdev))
-	// 	hdev->claimed |= HID_CLAIMED_HIDRAW;
-	// hidraw char/proxy runtime is not wired, so firmware must not claim
-	// HIDRAW until that boundary exists.
+	if ((connect_mask & HID_CONNECT_HIDRAW) && !hidraw_connect(hdev))
+		hdev->claimed |= HID_CLAIMED_HIDRAW;
 
 	if (connect_mask & HID_CONNECT_DRIVER)
 		hdev->claimed |= HID_CLAIMED_DRIVER;
@@ -2679,9 +2681,8 @@ void hid_disconnect(struct hid_device *hdev)
 		hidinput_disconnect(hdev);
 	if (hdev->claimed & HID_CLAIMED_HIDDEV)
 		hdev->hiddev_disconnect(hdev);
-	// if (hdev->claimed & HID_CLAIMED_HIDRAW)
-	// 	hidraw_disconnect(hdev);
-	// hidraw is never claimed while the firmware hidraw proxy is deferred.
+	if (hdev->claimed & HID_CLAIMED_HIDRAW)
+		hidraw_disconnect(hdev);
 	hdev->claimed = 0;
 
 	hid_bpf_disconnect_device(hdev);
@@ -3648,9 +3649,8 @@ static int __init hid_init(void)
 	// ret = hidraw_init();
 	// if (ret)
 	// 	goto err_bus;
-	// hidraw char-device/proxy runtime is deferred; do not require it for
-	// HID core startup.
-	ret = 0;
+	// Firmware HIDRAW has no global class state to initialize.
+	(void)hidraw_init();
 
 	hid_debug_init();
 
@@ -3667,8 +3667,7 @@ static void __exit hid_exit(void)
 	hid_ops = NULL;
 #endif
 	hid_debug_exit();
-	// hidraw_exit();
-	// hidraw char-device/proxy runtime is deferred.
+	hidraw_exit();
 	bus_unregister(&hid_bus_type);
 	// hid_quirks_exit(HID_BUS_ANY);
 	// Firmware has no module unload or runtime dynamic-quirk owner; the matching

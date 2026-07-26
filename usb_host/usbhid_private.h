@@ -107,6 +107,8 @@ struct usbhid_device {
 	bool report_host_pending;
 	/* Publish parsers/readers only after post-probe evdev activation completes. */
 	bool driver_ready;
+	/* Driver deliberately opened raw_event-only ingress during probe/remove. */
+	bool probe_raw_event;
 	bool transport_stopping;
 	bool disconnect_queued;
 

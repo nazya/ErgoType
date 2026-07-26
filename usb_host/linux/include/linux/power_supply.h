@@ -236,6 +236,7 @@ struct power_supply {
 	struct device *parent;
 	struct device *powered_dev;
 	bool changed;
+	bool published;
 	unsigned int changed_count;
 	ktime_t last_changed;
 	__u32 port_proxy_id;

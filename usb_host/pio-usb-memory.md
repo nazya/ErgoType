@@ -111,6 +111,149 @@ bridge. The exact diagnostic pair above remains the hardware evidence; the
 user explicitly accepted the reproducibly built cleaned pair without another
 hardware run.
 
+Opening the pinned upstream pre-connect HID++ 2.0 name and unit-ID/serial path
+first produced this historical host-only candidate. That checkpoint also
+carried the unit ID through devmon solely for a task-side CDC marker:
+
+```text
+host text/data/bss            518544 / 788 / 245088 B
+host __bss_end__              0x2003fd68
+host main-bank headroom       664 B to 0x20040000
+host UF2 SHA-256              0a83e8be9da5993ce2baeb9c0cde55fe5ca187b0c398f845b259d4d8351b34e6
+hardware verdict              none; matching emulator intentionally deferred
+```
+
+Relative to the production-clean request/reply image, this adds 1,168 bytes of
+text and changes neither static RAM section. The device name buffer is bounded
+by the HID++ one-byte length, copied into the existing fixed `hdev->name`, and
+freed before probe returns; unit ID is copied into existing `hdev->uniq`.
+The current tree removes the port-only unit-ID copies and devmon pointer.
+`hdev->uniq` and `input_dev->uniq` remain available to the Linux-derived
+drivers, while the KeyD task reports attachment as
+`DEVICE: added <vid:pid> <name>`. Evdev still owns the bounded final-name copy
+needed across queued ADD/removal. The size above belongs to the historical
+checkpoint; current build size is recorded by the later checkpoints.
+
+The combined diagnostic checkpoint adds direct HID++ battery, reduced HIDRAW
+lifecycle, a dedicated lifecycle work queue, and the first DJ receiver
+checkpoint (`046d:c52b` to at most one generic M705 child) on top of identity:
+
+```text
+host text/data/bss            529768 / 788 / 245160 B
+host __bss_end__              0x2003fdc0
+host main-bank headroom       576 B to 0x20040000
+host UF2 SHA-256              ee14a1aac2b8e65ef84ef977c41f0efed58b18209196a1937ba35960a0634911
+emulator UF2 SHA-256          e391ef3c3bab809076e86c415e07e213a668b5bcaa243fb2218069b803051872
+hardware verdict              passed 2026-07-25; complete combined sequence
+```
+
+Relative to the identity-only candidate above, this adds 11,224 bytes of text
+and 72 bytes of BSS; data is unchanged. Power events do not enter the ordinary
+devmon/KeyD path. Devmon owns a separate four-member QueueSet, and each live
+supply owns one length-one value queue. Full `ADDED`/`CHANGED` snapshots
+coalesce by overwrite; the UI task currently ignores their values and removes
+the queue after consuming terminal `REMOVED`.
+
+Static sections do not include the runtime HIDRAW object, HID++ power-supply
+object/queue, power QueueSet, receiver mutex, guaranteed HID-mode UI task/timer,
+or virtual HID/parser/input/evdev/devmon graph. The combined run must therefore
+show a stable free/min/largest/blocks heap plateau and all task stack watermarks
+across battery changes, repeated pair/unpair, link loss, hot receiver unplug
+during input, and fresh reconnect.
+
+The run reached `f10` without an `f12` marker. Direct HID++ returned to the
+same attached `free/blocks = 32152/5` state four times and the same removed
+`60144/7` state three times. The DJ child returned to `28800/2` while attached
+and `33648/8` after unpair; full receiver removal returned to `60400/8`.
+`oom=0`; minimum remaining stack watermarks were `tuh=265`, `keyd=658`,
+`async=414`, `work=163`, `timer=348`, `lifecycle=196`, and `report=838` words.
+The noop UI provides no value-level power snapshot acknowledgement, so the
+stable repeated removal plateau is the observable power lifetime evidence.
+
+Removing only the three test-progress messages `DJ_RESYNC`, `DJ_READY`, and
+`DJ_RECEIVER_GONE` produces the production-clean host:
+
+```text
+host text/data/bss            529696 / 788 / 245160 B
+host __bss_end__              0x2003fdc0
+host main-bank headroom       576 B to 0x20040000
+host UF2 SHA-256              a650da20f755f84640c97e8933efdb17d47b368b1252c3fe6eae4a353f98bfd6
+hardware verdict              accepted post-test cleanup; no separate run
+```
+
+This removes 72 bytes of text and changes no data, BSS, allocation, timing, or
+driver control flow. The exact diagnostic host/emulator pair above remains the
+hardware evidence.
+
+### Full upstream DJ/HID++ child memory boundary
+
+The later pinned-upstream re-port of `hid-logitech-dj.c` changes the dynamic
+memory envelope substantially. A paired device now receives its complete
+standard descriptor set plus the HID++ descriptor, and several virtual
+children may coexist. This restores the upstream driver shape, but the RP2040
+heap cannot represent every graph that upstream Linux can represent.
+
+The current firmware policy and static layout are:
+
+```text
+HID_MAX_FIELDS                64 (upstream Linux: 256)
+HID_MAX_USAGES               675 (upstream Linux: 12288)
+sizeof(struct hid_report)     316 B
+host text/data/bss            535208 / 788 / 245160 B
+host __bss_end__              0x2003fdd0
+host main-bank headroom       560 B to 0x20040000
+```
+
+Hardware testing distinguishes these receiver graphs:
+
+- one M705 mouse child (`046d:101b`);
+- one ordinary DJ keyboard child (`046d:4024`);
+- simultaneous M705 mouse and ordinary DJ keyboard children;
+- one HID++ eQuad keyboard connection child (`046d:4024`) with
+  `STD_KEYBOARD | MULTIMEDIA | POWER_KEYS | MEDIA_CENTER | HIDPP`.
+
+At the retained `64/675` policy, the single M705 and the single ordinary
+keyboard each attach and deliver input, and both children also work
+simultaneously. With both live, the heap reaches `free=5160`, `min=4008`, and
+`largest=4184` with `oom=0`. The complete HID++ eQuad keyboard connection child
+cannot be created even when it is the receiver's only paired child and adds the
+run's only OOM count.
+
+After that allocation attempt, later M705, ordinary keyboard, and direct HID++
+phases still work. Equivalent direct-device attached values return to 39,392 B
+free, and removal values return to 60,464 or 60,736 B free. The result is a
+bounded capacity limit, not cumulative heap loss or a receiver-lifecycle
+problem.
+
+Intermediate hardware comparisons used the same device graphs:
+
+| `HID_MAX_FIELDS` / `HID_MAX_USAGES` | M705 + ordinary keyboard | Complete HID++ eQuad keyboard |
+| --- | --- | --- |
+| `256 / 675` | second child does not fit; one new OOM | child does not fit; one new OOM |
+| `64 / 675` | passed; `free=5160`, `min=4008`, `largest=4184`, `oom=0` | child does not fit; one new OOM |
+| `32 / 675` | passed; `free=8256`, `min=7232`, `oom=0` | child does not fit; one new OOM |
+| `8 / 675` | passed; `free=10952`, `min=9912`, `oom=0` | child does not fit; one new OOM |
+| `8 / 256` | passed; `free=10968`, `min=9936`, `oom=0` | passed; `free=4480`, `min=2744`, `largest=2624`, `oom=0` |
+
+The earlier two-OOM capture used the upstream-sized 256-field table; it did not
+measure the retained 64-field policy. The retained configuration was then
+retested through the complete combined automatic sequence.
+
+Reducing only the report field table is insufficient for the complete eQuad
+keyboard: it still does not fit at `8/675`. It fits at `8/256`, after which
+child removal returns free heap to 42,512 B and full receiver removal returns
+it to 60,400 B with `oom=0`. Its Consumer descriptor declares usages 1 through
+767; the temporary `8/256` policy retains only selectors 1 through 256.
+Consequently that run verifies child creation, keyboard input, and lifecycle
+cleanup, while Consumer selector mappings 257 through 767 remain outside the
+temporary checkpoint. The retained compatibility policy remains `64/675`.
+
+This boundary may also affect other devices with wide usage arrays, many
+report fields, several simultaneous virtual children, or several large
+composite HID interfaces. Both total free heap and the largest contiguous
+block matter during parsing. A larger-RAM target must be measured with the
+same descriptors rather than assumed to fit.
+
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
 priority-inheritance mutexes. It builds as:

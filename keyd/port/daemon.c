@@ -335,6 +335,7 @@ static int event_handler(struct event *ev)
 		break;
 	case EV_DEV_ADD:
 		ev->dev->data = active_kbd;
+		msg("DEVICE: added\t%s %s", ev->dev->id, ev->dev->name);
 		log_memory_watermarks();
 		break;
 	case EV_DEV_REMOVE:
