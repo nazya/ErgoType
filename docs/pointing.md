@@ -68,4 +68,27 @@ Important behavior details:
   - PMW3389: `cpi` is programmed in 50-CPI steps; values are clamped to a minimum of 50.
 - There is no axis inversion/rotation in the firmware pointing path today; fix direction by physical orientation or by adjusting higher-level processing.
 
+## Possible smoothing
+
+The [1€ Filter](https://gery.casiez.net/1euro/) remains a possible future
+pre-gain stage for suppressing low-speed velocity noise without imposing the
+same smoothing delay at high speed. It is not implemented or exposed in the
+configuration.
+
+## Inactive acceleration references
+
+`pointing/accel/filter-apple.c` and `filter-libpointing.c` are source-only
+references. They are not compiled and cannot be selected from the
+configuration.
+
+- The Apple implementation treats every input packet as a `67 Hz` frame.
+- The libpointing table was measured with a `400 CPI`, `125 Hz` input device,
+  so each table entry represents an 8 ms packet. Its current code normalizes
+  CPI but not packet duration.
+
+Before either filter is enabled, the pointing pipeline must either aggregate
+motion into fixed `67 Hz`/`125 Hz` frames or map the measured packet duration
+to the filter's reference frame. Feeding event-driven PMW packets directly
+would make gain depend on IRQ and task scheduling.
+
 See also: `pointing/README.md`.

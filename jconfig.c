@@ -872,6 +872,10 @@ static uint8_t parse_accel_profile_name(const char *s, size_t len, uint8_t defau
         return ACCEL_PROFILE_ADAPTIVE;
     if (len == 6 && memcmp(s, "custom", 6) == 0)
         return ACCEL_PROFILE_CUSTOM;
+    if (len == 6 && memcmp(s, "maccel", 6) == 0)
+        return ACCEL_PROFILE_MACCEL;
+    if (len == 11 && memcmp(s, "synchronous", 11) == 0)
+        return ACCEL_PROFILE_SYNCHRONOUS;
     return default_profile;
 }
 
@@ -1021,6 +1025,46 @@ static void parse_accel_profile(const char *json,
         }
         memcpy(profile->custom_points, custom_points, sizeof(*profile->custom_points) * nr_points);
         profile->nr_points = nr_points;
+        break;
+    case ACCEL_PROFILE_MACCEL:
+        break;
+    case ACCEL_PROFILE_SYNCHRONOUS:
+        if (profile->scale < 1 || profile->scale > 10000) {
+            err("%s.scale=%d invalid, allowed range is [1,10000]",
+                profile_name, (int)profile->scale);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->sync_speed < 1) {
+            err("%s.sync_speed=%d invalid, must be positive",
+                profile_name, (int)profile->sync_speed);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->motivity <= profile->scale ||
+            profile->motivity > 10000 * profile->scale) {
+            err("%s.motivity=%d invalid, allowed range is (%d,%d]",
+                profile_name,
+                (int)profile->motivity,
+                (int)profile->scale,
+                (int)(10000 * profile->scale));
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->gamma < 1) {
+            err("%s.gamma=%d invalid, must be positive",
+                profile_name, (int)profile->gamma);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
+        if (profile->smooth < 0 || profile->smooth > profile->scale) {
+            err("%s.smooth=%d invalid, allowed range is [0,%d]",
+                profile_name,
+                (int)profile->smooth,
+                (int)profile->scale);
+            profile->profile = ACCEL_PROFILE_NONE;
+            return;
+        }
         break;
     default:
         err("%s.profile=%u invalid", profile_name, (unsigned)profile->profile);

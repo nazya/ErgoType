@@ -33,6 +33,8 @@ enum {
     ACCEL_PROFILE_FLAT = (1 << 0),
     ACCEL_PROFILE_ADAPTIVE = (1 << 1),
     ACCEL_PROFILE_CUSTOM = (1 << 2),
+    ACCEL_PROFILE_MACCEL = (1 << 3),
+    ACCEL_PROFILE_SYNCHRONOUS = (1 << 4),
 };
 
 #define FILTER_ACCEL_NPOINTS_MAX 64
@@ -123,7 +125,11 @@ typedef struct {
     FIELD(speed, int32_t, 0) \
     FIELD(adaptive_velocity_averaging, bool, true) \
     FIELD(custom_step, int32_t, 0) \
-    FIELD(custom_points, int32_t *, 0)
+    FIELD(custom_points, int32_t *, 0) \
+    FIELD(sync_speed, int32_t, 0) \
+    FIELD(motivity, int32_t, 0) \
+    FIELD(gamma, int32_t, 0) \
+    FIELD(smooth, int32_t, 0)
 
 typedef struct {
     #define FIELD(name, type, default_value) type name;

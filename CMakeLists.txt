@@ -92,6 +92,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-adaptive-low-dpi.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-custom.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-flat.c
+        ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-maccel.c
+        ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-synchronous.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c

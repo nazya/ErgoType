@@ -5,6 +5,8 @@
 #include "filter-adaptive.h"
 #include "filter-custom.h"
 #include "filter-flat.h"
+#include "filter-maccel.h"
+#include "filter-synchronous.h"
 #include "jconfig.h"
 
 struct filter_state {
@@ -14,6 +16,8 @@ struct filter_state {
 		struct pointer_accelerator_flat flat;
 		struct pointer_accelerator *adaptive;
 		struct custom_accel_function custom;
+		struct maccel maccel;
+		struct synchronous_accel synchronous;
 	} accelerator;
 };
 

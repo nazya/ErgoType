@@ -41,6 +41,18 @@ filter_init(struct filter_state *filter,
 					   filter_cfg->speed,
 					   filter_cfg->scale);
 		break;
+	case ACCEL_PROFILE_MACCEL:
+		maccel_init(&filter->accelerator.maccel, cpi);
+		break;
+	case ACCEL_PROFILE_SYNCHRONOUS:
+		synchronous_accel_init(&filter->accelerator.synchronous,
+				       cpi,
+				       filter_cfg->sync_speed,
+				       filter_cfg->motivity,
+				       filter_cfg->gamma,
+				       filter_cfg->smooth,
+				       filter_cfg->scale);
+		break;
 	}
 }
 
@@ -77,6 +89,20 @@ filter_process(struct filter_state *filter,
 		accelerated = accelerator_filter_flat(&filter->accelerator.flat,
 						      *dx,
 						      *dy);
+		break;
+	case ACCEL_PROFILE_MACCEL:
+		accelerated = maccel_filter(&filter->accelerator.maccel,
+					    &filter->residue,
+					    *dx,
+					    *dy,
+					    time_ms);
+		break;
+	case ACCEL_PROFILE_SYNCHRONOUS:
+		accelerated =
+			synchronous_accel_filter(&filter->accelerator.synchronous,
+						 *dx,
+						 *dy,
+						 time_ms);
 		break;
 	}
 
