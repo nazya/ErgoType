@@ -133,7 +133,7 @@ void pio_usb_bus_init(pio_port_t *pp, const pio_usb_configuration_t *c,
 void pio_usb_bus_prepare_receive(const pio_port_t *pp);
 int pio_usb_bus_receive_packet_and_handshake(pio_port_t *pp, uint8_t handshake);
 void pio_usb_bus_usb_transfer(pio_port_t *pp, uint8_t *data,
-                              uint16_t len);
+                              uint16_t len, bool receive_after_tx);
 
 uint8_t pio_usb_bus_wait_handshake(pio_port_t *pp);
 void pio_usb_bus_send_token(pio_port_t *pp, uint8_t token, uint8_t addr,

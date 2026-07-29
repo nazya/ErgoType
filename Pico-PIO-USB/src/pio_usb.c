@@ -82,31 +82,48 @@ static void __no_inline_not_in_flash_func(send_pre)(pio_port_t *pp) {
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, true);
 }
 
-void __not_in_flash_func(pio_usb_bus_usb_transfer)(pio_port_t *pp,
-                                              uint8_t *data, uint16_t len) {
+// Same-TU handshake callers must inline this path to meet the ACK deadline.
+void __force_inline __not_in_flash_func(pio_usb_bus_usb_transfer)(
+    pio_port_t *pp, uint8_t *data, uint16_t len, bool receive_after_tx) {
   if (pp->need_pre) {
     send_pre(pp);
   }
 
   pio_sm_exec(pp->pio_usb_tx, pp->sm_tx, pp->tx_start_instr);
-  dma_channel_transfer_from_buffer_now(pp->tx_ch, data, len);
   pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK; // clear complete flag
+  dma_channel_transfer_from_buffer_now(pp->tx_ch, data, len);
+  // Keep release bookkeeping off the timing-critical handshake launch path.
+  __compiler_memory_barrier();
 
-  io_ro_32 *pc = &pp->pio_usb_tx->sm[pp->sm_tx].addr;
   while ((pp->pio_usb_tx->irq & IRQ_TX_ALL_MASK) == 0) {
     continue;
   }
+
+  if (receive_after_tx) {
+    // Arm RX during the host EOP so the earliest device response is retained.
+    pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;
+  }
   pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK; // clear complete flag
 
+  uint32_t const set_base =
+      (pp->pio_usb_tx->sm[pp->sm_tx].pinctrl &
+       PIO_SM0_PINCTRL_SET_BASE_BITS) >>
+      PIO_SM0_PINCTRL_SET_BASE_LSB;
+  uint32_t const tx_pin_mask = 3u << set_base;
+  io_ro_32 *pc = &pp->pio_usb_tx->sm[pp->sm_tx].addr;
+
+  // DBG_PADOE stays low after release if the transient PC window was missed.
   if (pp->low_speed) {
     // For Low speed host, wait until EOP is fully sent. Otherwise, we can send another packet
     // before inter-packet delay timeout, which is 2-bit time by USB specs.
     // For Full speed, our overhead is probably enough without this additional wait.
-    while (*pc <= PIO_USB_TX_ENCODED_DATA_COMP) {
+    while (*pc <= PIO_USB_TX_ENCODED_DATA_COMP &&
+           (pp->pio_usb_tx->dbg_padoe & tx_pin_mask) != 0) {
       continue;
     }
   } else {
-    while (*pc < PIO_USB_TX_ENCODED_DATA_COMP) {
+    while (*pc < PIO_USB_TX_ENCODED_DATA_COMP &&
+           (pp->pio_usb_tx->dbg_padoe & tx_pin_mask) != 0) {
       continue;
     }
   }
@@ -126,7 +143,8 @@ void __no_inline_not_in_flash_func(pio_usb_bus_send_token)(pio_port_t *pp,
   uint8_t packet_encoded[sizeof(packet) * 2 * 7 / 6 + 2];
   uint8_t encoded_len = pio_usb_ll_encode_tx_data(packet, sizeof(packet), packet_encoded);
 
-  pio_usb_bus_usb_transfer(pp, packet_encoded, encoded_len);
+  pio_usb_bus_usb_transfer(pp, packet_encoded, encoded_len,
+                           token == USB_PID_IN);
 }
 
 void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)(const pio_port_t *pp) {
@@ -136,6 +154,15 @@ void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)(const pio_port_t
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr);
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr2);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, true);
+
+  // Also return the edge detector to irq wait IRQ_RX_EOP. A response timeout
+  // otherwise leaves it scanning, where the next host packet can be decoded
+  // before the final host packet arms the receive state.
+  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false);
+  pio_sm_restart(pp->pio_usb_rx, pp->sm_eop);
+  pio_sm_exec(pp->pio_usb_rx, pp->sm_eop,
+              pio_encode_jmp(pp->offset_eop));
+  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, true);
 }
 
 static inline __force_inline bool pio_usb_bus_wait_for_rx_start(const pio_port_t* pp) {
@@ -242,13 +269,13 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
       if (handshake == USB_PID_ACK) {
         // Only ACK if crc matches
         if (idx >= 4 && crc_match) {
-          pio_usb_bus_usb_transfer(pp, ack_encoded, 5);
+          pio_usb_bus_usb_transfer(pp, ack_encoded, 5, false);
           return idx - 4;
         }
       } else if (handshake == USB_PID_NAK) {
-        pio_usb_bus_usb_transfer(pp, nak_encoded, 5);
+        pio_usb_bus_usb_transfer(pp, nak_encoded, 5, false);
       } else {
-        pio_usb_bus_usb_transfer(pp, stall_encoded, 5);
+        pio_usb_bus_usb_transfer(pp, stall_encoded, 5, false);
       }
       break;
     } else if (get_time_us_32() - start > 7) {

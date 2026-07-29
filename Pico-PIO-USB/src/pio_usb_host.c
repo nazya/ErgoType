@@ -270,10 +270,11 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
     configure_root_port(pp, root);
     if (root->is_fullspeed) {
       // Send SOF for full speed
-      pio_usb_bus_usb_transfer(pp, sof_packet_encoded, sof_packet_encoded_len);
+      pio_usb_bus_usb_transfer(pp, sof_packet_encoded, sof_packet_encoded_len,
+                               false);
     } else {
       // Send Keep alive for low speed
-      pio_usb_bus_usb_transfer(pp, keepalive_encoded, 1);
+      pio_usb_bus_usb_transfer(pp, keepalive_encoded, 1, false);
     }
   }
 
@@ -555,7 +556,6 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
 
   pio_usb_bus_prepare_receive(pp);
   pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num);
-  pio_usb_bus_start_receive(pp);
 
   int receive_len = pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK);
   uint8_t const receive_pid = pp->usb_rx_buffer[1];
@@ -602,8 +602,7 @@ static int __no_inline_not_in_flash_func(usb_out_transaction)(pio_port_t *pp,
   pio_usb_bus_prepare_receive(pp);
   pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
 
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
-  pio_usb_bus_start_receive(pp);
+  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len, true);
 
   pio_usb_bus_wait_handshake(pp);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
@@ -644,10 +643,9 @@ static int __no_inline_not_in_flash_func(usb_setup_transaction)(
 
   // Data
   ep->data_id = 0; // set to DATA0
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
+  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len, true);
 
   // Handshake
-  pio_usb_bus_start_receive(pp);
   const uint8_t handshake = pio_usb_bus_wait_handshake(pp);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
 
