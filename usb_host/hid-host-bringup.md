@@ -54,6 +54,20 @@ Its expanded automatic matrix completed on hardware on 2026-07-27 with all
 markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
 `ERR`.
 
+The Wacom checkpoint additionally links complete pinned Wacom sources and
+matches only wired CTL-472 `056a:037a`. The upstream `BAMBOO_PEN` path creates
+one Pen input, performs a delayed Feature report 2 mode exchange, and rejects
+the device's 64-byte ghost interface. The exact no-PIO host and 32-reconnect
+emulator passed connection, mode/input, pre-deadline disconnect, held-callback
+disconnect, recovery, and stable teardown on hardware. The current shortened
+8-reconnect emulator is a different build-only artifact. The working tree
+restores pinned Linux's two-resource managed-input teardown and
+`void devm_release_action()` contract, and publishes evdev identity from
+`input_dev->id` instead of opaque driver data. The complete 32-reconnect Wacom
+artifact reran against that correction with all 36 Pen generations published
+as `056a:037a`, stable teardown, `oom=0`, and no host `ERR`. The separate Rapoo
+managed extra-input regression remains pending.
+
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
 device. That range is historical, not the expected value for the current
@@ -498,10 +512,17 @@ note.
 The workqueue task now owns a notification wake rather than a one-entry queue;
 its producers and synchronous cancellation paths share a dedicated
 priority-inheritance mutex and wait on durable conditions without masking
-interrupts or polling. The timer task is a parallel task-only synchronization
-domain with its own mutex and notification wake. TinyUSB unmount publishes only
-stopping; the report task claims retry cancellation under an `io_pending` lease
-and waits for the running timer callback outside every transport lock.
+interrupts or polling. The same mutex protects delayed-work deadlines and
+ordinary FIFO promotion. Wacom teardown can therefore remove init work before
+its deadline, after promotion, or while its callback runs; simultaneous
+synchronous cancelers retain the requeue gate until all have returned.
+Deadline comparison is wrap-safe for the linked one-second delay. Firmware
+queue destruction promotes owned delayed entries before drain rather than
+abandoning their lifetime. The timer task is a parallel task-only
+synchronization domain with its own mutex and notification wake. TinyUSB
+unmount publishes only stopping; the report task claims retry cancellation
+under an `io_pending` lease and waits for the running timer callback outside
+every transport lock.
 Current workqueue entry owners are the KeyD, HID timer/lifecycle, and
 workqueue tasks. TinyUSB callbacks only publish disconnect/report state to
 those owners. Workqueue invariant checks execute their FreeRTOS operation
@@ -509,6 +530,12 @@ before testing a captured result; `configASSERT()` never contains the
 operation itself. Fixed-size `async_msg()` diagnostics are used because the
 normal logger's roughly 2 KiB local frame does not fit the 384-word workqueue
 and timer stacks.
+
+The Wacom hardware matrix specifically covered cancellation before the
+one-second deadline and disconnect while the GET callback was held. It did not
+deterministically force the generic after-promotion window, simultaneous
+synchronous cancelers, callback self-requeue, workqueue destruction with a
+delayed entry, or tick-counter wrap; those remain code-audit results.
 The transport-wide invariant audit also leaves no function call or predicate
 inside an active `configASSERT()`. A collision in the one-slot async diagnostic
 path increments the UI warning counter before dropping the newer text.

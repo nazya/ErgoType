@@ -92,8 +92,14 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   own priority-inheritance mutex. Durable FIFO/flags are the condition, direct
   task notifications are wake edges, and stack-owned waiters preserve
   `flush_work()`, `cancel_work_sync()`, and `destroy_workqueue()` without the
-  former 15 critical regions or one-tick polling. The timer bridge is now a
-  second task-only execution domain with its own priority-inheritance mutex.
+  former 15 critical regions or one-tick polling. That same mutex now owns a
+  wrap-safe delayed-work deadline list for Wacom: due entries move into the
+  ordinary FIFO, pending/promoted/running synchronous cancel shares one
+  lifetime fence, and simultaneous cancelers keep callback requeue disabled
+  until the last waiter returns. Destroying a firmware queue promotes its
+  delayed entries before drain; `mod_delayed_work()` and deferrable work remain
+  compile-gated without callers. The timer bridge is now a second task-only
+  execution domain with its own priority-inheritance mutex.
   TinyUSB unmount publishes stopping and wakes the report task; that owner
   claims and synchronously cancels an I/O-retry timer under an `io_pending`
   lifetime lease. Direct notifications replace the timer's one-entry wake
@@ -418,6 +424,18 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
+- The complete pinned Wacom sources are linked with only wired CTL-472
+  `056a:037a` active. Its upstream `BAMBOO_PEN` path retains mode Feature
+  SET/GET, Pen report parsing, shared sibling data, record FIFO, selective
+  devres cleanup, and the 64-byte ghost-interface rejection. The exact no-PIO
+  host and 32-reconnect automatic fixture passed delayed initialization, Pen
+  input, disconnect before the deadline, disconnect while the callback was
+  held, recovery, and reconnect stress on hardware. The later shortened
+  8-reconnect artifact only builds. The working tree now restores pinned
+  Linux's `void devm_release_action()`, two-resource managed-input teardown,
+  and `input_dev->id` evdev identity. The exact 32-reconnect artifact reran
+  against that correction and completed all 36 real-identity Pen generations,
+  stable teardown, `f10`, and `oom=0` with no host `ERR`.
 - Input registration no longer opens the firmware's always-on evdev client
   inside an unfinished HID driver probe. `evdev_connect()` retains an inactive
   Linux input handle. After successful `hid_add_device()`, lifecycle first
@@ -476,6 +494,33 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-30: the Linux-shaped input/devres and evdev identity correction
+  reran against the complete 32-reconnect Wacom artifact. The host log showed
+  36 `056a:037a` Pen adds and removes, 36 expected ghost-interface
+  `HID_IGNORED` results, and `f1, f2, f3, f4, f10` in order with no `f12` or
+  host `ERR`. All 83 heap snapshots reported `oom=0`; repeated Wacom removal
+  snapshots stabilized at `free/largest/blocks=60736/36032/7`. Minimum-ever
+  heap was 7,856 B and minimum task watermarks were TinyUSB 265, KeyD 658,
+  async 389, work 205, timer 348, lifecycle 222, and report 870 words. The
+  published VID:PID proves the opaque-driver-data identity correction was
+  active; repeated teardown covers the Wacom-reachable two-resource
+  managed-input lifetime.
+- 2026-07-29: wired Wacom CTL-472 passed with exact no-PIO host UF2 SHA256
+  `bdf6ab6ce3bfbe1ed81abb4dcfb9183030d597f92e4e9d301bae8f474a436737`
+  and 32-reconnect emulator UF2 SHA256
+  `614401701850d5bbea0dde53ce005de9d0a76aacddf3bda5112a08c4b2c9048e`.
+  The host log completed `f1, f2, f3, f4, f10` with no `f12`, all 36 Pen
+  add/remove generations, and 36 expected ghost-interface
+  `WARN: HID_IGNORED` results. No `ERR` or other warning appeared. Repeated
+  removals returned to `free/largest/blocks=60728/36192/7`, minimum-ever heap
+  was 7,848 B, every snapshot had `oom=0`, and minimum stack watermarks were
+  TinyUSB 265, KeyD 658, async 389, work 205, timer 348, lifecycle 222, and
+  report 870 words. This covers Wacom-specific pre-deadline and held-callback
+  disconnects; generic promotion-window, simultaneous-cancel,
+  callback-requeue, destroy-with-delayed, and tick-wrap branches remain static
+  audit results. The current shortened 8-reconnect emulator
+  `2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff`
+  has not run on hardware.
 - 2026-07-24: the direct HID++ 1.0/2.0 diagnostic checkpoint used exact host
   UF2 SHA256
   `9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902`
@@ -713,9 +758,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   RP2040 heap boundary as a standalone child and adds the run's only OOM count.
   The earlier two-OOM result used 256 fields. Heap values are in
   `hid-emulator-coverage.md` and `pio-usb-memory.md`.
-- FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, broader
-  real-device DJ product coverage, and delayed-init work remain outside this
-  candidate.
+- FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, and
+  broader real-device DJ product coverage remain outside that DJ candidate.
+  Wacom CTL-472 delayed initialization is a separate linked, hardware-passed
+  parser/workqueue result; its input/devres and evdev identity correction also
+  passed the complete 32-reconnect artifact. The later removal of never-read
+  port state and compatibility-comment cleanup is build-only.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of
@@ -725,9 +773,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Continue practical HID++ with high-resolution wheel, vendor buttons, then
-  touchpad input. Keep acceptance visible in the host CDC/input log because the
-  emulator CDC is not visible to the user.
+- Run the existing `device/rapoo-2_4g-receiver` fixture against the exact
+  current host as the second managed extra-input regression. Record both extra
+  inputs, ordinary input, disconnect/reconnect, removal plateaus, stack
+  watermarks, and `oom`/`ERR` results.
+- Keep the generic delayed-work promotion-window, simultaneous synchronous
+  cancel, callback self-requeue, queue-destruction, and tick-wrap branches as
+  static audit results until a deterministic fixture exercises each one.
 - Measure broader real-device DJ combinations and the same complete HID++ eQuad
   keyboard profile on the selected larger-RAM target. Do not transfer the
   temporary `8/256` RP2040 verdict to the retained `64/675` configuration.

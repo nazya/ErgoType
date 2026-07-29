@@ -360,6 +360,73 @@ battery test covers the immediate sparse GET/input path; the later
 firmware-selected 90-second repeat interval is not an elapsed-time claim of
 this automatic sequence.
 
+#### Wired Wacom CTL-472 verified stage
+
+Linking the complete pinned Wacom implementation with only CTL-472
+`056a:037a` active produces:
+
+```text
+host text/data/bss             585656 / 788 / 245260 B
+host __bss_end__               0x2003fe44
+host main-bank headroom        444 B to 0x20040000
+scratch X                      788 B (0x20040000..0x20040314)
+scratch X / core-1 gap         1260 B to 0x20040800
+host UF2 SHA-256               bdf6ab6ce3bfbe1ed81abb4dcfb9183030d597f92e4e9d301bae8f474a436737
+emulator text/data/bss          59804 /   0 / 254444 B
+emulator UF2 SHA-256           614401701850d5bbea0dde53ce005de9d0a76aacddf3bda5112a08c4b2c9048e
+hardware verdict               passed 2026-07-29
+```
+
+The static image includes Wacom's full pinned parser/source plus small common
+devres, kfifo, and delayed-work glue. No task or queue was added. Live CTL-472
+cost includes the HID/parser graph, one Pen input, Wacom state, a 128-byte
+record FIFO allocation, shared-data ownership, and ordinary devres metadata.
+
+The exact no-PIO pair completed all 36 Wacom add/remove generations with
+`oom=0`. After the first warm-up variant, repeated Wacom removals returned to
+`free/largest/blocks=60728/36192/7`; repeated live Wacom snapshots were
+`18400/18176/6`. Minimum-ever free heap was 7,848 B. Minimum stack watermarks
+were TinyUSB 265, KeyD 658, async 389, work 205, timer 348, lifecycle 222, and
+report 870 words. The test included disconnect before the delayed deadline,
+disconnect while the initialization callback was blocked in its mode GET,
+recovery, and repeated reconnect, so no cumulative runtime leak appeared in
+that exact sequence.
+
+The current shortened emulator builds as `59820 / 0 / 254444 B` with UF2
+SHA-256
+`2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff`,
+but it has not run on hardware and does not inherit the 32-reconnect verdict.
+Generic promotion-window cancellation, simultaneous cancelers, callback
+self-requeue, workqueue destruction, and tick wrap remain static audit
+results, not measured memory/lifetime coverage.
+
+The Linux-shaped managed-input/devres and evdev identity correction builds as:
+
+```text
+host text/data/bss             585720 / 788 / 245260 B
+host UF2 SHA-256               12a8f6826c9148eb03a9fb783e1f558674d067f562bfcec2ad69edcf3dd09790
+hardware verdict               passed 2026-07-30; complete Wacom fixture
+```
+
+The complete 32-reconnect Wacom artifact produced 36 `056a:037a` adds and
+removes, 36 expected ghost-interface warnings, `f1, f2, f3, f4, f10`, no host
+`ERR`, and `oom=0` in all 83 heap snapshots. Repeated Wacom removals stabilized
+at `free/largest/blocks=60736/36032/7`; minimum-ever heap was 7,856 B and all
+task watermarks remained nonzero. The separate Rapoo managed extra-input
+fixture has not yet been rerun.
+
+Removing the never-read port-only `input_dev.registered` state and documenting
+the reduced compatibility contracts produces:
+
+```text
+host text/data/bss             585704 / 788 / 245260 B
+host UF2 SHA-256               c2542706419b44a00d1ba8dcaa562b50afc272faab798cab62267fa9c873e1ca
+hardware verdict               not run
+```
+
+This cleanup removes 16 bytes of text with no data or BSS change. Compilation
+does not transfer the preceding hardware verdict to this exact image.
+
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
 priority-inheritance mutexes. It builds as:

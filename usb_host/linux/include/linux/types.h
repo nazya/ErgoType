@@ -31,6 +31,7 @@ typedef signed int __s32;
 typedef int64_t __s64;
 typedef uint16_t __le16;
 typedef uint32_t __le32;
+typedef uint16_t __be16;
 typedef unsigned long __kernel_ulong_t;
 typedef unsigned long kernel_ulong_t;
 typedef unsigned int umode_t;

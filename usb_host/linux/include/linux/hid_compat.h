@@ -216,24 +216,20 @@ struct timer_list {
 
 struct delayed_work {
 	struct work_struct work;
-	struct timer_list timer;
-	struct workqueue_struct *wq;
-	uint8_t delayed_pending;
+	unsigned long deadline;
 };
 
 #define INIT_WORK(work, fn) do { (work)->func = (fn); (work)->pending = 0; (work)->running = 0; (work)->cancel_depth = 0; (work)->wq = NULL; (work)->next = NULL; } while (0)
 /*
- * Delayed work is intentionally a compile-time port boundary. The former
- * split timer/workqueue bridge could arm its timer after a synchronous cancel
- * had already returned. No linked driver uses delayed_work; keep future use
- * loud until deadlines are owned by the workqueue task itself.
+ * Firmware delayed work is task-only. The workqueue task owns its deadline
+ * list and promotes due entries into the ordinary queue under the same mutex.
  */
-void hid_delayed_work_not_supported(void)
-	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
-#define INIT_DELAYED_WORK(dwork, fn) do { hid_delayed_work_not_supported(); } while (0)
-// Upstream deferrable work can skip wakeups for idle CPUs. Firmware has no
-// delayed-work bridge yet, so it retains the same explicit compile-time gate.
-#define INIT_DEFERRABLE_WORK(dwork, fn) INIT_DELAYED_WORK(dwork, fn)
+#define INIT_DELAYED_WORK(dwork, fn) do { INIT_WORK(&(dwork)->work, (fn)); (dwork)->deadline = 0; } while (0)
+// Upstream deferrable work can skip wakeups for idle CPUs. No linked caller
+// needs that policy, so keep it compile-gated instead of silently weakening it.
+void hid_deferrable_work_not_supported(void)
+	__attribute__((error("deferrable delayed_work is not supported by the firmware workqueue")));
+#define INIT_DEFERRABLE_WORK(dwork, fn) do { hid_deferrable_work_not_supported(); } while (0)
 #define to_delayed_work(work) container_of(work, struct delayed_work, work)
 extern struct workqueue_struct *system_wq;
 int hid_workqueue_init(void);
@@ -245,15 +241,13 @@ bool cancel_work_sync(struct work_struct *work);
 struct workqueue_struct *create_singlethread_workqueue(const char *name);
 void destroy_workqueue(struct workqueue_struct *wq);
 bool queue_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
-			unsigned long delay)
-	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
-bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
-	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
+			unsigned long delay);
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay);
+bool cancel_delayed_work(struct delayed_work *dwork);
+bool cancel_delayed_work_sync(struct delayed_work *dwork);
 bool mod_delayed_work(struct workqueue_struct *wq, struct delayed_work *dwork,
 		      unsigned long delay)
-	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
-bool cancel_delayed_work_sync(struct delayed_work *dwork)
-	__attribute__((error("delayed_work needs the unified firmware workqueue deadline bridge")));
+	__attribute__((error("mod_delayed_work has no audited firmware caller")));
 int hid_timer_init(void);
 void hid_timer_task(void *pvParameters);
 
@@ -333,6 +327,7 @@ typedef int atomic_t;
 #define MODULE_DEVICE_TABLE(type, name)
 #define MODULE_AUTHOR(name)
 #define MODULE_DESCRIPTION(desc)
+#define MODULE_VERSION(version)
 #define MODULE_INFO(tag, info)
 #define MODULE_LICENSE(license)
 #define MODULE_SOFTDEP(dep)
@@ -403,10 +398,18 @@ static inline void module_put(struct module *module)
 #define U8_MAX ((u8)~0U)
 #define S16_MAX INT16_MAX
 #define S16_MIN INT16_MIN
+#define S32_MAX INT32_MAX
+#define S32_MIN INT32_MIN
 #define U16_MAX ((u16)~0U)
 #ifndef __packed
 #define __packed __attribute__((packed))
 #endif
+/*
+ * Reduced Linux WARN_ON() contract: evaluate the condition once and preserve
+ * its result for upstream control-flow callers. Firmware has no generic
+ * warning/backtrace sink, so this primitive omits Linux's diagnostic side
+ * effect.
+ */
 #define WARN_ON(x) (x)
 /*
  * Linux BUG_ON() always evaluates its condition. No linked caller needs a
@@ -1294,86 +1297,27 @@ static inline const char *dev_name(const struct device *dev)
 	return dev->name;
 }
 
-struct devres_node {
-	struct list_head list;
-	void (*release)(struct devres_node *node);
-};
-
-static inline void *devres_open_group(struct device *dev, void *id, gfp_t flags)
-{
-	(void)id;
-	(void)flags;
-	return dev;
-}
-
-static inline void devres_release_group(struct device *dev, void *id)
-{
-	struct devres_node *node;
-
-	(void)id;
-	while (!list_empty(&dev->devres)) {
-		node = list_entry(dev->devres.prev, struct devres_node, list);
-		list_del(&node->list);
-		if (node->release)
-			node->release(node);
-		else
-			vPortFree(node);
-	}
-}
-
 typedef void (*devm_action_fn)(void *);
+typedef void (*dr_release_t)(struct device *dev, void *res);
+typedef int (*dr_match_t)(struct device *dev, void *res, void *match_data);
 
-struct devres_action {
-	struct devres_node node;
-	devm_action_fn action;
-	void *data;
-};
-
-static inline void devres_action_release(struct devres_node *node)
-{
-	struct devres_action *res = container_of(node, struct devres_action, node);
-
-	res->action(res->data);
-	vPortFree(res);
-}
-
-static inline int devm_add_action_or_reset(struct device *dev, devm_action_fn action, void *data)
-{
-	struct devres_action *res = pvPortMalloc(sizeof(*res));
-
-	if (!res) {
-		action(data);
-		return -ENOMEM;
-	}
-
-	res->node.release = devres_action_release;
-	res->action = action;
-	res->data = data;
-	list_add_tail(&res->node.list, &dev->devres);
-	return 0;
-}
-
-static inline int devm_release_action(struct device *dev, devm_action_fn action, void *data)
-{
-	struct devres_node *node;
-
-	list_for_each_entry(node, &dev->devres, list) {
-		struct devres_action *res;
-
-		if (node->release != devres_action_release)
-			continue;
-
-		res = container_of(node, struct devres_action, node);
-		if (res->action != action || res->data != data)
-			continue;
-
-		list_del(&node->list);
-		devres_action_release(node);
-		return 0;
-	}
-
-	return -ENOENT;
-}
+/*
+ * Firmware keeps Linux devres ownership, LIFO ordering, and return semantics.
+ * In the current linked call graph, driver work is flushed or cancelled before
+ * lifecycle teardown, so the reduced implementation does not need Linux's
+ * devres lock.
+ */
+void *devres_alloc(dr_release_t release, size_t size, gfp_t flags);
+void devres_free(void *res);
+void devres_add(struct device *dev, void *res);
+int devres_destroy(struct device *dev, dr_release_t release,
+		   dr_match_t match, void *match_data);
+void *devres_open_group(struct device *dev, void *id, gfp_t flags);
+void devres_close_group(struct device *dev, void *id);
+int devres_release_group(struct device *dev, void *id);
+int devres_release_all(struct device *dev);
+int devm_add_action_or_reset(struct device *dev, devm_action_fn action, void *data);
+void devm_release_action(struct device *dev, devm_action_fn action, void *data);
 
 static inline int device_create_file(struct device *dev, const struct device_attribute *attr)
 {
@@ -1565,52 +1509,11 @@ static inline void kfree(const void *ptr)
 	vPortFree((void *)ptr);
 }
 
-static inline void *devm_kmalloc(struct device *dev, size_t size, gfp_t flags)
-{
-	struct devres_node *node;
-
-	(void)flags;
-	node = pvPortMalloc(sizeof(*node) + size);
-	if (!node)
-		return NULL;
-
-	node->release = NULL;
-	list_add_tail(&node->list, &dev->devres);
-	return node + 1;
-}
-
-static inline void *devm_kzalloc(struct device *dev, size_t size, gfp_t flags)
-{
-	void *ptr = devm_kmalloc(dev, size, flags);
-
-	if (ptr)
-		memset(ptr, 0, size);
-	return ptr;
-}
-
-static inline void *devm_kcalloc(struct device *dev, size_t n, size_t size, gfp_t flags)
-{
-	/* PORTING DEBT: callers must bound n * size until overflow is checked. */
-	return devm_kzalloc(dev, n * size, flags);
-}
-
-static inline void *devm_kmemdup(struct device *dev, const void *src, size_t size, gfp_t flags)
-{
-	void *dst = devm_kmalloc(dev, size, flags);
-
-	if (dst)
-		memcpy(dst, src, size);
-	return dst;
-}
-
-static inline void devm_kfree(struct device *dev, const void *ptr)
-{
-	struct devres_node *node = (struct devres_node *)ptr - 1;
-
-	(void)dev;
-	list_del(&node->list);
-	vPortFree(node);
-}
+void *devm_kmalloc(struct device *dev, size_t size, gfp_t flags);
+void *devm_kzalloc(struct device *dev, size_t size, gfp_t flags);
+void *devm_kcalloc(struct device *dev, size_t n, size_t size, gfp_t flags);
+void *devm_kmemdup(struct device *dev, const void *src, size_t size, gfp_t flags);
+void devm_kfree(struct device *dev, const void *ptr);
 
 static inline void kvfree(const void *ptr)
 {
@@ -2015,6 +1918,11 @@ static inline ktime_t ktime_get_coarse(void)
 	return (ktime_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
+static inline ktime_t ktime_get(void)
+{
+	return (ktime_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
 static inline ktime_t ktime_add_ms(ktime_t kt, unsigned int ms)
 {
 	return kt + (ktime_t)ms;
@@ -2065,6 +1973,48 @@ static inline u16 get_unaligned_be16(const u8 *p)
 static inline u32 get_unaligned_le32(const u8 *p)
 {
 	return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+static inline u64 get_unaligned_le64(const u8 *p)
+{
+	return (u64)get_unaligned_le32(p) |
+	       ((u64)get_unaligned_le32(p + 4) << 32);
+}
+
+static inline u16 le16_to_cpup(const __le16 *p)
+{
+	return get_unaligned_le16((const u8 *)p);
+}
+
+static inline u16 be16_to_cpup(const __be16 *p)
+{
+	return get_unaligned_be16((const u8 *)p);
+}
+
+static inline u64 div_u64(u64 dividend, u32 divisor)
+{
+	return dividend / divisor;
+}
+
+static inline unsigned long int_sqrt(unsigned long x)
+{
+	unsigned long result = 0;
+	unsigned long bit = 1UL << 30;
+
+	while (bit > x)
+		bit >>= 2;
+
+	while (bit) {
+		if (x >= result + bit) {
+			x -= result + bit;
+			result = (result >> 1) + bit;
+		} else {
+			result >>= 1;
+		}
+		bit >>= 2;
+	}
+
+	return result;
 }
 
 // Linux put_unaligned_le32(); local copy avoids pulling Linux unaligned headers.

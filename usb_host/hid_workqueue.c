@@ -46,6 +46,7 @@ struct hid_workqueue_waiter {
 static SemaphoreHandle_t hid_workqueue_mutex;
 static TaskHandle_t hid_workqueue_task_handle;
 static struct hid_workqueue_waiter *hid_workqueue_waiters;
+static struct work_struct *hid_delayed_work_head;
 static struct workqueue_struct hid_system_workqueue;
 static struct workqueue_struct *hid_workqueue_list = &hid_system_workqueue;
 
@@ -160,6 +161,71 @@ static void hid_workqueue_wait_idle(struct hid_workqueue_waiter *waiter)
 	}
 }
 
+static void hid_workqueue_append_locked(struct workqueue_struct *wq,
+					struct work_struct *work)
+{
+	work->wq = wq;
+	work->next = NULL;
+	if (wq->tail)
+		wq->tail->next = work;
+	else
+		wq->head = work;
+	wq->tail = work;
+}
+
+static void hid_workqueue_unlink_locked(struct work_struct *work)
+{
+	struct workqueue_struct *wq = work->wq;
+	struct work_struct *queued = wq->head;
+	struct work_struct *previous = NULL;
+
+	while (queued != work) {
+		previous = queued;
+		queued = queued->next;
+	}
+	if (previous)
+		previous->next = work->next;
+	else
+		wq->head = work->next;
+	if (wq->tail == work)
+		wq->tail = previous;
+	work->next = NULL;
+	work->pending = 0;
+}
+
+static bool hid_delayed_work_unlink_locked(struct work_struct *work)
+{
+	struct work_struct **link = &hid_delayed_work_head;
+
+	while (*link) {
+		if (*link == work) {
+			*link = work->next;
+			work->next = NULL;
+			return true;
+		}
+		link = &(*link)->next;
+	}
+
+	return false;
+}
+
+static bool hid_delayed_work_cancel_pending_locked(
+		struct delayed_work *dwork)
+{
+	struct work_struct *work = &dwork->work;
+
+	if (!work->pending)
+		return false;
+
+	if (hid_delayed_work_unlink_locked(work))
+		work->pending = 0;
+	else
+		hid_workqueue_unlink_locked(work);
+	hid_workqueue_wake_ready_locked();
+
+	return true;
+}
+
 int hid_workqueue_init(void)
 {
 	SemaphoreHandle_t mutex;
@@ -183,6 +249,7 @@ int hid_workqueue_init(void)
 	hid_workqueue_list = &hid_system_workqueue;
 	hid_workqueue_task_handle = NULL;
 	hid_workqueue_waiters = NULL;
+	hid_delayed_work_head = NULL;
 	/* Publish readiness only after every durable predicate is initialized. */
 	hid_workqueue_mutex = mutex;
 
@@ -202,13 +269,7 @@ bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
 		return false;
 	}
 	work->pending = 1;
-	work->wq = wq;
-	work->next = NULL;
-	if (wq->tail)
-		wq->tail->next = work;
-	else
-		wq->head = work;
-	wq->tail = work;
+	hid_workqueue_append_locked(wq, work);
 	task = hid_workqueue_task_handle;
 	hid_workqueue_unlock();
 
@@ -220,6 +281,50 @@ bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
 bool schedule_work(struct work_struct *work)
 {
 	return queue_work(system_wq, work);
+}
+
+bool queue_delayed_work(struct workqueue_struct *wq,
+			struct delayed_work *dwork, unsigned long delay)
+{
+	struct work_struct *work = &dwork->work;
+	TaskHandle_t task;
+
+	hid_workqueue_lock();
+	if (work->pending || work->cancel_depth || wq->destroying) {
+		hid_workqueue_unlock();
+		return false;
+	}
+	work->pending = 1;
+	if (!delay) {
+		hid_workqueue_append_locked(wq, work);
+	} else {
+		work->wq = wq;
+		dwork->deadline = jiffies + delay;
+		work->next = hid_delayed_work_head;
+		hid_delayed_work_head = work;
+	}
+	task = hid_workqueue_task_handle;
+	hid_workqueue_unlock();
+
+	if (task)
+		(void)xTaskNotifyGiveIndexed(task, HID_WORKQUEUE_NOTIFY_INDEX);
+	return true;
+}
+
+bool schedule_delayed_work(struct delayed_work *dwork, unsigned long delay)
+{
+	return queue_delayed_work(system_wq, dwork, delay);
+}
+
+bool cancel_delayed_work(struct delayed_work *dwork)
+{
+	bool was_pending;
+
+	hid_workqueue_lock();
+	was_pending = hid_delayed_work_cancel_pending_locked(dwork);
+	hid_workqueue_unlock();
+
+	return was_pending;
 }
 
 struct workqueue_struct *create_singlethread_workqueue(const char *name)
@@ -247,6 +352,8 @@ struct workqueue_struct *create_singlethread_workqueue(const char *name)
 void destroy_workqueue(struct workqueue_struct *wq)
 {
 	struct workqueue_struct **cursor;
+	struct work_struct **delayed;
+	TaskHandle_t task;
 	struct hid_workqueue_waiter waiter = {
 		.task = xTaskGetCurrentTaskHandle(),
 		.kind = HID_WORKQUEUE_WAIT_QUEUE,
@@ -255,9 +362,28 @@ void destroy_workqueue(struct workqueue_struct *wq)
 
 	hid_workqueue_lock();
 	wq->destroying = 1;
-	hid_workqueue_unlock();
+	delayed = &hid_delayed_work_head;
+	while (*delayed) {
+		struct work_struct *work = *delayed;
 
-	/* Linux destroy_workqueue() cannot return while active work owns @wq. */
+		if (work->wq != wq) {
+			delayed = &work->next;
+			continue;
+		}
+		*delayed = work->next;
+		work->next = NULL;
+		hid_workqueue_append_locked(wq, work);
+	}
+	task = hid_workqueue_task_handle;
+	hid_workqueue_unlock();
+	if (task)
+		(void)xTaskNotifyGiveIndexed(task, HID_WORKQUEUE_NOTIFY_INDEX);
+
+	/*
+	 * Linux requires callers to cancel timer-side delayed work before queue
+	 * destruction. Firmware owns those timers in this deadline list, so
+	 * promote them before draining to keep their work and queue alive.
+	 */
 	hid_workqueue_wait_idle(&waiter);
 
 	hid_workqueue_lock();
@@ -315,22 +441,7 @@ bool cancel_work_sync(struct work_struct *work)
 	/* Keep queue_work() closed until every concurrent canceler has returned. */
 	work->cancel_depth++;
 	if (work->pending) {
-		struct workqueue_struct *wq = work->wq;
-		struct work_struct *queued = wq->head;
-		struct work_struct *previous = NULL;
-
-		while (queued != work) {
-			previous = queued;
-			queued = queued->next;
-		}
-		if (previous)
-			previous->next = work->next;
-		else
-			wq->head = work->next;
-		if (wq->tail == work)
-			wq->tail = previous;
-		work->next = NULL;
-		work->pending = 0;
+		hid_workqueue_unlink_locked(work);
 		hid_workqueue_wake_ready_locked();
 	}
 	hid_workqueue_unlock();
@@ -345,13 +456,81 @@ bool cancel_work_sync(struct work_struct *work)
 	return was_pending;
 }
 
+bool cancel_delayed_work_sync(struct delayed_work *dwork)
+{
+	struct work_struct *work = &dwork->work;
+	struct hid_workqueue_waiter waiter = {
+		.task = xTaskGetCurrentTaskHandle(),
+		.kind = HID_WORKQUEUE_WAIT_WORK,
+		.work = work,
+	};
+	bool wait_needed;
+	bool was_pending;
+
+	hid_workqueue_lock();
+	was_pending = work->pending;
+	wait_needed = was_pending || work->running;
+	/*
+	 * Linux temporarily disables a work item while synchronous cancel waits.
+	 * Count every caller so one returning canceler cannot reopen callback
+	 * requeue while another canceler still owns the same completion fence.
+	 */
+	work->cancel_depth++;
+	if (work->pending)
+		(void)hid_delayed_work_cancel_pending_locked(dwork);
+	hid_workqueue_unlock();
+
+	if (wait_needed)
+		hid_workqueue_wait_idle(&waiter);
+
+	hid_workqueue_lock();
+	work->cancel_depth--;
+	hid_workqueue_unlock();
+
+	return was_pending;
+}
+
+static TickType_t hid_workqueue_promote_due_locked(void)
+{
+	struct work_struct **link = &hid_delayed_work_head;
+	unsigned long now = jiffies;
+	TickType_t wait_ticks = portMAX_DELAY;
+
+	while (*link) {
+		struct work_struct *work = *link;
+		struct delayed_work *dwork = to_delayed_work(work);
+
+		/*
+		 * Linux time ordering is modulo the tick width. The real Wacom
+		 * delays are below half of the 32-bit range, so this remains valid
+		 * when the FreeRTOS counter wraps.
+		 */
+		if (time_before_eq(dwork->deadline, now)) {
+			*link = work->next;
+			work->next = NULL;
+			hid_workqueue_append_locked(work->wq, work);
+			continue;
+		}
+
+		TickType_t remaining = (TickType_t)(dwork->deadline - now);
+
+		if (remaining < wait_ticks)
+			wait_ticks = remaining;
+		link = &work->next;
+	}
+
+	return wait_ticks;
+}
+
 static struct work_struct *
-hid_workqueue_take_next(struct workqueue_struct **running_wq)
+hid_workqueue_take_next(struct workqueue_struct **running_wq,
+			TickType_t *wait_ticks)
 {
 	struct workqueue_struct **link;
 	struct workqueue_struct *wq;
 
 	hid_workqueue_lock();
+	*wait_ticks = hid_workqueue_promote_due_locked();
 	link = &hid_workqueue_list;
 	for (wq = *link; wq; link = &wq->next, wq = *link) {
 		struct work_struct *work;
@@ -402,12 +581,13 @@ void hid_workqueue_task(void *pvParameters)
 	for (;;) {
 		struct work_struct *work;
 		struct workqueue_struct *running_wq;
+		TickType_t wait_ticks;
 
-		work = hid_workqueue_take_next(&running_wq);
+		work = hid_workqueue_take_next(&running_wq, &wait_ticks);
 
 		if (!work) {
 			(void)ulTaskNotifyTakeIndexed(HID_WORKQUEUE_NOTIFY_INDEX,
-						      pdTRUE, portMAX_DELAY);
+						      pdTRUE, wait_ticks);
 			continue;
 		}
 

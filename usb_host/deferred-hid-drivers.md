@@ -242,8 +242,55 @@ The expanded matrix completed on hardware on 2026-07-27. It covered every
 wired/wireless profile, both dial directions, battery and reconnect traffic,
 detach with reconnect work queued, and the Magic Trackpad sparse battery
 lookup. The run reached its complete marker sequence with `oom=0`, stable heap
-plateaus, nonzero task watermarks, and no host `ERR`. Wacom remains the next
-larger tablet family.
+plateaus, nonzero task watermarks, and no host `ERR`.
+
+## Active Wired Wacom Boundary
+
+The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
+implementation but matches only the wired One by Wacom Small CTL-472
+`056a:037a`. Its real path uses the upstream `BAMBOO_PEN` parser, one Pen input
+device, a record FIFO, sibling shared data, and a one-second delayed Feature
+SET/GET report 2 mode switch. The second 64-byte HID interface is retained and
+rejected by the upstream pen-only ghost-interface check.
+
+The compatibility layer now provides selective nested devres groups,
+power-of-two byte/record kfifo storage, and delayed work owned by the existing
+workqueue task. No new task or queue was added. Normal queue/cancel return
+values retain Linux semantics on the linked paths; synchronous cancellation
+waits for a running callback before Wacom resources are released.
+
+The exact no-PIO host and 32-reconnect `device/wacom-wired-matrix` artifact
+passed on hardware. It completed `f1, f2, f3, f4, f10` with no `f12`, exercised
+disconnect before the delayed deadline and while the mode GET callback was
+held, completed exact mode SET/GET plus pen/eraser input after recovery, and
+produced 36 clean Pen add/remove generations. Repeated removal plateaus were
+stable, every heap snapshot had `oom=0`, and every task watermark remained
+nonzero. The current shortened 8-reconnect emulator artifact is a different,
+build-only image.
+
+The hardware fixture does not deterministically cover every generic
+delayed-work state. Cancel after promotion but before callback entry,
+simultaneous synchronous cancelers, callback self-requeue, workqueue
+destruction with delayed entries, and tick-counter wrap remain static
+contract-audit results.
+
+The working input/devres candidate restores pinned Linux's
+`void devm_release_action()`, adds `devres_destroy()` with `0/-ENOENT`
+semantics, and uses Linux's separate allocation and unregister resources for
+managed inputs. CTL-472's real unused touch and pad paths exercise removal of
+the allocation resource; registered Pen teardown retains LIFO unregister then
+final release. The generic evdev client now takes VID/PID from
+`input_dev->id`, leaving Wacom's required opaque `struct wacom *` driver data
+untouched. The exact 32-reconnect Wacom artifact reran against this correction:
+all 36 Pen generations published as `056a:037a` and removed cleanly, all 36
+ghost interfaces were rejected as expected, `f1, f2, f3, f4, f10` completed
+with no `f12` or host `ERR`, every heap snapshot had `oom=0`, and removal
+plateaus were stable. The Rapoo managed extra-input regression remains
+separate and has not yet been rerun.
+
+All other Wacom product IDs remain behind
+`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, receivers, touch, pad, LED, battery,
+Remote, bootloader, I2C, and PCI paths are outside the current allowlist.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller
@@ -271,13 +318,13 @@ output report through the same route.
 Upstream `hid-magicmouse.c` is now linked for only the USB Magic Mouse 2 and
 Magic Trackpad 2 IDs. The current port already has
 the synchronous raw SET path over the async EP0 owner, input MT slots, and the
-timer bridge. A line-by-line USB-only reachability audit shows that it does not
-require enabling the currently compile-gated delayed-work API: USB Magic Mouse
-2 returns after `hid_hw_start()`, and the USB Trackpad 2 path can reach the
-mode SET but the upstream delayed retry condition selects Magic Mouse 2 only.
-The three unreachable upstream delayed-work calls remain commented beside the
-explained firmware disable rather than adding an unused timer/workqueue
-lifetime model. Bluetooth and legacy IDs likewise remain visible but disabled.
+timer bridge. The delayed-work API is now active for Wacom, but a line-by-line
+USB-only reachability audit still shows no linked Magic Mouse caller: USB Magic
+Mouse 2 returns after `hid_hw_start()`, and the USB Trackpad 2 path can reach
+the mode SET but the upstream delayed retry condition selects Magic Mouse 2
+only. The three unreachable upstream delayed-work calls remain commented
+beside that driver-specific boundary. Bluetooth and legacy IDs likewise remain
+visible but disabled.
 With `CONFIG_HID_BATTERY_STRENGTH` disabled, the retained
 battery timer performs one harmless failed lookup and does not rearm.
 

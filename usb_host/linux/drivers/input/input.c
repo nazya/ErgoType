@@ -90,9 +90,6 @@ static inline int is_event_supported(unsigned int code,
 	return code <= max && test_bit(code, bm);
 }
 
-// Port devres allocation installs this one-argument action before its
-// upstream-ordered definition below.
-static void devm_input_device_unregister(void *data);
 static void input_disconnect_device(struct input_dev *dev);
 static int input_default_getkeycode(struct input_dev *dev,
 				    struct input_keymap_entry *ke);
@@ -1154,17 +1151,19 @@ static int input_attach_handler(struct input_dev *dev, struct input_handler *han
 /*
  * Upstream Linux has the procfs and sysfs presentation layer here:
  * input_wakeup_procfs_readers(), /proc/bus/input/devices seq_file handlers,
- * modalias generation, input_dev attribute groups, input_dev_release(), and
- * input_dev_uevent(). Firmware has no Linux userspace file descriptors,
+ * modalias generation, input_dev attribute groups, and input_dev_uevent().
+ * Firmware has no Linux userspace file descriptors,
  * procfs, sysfs, kobject uevents, or input class device presentation. The
- * in-memory event and handler path continues below; discovery/presentation is
- * handled by firmware glue outside this upstream-derived file.
+ * in-memory event and handler path plus input_dev_release() continue below;
+ * discovery/presentation is handled by firmware glue outside this
+ * upstream-derived file.
  */
 
 #if 0
 /*
  * Exact upstream 83f14548 presentation block. Firmware has no procfs, sysfs,
- * input class, PM, or userspace device-model consumer, so it remains inactive.
+ * input class, PM, or userspace device-model consumer, so only the final
+ * input_dev release callback is active.
  */
 #ifdef CONFIG_PROC_FS
 
@@ -1719,19 +1718,29 @@ static const struct attribute_group *input_dev_attr_groups[] = {
 	NULL
 };
 
+#endif
+
 static void input_dev_release(struct device *device)
 {
 	struct input_dev *dev = to_input_dev(device);
 
+	// Linux device core releases resources before the final device callback.
+	// The reduced firmware device core performs that step here.
+	devres_release_all(&dev->dev);
 	input_ff_destroy(dev);
 	input_mt_destroy_slots(dev);
 	kfree(dev->poller);
 	kfree(dev->absinfo);
 	kfree(dev->vals);
+	// Linux input_dev uses event_lock storage embedded in the device. The
+	// firmware port owns an allocated mutex for the same active boundary.
+	mutex_destroy(&dev->port_event_mutex);
 	kfree(dev);
 
 	module_put(THIS_MODULE);
 }
+
+#if 0
 
 /*
  * Input uevent interface - loading event handlers based on
@@ -2095,15 +2104,15 @@ struct input_dev *input_allocate_device(void)
 
 	// dev->dev.type = &input_dev_type;
 	// dev->dev.class = &input_class;
-	// Firmware has no Linux input device class.
+	// Firmware has no Linux input device class; wire the same final release
+	// callback directly through the reduced device core.
+	dev->dev.release = input_dev_release;
 	device_initialize(&dev->dev);
 	/*
 	 * From this point on we can no longer simply "kfree(dev)", we need
 	 * to use input_free_device() so that device core properly frees its
 	 * resources associated with the input device.
 	 */
-	// Firmware input_free_device() owns the direct release path.
-	//
 	// dev_set_name(&dev->dev, "input%lu",
 	// 	      (unsigned long)atomic_inc_return(&input_no));
 	// __module_get(THIS_MODULE);
@@ -2113,28 +2122,26 @@ struct input_dev *input_allocate_device(void)
 // EXPORT_SYMBOL(input_allocate_device);
 // Firmware links this file directly and has no Linux module symbol export.
 
-// struct input_devres {
-// 	struct input_dev *input;
-// };
-//
-// static int devm_input_device_match(struct device *dev, void *res, void *data)
-// {
-// 	struct input_devres *devres = res;
-//
-// 	return devres->input == data;
-// }
-//
-// static void devm_input_device_release(struct device *dev, void *res)
-// {
-// 	struct input_devres *devres = res;
-// 	struct input_dev *input = devres->input;
-//
-// 	dev_dbg(dev, "%s: dropping reference to %s\n",
-// 		__func__, dev_name(&input->dev));
-// 	input_put_device(input);
-// }
-// Firmware devres actions carry the input_dev directly; no wrapper or Linux
-// input-device reference model is present at this compatibility boundary.
+struct input_devres {
+	struct input_dev *input;
+};
+
+static int devm_input_device_match(struct device *dev, void *res, void *data)
+{
+	struct input_devres *devres = res;
+
+	return devres->input == data;
+}
+
+static void devm_input_device_release(struct device *dev, void *res)
+{
+	struct input_devres *devres = res;
+	struct input_dev *input = devres->input;
+
+	dev_dbg(dev, "%s: dropping reference to %s\n",
+		__func__, dev_name(&input->dev));
+	input_put_device(input);
+}
 
 /**
  * devm_input_allocate_device - allocate managed input device
@@ -2156,33 +2163,25 @@ struct input_dev *input_allocate_device(void)
  */
 struct input_dev *devm_input_allocate_device(struct device *dev)
 {
-	// struct input_dev *input;
-	// struct input_devres *devres;
-	//
-	// devres = devres_alloc(devm_input_device_release,
-	// 		       sizeof(*devres), GFP_KERNEL);
-	// if (!devres)
-	// 	return NULL;
-	//
-	// input = input_allocate_device();
-	// if (!input) {
-	// 	devres_free(devres);
-	// 	return NULL;
-	// }
-	// Firmware stores the equivalent release action in the owning device's
-	// existing compatibility devres list, without a second wrapper allocation.
-	struct input_dev *input = input_allocate_device();
-	if (!input)
+	struct input_dev *input;
+	struct input_devres *devres;
+
+	devres = devres_alloc(devm_input_device_release,
+			      sizeof(*devres), GFP_KERNEL);
+	if (!devres)
 		return NULL;
+
+	input = input_allocate_device();
+	if (!input) {
+		devres_free(devres);
+		return NULL;
+	}
 
 	input->dev.parent = dev;
 	input->devres_managed = true;
 
-	// devres->input = input;
-	// devres_add(dev, devres);
-	// The one-argument action directly owns @input in the compatibility list.
-	if (devm_add_action_or_reset(dev, devm_input_device_unregister, input))
-		return NULL;
+	devres->input = input;
+	devres_add(dev, devres);
 
 	return input;
 }
@@ -2205,36 +2204,14 @@ struct input_dev *devm_input_allocate_device(struct device *dev)
  */
 void input_free_device(struct input_dev *dev)
 {
-	// if (dev) {
-	// Firmware keeps the direct NULL return, then releases port-owned storage.
-	if (!dev)
-		return;
-
-	// if (dev->devres_managed)
-	// 	WARN_ON(devres_destroy(dev->dev.parent,
-	// 				devm_input_device_release,
-	// 				devm_input_device_match,
-	// 				dev));
-	// Firmware devres uses devm_release_action().
-	if (dev->devres_managed && dev->dev.parent) {
-		if (!devm_release_action(dev->dev.parent, devm_input_device_unregister, dev))
-			return;
+	if (dev) {
+		if (dev->devres_managed)
+			WARN_ON(devres_destroy(dev->dev.parent,
+						devm_input_device_release,
+						devm_input_device_match,
+						dev));
+		input_put_device(dev);
 	}
-
-	// input_put_device(dev);
-	// Firmware has no Linux device refcount release path. Mirror
-	// device_release() by unwinding resources owned by this input device
-	// before its embedded struct device is destroyed.
-	devres_release_group(&dev->dev, NULL);
-	input_ff_destroy(dev);
-	input_mt_destroy_slots(dev);
-	kfree(dev->absinfo);
-	kfree(dev->vals);
-	// Linux input_put_device() frees input_dev after event users are gone. The
-	// firmware direct-free path also owns this port-only mutex allocation.
-	mutex_destroy(&dev->port_event_mutex);
-	kfree(dev);
-	// }
 }
 // EXPORT_SYMBOL(input_free_device);
 // Firmware links this file directly and has no Linux module symbol export.
@@ -2449,29 +2426,16 @@ static void __input_unregister_device(struct input_dev *dev)
 	//
 	// device_del(&dev->dev);
 	// Firmware has no Linux device model node to delete.
-	dev->registered = false;
 }
 
-// static void devm_input_device_unregister(struct device *dev, void *res)
-// {
-// 	struct input_devres *devres = res;
-// 	struct input_dev *input = devres->input;
-//
-// 	dev_dbg(dev, "%s: unregistering device %s\n",
-// 		__func__, dev_name(&input->dev));
-// 	__input_unregister_device(input);
-// }
-// Firmware devres uses a one-argument action on the input_dev itself instead
-// of Linux device/res wrapper state.
-static void devm_input_device_unregister(void *data)
+static void devm_input_device_unregister(struct device *dev, void *res)
 {
-	struct input_dev *dev = data;
+	struct input_devres *devres = res;
+	struct input_dev *input = devres->input;
 
-	dev->devres_managed = false;
-	if (dev->registered)
-		input_unregister_device(dev);
-	else
-		input_free_device(dev);
+	dev_dbg(dev, "%s: unregistering device %s\n",
+		__func__, dev_name(&input->dev));
+	__input_unregister_device(input);
 }
 
 /*
@@ -2585,7 +2549,7 @@ static int input_device_tune_vals(struct input_dev *dev)
  */
 int input_register_device(struct input_dev *dev)
 {
-	// struct input_devres *devres = NULL;
+	struct input_devres *devres = NULL;
 	struct input_handler *handler;
 	// const char *path;
 	int error;
@@ -2596,16 +2560,14 @@ int input_register_device(struct input_dev *dev)
 		return -EINVAL;
 	}
 
-	// if (dev->devres_managed) {
-	// 	devres = devres_alloc(devm_input_device_unregister,
-	// 			      sizeof(*devres), GFP_KERNEL);
-	// 	if (!devres)
-	// 		return -ENOMEM;
-	//
-	// 	devres->input = dev;
-	// }
-	// Firmware installed its direct devm action during allocation, so register
-	// does not allocate a second Linux input_devres wrapper.
+	if (dev->devres_managed) {
+		devres = devres_alloc(devm_input_device_unregister,
+				      sizeof(*devres), GFP_KERNEL);
+		if (!devres)
+			return -ENOMEM;
+
+		devres->input = dev;
+	}
 
 	/* Every input device generates EV_SYN/SYN_REPORT events. */
 	__set_bit(EV_SYN, dev->evbit);
@@ -2617,11 +2579,8 @@ int input_register_device(struct input_dev *dev)
 	input_cleanse_bitmasks(dev);
 
 	error = input_device_tune_vals(dev);
-	if (error) {
-		// goto err_devres_free;
-		// No register-time devres allocation needs unwinding in this port.
-		return error;
-	}
+	if (error)
+		goto err_devres_free;
 
 	/*
 	 * If delay and period are pre-set by the driver, then autorepeating
@@ -2657,27 +2616,24 @@ int input_register_device(struct input_dev *dev)
 	// Firmware has no input_mutex; the HID lifecycle task owns device registration.
 	list_add_tail(&dev->node, &input_dev_list);
 	dev->port_proxy_id = ++input_next_proxy_id;
-	dev->registered = true;
 	list_for_each_entry(handler, &input_handler_list, node)
 		input_attach_handler(dev, handler);
 	// }
 	//
-	// if (dev->devres_managed) {
-	// 	dev_dbg(dev->dev.parent, "%s: registering %s with devres.\n",
-	// 		__func__, dev_name(&dev->dev));
-	// 	devres_add(dev->dev.parent, devres);
-	// }
-	// Firmware devm_input_allocate_device() uses devm_add_action_or_reset().
+	if (dev->devres_managed) {
+		dev_dbg(dev->dev.parent, "%s: registering %s with devres.\n",
+			__func__, dev_name(&dev->dev));
+		devres_add(dev->dev.parent, devres);
+	}
+	return 0;
+
 	//
 	// err_device_del:
 	// 	device_del(&dev->dev);
-	// err_devres_free:
-	// 	devres_free(devres);
-	// 	return error;
-	// The firmware has neither device_add() state nor register-time devres to
-	// unwind; every active failure returns before list publication above.
-
-	return 0;
+	// Firmware has no device_add() state to unwind.
+err_devres_free:
+	devres_free(devres);
+	return error;
 }
 // EXPORT_SYMBOL(input_register_device);
 // Firmware links this file directly and has no Linux module symbol export.
@@ -2691,24 +2647,20 @@ int input_register_device(struct input_dev *dev)
  */
 void input_unregister_device(struct input_dev *dev)
 {
-	// if (dev->devres_managed) {
-	// 	WARN_ON(devres_destroy(dev->dev.parent,
-	// 				devm_input_device_unregister,
-	// 				devm_input_device_match,
-	// 				dev));
-	// 	__input_unregister_device(dev);
-	// 	/*
-	// 	 * We do not do input_put_device() here because it will be done
-	// 	 * when 2nd devres fires up.
-	// 	 */
-	// } else {
-	// 	__input_unregister_device(dev);
-	// 	input_put_device(dev);
-	// }
-	// Firmware has no Linux devres/input_put reference model here; unregister
-	// owns the allocation and releases it directly.
-	__input_unregister_device(dev);
-	input_free_device(dev);
+	if (dev->devres_managed) {
+		WARN_ON(devres_destroy(dev->dev.parent,
+					devm_input_device_unregister,
+					devm_input_device_match,
+					dev));
+		__input_unregister_device(dev);
+		/*
+		 * We do not do input_put_device() here because it will be done
+		 * when 2nd devres fires up.
+		 */
+	} else {
+		__input_unregister_device(dev);
+		input_put_device(dev);
+	}
 }
 // EXPORT_SYMBOL(input_unregister_device);
 // Firmware links this file directly and has no Linux module symbol export.

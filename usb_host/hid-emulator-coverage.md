@@ -267,6 +267,7 @@ claims for unrelated drivers.
 | 2026-07-22 | `device/work-input-drivers` (`67c1aea`) | ELECOM, Kensington, Topre, and EVision driver signals pass; three `cafe:1005` cycles recover the injected full-configuration GET failure and reach the HID interface at byte 575 of a 600-byte configuration; removal returns to stable `free=60936/60944` plateaus with `oom=0` |
 | 2026-07-23 | combined haptic lifecycle / Magic Trackpad 2 fixture | all three numbered/ID0 haptic transports, five-slot replacement/erase/replay/unplug/reconnect, and the four-interface Magic Trackpad 2 mode/native/reconnect path pass in repeated hot- and cold-start runs with `oom=0` |
 | 2026-07-26 | `device/logitech-hidpp-dj-waitqueue` | the combined direct HID++/battery/DJ sequence completes at retained `64/675`; simultaneous M705 + ordinary keyboard works with `free=5160`, `min=4008`, and no new OOM, while the complete HID++ eQuad keyboard profile reaches the measured RP2040 memory boundary and adds the run's only OOM count; later device phases complete and teardown recovers without cumulative heap loss |
+| 2026-07-29 | `device/wacom-wired-matrix`, exact no-PIO host `bdf6ab6c…` and 32-reconnect emulator `61440170…` | CTL-472 completes `f1, f2, f3, f4, f10` with no `f12`; exact mode SET/GET, Pen/eraser input, pre-deadline and held-callback disconnect, recovery, 36 Pen add/removes, 36 expected ghost-interface warnings, stable removal plateaus, nonzero task watermarks, and `oom=0` |
 
 ## Recorded Emulator Branches
 
@@ -350,6 +351,8 @@ Recorded emulator branches:
 - driver `.event`
 - `timer_list`
 - firmware workqueue path
+- Wacom delayed-work deadline, pre-deadline cancel, held-callback disconnect,
+  and teardown path
 - async raw SET_REPORT
 - async regular SET_REPORT
 - async GET_REPORT to SET_REPORT continuation
@@ -373,7 +376,7 @@ drivers are not counted here.
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| workqueue callback | `hid-input` LED work and active `hid-haptic` effect/stop work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies five-slot replacement, erase/replay, queued-work unplug, teardown, and reconnect |
+| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom delayed `init_work` | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; exact 32-reconnect `wacom-wired-matrix` verifies pre-deadline and held-callback removal |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
@@ -382,6 +385,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
+| Wacom `BAMBOO_PEN`, mode SET/GET, record FIFO, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`, active ID `056a:037a` | exact IF0/equivalent IF1 32-reconnect `wacom-wired-matrix` artifact passed on hardware; shortened 8-reconnect artifact is build-only |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -397,8 +401,10 @@ Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
 Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
-Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron; each
-of those entries has a matching emulator branch. Core/common glue (`hid-core`,
+Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom, and
+Zydacron; each has a matching emulator branch. Wacom's exact 32-reconnect
+artifact is hardware-verified, while the current shortened artifact is not.
+Core/common glue (`hid-core`,
 `hid-input`, `hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all
 fixtures.
 
@@ -408,11 +414,14 @@ reuse an already tested hook shape.
 
 ## Coverage Decision
 
-The existing emulator set plus the hardware-verified work-input and combined
-haptic/Trackpad fixtures covers the previously active allowlist,
-long-enumeration success path, and the normal USB Magic Trackpad 2 path. The
-Holtek mouse driver-specific hardware result remains pending. Stadia's existing
-fixture covers its deferred mutex-conversion path if it is relinked later.
+The existing emulator set plus the hardware-verified work-input, combined
+haptic/Trackpad, and exact Wacom fixtures covers the active allowlist,
+long-enumeration success path, normal USB Magic Trackpad 2 path, and wired
+CTL-472 driver flow. The Holtek mouse driver-specific result remains pending.
+Stadia's existing fixture covers its deferred mutex-conversion path if it is
+relinked later. The complete Wacom fixture also passed the working input/devres
+and evdev identity correction. It does not certify the generic delayed-work
+branches listed below or the separate Rapoo managed extra-input path.
 
 Reasoning:
 
@@ -926,6 +935,102 @@ Wireless markers prove their exact battery transfers and reconnect re-probes;
 the noop UI does not independently acknowledge the queued power snapshots.
 UI battery presentation and KeyD tablet policy remain outside this fixture.
 
+### Wired Wacom CTL-472 coverage
+
+The hardware-verified 32-reconnect revision of branch
+`device/wacom-wired-matrix` emulates wired CTL-472 `056a:037a`. Its interface
+0 uses the exact captured 228-byte report descriptor
+(`956e9e8a183dcb56aec2fc42e059a4dfff0b90484e58875b8f2d0f02b0906429`).
+Available captures contain only interface 1's 38-byte length and endpoint
+shape, so that interface is functionally equivalent rather than byte-exact. It
+still produces the required 64-byte packet length and reaches upstream's
+ghost-interface rejection.
+
+That automatic sequence checked:
+
+1. one completed idle boot-mouse report proving interrupt IN is open, then D+
+   removal 600 ms later, before the one-second delayed init;
+2. exactly Feature SET report 2 payload `02`, then GET report 2 payload `02`,
+   accepted no earlier than 900 ms after mount;
+3. wired status with the wireless-module bit clear, then X/Y, pressure,
+   distance including the parser's over-range clamp, tip, both stylus buttons,
+   pen/eraser, proximity, range, and release reports after the completed
+   exchange;
+4. D+ removal while the device-side GET callback is suspended, callback
+   release while disconnected, then a fresh generation and full pen matrix;
+5. 32 additional reconnects, each with a fresh exact exchange and completed
+   pen transfers.
+
+The host-visible success sequence is `f1, f2, f3, f4, f10`; `f12` plus
+`a`/`b`/`c`/`d` repeated three times identifies the failed phase. Emulator CDC
+is not an oracle. The exact pair below passed on 2026-07-29. The host log
+showed all 36 Wacom Pen add/remove generations, 36 expected
+`WARN: HID_IGNORED` results, no input before mode exchange, clean input after
+recovery, stable removal plateaus, `oom=0`, and nonzero task watermarks. F1
+also showed the Pen device published before removal, so that phase credits the
+pre-deadline pending-work path.
+
+Verified artifacts and measurements are:
+
+```text
+host UF2 SHA-256       bdf6ab6ce3bfbe1ed81abb4dcfb9183030d597f92e4e9d301bae8f474a436737
+host text/data/bss     585656 / 788 / 245260 B
+emulator UF2 SHA-256   614401701850d5bbea0dde53ce005de9d0a76aacddf3bda5112a08c4b2c9048e
+emulator text/data/bss 59804 / 0 / 254444 B
+hardware verdict       passed 2026-07-29
+```
+
+Repeated Wacom removals returned to
+`free/largest/blocks=60728/36192/7` after the first warm-up variant.
+Minimum-ever free heap was 7,848 B and every snapshot reported `oom=0`.
+Minimum stack watermarks were TinyUSB 265, KeyD 658, async 389, work 205,
+timer 348, lifecycle 222, and report 870 words. The Wacom input reached the
+Linux input/evdev boundary; current KeyD intentionally has no full tablet
+policy and logs the unsupported pressure/distance/tool codes.
+
+The fixture proves the Wacom-specific disconnect before its deadline and while
+the device-side GET callback is held. It does not deterministically force
+cancel after promotion but before callback entry, simultaneous synchronous
+cancelers, callback self-requeue, workqueue destruction with delayed entries,
+or FreeRTOS tick wrap. Those remain static code-audit results.
+
+The current shortened 8-reconnect emulator build is distinct:
+
+```text
+emulator UF2 SHA-256   2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff
+emulator text/data/bss 59820 / 0 / 254444 B
+hardware verdict       not run
+```
+
+The working host candidate now restores pinned-Linux
+`void devm_release_action()`, uses two managed-input devres records, and
+publishes VID/PID from `input_dev->id` without interpreting Wacom's opaque
+driver data. The complete 32-reconnect artifact reran against this candidate:
+the log contained 36 `056a:037a` Pen adds and removes, 36 expected
+ghost-interface warnings, and `f1, f2, f3, f4, f10` with no `f12` or host
+`ERR`. Repeated Wacom removal snapshots stabilized at
+`free/largest/blocks=60736/36032/7`; every heap snapshot had `oom=0` and every
+task watermark remained nonzero.
+
+```text
+host UF2 SHA-256      12a8f6826c9148eb03a9fb783e1f558674d067f562bfcec2ad69edcf3dd09790
+host text/data/bss    585720 / 788 / 245260 B
+hardware verdict      passed 2026-07-30 with complete 32-reconnect artifact
+```
+
+The subsequent cleanup removes the never-read port-only
+`input_dev.registered` state and documents the reduced `WARN_ON` and kfifo
+contracts. It builds, but this exact image has not been flashed:
+
+```text
+host UF2 SHA-256      c2542706419b44a00d1ba8dcaa562b50afc272faab798cab62267fa9c873e1ca
+host text/data/bss    585704 / 788 / 245260 B
+hardware verdict      not run
+```
+
+Bluetooth, receivers, other Wacom IDs, touch, pad, LED, battery, and Remote
+paths are outside this fixture.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
@@ -993,6 +1098,22 @@ and emulator CDC lines under each item.
   - compare live and removal heap/stack snapshots; require `oom=0`
   - verdict: passed 2026-07-27; complete markers, no `f12`/host `ERR`, stable
     plateaus, and 86-word minimum lifecycle watermark
+- [x] wired Wacom CTL-472
+  - emulator branch `device/wacom-wired-matrix`
+  - require `f1`, `f2`, `f3`, `f4`, terminal `f10`, and no `f12`
+  - require exact mode SET/GET, wired status, Pen/eraser input boundaries,
+    pending/running work removal, recovery, and 32 reconnect cycles
+  - require 36 Pen add/remove generations, 36 expected ghost-interface
+    warnings, equivalent removal heap plateaus, `oom=0`, and nonzero task
+    watermarks
+  - verdict: exact no-PIO host and 32-reconnect emulator passed 2026-07-29;
+    all markers and 36 generations completed, no host `ERR`, `oom=0`, stable
+    removal plateau, and every task watermark nonzero
+  - the Linux-shaped input/devres and evdev identity correction passed the
+    same complete fixture on 2026-07-30 with all 36 devices published as
+    `056a:037a`, stable removal plateaus, no host `ERR`, and `oom=0`
+  - current shortened 8-reconnect emulator artifact is build-only and does not
+    inherit that verdict
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

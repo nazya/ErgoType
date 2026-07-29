@@ -708,6 +708,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_transport_sync.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_devres.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_kfifo.c
         # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
         # Split devmon/FreeRTOS half of the Linux-shaped evdev adapter.
@@ -806,6 +808,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-params.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-rdesc.c
+        # Pinned-upstream Wacom stack, allowlisted to the wired CTL-472.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_wac.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_sys.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-topseed.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-twinhan.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-viewsonic.c

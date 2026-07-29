@@ -30,6 +30,18 @@ The active implementation now has these properties:
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.
+- The task-only workqueue now owns a wrap-safe delayed-work deadline list.
+  Wacom CTL-472 uses it for the pinned one-second initialization callback,
+  whose Feature report 2 SET/GET runs through the existing synchronous-looking
+  raw-control path. Pending, promoted, and running cancellation are fenced
+  before driver resources are released. The exact no-PIO host and 32-reconnect
+  fixture passed disconnect before the deadline, disconnect while the callback
+  was held, recovery, repeated mode/input cycles, and stable teardown on
+  hardware. The complete fixture also passed the later Linux-shaped
+  two-resource managed-input teardown and evdev identity correction.
+  Promotion-before-callback, simultaneous synchronous cancel, callback
+  self-requeue, queue destruction, and tick wrap remain statically audited
+  generic branches rather than hardware-covered claims.
 - Device and string pre-probe policy is lifecycle-owned and uses that same
   generic `usb_control_msg()` path with one transport-pool scratch. The async
   executor has no descriptor-specific request kind, FIFO, or continuation.

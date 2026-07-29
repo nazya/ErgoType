@@ -15,7 +15,7 @@
 
 #include "devmon.h"
 #include "evdev.h"
-#include "linux/include/linux/hid.h"
+#include "linux/include/linux/input.h"
 #include "stdio_tusb_cdc.h"
 #include <linux/input-event-codes.h>
 
@@ -74,14 +74,13 @@ static void evdev_copy_absinfo(struct input_absinfo_snapshot *dst,
 	dst->resolution = src->resolution;
 }
 
-static struct port_input_dev evdev_port_input_dev(const struct input_dev *src,
-						  uint16_t vendor,
-						  uint16_t product)
+static struct port_input_dev evdev_port_input_dev(const struct input_dev *src)
 {
 	struct port_input_dev port_dev = {0};
 
-	port_dev.vendor = vendor;
-	port_dev.product = product;
+	/* Linux evdev publishes input_dev identity; driver data stays opaque. */
+	port_dev.vendor = src->id.vendor;
+	port_dev.product = src->id.product;
 	port_dev.name = src->name ? src->name : "usb-hid";
 	port_dev.has_haptic = src->ff && test_bit(FF_HAPTIC, src->ffbit);
 	memcpy(port_dev.keybit, src->keybit, sizeof(port_dev.keybit));
@@ -166,7 +165,6 @@ static int evdev_publish_device(const struct port_input_dev *src,
 int evdev_prepare_input_device(struct input_dev *src, struct evdev *evdev,
 			       struct evdev_client **client_slot)
 {
-	struct hid_device *hid = input_get_drvdata(src);
 	struct port_input_dev port_dev;
 
 	/*
@@ -178,26 +176,17 @@ int evdev_prepare_input_device(struct input_dev *src, struct evdev *evdev,
 	    EVDEV_EVENT_QUEUE_LEN - EVDEV_QUEUE_NORMAL_RESERVE)
 		async_msg("WARN: EVDEV_BATCH_CAP");
 
-	if (!hid && src->dev.parent && src->dev.parent->bus == &hid_bus_type) {
-		// input_set_drvdata(input_dev, hid);
-		// Some upstream drivers allocate extra input_dev objects from &hdev->dev
-		// without storing HID drvdata. The firmware evdev client needs that link.
-		hid = to_hid_device(src->dev.parent);
-		input_set_drvdata(src, hid);
-	}
-
 	clear_bit(EV_REP, src->evbit);
-	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
+	port_dev = evdev_port_input_dev(src);
 	return evdev_prepare_device(&port_dev, evdev, client_slot);
 }
 
 int evdev_publish_input_device(struct input_dev *src,
 			       struct evdev_client *client)
 {
-	struct hid_device *hid = input_get_drvdata(src);
 	struct port_input_dev port_dev;
 
-	port_dev = evdev_port_input_dev(src, hid->vendor, hid->product);
+	port_dev = evdev_port_input_dev(src);
 	return evdev_publish_device(&port_dev, client);
 }
 

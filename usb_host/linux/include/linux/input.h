@@ -161,7 +161,6 @@ struct input_dev {
 	struct input_value *vals;
 
 	bool devres_managed;
-	bool registered;
 	unsigned int port_proxy_id;
 
 	ktime_t timestamp[INPUT_CLK_MAX];
@@ -244,16 +243,15 @@ static inline void *input_get_drvdata(struct input_dev *dev)
 // {
 // 	return dev ? to_input_dev(get_device(&dev->dev)) : NULL;
 // }
-// static inline void input_put_device(struct input_dev *dev)
-// {
-// 	if (dev)
-// 		put_device(&dev->dev);
-// }
-// The reduced device core has no input_dev reference-count lifetime.
+// No linked input caller acquires an extra reference yet, so keep that
+// unsupported direction compile-gated.
 struct input_dev *input_get_device(struct input_dev *dev)
-	__attribute__((error("input_get_device needs the firmware device refcount bridge")));
-void input_put_device(struct input_dev *dev)
-	__attribute__((error("input_put_device needs the firmware device refcount bridge")));
+	__attribute__((error("input_get_device has no audited firmware lifetime caller")));
+static inline void input_put_device(struct input_dev *dev)
+{
+	if (dev)
+		put_device(&dev->dev);
+}
 
 struct input_dev *input_allocate_device(void);
 struct input_dev *devm_input_allocate_device(struct device *dev);
