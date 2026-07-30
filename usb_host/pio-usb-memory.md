@@ -15,6 +15,20 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
+The latest exact hardware-tested host image recorded here is the expanded
+wired Wacom matrix:
+
+```text
+text/data/bss                 592312 / 788 / 245264 B
+__bss_end__                   0x2003fe58
+main-bank headroom            424 B to 0x20040000
+UF2 SHA-256                   4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5
+hardware verdict              passed 2026-07-30 for the qualified Wacom scope
+```
+
+Its exact emulator, dynamic heap measurements, and power-snapshot limitation
+are recorded in the expanded Wacom stage below.
+
 The original 232 KiB heap experiment is historical evidence for the static-RAM
 ceiling. With that tested host branch, the link failed with:
 
@@ -49,8 +63,8 @@ formatting. After adding the audited ELECOM, Kensington, Topre, and EVision
 builtin drivers, that historical image linked with `text=505836`, `data=708`,
 and `bss=245364`.
 
-The current checkpoint excludes Stadia/`ff-memless` from the link. It uses the
-fixed 218.5 KiB (`223744`-byte) FreeRTOS heap and clean-builds as:
+The 2026-07-23 checkpoint excluded Stadia/`ff-memless` from the link. It used
+the fixed 218.5 KiB (`223744`-byte) FreeRTOS heap and clean-built as:
 
 ```text
 text/data/bss                 514752 / 788 / 245040 B
@@ -392,7 +406,7 @@ disconnect while the initialization callback was blocked in its mode GET,
 recovery, and repeated reconnect, so no cumulative runtime leak appeared in
 that exact sequence.
 
-The current shortened emulator builds as `59820 / 0 / 254444 B` with UF2
+A separate shortened CTL-only emulator builds as `59820 / 0 / 254444 B` with UF2
 SHA-256
 `2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff`,
 but it has not run on hardware and does not inherit the 32-reconnect verdict.
@@ -426,6 +440,71 @@ hardware verdict               not run
 
 This cleanup removes 16 bytes of text with no data or BSS change. Compilation
 does not transfer the preceding hardware verdict to this exact image.
+
+#### Expanded wired Wacom verified stage
+
+Selecting the wired CTL-472 `056a:037a`, CTL-672 `056a:037b`, PTK-450
+`056a:0029`, CTH-470 `056a:00de`, and PTH-650 `056a:0027` paths, including
+Pen/Pad/Touch, LED, battery-report, arbitration, and work-disconnect handling,
+produces the exact hardware-tested pair:
+
+```text
+host text/data/bss             592312 / 788 / 245264 B
+host __bss_end__               0x2003fe58
+host main-bank headroom        424 B to 0x20040000
+scratch X                      788 B (0x20040000..0x20040314)
+scratch X / core-1 gap         1260 B to 0x20040800
+host UF2 SHA-256               4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5
+emulator text/data/bss         65820 / 0 / 254456 B
+emulator UF2 SHA-256           037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b
+hardware verdict               passed 2026-07-30 for the qualified scope below
+```
+
+Relative to the unflashed CTL-only cleanup immediately above, the expanded
+host has 6,608 more bytes of text, unchanged data, and four more bytes of BSS.
+The important additional cost remains dynamic: PTK owns Pen and Pad inputs;
+CTH and PTH each own Pen, Finger, and Pad inputs; PTH also reaches the reduced
+power-supply object, length-one event queue, and changed work.
+
+The exact run completed 23 physical attachments and balanced all 46 Wacom
+input-node additions with 46 removals. Its 115 heap snapshots all reported
+`oom=0`. Snapshot-time free heap ranged from 18,232 B to 62,360 B, while the
+minimum-ever counter reached 7,568 B. The largest free block ranged from
+18,136 B to 58,512 B, and the allocator reported 4 through 12 free blocks.
+CTH padding-only reports reach two upstream zero-size allocations per attach.
+Returning Linux's `ZERO_SIZE_PTR` sentinel, rather than passing those requests
+to FreeRTOS, removed the former two false malloc-failure increments without
+allocating memory.
+Stable terminal tuples were:
+
+```text
+CTL-472/CTL-672 free/largest/blocks  60752 / 36712 / 6
+PTK-450          free/largest/blocks 60752 / 22576 / 8
+CTH-470          free/largest/blocks 60752 / 21704 / 9
+PTH-650          free/largest/blocks 60752 / 26992 / 8
+```
+
+The first CTL teardown had one extra block without a free-byte difference.
+The immediate PTH status-disconnect snapshot was
+`free/largest/blocks=60496/26992/9`, exactly one 256-byte allocation below the
+normal PTH plateau. Before the next PTH live snapshot, that allocation was
+reclaimed; all later terminal PTH snapshots returned to
+`60752/26992/8`. This proves that the measured difference was transient rather
+than a cumulative heap leak.
+
+Minimum remaining stack watermarks were TinyUSB 265, KeyD 658, async 389,
+work 198, timer 348, lifecycle 218, and report 854 words. Nine expected CTL
+ghost-interface warnings and nine expected CTH/PTH bounded-batch warnings were
+the only warnings. The bounded-batch result covers the fixture's two-contact
+touch frames, not a maximum-contact frame.
+
+The PTH phase completed its battery-report transfers, immediate disconnect,
+running LED-work disconnect, and recovery, but the production host emitted no
+`POWER` snapshot records. The 256-byte transient and subsequent recovery are
+heap-lifetime evidence only; they do not verify exact detached
+`ADDED`/`CHANGED`/`REMOVED` values or ordering, or identify the consumer that
+deleted the queue. Do not use this memory result as a value-level
+power-snapshot verdict.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware

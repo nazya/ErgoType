@@ -19,10 +19,10 @@ Post-baseline upstream fix: multitouch active-slot bitmap commit
 
 Active-path conformance for the linked keyboard, mouse, multitouch, haptic,
 input-core, and FF paths through the Linux input-event publication boundary at
-the preceding clean checkpoint. The working Wacom correction closes the
-identified P1 devres and evdev identity divergences in static audit and passed
-the exact 32-reconnect Wacom runtime regression. The separate Rapoo managed
-extra-input regression remains pending.
+the preceding clean checkpoint. The current wired Wacom checkpoint activates
+five exact USB IDs and passed its 23-attachment Pen/Pad/Touch/LED/battery-report
+matrix after the earlier P1 devres and evdev identity corrections. The separate
+Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
 This is a porting audit, not a runtime safety certification.
@@ -64,7 +64,9 @@ mutexes now block directly; workqueue/timer waiters sleep on notifications and
 durable predicates instead of retrying every tick.
 The repeated active-path audit, including the corrected Wacom-reachable devres
 contract described below, found no remaining P0/P1 lifetime, lock-order, or
-polling defect. Bounded and dormant exceptions are listed below instead of
+polling defect in the inspected HID/input/work call graph. This result does not
+certify value-level power snapshots or removal-queue cleanup when the UI
+consumer does not start; those bounded exceptions are listed below instead of
 being hidden by speculative rewrites.
 
 The whole-tree diagnostic pass is also applied. Every active application/host
@@ -106,9 +108,52 @@ The compatibility header now documents the linked byte/record kfifo forms,
 allocation, caller serialization, and unsupported extension boundary. Several
 broad Wacom compile gates still lack immediate boundary notes; that is strict
 porting-rule hygiene, not a runtime blocker. The input/devres and identity
-candidate passed the exact 32-reconnect Wacom artifact with real `056a:037a`
-identity, stable teardown, `oom=0`, and no host `ERR`. The separate Rapoo
-managed extra-input regression remains pending.
+contracts first passed the exact 32-reconnect CTL-472 artifact and then the
+current five-profile wired matrix with real `056a:*` identities, balanced
+teardown, `oom=0`, and no host `ERR`. The separate Rapoo managed extra-input
+regression remains pending.
+
+## Current Wired Wacom Contract Result
+
+The active allowlist contains only five wired USB Wacom products:
+PTH-650 `056a:0027`, PTK-450 `056a:0029`, CTH-470 `056a:00de`, CTL-472
+`056a:037a`, and CTL-672 `056a:037b`. It reaches the pinned Pen path for both
+One by Wacom models, PTK Pen/Pad/ExpressKeys/Touch Ring and LED control, CTH
+Pen/Touch/Pad plus pen-touch arbitration, and PTH Pen/Touch/Pad/LED plus the
+ordinary USB battery-report path. Bluetooth, USB wireless receivers, AES
+battery expiry, and ExpressKey Remote remain outside this checkpoint.
+
+The CTH descriptor contains two padding-only reports whose ordering pass has
+zero fields. Pinned `hid_report_process_ordering()` consequently calls
+`kzalloc(..., 0)` twice. Linux returns `ZERO_SIZE_PTR`, permits the empty loops
+to complete, and makes the later `kfree(ZERO_SIZE_PTR)` a no-op. The former
+compatibility shim passed zero to FreeRTOS, which returned `NULL` and invoked
+the malloc-failure hook even though the upstream zero-size request was not an
+allocation failure. The compatibility contract now returns Linux's sentinel
+from zero-size `kmalloc()`, `kzalloc()`, and `kcalloc()` and recognizes it in
+`kfree()`. This removes the observed two false OOM increments per CTH attach
+without changing pinned `hid-core.c` flow or adding allocation state.
+
+The exact host
+`4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
+and emulator
+`037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b`
+completed all 23 physical Wacom attachments. The log contained 46 matching
+input-node adds and removes, all 115 heap snapshots reported `oom=0`, and no
+host `ERR`, transfer failure, timeout, or evdev input-drop diagnostic appeared.
+The nine `HID_IGNORED` warnings belong to the nine CTL ghost interfaces; the
+nine `EVDEV_BATCH_CAP` warnings belong to the four CTH and five PTH touch
+inputs and were not accompanied by a recorded drop.
+
+Ordinary power-supply cleanup has only indirect runtime evidence. One immediate
+PTH disconnect left the expected single 256-byte queue allocation temporarily
+visible, and a later snapshot returned from 60,496 to the normal 60,752-byte
+removal plateau; five PTH generations did not accumulate queue storage. The
+temporary value logger was removed before the successful run, so exact
+`ADDED`/`CHANGED` fields (`present`, `status`, and `capacity`) were not observed.
+Queue deletion still belongs exclusively to the UI consumer after it receives
+`REMOVED`; failure to create or wake that consumer was not injected and is not
+covered by this verdict.
 
 ## Deferred P2 Boundaries
 
@@ -158,6 +203,12 @@ support:
   strand only the UI task. Configured KeyD macro delays intentionally pause the
   single KeyD loop. Neither wait belongs to the TinyUSB-to-Linux transport
   layer, but both remain explicit whole-tree latency boundaries.
+- Detached power-supply queues are deleted only when the UI task consumes
+  their terminal `REMOVED` snapshot. The normal Wacom matrix indirectly showed
+  that cleanup through recovered heap plateaus, but task/timer startup failure
+  was not injected and the host startup path does not establish a separate
+  power-consumer readiness contract. Exact snapshot fields also remain
+  unverified without a production consumer.
 - Compatibility `delayed_work`, runtime dynamic quirks, public input grab,
   second input clients, and generic Linux logging remain compile-gated or
   dormant. Enabling a caller requires re-auditing the reduced compatibility
@@ -246,6 +297,10 @@ and `mdelay()` sleeps instead of busy-waiting. The kfifo glue implements the two
 linked shapes: byte FIFO and two-byte-header record FIFO, with Linux
 power-of-two allocation and return counts; locking and the broader typed API
 remain unsupported because every linked owner serializes its own accesses.
+The `kmalloc()`/`kzalloc()`/`kcalloc()` contract now returns Linux's
+`ZERO_SIZE_PTR` for zero-size requests and `kfree()` accepts that sentinel;
+this is reached by CTH padding-report ordering rather than being a hypothetical
+future compatibility case.
 Selective nested devres groups release only their enclosed resources in reverse
 order, while final input/HID teardown releases all remaining resources.
 Devres documents its teardown-serialization contract beside the declarations,
@@ -276,7 +331,7 @@ sources so their enablement contract remains visible.
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receiver `046d:c52b` active and the other upstream receiver IDs retained behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
-| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with only wired CTL-472 `056a:037a` matched; four report-ID hash reads use the existing sparse registry; the shared-device list relies on the single lifecycle owner; unused per-device mutex/work/timer initialization and cancellation remain adjacent but disabled; Linux LED/Remote/wireless subsystems remain compile-gated; the driver descriptor is immutable. |
+| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with only wired PTH-650 `056a:0027`, PTK-450 `056a:0029`, CTH-470 `056a:00de`, CTL-472 `056a:037a`, and CTL-672 `056a:037b` matched; four report-ID hash reads use the existing sparse registry; the shared-device list relies on the single lifecycle owner; wired Pen/Pad/Touch, LED, and ordinary PTH battery paths are active, while Bluetooth, Remote, receiver, and AES-only paths remain gated; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots. |
 
@@ -354,18 +409,16 @@ it contains no callback, logging, allocation, or wait.
   not claimed because the later evdev-to-KeyD queue remains a separate bounded
   consumer.
 - The imported Wacom sources retain the complete pinned switch/parser flow and
-  match only wired CTL-472 `056a:037a`. Its 10-byte `BAMBOO_PEN` reports,
-  one-second mode SET/GET, Pen input, shared-data/devres ownership, and
-  64-byte ghost-interface rejection are linked. All other Wacom IDs remain
-  behind `CONFIG_HID_WACOM_ALL_DEVICES`; their receiver, Bluetooth, touch, pad,
-  LED, battery, and Remote paths remain unreachable, with the LED, Remote, and
-  wireless-only blocks compile-gated. The exact no-PIO host and 32-reconnect
-  emulator pair passed its Wacom mode/input/disconnect matrix on hardware with
-  36 clean Pen generations, stable removal plateaus, and `oom=0`. That runtime
-  matrix was repeated against the input/devres and evdev identity correction:
-  all 36 Pen generations published as `056a:037a`, all removals completed, and
-  the run reached `f10` with no `f12`, host `ERR`, or allocation failure. The
-  Rapoo managed extra-input regression remains separate.
+  match only wired PTH-650 `056a:0027`, PTK-450 `056a:0029`, CTH-470
+  `056a:00de`, CTL-472 `056a:037a`, and CTL-672 `056a:037b`. Their active paths
+  retain upstream Pen, Pad, Touch, ExpressKey, Touch Ring, LED, arbitration,
+  shared-data/devres, delayed initialization, and ordinary PTH battery logic.
+  All other Wacom IDs remain behind `CONFIG_HID_WACOM_ALL_DEVICES`; Bluetooth,
+  receiver, AES-only battery, and Remote paths remain unreachable. The current
+  exact host/emulator pair completed the 23-attachment matrix with 46 balanced
+  input-node lifetimes, stable removal plateaus, and `oom=0`. Exact queued
+  power values and consumer-start failure remain outside that runtime result.
+  The Rapoo managed extra-input regression remains separate.
 - The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole. Direct USB
   matching selects only IDs `046d:c08d` and `046d:c08a`; the current
   exact-class gate additionally selects DJ child IDs M560 `046d:402d`, T650
@@ -1222,15 +1275,22 @@ Current checkpoint audit:
   battery/reconnect/input matrix passed on hardware on 2026-07-27 with every
   completion marker, no host `ERR`, `oom=0`, equivalent cleanup plateaus, and
   an 86-word minimum lifecycle watermark
-- audited the complete pinned Wacom parser/system sources and their exact
-  CTL-472 call graph. The no-PIO host
-  `bdf6ab6ce3bfbe1ed81abb4dcfb9183030d597f92e4e9d301bae8f474a436737`
-  with the 32-reconnect emulator
-  `614401701850d5bbea0dde53ce005de9d0a76aacddf3bda5112a08c4b2c9048e`
-  completed `f1, f2, f3, f4, f10`, 36 Pen add/remove generations, 36 expected
-  ghost-interface warnings, stable removal plateaus, nonzero task watermarks,
-  and `oom=0`. Generic promotion-window, simultaneous-cancel, callback-requeue,
-  destroy-with-delayed, and tick-wrap branches remain static audit results
+- audited the complete pinned Wacom parser/system sources and the five active
+  wired call graphs. Host
+  `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
+  with emulator
+  `037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b`
+  completed
+  `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`, 23 physical
+  attachments, 46 balanced input-node add/remove lifetimes, nine expected
+  ghost-interface warnings, nine bounded touch-batch warnings, nonzero task
+  watermarks, and `oom=0` in all 115 heap snapshots. The CTH ordering pass
+  reaches two zero-size allocations per attach; restoring Linux
+  `ZERO_SIZE_PTR` semantics removed their false OOM accounting without changing
+  upstream flow. Generic promotion-window, simultaneous-cancel,
+  callback-requeue, destroy-with-delayed, and tick-wrap branches remain static
+  audit results. Power-snapshot values and UI-consumer startup failure remain
+  unverified
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep
   on a mutex, queue, or task notification and recheck a durable predicate. The

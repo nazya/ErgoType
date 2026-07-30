@@ -4993,7 +4993,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x23) },
 	{ USB_DEVICE_WACOM(0x24) },
 	{ USB_DEVICE_WACOM(0x26) },
+#endif
+	// The wired PTH-650 exercises upstream USB battery publication.
 	{ USB_DEVICE_WACOM(0x27) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x28) },
 #endif
 	// The wired PTK-450 exercises the upstream Pen, Pad, and Touch Ring path.
@@ -5071,7 +5074,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0xDA) },
 	{ USB_DEVICE_WACOM(0xDB) },
 	{ USB_DEVICE_WACOM(0xDD) },
+#endif
+	// The wired CTH-470 exercises the upstream paired Pen/Touch/Pad path.
 	{ USB_DEVICE_WACOM(0xDE) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0xDF) },
 	{ USB_DEVICE_WACOM(0xE2) },
 	{ USB_DEVICE_WACOM(0xE3) },

@@ -57,6 +57,10 @@ static void power_supply_build_snapshot(
 		snapshot->status = value.intval;
 		snapshot->fields |= PORT_POWER_SUPPLY_HAS_STATUS;
 	}
+	if (power_supply_read_property(psy, POWER_SUPPLY_PROP_PRESENT, &value)) {
+		snapshot->present = value.intval != 0;
+		snapshot->fields |= PORT_POWER_SUPPLY_HAS_PRESENT;
+	}
 	if (power_supply_read_property(psy, POWER_SUPPLY_PROP_ONLINE, &value)) {
 		snapshot->online = value.intval != 0;
 		snapshot->fields |= PORT_POWER_SUPPLY_HAS_ONLINE;

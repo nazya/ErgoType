@@ -84,7 +84,8 @@ synchronous waits:
 - hidraw fd/ioctl semantics
 - LED class
 - backlight
-- power_supply
+- the full Linux power-supply class, sysfs, uevents, and notifier ownership
+  (the linked drivers use a reduced detached-snapshot glue boundary)
 - hwrng
 - force-feedback PID state
 - framebuffer
@@ -247,26 +248,52 @@ plateaus, nonzero task watermarks, and no host `ERR`.
 ## Active Wired Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
-implementation but matches only the wired One by Wacom Small CTL-472
-`056a:037a`. Its real path uses the upstream `BAMBOO_PEN` parser, one Pen input
-device, a record FIFO, sibling shared data, and a one-second delayed Feature
-SET/GET report 2 mode switch. The second 64-byte HID interface is retained and
-rejected by the upstream pen-only ghost-interface check.
+implementation and matches five wired IDs: One by Wacom Small CTL-472
+`056a:037a`, One by Wacom Medium CTL-672 `056a:037b`, Intuos5 S PTK-450
+`056a:0029`, Bamboo Capture CTH-470 `056a:00de`, and Intuos5 touch M PTH-650
+`056a:0027`. The two CTL profiles use the upstream `BAMBOO_PEN` parser, one
+Pen input device, a record FIFO, sibling shared data, and a one-second delayed
+Feature SET/GET report 2 mode switch. Their second 64-byte HID interface is
+retained and rejected by the upstream pen-only ghost-interface check. PTK-450
+adds the upstream Pad, ExpressKeys, Touch Ring, and LED paths. CTH-470 and
+PTH-650 add paired Pen/Touch/Pad inputs and pen/touch arbitration; PTH-650 also
+reaches the ordinary wired USB battery path.
 
 The compatibility layer now provides selective nested devres groups,
 power-of-two byte/record kfifo storage, and delayed work owned by the existing
-workqueue task. No new task or queue was added. Normal queue/cancel return
+workqueue task. The existing reduced LED class/trigger and power-supply
+snapshot glue provide only the operations reached by these wired profiles; they
+do not implement Linux sysfs, uevents, notifier chains, or power-supply/LED
+presentation. No new task or workqueue was added. Normal queue/cancel return
 values retain Linux semantics on the linked paths; synchronous cancellation
 waits for a running callback before Wacom resources are released.
 
-The exact no-PIO host and 32-reconnect `device/wacom-wired-matrix` artifact
-passed on hardware. It completed `f1, f2, f3, f4, f10` with no `f12`, exercised
-disconnect before the delayed deadline and while the mode GET callback was
-held, completed exact mode SET/GET plus pen/eraser input after recovery, and
-produced 36 clean Pen add/remove generations. Repeated removal plateaus were
-stable, every heap snapshot had `oom=0`, and every task watermark remained
-nonzero. The current shortened 8-reconnect emulator artifact is a different,
-build-only image.
+The exact expanded host/emulator pair recorded in
+`hid-emulator-coverage.md` passed the automatic wired matrix on hardware. The
+log completed
+`f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10` with no `f12` or host `ERR`.
+All 23 physical Wacom attachments produced 46 balanced input-device
+add/removes. The run covered mode requests, pen/pad/touch input, LED control,
+disconnect before a delayed deadline, disconnect while mode or LED work was
+running, active-touch teardown, recovery, and reconnect stress. All 115 heap
+snapshots reported `oom=0`, removal returned to the established 60,752-byte
+plateau, and every task watermark remained nonzero.
+
+The PTH fixture transmitted its battery reports and reached `f11`. One
+immediate removal snapshot was 256 bytes below the established plateau and a
+later snapshot recovered it, which is consistent with normal terminal
+power-queue consumption and deletion. The production host emitted no
+value-level `POWER` diagnostics, so this run does not verify the exact detached
+`ADDED`/`CHANGED` snapshot fields. It also does not exercise failure to create
+the UI task or start its tick timer; without that consumer, terminal queue
+cleanup is not verified.
+
+The earlier exact no-PIO CTL-472 host and 32-reconnect
+`device/wacom-wired-matrix` artifact remains a separate hardware result. It
+completed `f1, f2, f3, f4, f10`, exercised disconnect before the delayed
+deadline and while the mode GET callback was held, and produced 36 clean Pen
+add/remove generations with stable removal plateaus, `oom=0`, and nonzero task
+watermarks.
 
 The hardware fixture does not deterministically cover every generic
 delayed-work state. Cancel after promotion but before callback entry,
@@ -274,7 +301,7 @@ simultaneous synchronous cancelers, callback self-requeue, workqueue
 destruction with delayed entries, and tick-counter wrap remain static
 contract-audit results.
 
-The working input/devres candidate restores pinned Linux's
+The retained input/devres layer restores pinned Linux's
 `void devm_release_action()`, adds `devres_destroy()` with `0/-ENOENT`
 semantics, and uses Linux's separate allocation and unregister resources for
 managed inputs. CTL-472's real unused touch and pad paths exercise removal of
@@ -289,8 +316,10 @@ plateaus were stable. The Rapoo managed extra-input regression remains
 separate and has not yet been rerun.
 
 All other Wacom product IDs remain behind
-`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, receivers, touch, pad, LED, battery,
-Remote, bootloader, I2C, and PCI paths are outside the current allowlist.
+`CONFIG_HID_WACOM_ALL_DEVICES`. USB wireless receivers, USB AES profiles,
+Bluetooth, Remote, bootloader, I2C, and PCI paths are outside the current
+allowlist. Touch, pad, LED, and ordinary wired battery behavior are claimed
+only for the five exact profiles above.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller
@@ -325,8 +354,10 @@ the mode SET but the upstream delayed retry condition selects Magic Mouse 2
 only. The three unreachable upstream delayed-work calls remain commented
 beside that driver-specific boundary. Bluetooth and legacy IDs likewise remain
 visible but disabled.
-With `CONFIG_HID_BATTERY_STRENGTH` disabled, the retained
-battery timer performs one harmless failed lookup and does not rearm.
+Generic HID battery strength is active through the reduced detached-snapshot
+boundary. The retained Magic Mouse/Trackpad timer performs the pinned lookup
+and uses the firmware-selected 90-second repeat interval; this does not add the
+full Linux power-supply presentation subsystem.
 
 Upstream intentionally returns from the USB Magic Mouse 2 probe immediately
 after `hid_hw_start()`: it does not reach the later native-report registration

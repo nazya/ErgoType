@@ -1847,6 +1847,9 @@ static int __wacom_initialize_battery(struct wacom *wacom,
 	power_supply_powers(ps_bat, &wacom->hdev->dev);
 
 	battery->battery = ps_bat;
+	// Linux device_add() emits the initial add uevent; firmware queues
+	// the corresponding value snapshot explicitly.
+	power_supply_changed(ps_bat);
 
 	devres_close_group(dev, bat_desc);
 	return 0;

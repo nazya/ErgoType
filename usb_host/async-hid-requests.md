@@ -31,17 +31,22 @@ The active implementation now has these properties:
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.
 - The task-only workqueue now owns a wrap-safe delayed-work deadline list.
-  Wacom CTL-472 uses it for the pinned one-second initialization callback,
-  whose Feature report 2 SET/GET runs through the existing synchronous-looking
-  raw-control path. Pending, promoted, and running cancellation are fenced
-  before driver resources are released. The exact no-PIO host and 32-reconnect
-  fixture passed disconnect before the deadline, disconnect while the callback
-  was held, recovery, repeated mode/input cycles, and stable teardown on
-  hardware. The complete fixture also passed the later Linux-shaped
-  two-resource managed-input teardown and evdev identity correction.
-  Promotion-before-callback, simultaneous synchronous cancel, callback
-  self-requeue, queue destruction, and tick wrap remain statically audited
-  generic branches rather than hardware-covered claims.
+  The five active wired Wacom profiles use it for pinned one-second
+  initialization callbacks whose Feature SET/GET operations run through the
+  existing synchronous-looking raw-control path; PTK-450 and PTH-650 also use
+  ordinary work for their reached LED and battery paths. Pending, promoted, and
+  running delayed-work cancellation are fenced before driver resources are
+  released. The expanded exact host/emulator pair passed disconnect before the
+  deadline, disconnect while mode or LED work was running, active-touch
+  teardown, recovery, repeated mode/input cycles, and stable teardown on
+  hardware for CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650. All 115 heap
+  snapshots reported `oom=0` and every task watermark remained nonzero.
+  PTH battery reports and normal terminal power-queue cleanup were exercised,
+  but the production log contained no value-level power snapshots and did not
+  exercise UI task/timer startup failure. Promotion-before-callback,
+  simultaneous synchronous cancel, callback self-requeue, queue destruction,
+  and tick wrap remain statically audited generic branches rather than
+  hardware-covered claims.
 - Device and string pre-probe policy is lifecycle-owned and uses that same
   generic `usb_control_msg()` path with one transport-pool scratch. The async
   executor has no descriptor-specific request kind, FIFO, or continuation.
@@ -340,8 +345,11 @@ After resolution multiplier works:
    - reconnect later only after ownership and queueing are explicit
 
 5. Battery/power supply:
-   - currently compiled out by `CONFIG_HID_BATTERY_STRENGTH`
-   - do not enable until GET_REPORT query path has async continuation support
+   - at the time of this historical plan, this was compiled out by
+     `CONFIG_HID_BATTERY_STRENGTH`; the current port instead has a reduced
+     detached-snapshot boundary documented in the current-status notes
+   - the old enablement blocker was GET_REPORT continuation support; the
+     current async-backed request path has since removed that blocker
 
 ## Nonblocking Rules
 

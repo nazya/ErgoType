@@ -1450,25 +1450,28 @@ int driver_attr_for_each(struct device_driver *drv,
 			 void *data)
 	__attribute__((error("driver sysfs iteration needs a firmware proxy")));
 
+#define ZERO_SIZE_PTR ((void *)16)
+#define ZERO_OR_NULL_PTR(x) ((uintptr_t)(x) <= (uintptr_t)ZERO_SIZE_PTR)
+
 // Linux kmalloc(size, flags) compatibility shim.
 static inline void *kmalloc(size_t size, int flags)
 {
 	(void)flags;
-	return pvPortMalloc(size);
+	return size ? pvPortMalloc(size) : ZERO_SIZE_PTR;
 }
 
 // Linux kzalloc(size, flags) compatibility shim.
 static inline void *kzalloc(size_t size, int flags)
 {
 	(void)flags;
-	return pvPortCalloc(1, size);
+	return size ? pvPortCalloc(1, size) : ZERO_SIZE_PTR;
 }
 
 // Linux kcalloc(count, size, flags) compatibility shim.
 static inline void *kcalloc(size_t count, size_t size, int flags)
 {
 	(void)flags;
-	return pvPortCalloc(count, size);
+	return count && size ? pvPortCalloc(count, size) : ZERO_SIZE_PTR;
 }
 
 // Linux vzalloc(size) compatibility shim.
@@ -1506,7 +1509,8 @@ static inline void *kmemdup(const void *src, size_t size, int flags)
 // Linux kfree(ptr) compatibility shim.
 static inline void kfree(const void *ptr)
 {
-	vPortFree((void *)ptr);
+	if (!ZERO_OR_NULL_PTR(ptr))
+		vPortFree((void *)ptr);
 }
 
 void *devm_kmalloc(struct device *dev, size_t size, gfp_t flags);

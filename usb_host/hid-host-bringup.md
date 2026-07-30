@@ -55,18 +55,37 @@ markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
 `ERR`.
 
 The Wacom checkpoint additionally links complete pinned Wacom sources and
-matches only wired CTL-472 `056a:037a`. The upstream `BAMBOO_PEN` path creates
-one Pen input, performs a delayed Feature report 2 mode exchange, and rejects
-the device's 64-byte ghost interface. The exact no-PIO host and 32-reconnect
-emulator passed connection, mode/input, pre-deadline disconnect, held-callback
-disconnect, recovery, and stable teardown on hardware. The current shortened
-8-reconnect emulator is a different build-only artifact. The working tree
-restores pinned Linux's two-resource managed-input teardown and
-`void devm_release_action()` contract, and publishes evdev identity from
-`input_dev->id` instead of opaque driver data. The complete 32-reconnect Wacom
-artifact reran against that correction with all 36 Pen generations published
-as `056a:037a`, stable teardown, `oom=0`, and no host `ERR`. The separate Rapoo
-managed extra-input regression remains pending.
+matches five wired IDs: CTL-472 `056a:037a`, CTL-672 `056a:037b`, PTK-450
+`056a:0029`, CTH-470 `056a:00de`, and PTH-650 `056a:0027`. Together they reach
+the upstream Pen, Pad, Touch, ExpressKeys, Touch Ring, LED, arbitration, and
+ordinary wired battery paths applicable to those profiles. The two CTL
+profiles create one Pen input, perform a delayed Feature report 2 mode
+exchange, and reject their 64-byte ghost interfaces.
+
+The exact expanded pair recorded in `hid-emulator-coverage.md` completed
+`f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10` on hardware with no `f12` or
+host `ERR`. All 23 physical Wacom attachments produced 46 balanced input-device
+add/removes. The run covered control requests, pen/pad/touch input, LED work,
+disconnect with delayed or running work, active-touch teardown, recovery, and
+reconnect stress. All 115 heap snapshots reported `oom=0`, removal returned to
+the established plateau, and every task watermark remained nonzero.
+
+PTH-650 battery reports and normal terminal power-queue cleanup occurred in
+that sequence, but the production host emitted no value-level `POWER`
+diagnostic. The exact detached snapshot fields therefore remain unverified,
+as does the failure path where the UI task or its tick timer does not start.
+The reduced firmware glue does not implement Linux's power-supply/LED sysfs,
+uevent, notifier, or presentation subsystems.
+
+The earlier exact no-PIO CTL-472 host and 32-reconnect emulator remain a
+separate historical result: they passed connection, mode/input, pre-deadline
+disconnect, held-callback disconnect, recovery, and stable teardown. The
+retained source also restores pinned Linux's two-resource managed-input
+teardown and `void devm_release_action()` contract, and publishes evdev
+identity from `input_dev->id` instead of opaque driver data. The complete
+32-reconnect artifact reran against that correction with all 36 Pen
+generations published as `056a:037a`, stable teardown, `oom=0`, and no host
+`ERR`. The separate Rapoo managed extra-input regression remains pending.
 
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
@@ -497,6 +516,9 @@ The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
 Kye, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic
 multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2 driver.
+The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
+separate narrow USB ID gates; the active Wacom gate contains only the five
+wired IDs listed above.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.
@@ -531,11 +553,13 @@ operation itself. Fixed-size `async_msg()` diagnostics are used because the
 normal logger's roughly 2 KiB local frame does not fit the 384-word workqueue
 and timer stacks.
 
-The Wacom hardware matrix specifically covered cancellation before the
-one-second deadline and disconnect while the GET callback was held. It did not
-deterministically force the generic after-promotion window, simultaneous
-synchronous cancelers, callback self-requeue, workqueue destruction with a
-delayed entry, or tick-counter wrap; those remain code-audit results.
+The expanded Wacom hardware matrix specifically covered cancellation before
+the one-second deadline, disconnect while a mode GET callback was held,
+disconnect with LED work running, and composite removal with active touch. It
+did not deterministically force the generic after-promotion window,
+simultaneous synchronous cancelers, callback self-requeue, workqueue
+destruction with a delayed entry, or tick-counter wrap; those remain code-audit
+results.
 The transport-wide invariant audit also leaves no function call or predicate
 inside an active `configASSERT()`. A collision in the one-slot async diagnostic
 path increments the UI warning counter before dropping the newer text.
@@ -661,7 +685,9 @@ Drivers remain in the repository but are linked selectively. To enable one:
 1. Add its source to the HID allowlist in `CMakeLists.txt`.
 2. Enable the matching `CONFIG_HID_*` symbol in `hid_compat.h`.
 3. Do not enable optional FF, HIDDEV, HIDRAW, LED, battery, PID, or haptic
-   feature symbols unless the required firmware proxy is also implemented.
+   feature symbols unless every reached operation has a firmware contract.
+   Reduced LED and detached power-snapshot glue exists for the exact linked
+   callers above; it is not the full Linux class/sysfs/uevent subsystem.
 4. Build and check both link-time RAM and runtime free heap.
 5. Test enumeration, actual input/output, repeated unplug/replug, and the
    expected fallback to `hid-generic` for unrelated devices.

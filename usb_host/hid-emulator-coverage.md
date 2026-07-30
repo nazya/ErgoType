@@ -268,6 +268,7 @@ claims for unrelated drivers.
 | 2026-07-23 | combined haptic lifecycle / Magic Trackpad 2 fixture | all three numbered/ID0 haptic transports, five-slot replacement/erase/replay/unplug/reconnect, and the four-interface Magic Trackpad 2 mode/native/reconnect path pass in repeated hot- and cold-start runs with `oom=0` |
 | 2026-07-26 | `device/logitech-hidpp-dj-waitqueue` | the combined direct HID++/battery/DJ sequence completes at retained `64/675`; simultaneous M705 + ordinary keyboard works with `free=5160`, `min=4008`, and no new OOM, while the complete HID++ eQuad keyboard profile reaches the measured RP2040 memory boundary and adds the run's only OOM count; later device phases complete and teardown recovers without cumulative heap loss |
 | 2026-07-29 | `device/wacom-wired-matrix`, exact no-PIO host `bdf6ab6c…` and 32-reconnect emulator `61440170…` | CTL-472 completes `f1, f2, f3, f4, f10` with no `f12`; exact mode SET/GET, Pen/eraser input, pre-deadline and held-callback disconnect, recovery, 36 Pen add/removes, 36 expected ghost-interface warnings, stable removal plateaus, nonzero task watermarks, and `oom=0` |
+| 2026-07-30 | expanded `device/wacom-wired-matrix`, host `4efcd108…`, emulator `037c8fe0…` | CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650 complete `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`; all 23 physical attachments publish and remove the expected 46 Wacom input nodes, all 115 heap snapshots have `oom=0`, and the one 256-byte immediate PTH teardown difference is reclaimed; production logging does not expose exact power-snapshot values or ordering |
 
 ## Recorded Emulator Branches
 
@@ -352,7 +353,8 @@ Recorded emulator branches:
 - `timer_list`
 - firmware workqueue path
 - Wacom delayed-work deadline, pre-deadline cancel, held-callback disconnect,
-  and teardown path
+  PTK LED work, CTH Pen/Touch/Pad arbitration, PTH Pen/Touch/Pad/battery-report
+  transfer, work-disconnect recovery, and teardown paths
 - async raw SET_REPORT
 - async regular SET_REPORT
 - async GET_REPORT to SET_REPORT continuation
@@ -376,7 +378,7 @@ drivers are not counted here.
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom delayed `init_work` | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; exact 32-reconnect `wacom-wired-matrix` verifies pre-deadline and held-callback removal |
+| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom delayed `init_work`, LED, and battery work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the historical 32-reconnect Wacom artifact verifies pre-deadline and held-callback removal, while the expanded exact artifact also verifies PTK/PTH work-disconnect recovery |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
@@ -385,7 +387,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom `BAMBOO_PEN`, mode SET/GET, record FIFO, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`, active ID `056a:037a` | exact IF0/equivalent IF1 32-reconnect `wacom-wired-matrix` artifact passed on hardware; shortened 8-reconnect artifact is build-only |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, battery-report handling, arbitration, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; selected wired IDs `056a:0027`, `056a:0029`, `056a:00de`, `056a:037a`, and `056a:037b` | historical exact IF0/equivalent IF1 CTL-472 artifact and expanded five-profile `wacom-wired-matrix` artifact passed on hardware; receiver `056a:0084` and AES `056a:5048` remain outside this run |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -402,8 +404,10 @@ unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
 Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom, and
-Zydacron; each has a matching emulator branch. Wacom's exact 32-reconnect
-artifact is hardware-verified, while the current shortened artifact is not.
+Zydacron; each has a matching emulator branch. Wacom's historical exact
+32-reconnect CTL-472 artifact and the current expanded five-profile artifact
+are hardware-verified. Receiver `056a:0084`, AES `056a:5048`, and Remote
+coverage remain separate.
 Core/common glue (`hid-core`,
 `hid-input`, `hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all
 fixtures.
@@ -416,12 +420,14 @@ reuse an already tested hook shape.
 
 The existing emulator set plus the hardware-verified work-input, combined
 haptic/Trackpad, and exact Wacom fixtures covers the active allowlist,
-long-enumeration success path, normal USB Magic Trackpad 2 path, and wired
-CTL-472 driver flow. The Holtek mouse driver-specific result remains pending.
+long-enumeration success path, normal USB Magic Trackpad 2 path, and the
+selected wired Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650 flows. The Holtek
+mouse driver-specific result remains pending.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. The complete Wacom fixture also passed the working input/devres
-and evdev identity correction. It does not certify the generic delayed-work
-branches listed below or the separate Rapoo managed extra-input path.
+and evdev identity correction. It does not certify receiver rebind, AES expiry,
+exact detached power-snapshot values or ordering, the generic delayed-work
+branches listed below, or the separate Rapoo managed extra-input path.
 
 Reasoning:
 
@@ -478,6 +484,9 @@ Recommended smoke order:
    `hid_lookup_quirk()` before probe.
 6. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
+7. `device/wacom-wired-matrix`: proves the selected wired Wacom mode, input,
+   LED/work, composite teardown, and reconnect paths; use the exact expanded
+   artifact recorded below when comparing the hardware result.
 
 These gates cover the current host architecture. Run the useful second-pass
 branches only if one fails or a specific driver family needs confirmation.
@@ -994,7 +1003,7 @@ cancel after promotion but before callback entry, simultaneous synchronous
 cancelers, callback self-requeue, workqueue destruction with delayed entries,
 or FreeRTOS tick wrap. Those remain static code-audit results.
 
-The current shortened 8-reconnect emulator build is distinct:
+A separate shortened CTL-only 8-reconnect emulator build is distinct:
 
 ```text
 emulator UF2 SHA-256   2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff
@@ -1030,6 +1039,86 @@ hardware verdict      not run
 
 Bluetooth, receivers, other Wacom IDs, touch, pad, LED, battery, and Remote
 paths are outside this fixture.
+
+### Expanded wired Wacom matrix coverage
+
+The later exact `device/wacom-wired-matrix` artifact extends the historical
+CTL-472-only result to CTL-672 `056a:037b`, PTK-450 `056a:0029`, CTH-470
+`056a:00de`, and PTH-650 `056a:0027`, while retaining CTL-472
+`056a:037a`. The CTH and PTH report descriptors are capture-exact, but the
+combined fixture uses its compile-time 64-byte endpoint-0 size instead of the
+retail devices' 32-byte and 16-byte values. This is an exact host/emulator
+binary result, not a claim that those two complete USB topologies are
+byte-identical to retail hardware.
+
+The exact pair and audited host log are:
+
+```text
+host UF2 SHA-256       4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5
+host text/data/bss     592312 / 788 / 245264 B
+emulator UF2 SHA-256   037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b
+emulator text/data/bss 65820 / 0 / 254456 B
+host log SHA-256       c925adc49044ec7ffe8286cb2bc445aaf652c147b5e99d6e307860b2bcdf5714
+hardware verdict       passed 2026-07-30 for the qualified scope below
+```
+
+The host-visible marker order was
+`f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`, with no `f12`, failure
+letter, host `ERR`, timeout, or input-drop marker. The 23 physical Wacom
+attachments were six CTL-472, three CTL-672, five PTK-450, four CTH-470, and
+five PTH-650 generations. They published and removed 46 input nodes:
+
+- CTL-472 and CTL-672: nine Pen adds and nine removals;
+- PTK-450: five Pen and five Pad adds, each with five removals;
+- CTH-470: four Pen, four Finger, and four Pad adds, each with four removals;
+- PTH-650: five Pen, five Finger, and five Pad adds, each with five removals.
+
+There were nine expected `WARN: HID_IGNORED` messages, one for every CTL ghost
+interface, and nine `WARN: EVDEV_BATCH_CAP` messages, one for every CTH/PTH
+touch attachment. No other warning appeared. The bounded-batch warning means
+the fixture's two-contact frames passed; it does not certify a maximum-contact
+frame. All 226 logged key transitions appeared in identical adjacent
+device/KeyD/virtual-output sequences, including every marker down/up. The ten
+`HID_REPORT_SET_Q` diagnostics each had an immediately following
+`HID_REPORT_SET_OK`; they belong to the ten alert-keyboard generations and are
+not a separate Wacom control-value oracle. The emulator state machine remains
+the oracle for the required Wacom mode and LED exchanges.
+
+All 115 heap snapshots reported `oom=0`. Minimum-ever free heap was 7,568 B;
+the lowest snapshot-time free heap was 18,232 B. Repeated terminal profile
+plateaus were:
+
+```text
+CTL-472/CTL-672 free/largest/blocks  60752 / 36712 / 6
+PTK-450          free/largest/blocks 60752 / 22576 / 8
+CTH-470          free/largest/blocks 60752 / 21704 / 9
+PTH-650          free/largest/blocks 60752 / 26992 / 8
+```
+
+The first CTL removal had the same free/largest values with seven blocks. One
+immediate PTH status-disconnect snapshot was
+`free/largest/blocks=60496/26992/9`, exactly 256 B and one block below the
+normal PTH plateau. The next PTH attachment and every later terminal removal
+returned to their normal tuples, so the allocation was transient rather than
+cumulative retention. The ten alert-attached snapshots were exactly
+`48312/24960/8`; the first nine alert removals were exactly
+`60736/34712/8`. The capture ends immediately after terminal `f10 up`, with
+the final alert still attached, so its removal is not part of the verdict.
+
+Minimum remaining stack watermarks were TinyUSB 265, KeyD 658, async 389,
+work 198, timer 348, lifecycle 218, and report 854 words.
+
+The `f11` state machine proves completion of the PTH battery-report transfers,
+the immediate-status disconnect, the battery-plus-running-LED-work
+disconnect, and recovery. Production host logging contains no `POWER` lines,
+however. The 256-byte transient and later heap recovery are lifetime evidence,
+but they do not establish the exact detached `ADDED`, `CHANGED`, and `REMOVED`
+snapshot values or ordering, nor independently prove which consumer reclaimed
+that allocation. Exact power-snapshot observation remains outside this
+hardware verdict.
+
+Bluetooth, receiver `056a:0084`, AES `056a:5048`, battery-expiry timing, and
+ExpressKey Remote remain outside this expanded wired fixture.
 
 Heavier FF drivers should stay deferred for now:
 
@@ -1112,8 +1201,25 @@ and emulator CDC lines under each item.
   - the Linux-shaped input/devres and evdev identity correction passed the
     same complete fixture on 2026-07-30 with all 36 devices published as
     `056a:037a`, stable removal plateaus, no host `ERR`, and `oom=0`
-  - current shortened 8-reconnect emulator artifact is build-only and does not
+  - the separate shortened CTL-only 8-reconnect artifact is build-only and does not
     inherit that verdict
+- [x] expanded wired Wacom matrix
+  - exact host
+    `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
+    and emulator
+    `037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b`
+  - require `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`, no `f12`,
+    failure letter, host `ERR`, timeout, or input-drop marker
+  - require 23 physical attachments and balanced publication/removal of all
+    46 CTL/CTH/PTK/PTH Pen, Pad, and Finger input nodes
+  - allow exactly nine CTL ghost-interface `HID_IGNORED` and nine CTH/PTH
+    `EVDEV_BATCH_CAP` warnings; require no other warning
+  - require 115 heap snapshots with `oom=0`, nonzero task watermarks, stable
+    per-profile removal plateaus, and reclamation of the one immediate
+    256-byte PTH teardown difference
+  - verdict: passed 2026-07-30 for mode/input/LED/work/composite lifecycle and
+    memory cleanup; exact detached power-snapshot values and ordering remain
+    unverified because production logging emits no `POWER` records
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

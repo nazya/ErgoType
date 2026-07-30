@@ -35,6 +35,7 @@ enum {
 	PORT_POWER_SUPPLY_HAS_CAPACITY = 1u << 2,
 	PORT_POWER_SUPPLY_HAS_CAPACITY_LEVEL = 1u << 3,
 	PORT_POWER_SUPPLY_HAS_VOLTAGE_NOW = 1u << 4,
+	PORT_POWER_SUPPLY_HAS_PRESENT = 1u << 5,
 };
 
 /*
@@ -112,6 +113,7 @@ struct port_power_supply_snapshot {
 	int32_t capacity;
 	int32_t capacity_level;
 	int32_t voltage_now_uv;
+	bool present;
 	bool online;
 	char name[PORT_POWER_SUPPLY_NAME_LEN];
 	char model[PORT_POWER_SUPPLY_MODEL_LEN];

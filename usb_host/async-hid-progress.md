@@ -424,18 +424,26 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
-- The complete pinned Wacom sources are linked with only wired CTL-472
-  `056a:037a` active. Its upstream `BAMBOO_PEN` path retains mode Feature
-  SET/GET, Pen report parsing, shared sibling data, record FIFO, selective
-  devres cleanup, and the 64-byte ghost-interface rejection. The exact no-PIO
-  host and 32-reconnect automatic fixture passed delayed initialization, Pen
-  input, disconnect before the deadline, disconnect while the callback was
-  held, recovery, and reconnect stress on hardware. The later shortened
-  8-reconnect artifact only builds. The working tree now restores pinned
-  Linux's `void devm_release_action()`, two-resource managed-input teardown,
-  and `input_dev->id` evdev identity. The exact 32-reconnect artifact reran
-  against that correction and completed all 36 real-identity Pen generations,
-  stable teardown, `f10`, and `oom=0` with no host `ERR`.
+- The complete pinned Wacom sources are linked with five wired USB products:
+  PTH-650 `056a:0027`, PTK-450 `056a:0029`, CTH-470 `056a:00de`, CTL-472
+  `056a:037a`, and CTL-672 `056a:037b`. The active upstream paths retain mode
+  Feature SET/GET, Pen/Pad/Touch parsing, ExpressKeys, Touch Ring, LED control,
+  pen-touch arbitration, shared sibling data, record FIFO, selective devres
+  cleanup, delayed initialization, and ordinary PTH battery reporting. The
+  current exact automatic fixture passed disconnect before the deadline,
+  disconnect with GET or LED work running, active-touch teardown, recovery,
+  and five-profile reconnect stress. Linux's `void devm_release_action()`,
+  two-resource managed-input teardown, and `input_dev->id` evdev identity
+  remain active. Bluetooth, wireless receivers, AES battery expiry, and Remote
+  paths remain gated.
+- CTH padding-only report IDs 2 and 3 make pinned
+  `hid_report_process_ordering()` request zero bytes. Linux returns
+  `ZERO_SIZE_PTR` and later accepts that sentinel in `kfree()`. The former
+  FreeRTOS shim returned `NULL` and incremented the global OOM counter twice
+  per CTH attach even though no allocation was required. The compatibility
+  `kmalloc()`/`kzalloc()`/`kcalloc()` and `kfree()` contract now preserves the
+  Linux sentinel behavior. The exact rerun kept every heap snapshot at
+  `oom=0`.
 - Input registration no longer opens the firmware's always-on evdev client
   inside an unfinished HID driver probe. `evdev_connect()` retains an inactive
   Linux input handle. After successful `hid_add_device()`, lifecycle first
@@ -494,6 +502,30 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-30: the five-profile wired Wacom checkpoint used exact host UF2
+  SHA256
+  `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
+  and emulator UF2 SHA256
+  `037c8fe0f947e1cc4a38815539f6c2af33827a0b8ef58363fc8cdaf00408cb1b`.
+  The host log completed
+  `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10` with no `f12`,
+  host `ERR`, transfer failure, timeout, or `EVDEV_INPUT_DROP`. Across 23
+  physical Wacom attachments, all 46 published Pen/Pad/Finger nodes had
+  matching removals. Nine `HID_IGNORED` warnings corresponded to the six
+  CTL-472 and three CTL-672 ghost interfaces; nine `EVDEV_BATCH_CAP` warnings
+  corresponded to the four CTH and five PTH touch inputs and did not produce a
+  recorded input drop.
+  All 115 heap snapshots reported `oom=0`, confirming that Linux
+  `ZERO_SIZE_PTR` handling removed the former two false OOM increments for
+  each CTH attach. Minimum-ever free heap was 7,568 B. Minimum task watermarks
+  were TinyUSB 265, KeyD 658, async 389, work 198, timer 348, lifecycle 218,
+  and report 854 words.
+  The successful run intentionally contained no value-level `POWER` logger.
+  Five PTH generations did not accumulate queue storage: after one immediate
+  disconnect temporarily left a 60,496-byte plateau, later cleanup returned to
+  60,752 B. This is indirect evidence for the normal UI-consumed `REMOVED`
+  path, not verification of `present`/`status`/`capacity` snapshot values or
+  cleanup when the UI task/timer fails to start.
 - 2026-07-30: the Linux-shaped input/devres and evdev identity correction
   reran against the complete 32-reconnect Wacom artifact. The host log showed
   36 `056a:037a` Pen adds and removes, 36 expected ghost-interface
@@ -760,10 +792,10 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `hid-emulator-coverage.md` and `pio-usb-memory.md`.
 - FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, and
   broader real-device DJ product coverage remain outside that DJ candidate.
-  Wacom CTL-472 delayed initialization is a separate linked, hardware-passed
-  parser/workqueue result; its input/devres and evdev identity correction also
-  passed the complete 32-reconnect artifact. The later removal of never-read
-  port state and compatibility-comment cleanup is build-only.
+  The five wired Wacom IDs are a separate linked, hardware-passed
+  parser/workqueue result covering Pen, Pad, Touch, LED, arbitration, ordinary
+  PTH battery traffic, and balanced reconnect teardown. Exact power-snapshot
+  values and UI-consumer startup failure are not part of that verdict.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of
@@ -780,6 +812,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 - Keep the generic delayed-work promotion-window, simultaneous synchronous
   cancel, callback self-requeue, queue-destruction, and tick-wrap branches as
   static audit results until a deterministic fixture exercises each one.
+- If exact power publication becomes part of the product claim, add a bounded
+  task-context consumer oracle for `ADDED`/`CHANGED` values and a deterministic
+  startup-failure case. The current Wacom run proves only ordinary queue cleanup
+  indirectly through recovered heap plateaus; it does not prove
+  `present`/`status`/`capacity` values or cleanup without the UI consumer.
 - Measure broader real-device DJ combinations and the same complete HID++ eQuad
   keyboard profile on the selected larger-RAM target. Do not transfer the
   temporary `8/256` RP2040 verdict to the retained `64/675` configuration.
