@@ -55,14 +55,15 @@ markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
 `ERR`.
 
 The Wacom checkpoint additionally links complete pinned Wacom sources and
-matches five wired IDs: CTL-472 `056a:037a`, CTL-672 `056a:037b`, PTK-450
-`056a:0029`, CTH-470 `056a:00de`, and PTH-650 `056a:0027`. Together they reach
-the upstream Pen, Pad, Touch, ExpressKeys, Touch Ring, LED, arbitration, and
-ordinary wired battery paths applicable to those profiles. The two CTL
-profiles create one Pen input, perform a delayed Feature report 2 mode
-exchange, and reject their 64-byte ghost interfaces.
+matches seven USB IDs: CTL-472 `056a:037a`, CTL-672 `056a:037b`, PTK-450
+`056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
+`056a:5048`, and receiver `056a:0084`. Together they reach the upstream Pen,
+Pad, Touch, ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES battery,
+idle-proximity timer, and receiver pair/unpair plus sibling-rebind paths
+applicable to those profiles.
 
-The exact expanded pair recorded in `hid-emulator-coverage.md` completed
+The exact five-profile wired pair recorded in `hid-emulator-coverage.md`
+completed
 `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10` on hardware with no `f12` or
 host `ERR`. All 23 physical Wacom attachments produced 46 balanced input-device
 add/removes. The run covered control requests, pen/pad/touch input, LED work,
@@ -86,6 +87,27 @@ identity from `input_dev->id` instead of opaque driver data. The complete
 32-reconnect artifact reran against that correction with all 36 Pen
 generations published as `056a:037a`, stable teardown, `oom=0`, and no host
 `ERR`. The separate Rapoo managed extra-input regression remains pending.
+
+The later AES/receiver pair recorded in `hid-emulator-coverage.md` also passed
+on hardware. Four AES and four receiver attachments produced 20 balanced
+input-device lifetimes across AES control/input/battery work, receiver
+pair/unpair/re-pair, cancellation of original sibling initialization before
+dynamic resource release, held rebind/teardown controls, physical disconnect,
+and recovery. All 47 heap snapshots reported `oom=0`, removal returned to the
+established 60,496/60,752-byte plateaus after terminal physical disconnect,
+and every task watermark remained nonzero. The selected receiver child is
+active PTH-650 profile `056a:0027`. The available capture reports `033b`, which
+is outside the active table and would be ignored; the test therefore does not
+claim a captured `0084 -> 0027` pairing.
+
+Production logs still do not expose exact detached battery fields or ordering,
+and the AES fixture does not wait for the real 30-minute expiry. The receiver
+fixture deterministically covers initial sibling work while pending but cannot
+externally hold the short pre-PID callback after workqueue promotion or during
+execution. Receiver lookup can select any child PID in the active seven-entry
+table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
+ExpressKey Remote, bootloader, I2C, PCI, and product IDs outside that table
+remain excluded.
 
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
@@ -517,8 +539,8 @@ Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
 Kye, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic
 multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
-separate narrow USB ID gates; the active Wacom gate contains only the five
-wired IDs listed above.
+separate narrow USB ID gates; the active Wacom gate contains only the seven
+USB IDs listed above.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.
@@ -538,9 +560,11 @@ interrupts or polling. The same mutex protects delayed-work deadlines and
 ordinary FIFO promotion. Wacom teardown can therefore remove init work before
 its deadline, after promotion, or while its callback runs; simultaneous
 synchronous cancelers retain the requeue gate until all have returned.
-Deadline comparison is wrap-safe for the linked one-second delay. Firmware
-queue destruction promotes owned delayed entries before drain rather than
-abandoning their lifetime. The timer task is a parallel task-only
+Deadline comparison is wrap-safe for the linked one-second initialization and
+30-minute AES expiry delays. Receiver rebind synchronously cancels both
+sibling initialization callbacks before releasing their resource graphs.
+Firmware queue destruction promotes owned delayed entries before drain rather
+than abandoning their lifetime. The timer task is a parallel task-only
 synchronization domain with its own mutex and notification wake. TinyUSB
 unmount publishes only stopping; the report task claims retry cancellation
 under an `io_pending` lease and waits for the running timer callback outside
@@ -553,13 +577,14 @@ operation itself. Fixed-size `async_msg()` diagnostics are used because the
 normal logger's roughly 2 KiB local frame does not fit the 384-word workqueue
 and timer stacks.
 
-The expanded Wacom hardware matrix specifically covered cancellation before
-the one-second deadline, disconnect while a mode GET callback was held,
-disconnect with LED work running, and composite removal with active touch. It
-did not deterministically force the generic after-promotion window,
-simultaneous synchronous cancelers, callback self-requeue, workqueue
-destruction with a delayed entry, or tick-counter wrap; those remain code-audit
-results.
+The two Wacom hardware matrices specifically covered cancellation before the
+one-second deadline, disconnect while mode, LED, rebind, or teardown control
+was held, pending AES work, timer cancellation, active-touch removal, and
+receiver re-pair/recovery. They did not deterministically force the generic
+after-promotion window, simultaneous synchronous cancelers, callback
+self-requeue, workqueue destruction with a delayed entry, tick-counter wrap,
+or the real 30-minute AES expiry; those remain code-audit or explicit coverage
+limits.
 The transport-wide invariant audit also leaves no function call or predicate
 inside an active `configASSERT()`. A collision in the one-slot async diagnostic
 path increments the UI warning counter before dropping the newer text.

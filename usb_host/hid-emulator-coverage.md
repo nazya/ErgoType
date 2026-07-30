@@ -269,6 +269,7 @@ claims for unrelated drivers.
 | 2026-07-26 | `device/logitech-hidpp-dj-waitqueue` | the combined direct HID++/battery/DJ sequence completes at retained `64/675`; simultaneous M705 + ordinary keyboard works with `free=5160`, `min=4008`, and no new OOM, while the complete HID++ eQuad keyboard profile reaches the measured RP2040 memory boundary and adds the run's only OOM count; later device phases complete and teardown recovers without cumulative heap loss |
 | 2026-07-29 | `device/wacom-wired-matrix`, exact no-PIO host `bdf6ab6c…` and 32-reconnect emulator `61440170…` | CTL-472 completes `f1, f2, f3, f4, f10` with no `f12`; exact mode SET/GET, Pen/eraser input, pre-deadline and held-callback disconnect, recovery, 36 Pen add/removes, 36 expected ghost-interface warnings, stable removal plateaus, nonzero task watermarks, and `oom=0` |
 | 2026-07-30 | expanded `device/wacom-wired-matrix`, host `4efcd108…`, emulator `037c8fe0…` | CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650 complete `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`; all 23 physical attachments publish and remove the expected 46 Wacom input nodes, all 115 heap snapshots have `oom=0`, and the one 256-byte immediate PTH teardown difference is reclaimed; production logging does not expose exact power-snapshot values or ordering |
+| 2026-07-30 | AES/receiver `device/wacom-wired-matrix`, host `8e07cbab…`, emulator `8dd6dd64…` | Yoga 260 AES and USB receiver phases complete without a failure marker or host `ERR`; four AES and four receiver attachments produce 20 balanced input lifetimes across control/input/battery, pair/unpair/re-pair, sibling-init cancellation, held rebind/teardown controls, physical disconnect, and recovery; all 47 heap snapshots have `oom=0` and nonzero task watermarks |
 
 ## Recorded Emulator Branches
 
@@ -296,6 +297,7 @@ Recorded emulator branches:
 | `device/zydacron-remote` | `40ee6a8` |
 | `device/work-input-drivers` | `67c1aea` |
 | `device/haptic-lifecycle` | `05607cc` |
+| `device/wacom-wired-matrix` | `66351b1` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -353,8 +355,9 @@ Recorded emulator branches:
 - `timer_list`
 - firmware workqueue path
 - Wacom delayed-work deadline, pre-deadline cancel, held-callback disconnect,
-  PTK LED work, CTH Pen/Touch/Pad arbitration, PTH Pen/Touch/Pad/battery-report
-  transfer, work-disconnect recovery, and teardown paths
+  PTK LED work, CTH/PTH Pen/Touch/Pad arbitration, ordinary/AES battery-report
+  transfer, AES timer cancellation, receiver pair/unpair/re-pair and sibling
+  rebind, physical disconnect, work-disconnect recovery, and teardown paths
 - async raw SET_REPORT
 - async regular SET_REPORT
 - async GET_REPORT to SET_REPORT continuation
@@ -378,7 +381,7 @@ drivers are not counted here.
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom delayed `init_work`, LED, and battery work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the historical 32-reconnect Wacom artifact verifies pre-deadline and held-callback removal, while the expanded exact artifact also verifies PTK/PTH work-disconnect recovery |
+| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, and receiver work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
@@ -387,7 +390,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, battery-report handling, arbitration, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; selected wired IDs `056a:0027`, `056a:0029`, `056a:00de`, `056a:037a`, and `056a:037b` | historical exact IF0/equivalent IF1 CTL-472 artifact and expanded five-profile `wacom-wired-matrix` artifact passed on hardware; receiver `056a:0084` and AES `056a:5048` remain outside this run |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; selected USB IDs `056a:0027/0029/0084/00de/037a/037b/5048` | historical CTL-472, expanded five-profile wired, and separate AES/receiver `wacom-wired-matrix` artifacts passed on hardware; exact power values, elapsed AES expiry, other receiver children, and Remote remain outside the verdict |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -405,9 +408,10 @@ A4Tech,
 Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom, and
 Zydacron; each has a matching emulator branch. Wacom's historical exact
-32-reconnect CTL-472 artifact and the current expanded five-profile artifact
-are hardware-verified. Receiver `056a:0084`, AES `056a:5048`, and Remote
-coverage remain separate.
+32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
+separate AES/receiver artifact are hardware-verified. Exact power-snapshot
+values, elapsed AES expiry, receiver children outside selected profile
+`056a:0027`, and Remote coverage remain separate.
 Core/common glue (`hid-core`,
 `hid-input`, `hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all
 fixtures.
@@ -421,12 +425,13 @@ reuse an already tested hook shape.
 The existing emulator set plus the hardware-verified work-input, combined
 haptic/Trackpad, and exact Wacom fixtures covers the active allowlist,
 long-enumeration success path, normal USB Magic Trackpad 2 path, and the
-selected wired Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650 flows. The Holtek
-mouse driver-specific result remains pending.
+selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/Yoga 260 AES and USB
+receiver flows. The Holtek mouse driver-specific result remains pending.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. The complete Wacom fixture also passed the working input/devres
-and evdev identity correction. It does not certify receiver rebind, AES expiry,
-exact detached power-snapshot values or ordering, the generic delayed-work
+and evdev identity correction. The later fixture certifies the selected
+receiver rebind and AES control/input paths, but not exact detached
+power-snapshot values or ordering, elapsed AES expiry, the generic delayed-work
 branches listed below, or the separate Rapoo managed extra-input path.
 
 Reasoning:
@@ -484,9 +489,10 @@ Recommended smoke order:
    `hid_lookup_quirk()` before probe.
 6. `device/holtek-kbd-a055`: proves ordinary LED output SET_REPORT does not
    block/assert.
-7. `device/wacom-wired-matrix`: proves the selected wired Wacom mode, input,
-   LED/work, composite teardown, and reconnect paths; use the exact expanded
-   artifact recorded below when comparing the hardware result.
+7. `device/wacom-wired-matrix`: use the separately recorded exact artifacts.
+   The expanded wired artifact proves mode, input, LED/work, composite
+   teardown, and reconnect; the final AES/receiver artifact proves the added
+   timer, battery-work, pair/unpair/re-pair, sibling-rebind, and recovery paths.
 
 These gates cover the current host architecture. Run the useful second-pass
 branches only if one fails or a specific driver family needs confirmation.
@@ -1120,6 +1126,81 @@ hardware verdict.
 Bluetooth, receiver `056a:0084`, AES `056a:5048`, battery-expiry timing, and
 ExpressKey Remote remain outside this expanded wired fixture.
 
+### Wacom AES and USB receiver coverage
+
+The final `device/wacom-wired-matrix` artifact runs only the newly added Yoga
+260 AES `056a:5048` and Wacom USB receiver `056a:0084` phases; it does not
+repeat the already-qualified wired profiles. The AES interfaces use the exact
+captured 522-byte touch and 434-byte pen report descriptors. The receiver uses
+the captured three-interface ACK-40401 topology and monitor/pen descriptors;
+its touch interface reuses the exact PTH-650 descriptor.
+
+The available receiver capture reports child PID `033b`, which is outside the
+active table and would be ignored. The fixture deliberately selects already
+active PTH-650 profile `0027` to exercise the same pinned sibling-rebind path.
+This is protocol coverage, not a claim that `0084 -> 0027` was captured from
+retail hardware.
+
+The exact pair and audited host log are:
+
+```text
+host UF2 SHA-256       8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8
+host text/data/bss     594360 / 788 / 245264 B
+emulator UF2 SHA-256   8dd6dd644047ee0fcdf4e3616c092df4019798338f618da9086d92f5f5c7ac48
+emulator text/data/bss 68504 / 0 / 254480 B
+hardware verdict       passed 2026-07-30 for the qualified scope below
+```
+
+The host-visible alert sequence completed the AES phase, receiver phase, and
+terminal success without a failure marker or host `ERR`. Four AES attachments
+published and removed four Pen and four Finger inputs. Four physical receiver
+attachments produced four balanced dynamic `056a:0027 (WL)` graphs, each with
+Pen, Pad, and Finger inputs: 20 Wacom input adds and 20 matching removes in
+total.
+
+The AES phases cover exact control IDs, directions, lengths and payloads,
+Pen/Finger input, ordinary battery updates, disconnect with delayed battery
+work pending, idle-proximity timer cancellation, and recovery. The receiver
+phases cover:
+
+- pairing before the original one-second sibling `init_work` deadline;
+- synchronous cancellation of both original sibling callbacks before resource
+  release, with the fresh rebind control held beyond the stale deadline so a
+  surviving callback would create a rejected duplicate;
+- Pen/Pad/Finger input, center-button LED selection, and battery update;
+- logical unpair while teardown control is running, queued re-pair, fresh
+  control exchange, and recreated-input smoke;
+- physical disconnect before monitor-report work can be relied upon;
+- physical disconnect with teardown control held and re-pair queued;
+- final clean pair, input, battery update, and removal.
+
+All 47 heap snapshots reported `oom=0`. Minimum-ever free heap was 9,464 B.
+AES and terminal physical receiver removal returned to the established 60,496
+or 60,752 B plateaus without cumulative retention; logical unpair correctly
+kept the monitor allocation alive. Minimum remaining stack watermarks were
+TinyUSB 265, KeyD 658, async 389, work 202, timer 332, lifecycle 182, and
+report 854 words.
+
+The log contains four `EVDEV_BATCH_CAP` warnings plus unsupported evdev code,
+absolute-axis, and miscellaneous-event messages. These are the existing
+Linux-to-KeyD consumer boundary for tablet events; no `EVDEV_INPUT_DROP` or
+host transport error appeared.
+
+Production firmware does not log detached power-supply snapshots, so exact
+battery values and event ordering are not part of the verdict. A device-side
+interrupt-IN acknowledgement alone cannot prove that PTH/receiver pending
+battery work had already reached the host report task. The fixture constructs
+and cancels AES delayed work but does not wait for the real 30-minute expiry.
+It deterministically proves the receiver's original sibling work while pending,
+but the short pre-PID callback cannot be externally held after promotion or
+while executing without a host test hook or SWD. Generic promotion-window,
+simultaneous-canceler, callback-self-requeue, queue-destruction, and tick-wrap
+branches remain static workqueue audit results.
+
+Bluetooth, ExpressKey Remote, bootloader, I2C, PCI, receiver children outside
+the selected `0027` profile, and all other Wacom IDs remain outside this
+fixture.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`
@@ -1220,6 +1301,22 @@ and emulator CDC lines under each item.
   - verdict: passed 2026-07-30 for mode/input/LED/work/composite lifecycle and
     memory cleanup; exact detached power-snapshot values and ordering remain
     unverified because production logging emits no `POWER` records
+- [x] Wacom AES and USB receiver matrix
+  - exact host
+    `8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8`
+    and emulator
+    `8dd6dd644047ee0fcdf4e3616c092df4019798338f618da9086d92f5f5c7ac48`
+  - require four AES and four receiver attachments, balanced Pen/Finger and
+    dynamic Pen/Pad/Finger lifetimes, receiver pair/unpair/re-pair, fresh
+    rebind after held teardown, physical-disconnect recovery, no failure marker
+    or host `ERR`, `oom=0`, and nonzero task watermarks
+  - require cancellation of both original sibling initialization callbacks
+    before rebind resource release; keep the fresh control held beyond the
+    stale deadline so duplicate initialization is rejected
+  - verdict: passed 2026-07-30 with 20 balanced input lifetimes and `oom=0` in
+    all 47 heap snapshots; exact power values/order, real 30-minute AES expiry,
+    post-promotion/running original pre-PID callback, and other receiver child
+    profiles remain outside the verdict
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

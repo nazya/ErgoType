@@ -3866,10 +3866,15 @@ static int usbhid_start(struct hid_device *hid)
 
 	mutex_lock(&usbhid->mutex);
 
-	if (usbhid_report_is_stopping(hid)) {
+	// clear_bit(HID_DISCONNECTED, &usbhid->iofl);
+	// Firmware keeps physical disconnect in disconnect_queued and reopens the
+	// transport gate below only after restart allocation succeeds.
+	hid_transport_lock();
+	if (usbhid->disconnect_queued)
 		ret = -ENODEV;
+	hid_transport_unlock();
+	if (ret)
 		goto fail;
-	}
 
 	usbhid->bufsize = HID_MIN_BUFFER_SIZE;
 	hid_find_max_report(hid, HID_INPUT_REPORT, &usbhid->bufsize);
@@ -3889,6 +3894,20 @@ static int usbhid_start(struct hid_device *hid)
 		ret = -ENOMEM;
 		goto fail;
 	}
+
+	/*
+	 * Linux usbhid_stop() is reversible while physical disconnect is not.
+	 * Keep the firmware stop gate closed through allocation and reopen only
+	 * while this exact interface generation remains physically present.
+	 */
+	hid_transport_lock();
+	if (usbhid->disconnect_queued)
+		ret = -ENODEV;
+	else
+		usbhid->transport_stopping = false;
+	hid_transport_unlock();
+	if (ret)
+		goto fail;
 
 	/*
 	 * Firmware allocates no Linux URBs here. TinyUSB interrupt IN starts here
@@ -3914,6 +3933,9 @@ static int usbhid_start(struct hid_device *hid)
 	return 0;
 
 fail:
+	hid_transport_lock();
+	usbhid->transport_stopping = true;
+	hid_transport_unlock();
 	// usb_free_urb(usbhid->urbin);
 	// usb_free_urb(usbhid->urbout);
 	// usb_free_urb(usbhid->urbctrl);
@@ -4240,6 +4262,19 @@ static int usbhid_parse(struct hid_device *hid)
 	if (quirks & HID_QUIRK_IGNORE)
 		return -ENODEV;
 
+	/*
+	 * The exact Wacom 0x5048 and wireless-receiver descriptors contain large
+	 * VARIABLE feature reports whose single vendor usage is repeated up to 261
+	 * times. The pinned Wacom driver maps only the explicitly declared usage
+	 * while retaining every report value and byte for its real control paths.
+	 */
+	if (hid->vendor == 0x056a &&
+	    (hid->product == 0x0084 || hid->product == 0x5048)) {
+		quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		hid->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		transport_quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+	}
+
 	/* Many keyboards and mice don't like to be polled for reports,
 	 * so we will always set the HID_QUIRK_NOGET flag for them. */
 	// if (interface->desc.bInterfaceSubClass == USB_INTERFACE_SUBCLASS_BOOT) {
@@ -4337,8 +4372,8 @@ static int usbhid_parse(struct hid_device *hid)
 		async_msg("WARN: HID_OPT_DESC");
 	}
 
-	// hid_device_probe() recomputes table quirks after parse(); keep the
-	// transport-added boot NOGET bit in initial_quirks as well.
+	// hid_device_probe() recomputes table quirks after parse(); keep
+	// transport-added quirks in initial_quirks as well.
 	hid->initial_quirks |= transport_quirks;
 	hid->quirks |= quirks;
 
@@ -4524,6 +4559,38 @@ void usbhid_io_put(struct hid_device *hid)
 	// possible predicate transition. With no linked waiter this is a cheap no-op.
 	usbhid_wait_wake_locked(hid);
 	hid_transport_unlock();
+}
+
+/*
+ * Linux usb_interface storage outlives a reversible hid_hw_stop(). The
+ * firmware lifecycle owner likewise keeps registry objects alive until its
+ * callback returns, but must reject a physical disconnect already published by
+ * TinyUSB.
+ */
+struct hid_device *usbhid_lifecycle_find_hid(const struct usb_device *dev,
+					      unsigned int ifnum)
+{
+	struct hid_device *found = NULL;
+
+	hid_transport_lock();
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid;
+
+		if (!hid)
+			continue;
+		/* Registry publication follows hid->driver_data = usbhid. */
+		usbhid = hid->driver_data;
+		if (usbhid->driver_ready &&
+		    !usbhid->disconnect_queued &&
+		    interface_to_usbdev(usbhid->intf) == dev &&
+		    usbhid->intf->cur_altsetting->desc.bInterfaceNumber == ifnum) {
+			found = hid;
+			break;
+		}
+	}
+	hid_transport_unlock();
+	return found;
 }
 
 /*

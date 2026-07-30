@@ -6,6 +6,8 @@
 #include "wacom_wac.h"
 #include "wacom.h"
 #include <linux/input/mt.h>
+// Upstream input registration publishes evdev synchronously.
+#include "usb_host/evdev.h"
 
 #define WAC_MSG_RETRIES		5
 #define WAC_CMD_RETRIES		10
@@ -1880,7 +1882,18 @@ static void wacom_aes_battery_handler(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, aes_battery_work.work);
 
+	/*
+	 * Linux power_supply objects retain device-core lifetime across report and
+	 * workqueue contexts. The firmware object is freed directly, so serialize
+	 * it with report parsing. Removal already owns this lock while cancelling
+	 * the work, therefore retry rather than wait when the lock is busy.
+	 */
+	if (down_trylock(&wacom->hdev->driver_input_lock)) {
+		schedule_delayed_work(&wacom->aes_battery_work, 1);
+		return;
+	}
 	wacom_destroy_battery(wacom);
+	up(&wacom->hdev->driver_input_lock);
 }
 
 static ssize_t wacom_show_speed(struct device *dev,
@@ -2268,6 +2281,7 @@ static void wacom_calculate_res(struct wacom_features *features)
 void wacom_battery_work(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, battery_work);
+	bool wireless = wacom->wacom_wac.features.type == WIRELESS;
 
 	/*
 	 * Linux power_supply objects retain device-core lifetime across report and
@@ -2280,11 +2294,24 @@ void wacom_battery_work(struct work_struct *work)
 		return;
 	}
 
+	/*
+	 * A receiver disconnect can requeue this work while an earlier instance
+	 * waits for the parser lock. Do not recreate its battery after PID became
+	 * zero.
+	 */
+	if (wireless && !wacom->wacom_wac.pid) {
+		if (wacom->battery.battery)
+			wacom_destroy_battery(wacom);
+		up(&wacom->hdev->driver_input_lock);
+		return;
+	}
+
 	if ((wacom->wacom_wac.features.quirks & WACOM_QUIRK_BATTERY) &&
 	     !wacom->battery.battery) {
 		wacom_initialize_battery(wacom);
 	}
-	else if (!(wacom->wacom_wac.features.quirks & WACOM_QUIRK_BATTERY) &&
+	else if (!(wacom->wacom_wac.features.quirks &
+		   WACOM_QUIRK_BATTERY) &&
 		 wacom->battery.battery) {
 		wacom_destroy_battery(wacom);
 	}
@@ -2551,11 +2578,18 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 fail_quirks:
 	hid_hw_stop(hdev);
 fail:
+	/*
+	 * Firmware releases all devres after an initial probe failure, while a
+	 * dynamic rebind releases this resource group below. Close the independent
+	 * initialization callback before either lifetime unwind.
+	 */
+	cancel_delayed_work_sync(&wacom->init_work);
 	wacom_release_resources(wacom);
 	return error;
 }
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// The exact USB receiver allowlist reaches the upstream wireless worker.
 static void wacom_wireless_work(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, wireless_work);
@@ -2564,6 +2598,7 @@ static void wacom_wireless_work(struct work_struct *work)
 	struct hid_device *hdev1, *hdev2;
 	struct wacom *wacom1, *wacom2;
 	struct wacom_wac *wacom_wac1, *wacom_wac2;
+	int pid;
 	int error;
 
 	/*
@@ -2571,48 +2606,91 @@ static void wacom_wireless_work(struct work_struct *work)
 	 * remove any existing input and battery devices.
 	 */
 
+	// Linux device-core references protect battery lifetime after raw_event.
+	// The firmware monitor parser lock supplies that boundary and snapshots PID;
+	// a later monitor report can queue another lifecycle pass during rebind.
+	down(&wacom->hdev->driver_input_lock);
+	pid = wacom_wac->pid;
 	wacom_destroy_battery(wacom);
+	up(&wacom->hdev->driver_input_lock);
 
 	if (!usbdev)
 		return;
 
 	/* Stylus interface */
-	hdev1 = usb_get_intfdata(usbdev->config->interface[1]);
-	wacom1 = hid_get_drvdata(hdev1);
-	wacom_wac1 = &(wacom1->wacom_wac);
-	wacom_release_resources(wacom1);
+	// hdev1 = usb_get_intfdata(usbdev->config->interface[1]);
+	// wacom1 = hid_get_drvdata(hdev1);
+	// wacom_wac1 = &(wacom1->wacom_wac);
+	// wacom_release_resources(wacom1);
+	// Firmware lifecycle owns the HID registry while this callback runs.
+	hdev1 = usbhid_lifecycle_find_hid(usbdev, 1);
 
 	/* Touch interface */
-	hdev2 = usb_get_intfdata(usbdev->config->interface[2]);
+	// hdev2 = usb_get_intfdata(usbdev->config->interface[2]);
+	// wacom2 = hid_get_drvdata(hdev2);
+	// wacom_wac2 = &(wacom2->wacom_wac);
+	// wacom_release_resources(wacom2);
+	// Firmware lifecycle owns the HID registry while this callback runs.
+	hdev2 = usbhid_lifecycle_find_hid(usbdev, 2);
+	// A sibling probe failure or published physical disconnect is terminal.
+	if (!hdev1 || !hdev2)
+		return;
+
+	wacom1 = hid_get_drvdata(hdev1);
+	wacom_wac1 = &(wacom1->wacom_wac);
 	wacom2 = hid_get_drvdata(hdev2);
 	wacom_wac2 = &(wacom2->wacom_wac);
+
+	/*
+	 * The initial NONE-profile probes schedule one-second initialization.
+	 * Linux resource lifetime outlives those callbacks; firmware releases the
+	 * sibling devres groups during logical rebind, so close both callbacks
+	 * before either resource graph or feature profile changes.
+	 */
+	cancel_delayed_work_sync(&wacom1->init_work);
+	cancel_delayed_work_sync(&wacom2->init_work);
+
+	// USB report callbacks may otherwise retain either dynamic input graph.
+	down(&hdev1->driver_input_lock);
+	down(&hdev2->driver_input_lock);
+
+	wacom_release_resources(wacom1);
 	wacom_release_resources(wacom2);
 
-	if (wacom_wac->pid == 0) {
+	// if (wacom_wac->pid == 0) {
+	// Firmware snapshots PID so one lifecycle pass cannot mix generations.
+	if (pid == 0) {
 		hid_info(wacom->hdev, "wireless tablet disconnected\n");
 	} else {
 		const struct hid_device_id *id = wacom_ids;
 
+		// hid_info(wacom->hdev, "wireless tablet connected with PID %x\n",
+		// 	 wacom_wac->pid);
 		hid_info(wacom->hdev, "wireless tablet connected with PID %x\n",
-			 wacom_wac->pid);
+			 pid);
 
 		while (id->bus) {
+			// if (id->vendor == USB_VENDOR_ID_WACOM &&
+			//     id->product == wacom_wac->pid)
 			if (id->vendor == USB_VENDOR_ID_WACOM &&
-			    id->product == wacom_wac->pid)
+			    id->product == pid)
 				break;
 			id++;
 		}
 
 		if (!id->bus) {
 			hid_info(wacom->hdev, "ignoring unknown PID.\n");
-			return;
+			// return;
+			// Firmware releases the two parser locks before returning.
+			goto unlock;
 		}
 
 		/* Stylus interface */
 		wacom_wac1->features =
 			*((struct wacom_features *)id->driver_data);
 
-		wacom_wac1->pid = wacom_wac->pid;
+		// wacom_wac1->pid = wacom_wac->pid;
+		wacom_wac1->pid = pid;
 		hid_hw_stop(hdev1);
 		error = wacom_parse_and_register(wacom1, true);
 		if (error)
@@ -2624,7 +2702,8 @@ static void wacom_wireless_work(struct work_struct *work)
 		    wacom_wac1->features.type <= BAMBOO_PT)) {
 			wacom_wac2->features =
 				*((struct wacom_features *)id->driver_data);
-			wacom_wac2->pid = wacom_wac->pid;
+			// wacom_wac2->pid = wacom_wac->pid;
+			wacom_wac2->pid = pid;
 			hid_hw_stop(hdev2);
 			error = wacom_parse_and_register(wacom2, true);
 			if (error)
@@ -2635,16 +2714,31 @@ static void wacom_wireless_work(struct work_struct *work)
 			sizeof(wacom_wac->name)) < 0) {
 			hid_warn(wacom->hdev, "String overflow while assembling device name");
 		}
+
+		// Linux input registration publishes evdev synchronously. Firmware's
+		// one-shot activation preceded these dynamically recreated inputs.
+		evdev_activate_hid(hdev1);
+		if (wacom_wac1->features.touch_max ||
+		    (wacom_wac1->features.type >= INTUOSHT &&
+		    wacom_wac1->features.type <= BAMBOO_PT))
+			evdev_activate_hid(hdev2);
 	}
 
-	return;
+	// return;
+	// Firmware must release the two parser locks before returning.
+	goto unlock;
 
 fail:
 	wacom_release_resources(wacom1);
 	wacom_release_resources(wacom2);
+
+unlock:
+	up(&hdev2->driver_input_lock);
+	up(&hdev1->driver_input_lock);
 	return;
 }
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 static void wacom_remote_destroy_battery(struct wacom *wacom, int index)
 {
 	struct wacom_remote *remote = wacom->remote;
@@ -2928,14 +3022,13 @@ static int wacom_probe(struct hid_device *hdev,
 	if (error)
 		return error;
 	INIT_DELAYED_WORK(&wacom->init_work, wacom_init_work);
-	// INIT_DELAYED_WORK(&wacom->aes_battery_work, wacom_aes_battery_handler);
-	// INIT_WORK(&wacom->wireless_work, wacom_wireless_work);
+	INIT_DELAYED_WORK(&wacom->aes_battery_work, wacom_aes_battery_handler);
+	INIT_WORK(&wacom->wireless_work, wacom_wireless_work);
 	INIT_WORK(&wacom->battery_work, wacom_battery_work);
 	// INIT_WORK(&wacom->remote_work, wacom_remote_work);
 	// INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
-	// timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
-	// The active wired profiles do not reach AES, wireless, remote,
-	// mode-change, or idle-proximity callbacks.
+	timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
+	// Remote and mode-change callbacks remain outside the USB allowlist.
 
 	/* ask for the report descriptor to be loaded by HID */
 	error = hid_parse(hdev);
@@ -2977,13 +3070,20 @@ static void wacom_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 
 	cancel_delayed_work_sync(&wacom->init_work);
-	// cancel_delayed_work_sync(&wacom->aes_battery_work);
+	cancel_delayed_work_sync(&wacom->aes_battery_work);
 	// cancel_work_sync(&wacom->wireless_work);
-	cancel_work_sync(&wacom->battery_work);
+	// Wireless rebind work runs on this firmware lifecycle owner.
+	usbhid_lifecycle_cancel_work(&wacom->wireless_work);
+	// cancel_work_sync(&wacom->battery_work);
+	// Receiver battery devres shares that owner; wired work remains synchronous.
+	if (features->type == WIRELESS)
+		usbhid_lifecycle_cancel_work(&wacom->battery_work);
+	else
+		cancel_work_sync(&wacom->battery_work);
 	// cancel_work_sync(&wacom->remote_work);
 	// cancel_work_sync(&wacom->mode_change_work);
-	// timer_delete_sync(&wacom->idleprox_timer);
-	// These work/timer objects are not initialized by the active USB profiles.
+	timer_delete_sync(&wacom->idleprox_timer);
+	// Remote and mode-change work are not initialized by the active USB profiles.
 	if (hdev->bus == BUS_BLUETOOTH)
 		device_remove_file(&hdev->dev, &dev_attr_speed);
 

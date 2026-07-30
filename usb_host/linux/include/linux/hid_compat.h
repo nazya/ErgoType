@@ -214,6 +214,14 @@ struct timer_list {
 	struct timer_list *next;
 };
 
+/*
+ * Linux deferrable timers may wait for a later non-deferrable wake while a CPU
+ * is idle. Firmware has one always-running timer task, so linked Wacom callers
+ * retain the same not-before-deadline and cancellation semantics but may run
+ * promptly at the deadline instead of being deferred.
+ */
+#define TIMER_DEFERRABLE 0x00080000
+
 struct delayed_work {
 	struct work_struct work;
 	unsigned long deadline;

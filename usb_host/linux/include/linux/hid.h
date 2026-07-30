@@ -339,6 +339,9 @@
 #define HID_QUIRK_X_INVERT			BIT(12)
 #define HID_QUIRK_Y_INVERT			BIT(13)
 #define HID_QUIRK_IGNORE_MOUSE			BIT(14)
+// BIT(15) is unused upstream. Firmware can retain only explicitly declared
+// usages for proven driver-owned VARIABLE feature reports.
+#define HID_QUIRK_EXPLICIT_FEATURE_USAGES	BIT(15)
 #define HID_QUIRK_SKIP_OUTPUT_REPORTS		BIT(16)
 #define HID_QUIRK_SKIP_OUTPUT_REPORT_ID		BIT(17)
 #define HID_QUIRK_NO_OUTPUT_REPORTS_ON_INTR_EP	BIT(18)

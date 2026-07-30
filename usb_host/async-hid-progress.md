@@ -93,13 +93,20 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   task notifications are wake edges, and stack-owned waiters preserve
   `flush_work()`, `cancel_work_sync()`, and `destroy_workqueue()` without the
   former 15 critical regions or one-tick polling. That same mutex now owns a
-  wrap-safe delayed-work deadline list for Wacom: due entries move into the
-  ordinary FIFO, pending/promoted/running synchronous cancel shares one
-  lifetime fence, and simultaneous cancelers keep callback requeue disabled
-  until the last waiter returns. Destroying a firmware queue promotes its
-  delayed entries before drain; `mod_delayed_work()` and deferrable work remain
-  compile-gated without callers. The timer bridge is now a second task-only
-  execution domain with its own priority-inheritance mutex.
+  wrap-safe delayed-work deadline list for Wacom initialization and AES battery
+  expiry: due entries move into the ordinary FIFO, pending/promoted/running
+  synchronous cancel shares one lifetime fence, and simultaneous cancelers keep
+  callback requeue disabled until the last waiter returns. Destroying a
+  firmware queue promotes its delayed entries before drain;
+  `mod_delayed_work()` remains compile-gated without callers. Receiver rebind
+  and receiver battery work run on the lifecycle owner's ordinary work list.
+  Battery callbacks use nonblocking parser-lock retry, receiver work snapshots
+  PID under the monitor lock, and both sibling initialization callbacks are
+  synchronously cancelled before dynamic rebind releases their resources.
+  The timer bridge is a second task-only execution domain with its own
+  priority-inheritance mutex. Its active Wacom `TIMER_DEFERRABLE` caller keeps
+  not-before-deadline and cancellation semantics, but the always-running timer
+  task may execute promptly at the deadline.
   TinyUSB unmount publishes stopping and wakes the report task; that owner
   claims and synchronously cancels an I/O-retry timer under an `io_pending`
   lifetime lease. Direct notifications replace the timer's one-entry wake
@@ -424,18 +431,20 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
-- The complete pinned Wacom sources are linked with five wired USB products:
-  PTH-650 `056a:0027`, PTK-450 `056a:0029`, CTH-470 `056a:00de`, CTL-472
-  `056a:037a`, and CTL-672 `056a:037b`. The active upstream paths retain mode
-  Feature SET/GET, Pen/Pad/Touch parsing, ExpressKeys, Touch Ring, LED control,
-  pen-touch arbitration, shared sibling data, record FIFO, selective devres
-  cleanup, delayed initialization, and ordinary PTH battery reporting. The
-  current exact automatic fixture passed disconnect before the deadline,
-  disconnect with GET or LED work running, active-touch teardown, recovery,
-  and five-profile reconnect stress. Linux's `void devm_release_action()`,
-  two-resource managed-input teardown, and `input_dev->id` evdev identity
-  remain active. Bluetooth, wireless receivers, AES battery expiry, and Remote
-  paths remain gated.
+- The complete pinned Wacom sources use a narrow USB-only table containing
+  PTH-650 `056a:0027`, PTK-450 `056a:0029`, receiver `056a:0084`, CTH-470
+  `056a:00de`, CTL-472 `056a:037a`, CTL-672 `056a:037b`, and Yoga 260 AES
+  `056a:5048`. The active upstream paths retain Pen/Pad/Touch parsing,
+  ExpressKeys, Touch Ring, LED control, pen-touch arbitration, ordinary/AES
+  battery, delayed initialization, idle proximity, and receiver
+  pair/unpair/re-pair with dynamic sibling rebind. Rebind clears the
+  connect-lifetime HID field-ordering graph after the low-level transport has
+  stopped, so the next `hid_hw_start()` rebuilds it without accumulating stale
+  allocations. The separate wired and AES/receiver automatic fixtures passed
+  their complete hardware runs. Bluetooth, ExpressKey Remote, bootloader, I2C,
+  PCI, and product IDs outside the seven-entry USB table remain gated. Receiver
+  lookup can resolve any child PID already in that table; hardware receiver
+  coverage is limited to child `056a:0027`.
 - CTH padding-only report IDs 2 and 3 make pinned
   `hid_report_process_ordering()` request zero bytes. Linux returns
   `ZERO_SIZE_PTR` and later accepts that sentinel in `kfree()`. The former
@@ -502,6 +511,27 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-07-30: the AES/receiver Wacom checkpoint used exact host UF2 SHA256
+  `8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8`
+  and emulator UF2 SHA256
+  `8dd6dd644047ee0fcdf4e3616c092df4019798338f618da9086d92f5f5c7ac48`.
+  The terminal alert sequence completed the AES, receiver, and success phases
+  with no failure marker or host `ERR`. Four `056a:5048` attachments produced
+  eight balanced Pen/Finger lifetimes. Four physical `056a:0084` attachments
+  produced four balanced dynamic `056a:0027 (WL)` Pen/Pad/Finger graphs across
+  pair, unpair, re-pair, held teardown/rebind control, physical disconnect,
+  and final recovery.
+  All 47 heap snapshots reported `oom=0`; terminal physical removal returned
+  to the established 60,496/60,752-byte plateaus. Minimum-ever free heap was
+  9,464 B. Minimum task watermarks were TinyUSB 265, KeyD 658, async 389,
+  work 202, timer 332, lifecycle 182, and report 854 words. Four
+  `EVDEV_BATCH_CAP` warnings and the
+  unsupported evdev-code/event messages are the existing Linux-to-KeyD
+  boundary; no `EVDEV_INPUT_DROP` or host transport error appeared.
+  Production logs do not expose exact power-snapshot values/order. The fixture
+  does not wait for the real 30-minute AES battery expiry, and its receiver
+  child `0027` is a selected active profile. Captured child `033b` is outside
+  the active table and would be ignored.
 - 2026-07-30: the five-profile wired Wacom checkpoint used exact host UF2
   SHA256
   `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
@@ -550,9 +580,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   report 870 words. This covers Wacom-specific pre-deadline and held-callback
   disconnects; generic promotion-window, simultaneous-cancel,
   callback-requeue, destroy-with-delayed, and tick-wrap branches remain static
-  audit results. The current shortened 8-reconnect emulator
-  `2d95713f875eb6115f1e862d2a48e8c9296c34d714e3e58128647f47988ecaff`
-  has not run on hardware.
+  audit results.
 - 2026-07-24: the direct HID++ 1.0/2.0 diagnostic checkpoint used exact host
   UF2 SHA256
   `9577a3e2820e99615b62e6535a1c01fbd403546c3bad233d9834a42f0dc88902`
@@ -762,7 +790,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   wake, and exact-generation disconnect cancellation. Probe replies take the
   port-only raw-event-only ingress while ordinary input stays behind final
   activation.
-- The current dirty host selects direct USB `046d:c08d` and
+- The current host selects direct USB `046d:c08d` and
   `046d:c08a`. It reaches upstream pre-connect HID++ 2.0 name and
   unit-ID/serial discovery, then the direct battery paths. The final name
   reaches the KeyD device-add log with VID:PID; the unit ID remains in Linux
@@ -792,10 +820,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `hid-emulator-coverage.md` and `pio-usb-memory.md`.
 - FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, and
   broader real-device DJ product coverage remain outside that DJ candidate.
-  The five wired Wacom IDs are a separate linked, hardware-passed
-  parser/workqueue result covering Pen, Pad, Touch, LED, arbitration, ordinary
-  PTH battery traffic, and balanced reconnect teardown. Exact power-snapshot
-  values and UI-consumer startup failure are not part of that verdict.
+  The seven active Wacom USB IDs are a separate linked, hardware-passed
+  parser/workqueue/timer result covering Pen, Pad, Touch, LED, arbitration,
+  ordinary/AES/receiver battery traffic, receiver rebind, and balanced
+  reconnect teardown. Exact power-snapshot values, real 30-minute AES expiry,
+  and UI-consumer startup failure are not part of that verdict.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of
@@ -805,6 +834,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
+- Define the minimal HIDRAW proxy consumer before extending the current
+  lifecycle-only object. Audit bounded report storage, subscriber wake and
+  revocation, overflow policy, and reconnect-generation fencing, then cover
+  delivery, overflow, pending-data disconnect, and reconnect with one focused
+  emulator phase.
 - Run the existing `device/rapoo-2_4g-receiver` fixture against the exact
   current host as the second managed extra-input regression. Record both extra
   inputs, ordinary input, disconnect/reconnect, removal plateaus, stack

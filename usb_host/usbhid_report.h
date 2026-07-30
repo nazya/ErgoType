@@ -22,7 +22,6 @@ void usbhid_report_close(struct hid_device *hid);
 void usbhid_report_stop(struct hid_device *hid);
 void usbhid_report_unplug(struct hid_device *hid);
 void usbhid_report_release(struct hid_device *hid);
-bool usbhid_report_is_stopping(struct hid_device *hid);
 bool usbhid_report_idle(struct hid_device *hid);
 void usbhid_report_task(void *pvParameters);
 

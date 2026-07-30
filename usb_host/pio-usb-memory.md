@@ -15,19 +15,19 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
-The latest exact hardware-tested host image recorded here is the expanded
-wired Wacom matrix:
+The latest exact hardware-tested host image recorded here is the Wacom
+AES/receiver matrix:
 
 ```text
-text/data/bss                 592312 / 788 / 245264 B
+text/data/bss                 594360 / 788 / 245264 B
 __bss_end__                   0x2003fe58
 main-bank headroom            424 B to 0x20040000
-UF2 SHA-256                   4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5
+UF2 SHA-256                   8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8
 hardware verdict              passed 2026-07-30 for the qualified Wacom scope
 ```
 
 Its exact emulator, dynamic heap measurements, and power-snapshot limitation
-are recorded in the expanded Wacom stage below.
+are recorded in the AES/receiver Wacom stage below.
 
 The original 232 KiB heap experiment is historical evidence for the static-RAM
 ceiling. With that tested host branch, the link failed with:
@@ -505,6 +505,56 @@ heap-lifetime evidence only; they do not verify exact detached
 `ADDED`/`CHANGED`/`REMOVED` values or ordering, or identify the consumer that
 deleted the queue. Do not use this memory result as a value-level
 power-snapshot verdict.
+
+#### Wacom AES and USB receiver verified stage
+
+Adding Yoga 260 AES `056a:5048`, Wacom USB receiver `056a:0084`, dynamic
+PTH-650 child profile `056a:0027`, receiver sibling lookup/rebind, and the
+HID-ordering lifetime correction produces the latest exact pair:
+
+```text
+host text/data/bss             594360 / 788 / 245264 B
+host __bss_end__               0x2003fe58
+host main-bank headroom        424 B to 0x20040000
+scratch X                      788 B (0x20040000..0x20040314)
+scratch X / core-1 gap         1260 B to 0x20040800
+host UF2 SHA-256               8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8
+emulator text/data/bss         68504 / 0 / 254480 B
+emulator UF2 SHA-256           8dd6dd644047ee0fcdf4e3616c092df4019798338f618da9086d92f5f5c7ac48
+hardware verdict               passed 2026-07-30 for the qualified scope below
+```
+
+Relative to the expanded wired host, this adds 2,048 B of text with unchanged
+data, BSS, and main-bank headroom. The important cost is dynamic: each AES
+attachment owns separate Pen and Finger HID/input graphs, while a paired
+receiver owns monitor state plus dynamic Pen, Pad, and Finger graphs. Receiver
+rebind frees each input/devres graph and the previous connect-lifetime HID
+field-ordering graph before rebuilding the selected child profile.
+
+The run completed four AES and four physical receiver attachments. Eight AES
+and twelve dynamic receiver input additions had matching removals. All 47 heap
+snapshots reported `oom=0`; snapshot-time free heap ranged from 9,992 B to
+62,360 B and the minimum-ever counter reached 9,464 B. Stable AES and receiver
+terminal physical-removal snapshots returned to 60,496 or 60,752 B without
+cumulative retention; logical unpair correctly retained the receiver monitor
+allocation. The smallest live receiver graph snapshot was 26,104 B free, with
+a largest free block of 25,984 B.
+
+Minimum remaining stack watermarks were TinyUSB 265, KeyD 658, async 389,
+work 202, timer 332, lifecycle 182, and report 854 words. Four
+`EVDEV_BATCH_CAP` warnings and the unsupported tablet event messages belong to
+the downstream Linux-to-KeyD boundary; there was no `EVDEV_INPUT_DROP`, host
+`ERR`, or transport failure.
+
+This memory result covers AES delayed-work cancellation, idle-proximity timer
+cancellation, receiver pair/unpair/re-pair, pending original sibling
+initialization cancellation, held rebind/teardown controls, physical
+disconnect, and recovery. It does not wait for real 30-minute AES expiry or
+prove exact power-snapshot values/order. A device-side report acknowledgement
+also cannot prove that every PTH/receiver pending battery callback had already
+been queued. The selected receiver child `0027` is a protocol-equivalent active
+profile; captured child `033b` is outside the active table and would be
+ignored.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware

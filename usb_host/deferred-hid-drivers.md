@@ -62,8 +62,9 @@ Current unsupported patterns include:
 
 - `usb_submit_urb()` and request-specific kill/resubmit ownership
 - synchronous interrupt-IN messages
-- multi-interface protocols that require a complete USB-core ownership model,
-  sibling binding, or `usb_get_intfdata()` coordination
+- multi-interface protocols that require generic USB-core ownership or sibling
+  coordination beyond the explicit lifecycle-owned Wacom `056a:0084` registry
+  path
 - protocols whose init burst exceeds the logical usbhid FIFO's shared 4096-byte
   node budget (CTRL/OUT ordering and more-than-nine-report bursts are supported;
   validate a real device before raising this firmware memory policy)
@@ -82,7 +83,8 @@ synchronous waits:
 
 - sysfs
 - hidraw fd/ioctl semantics
-- LED class
+- full Linux LED class/sysfs behavior beyond the reduced Wacom class/trigger
+  contract
 - backlight
 - the full Linux power-supply class, sysfs, uevents, and notifier ownership
   (the linked drivers use a reduced detached-snapshot glue boundary)
@@ -245,81 +247,91 @@ detach with reconnect work queued, and the Magic Trackpad sparse battery
 lookup. The run reached its complete marker sequence with `oom=0`, stable heap
 plateaus, nonzero task watermarks, and no host `ERR`.
 
-## Active Wired Wacom Boundary
+## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
-implementation and matches five wired IDs: One by Wacom Small CTL-472
-`056a:037a`, One by Wacom Medium CTL-672 `056a:037b`, Intuos5 S PTK-450
-`056a:0029`, Bamboo Capture CTH-470 `056a:00de`, and Intuos5 touch M PTH-650
-`056a:0027`. The two CTL profiles use the upstream `BAMBOO_PEN` parser, one
-Pen input device, a record FIFO, sibling shared data, and a one-second delayed
-Feature SET/GET report 2 mode switch. Their second 64-byte HID interface is
-retained and rejected by the upstream pen-only ghost-interface check. PTK-450
-adds the upstream Pad, ExpressKeys, Touch Ring, and LED paths. CTH-470 and
-PTH-650 add paired Pen/Touch/Pad inputs and pen/touch arbitration; PTH-650 also
-reaches the ordinary wired USB battery path.
+implementation while keeping a narrow USB-only match table:
 
-The compatibility layer now provides selective nested devres groups,
-power-of-two byte/record kfifo storage, and delayed work owned by the existing
-workqueue task. The existing reduced LED class/trigger and power-supply
-snapshot glue provide only the operations reached by these wired profiles; they
-do not implement Linux sysfs, uevents, notifier chains, or power-supply/LED
-presentation. No new task or workqueue was added. Normal queue/cancel return
-values retain Linux semantics on the linked paths; synchronous cancellation
-waits for a running callback before Wacom resources are released.
+- One by Wacom Small CTL-472 `056a:037a` and Medium CTL-672 `056a:037b` use
+  the upstream `BAMBOO_PEN` parser, record FIFO, sibling shared data, and
+  one-second delayed Feature SET/GET mode switch. Their second HID interface
+  reaches the upstream pen-only ghost-interface rejection.
+- Intuos5 S PTK-450 `056a:0029` enables Pen, Pad, ExpressKeys, Touch Ring, LED,
+  and delayed initialization.
+- Bamboo Capture CTH-470 `056a:00de` and Intuos5 touch M PTH-650 `056a:0027`
+  enable paired Pen/Touch/Pad input and pen-versus-touch arbitration; PTH-650
+  also reaches Touch Ring, LED, and ordinary USB battery paths.
+- Yoga 260 AES `056a:5048` enables the generic AES Pen/Touch parser, control
+  exchange, delayed battery work, and idle-proximity timer.
+- Wacom USB wireless receiver `056a:0084` enables the upstream three-interface
+  monitor/stylus/touch topology, pair/unpair, dynamic sibling rebind, LED, and
+  receiver battery lifetime. The fixture deliberately selects the already
+  active PTH-650 child profile `056a:0027`; the available receiver capture
+  reports child `033b`, which is outside the current table and would be
+  ignored. Therefore `0084 -> 0027` is protocol-path coverage, not a captured
+  pairing.
 
-The exact expanded host/emulator pair recorded in
-`hid-emulator-coverage.md` passed the automatic wired matrix on hardware. The
-log completed
-`f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10` with no `f12` or host `ERR`.
-All 23 physical Wacom attachments produced 46 balanced input-device
-add/removes. The run covered mode requests, pen/pad/touch input, LED control,
-disconnect before a delayed deadline, disconnect while mode or LED work was
-running, active-touch teardown, recovery, and reconnect stress. All 115 heap
-snapshots reported `oom=0`, removal returned to the established 60,752-byte
-plateau, and every task watermark remained nonzero.
+The compatibility layer provides selective nested devres groups, power-of-two
+byte/record kfifo storage, the common delayed-work deadline list, the timer
+bridge, and reduced LED and power-supply glue. No new task was added. Firmware
+power-supply unregister frees directly, so ordinary and AES battery callbacks
+serialize with report parsing through nonblocking lock/requeue. Receiver work
+snapshots PID under the monitor parser lock. It synchronously cancels both
+sibling initialization callbacks before releasing either dynamic resource
+graph, then performs the longer rebuild without holding the monitor lock.
 
-The PTH fixture transmitted its battery reports and reached `f11`. One
-immediate removal snapshot was 256 bytes below the established plateau and a
-later snapshot recovered it, which is consistent with normal terminal
-power-queue consumption and deletion. The production host emitted no
-value-level `POWER` diagnostics, so this run does not verify the exact detached
-`ADDED`/`CHANGED` snapshot fields. It also does not exercise failure to create
-the UI task or start its tick timer; without that consumer, terminal queue
-cleanup is not verified.
+Receiver rebind repeatedly executes `hid_hw_stop()` followed by
+`hid_hw_start()`. The port releases the connect-lifetime HID field-ordering
+graph only after the low-level transport has synchronously stopped all report
+producers; the next connect rebuilds it for the new Wacom profile. Allocation
+failure keeps Linux's nonfatal descriptor-order fallback and does not change
+the return value of `hid_connect()`.
 
-The earlier exact no-PIO CTL-472 host and 32-reconnect
-`device/wacom-wired-matrix` artifact remains a separate hardware result. It
-completed `f1, f2, f3, f4, f10`, exercised disconnect before the delayed
-deadline and while the mode GET callback was held, and produced 36 clean Pen
-add/remove generations with stable removal plateaus, `oom=0`, and nonzero task
-watermarks.
+If initial receiver-monitor probe queued `init_work` and a later
+`hid_hw_open()` fails, the common failure path synchronously cancels that
+callback before devres releases `struct wacom`. Reversible `usbhid_start()`
+checks physical disconnect both before and after buffer allocation, reopens
+the transport only for the same live interface generation, and preserves
+`-ENODEV`/`-ENOMEM`. The pinned late-error shape remains: input or LED
+registration failure after a successful restart releases the input resources
+but leaves transport started until the next rebind or disconnect, and an
+unchanged PID is not retried automatically. These error paths are
+source-audited, not hardware-injected.
 
-The hardware fixture does not deterministically cover every generic
-delayed-work state. Cancel after promotion but before callback entry,
-simultaneous synchronous cancelers, callback self-requeue, workqueue
-destruction with delayed entries, and tick-counter wrap remain static
-contract-audit results.
+The wired five-profile artifact and the later AES/receiver artifact are
+separate hardware results recorded in `hid-emulator-coverage.md`. Together
+they cover all seven active USB IDs. The wired run completed 23 physical
+attachments and 46 balanced input lifetimes with no host `ERR` and `oom=0` in
+all 115 heap snapshots. The AES/receiver run completed four AES and four
+receiver attachments, 20 balanced input lifetimes, pair/unpair/re-pair,
+pending initial sibling work cancellation, held rebind/teardown controls,
+physical disconnect, and recovery. All 47 heap snapshots reported `oom=0`,
+terminal physical removal returned to the established 60,496/60,752-byte
+plateaus, and every task watermark remained nonzero.
+
+Production firmware does not log detached power-supply values, so neither run
+proves exact `PRESENT`, status, capacity, or event ordering. PTH and receiver
+pending-disconnect cases also cannot prove from a device-side USB
+acknowledgement alone that the report task had already queued battery work.
+The AES fixture does not wait for the real 30-minute expiry. The receiver
+fixture deterministically proves cancellation while original sibling
+`init_work` is pending and detects a stale callback through duplicate control
+traffic, but cannot externally hold the short pre-PID callback after promotion
+or during execution. Generic promotion-window cancellation, simultaneous
+synchronous cancelers, callback self-requeue, queue destruction with delayed
+entries, and tick wrap therefore remain static contract-audit results.
 
 The retained input/devres layer restores pinned Linux's
-`void devm_release_action()`, adds `devres_destroy()` with `0/-ENOENT`
-semantics, and uses Linux's separate allocation and unregister resources for
-managed inputs. CTL-472's real unused touch and pad paths exercise removal of
-the allocation resource; registered Pen teardown retains LIFO unregister then
-final release. The generic evdev client now takes VID/PID from
-`input_dev->id`, leaving Wacom's required opaque `struct wacom *` driver data
-untouched. The exact 32-reconnect Wacom artifact reran against this correction:
-all 36 Pen generations published as `056a:037a` and removed cleanly, all 36
-ghost interfaces were rejected as expected, `f1, f2, f3, f4, f10` completed
-with no `f12` or host `ERR`, every heap snapshot had `oom=0`, and removal
-plateaus were stable. The Rapoo managed extra-input regression remains
-separate and has not yet been rerun.
+`void devm_release_action()`, `devres_destroy()` `0/-ENOENT`, and separate
+allocation/unregister resources for managed inputs. The generic evdev client
+uses `input_dev->id` and leaves Wacom's opaque `struct wacom *` driver data
+untouched. The separate Rapoo managed extra-input regression remains pending.
 
 All other Wacom product IDs remain behind
-`CONFIG_HID_WACOM_ALL_DEVICES`. USB wireless receivers, USB AES profiles,
-Bluetooth, Remote, bootloader, I2C, and PCI paths are outside the current
-allowlist. Touch, pad, LED, and ordinary wired battery behavior are claimed
-only for the five exact profiles above.
+`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, ExpressKey Remote, bootloader, I2C,
+PCI, Linux LED/sysfs presentation, and product IDs outside the seven-entry USB
+table remain excluded. Receiver lookup can select any child PID already in
+that table; only child `056a:0027` is covered by the receiver hardware verdict.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller

@@ -1725,21 +1725,6 @@ void usbhid_report_release(struct hid_device *hid)
 	hid_transport_unlock();
 }
 
-bool usbhid_report_is_stopping(struct hid_device *hid)
-{
-	struct usbhid_device *usbhid;
-	bool stopping;
-
-	if (!hid)
-		return true;
-	usbhid = hid->driver_data;
-
-	hid_transport_lock();
-	stopping = usbhid->transport_stopping;
-	hid_transport_unlock();
-	return stopping;
-}
-
 /* Start up the input URB */
 // static int hid_start_in(struct hid_device *hid)
 // {

@@ -93,6 +93,8 @@
 #include <linux/power_supply.h>
 #include <linux/timer.h>
 #include <linux/unaligned.h>
+// Upstream workqueues do not own the firmware HID device registry.
+#include "usb_host/usbhid.h"
 
 /*
  * Version Information
@@ -192,10 +194,17 @@ static inline void wacom_schedule_work(struct wacom_wac *wacom_wac,
 
 	switch (which) {
 	case WACOM_WORKER_WIRELESS:
-		schedule_work(&wacom->wireless_work);
+		// schedule_work(&wacom->wireless_work);
+		// Wireless input add/remove must run on the lifecycle owner.
+		usbhid_lifecycle_schedule_work(&wacom->wireless_work);
 		break;
 	case WACOM_WORKER_BATTERY:
-		schedule_work(&wacom->battery_work);
+		// schedule_work(&wacom->battery_work);
+		// Receiver battery devres shares the wireless lifecycle owner.
+		if (wacom_wac->features.type == WIRELESS)
+			usbhid_lifecycle_schedule_work(&wacom->battery_work);
+		else
+			schedule_work(&wacom->battery_work);
 		break;
 	case WACOM_WORKER_REMOTE:
 		schedule_work(&wacom->remote_work);

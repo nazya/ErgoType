@@ -466,6 +466,15 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	value_count = report_type == HID_INPUT_REPORT &&
 		      !(flags & HID_MAIN_ITEM_VARIABLE) ?
 		      parser->global.report_count : usages;
+	// The port quirk preserves every explicit usage and every report value,
+	// but does not materialize Linux's repeated last usage for feature fields
+	// whose bound driver does not consume those duplicate callbacks.
+	if (report_type == HID_FEATURE_REPORT &&
+	    (flags & HID_MAIN_ITEM_VARIABLE) &&
+	    (parser->device->quirks & HID_QUIRK_EXPLICIT_FEATURE_USAGES)) {
+		usages = parser->local.usage_index;
+		value_count = parser->global.report_count;
+	}
 	field = hid_register_field(report, usages, value_count);
 	// if (!field)
 	// 	return 0;
@@ -1852,7 +1861,9 @@ static void hid_input_var_field(struct hid_device *hid,
 	__s32 *value = field->new_value;
 	unsigned int n;
 
-	for (n = 0; n < count; n++)
+	// for (n = 0; n < count; n++)
+	// Compact feature fields retain only their explicitly declared callbacks.
+	for (n = 0; n < min(count, field->maxusage); n++)
 		hid_process_event(hid,
 				  field,
 				  &field->usage[n],
@@ -2064,6 +2075,22 @@ static void hid_process_ordering(struct hid_device *hid)
 
 	list_for_each_entry(report, &report_enum->report_list, list)
 		hid_report_process_ordering(hid, report);
+}
+
+/*
+ * Port deviation from pinned Linux: field ordering is connect-lifetime state.
+ * Release it after report producers stop so a later hid_connect() rebuilds it.
+ */
+static void hid_clear_ordering(struct hid_device *hid)
+{
+	struct hid_report *report;
+	struct hid_report_enum *report_enum = &hid->report_enum[HID_INPUT_REPORT];
+
+	list_for_each_entry(report, &report_enum->report_list, list) {
+		INIT_LIST_HEAD(&report->field_entry_list);
+		kfree(report->field_entries);
+		report->field_entries = NULL;
+	}
 }
 
 /*
@@ -2729,6 +2756,7 @@ void hid_hw_stop(struct hid_device *hdev)
 {
 	hid_disconnect(hdev);
 	hdev->ll_driver->stop(hdev);
+	hid_clear_ordering(hdev);
 }
 EXPORT_SYMBOL_GPL(hid_hw_stop);
 

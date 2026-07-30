@@ -5034,7 +5034,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x6A) },
 	{ USB_DEVICE_WACOM(0x6B) },
 	{ BT_DEVICE_WACOM(0x81) },
+#endif
+	// The USB wireless receiver retains the upstream three-interface path.
 	{ USB_DEVICE_WACOM(0x84) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x90) },
 	{ USB_DEVICE_WACOM(0x93) },
 	{ USB_DEVICE_WACOM(0x94) },
@@ -5147,6 +5150,12 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x4004) },
 	{ USB_DEVICE_WACOM(0x5000) },
 	{ USB_DEVICE_WACOM(0x5002) },
+#endif
+	// The exact wired 0x5048 profile reaches the upstream generic AES path.
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x5048),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_LENOVO(0x6004) },
 
 	{ USB_DEVICE_WACOM(HID_ANY_ID) },

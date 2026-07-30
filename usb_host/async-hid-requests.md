@@ -31,22 +31,27 @@ The active implementation now has these properties:
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.
 - The task-only workqueue now owns a wrap-safe delayed-work deadline list.
-  The five active wired Wacom profiles use it for pinned one-second
-  initialization callbacks whose Feature SET/GET operations run through the
-  existing synchronous-looking raw-control path; PTK-450 and PTH-650 also use
-  ordinary work for their reached LED and battery paths. Pending, promoted, and
-  running delayed-work cancellation are fenced before driver resources are
-  released. The expanded exact host/emulator pair passed disconnect before the
-  deadline, disconnect while mode or LED work was running, active-touch
-  teardown, recovery, repeated mode/input cycles, and stable teardown on
-  hardware for CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650. All 115 heap
-  snapshots reported `oom=0` and every task watermark remained nonzero.
-  PTH battery reports and normal terminal power-queue cleanup were exercised,
-  but the production log contained no value-level power snapshots and did not
-  exercise UI task/timer startup failure. Promotion-before-callback,
-  simultaneous synchronous cancel, callback self-requeue, queue destruction,
-  and tick wrap remain statically audited generic branches rather than
-  hardware-covered claims.
+  The active USB Wacom profiles use it for pinned one-second initialization;
+  AES additionally uses delayed battery expiry. Feature GET/SET operations run
+  through the existing synchronous-looking raw-control path. Receiver rebind
+  and receiver battery work run on the lifecycle owner's ordinary work list,
+  while idle proximity uses the timer bridge. Before dynamic receiver resources
+  are released, both sibling initialization callbacks are synchronously
+  cancelled; receiver PID is snapshotted under the monitor parser lock. Initial
+  receiver-monitor probe failure also cancels an already queued initialization
+  callback before devres can release its owner.
+  Ordinary and AES battery callbacks use nonblocking parser-lock retry because
+  firmware power-supply unregister frees directly.
+  Separate wired and AES/receiver hardware runs covered disconnect before a
+  delayed deadline, held mode/LED/rebind callbacks, active-touch teardown,
+  pair/unpair/re-pair, physical disconnect, recovery, and reconnect for all
+  seven active USB IDs. Their 115 and 47 heap snapshots respectively reported
+  `oom=0`, with nonzero task watermarks. Production logs did not expose exact
+  power-snapshot values, the AES run did not wait for the real 30-minute
+  expiry, and device-side acknowledgement cannot prove every pending battery
+  work enqueue. Promotion-before-callback, simultaneous synchronous cancel,
+  callback self-requeue, queue destruction, and tick wrap remain statically
+  audited generic branches rather than hardware-covered claims.
 - Device and string pre-probe policy is lifecycle-owned and uses that same
   generic `usb_control_msg()` path with one transport-pool scratch. The async
   executor has no descriptor-specific request kind, FIFO, or continuation.
