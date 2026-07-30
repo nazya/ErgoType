@@ -277,11 +277,6 @@ support:
   Linux logging, `mod_delayed_work()`, and `INIT_DEFERRABLE_WORK()` remain
   compile-gated or dormant. Ordinary delayed work is active for Wacom
   initialization and AES battery expiry and is audited below.
-- `queue_work()` still checks `!hid_workqueue_mutex`. Current startup creates
-  and validates the workqueue before TinyUSB host creation, so no linked HID
-  caller can reach this branch. It predates the Wacom series and has no runtime
-  effect, but it is proven dead defensive code under the current call graph and
-  remains porting-hygiene debt until a separately authorized runtime cleanup.
 - Terminal interrupt-I/O recovery currently performs full TinyUSB
   teardown/re-enumeration rather than Linux's in-place `usb_reset_device()`.
   A backend-neutral reset/cancel contract is required before a second HCD.

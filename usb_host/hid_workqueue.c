@@ -260,9 +260,6 @@ bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
 {
 	TaskHandle_t task;
 
-	if (!hid_workqueue_mutex)
-		return false;
-
 	hid_workqueue_lock();
 	if (work->pending || work->cancel_depth || wq->destroying) {
 		hid_workqueue_unlock();
