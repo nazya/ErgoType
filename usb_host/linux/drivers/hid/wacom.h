@@ -113,7 +113,6 @@ enum wacom_worker {
 
 struct wacom;
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 struct wacom_led {
 	struct led_classdev cdev;
 	struct led_trigger trigger;
@@ -124,10 +123,6 @@ struct wacom_led {
 	u8 hlv;
 	bool held;
 };
-#else
-// LED class/trigger support is outside the wired CTL-472 allowlist.
-struct wacom_led;
-#endif
 
 struct wacom_group_leds {
 	u8 select; /* status led selector (0..3) */
@@ -250,12 +245,10 @@ void wacom_wac_event(struct hid_device *hdev, struct hid_field *field,
 		struct hid_usage *usage, __s32 value);
 void wacom_wac_report(struct hid_device *hdev, struct hid_report *report);
 void wacom_battery_work(struct work_struct *work);
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 enum led_brightness wacom_leds_brightness_get(struct wacom_led *led);
 struct wacom_led *wacom_led_find(struct wacom *wacom, unsigned int group,
 				 unsigned int id);
 struct wacom_led *wacom_led_next(struct wacom *wacom, struct wacom_led *cur);
-#endif
 int wacom_equivalent_usage(int usage);
 int wacom_initialize_leds(struct wacom *wacom);
 void wacom_idleprox_timeout(struct timer_list *list);

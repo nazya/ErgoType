@@ -35,10 +35,8 @@ static void wacom_report_numbered_buttons(struct input_dev *input_dev,
 
 static int wacom_numbered_button_to_key(int n);
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 static void wacom_update_led(struct wacom *wacom, int button_count, int mask,
 			     int group);
-#endif
 
 static void wacom_force_proxout(struct wacom_wac *wacom_wac)
 {
@@ -2268,14 +2266,9 @@ static void wacom_wac_pad_event(struct hid_device *hdev, struct hid_field *field
 		break;
 
 	case WACOM_HID_WD_BUTTONCENTER:
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 		for (i = 0; i < wacom->led.count; i++)
 			wacom_update_led(wacom, features->numbered_buttons,
 					 value, i);
-#else
-		// Upstream updates generic-device LED triggers here. The
-		// active CTL-472 profile never enters generic event mapping.
-#endif
 		fallthrough;
 	default:
 		do_report = true;
@@ -4126,7 +4119,6 @@ static void wacom_setup_numbered_buttons(struct input_dev *input_dev,
 	}
 }
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 static void wacom_24hd_update_leds(struct wacom *wacom, int mask, int group)
 {
 	struct wacom_led *led;
@@ -4219,7 +4211,6 @@ static void wacom_update_led(struct wacom *wacom, int button_count, int mask,
 	led_trigger_event(&next_led->trigger,
 			  wacom_leds_brightness_get(next_led));
 }
-#endif
 
 static void wacom_report_numbered_buttons(struct input_dev *input_dev,
 				int button_count, int mask)
@@ -4227,13 +4218,8 @@ static void wacom_report_numbered_buttons(struct input_dev *input_dev,
 	struct wacom *wacom = input_get_drvdata(input_dev);
 	int i;
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	for (i = 0; i < wacom->led.count; i++)
 		wacom_update_led(wacom,  button_count, mask, i);
-#else
-	// Upstream updates pad LED triggers here. CTL-472 has no pad or LEDs.
-	(void)wacom;
-#endif
 
 	for (i = 0; i < button_count; i++) {
 		int key = wacom_numbered_button_to_key(i);
@@ -5009,7 +4995,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x26) },
 	{ USB_DEVICE_WACOM(0x27) },
 	{ USB_DEVICE_WACOM(0x28) },
+#endif
+	// The wired PTK-450 exercises the upstream Pen, Pad, and Touch Ring path.
 	{ USB_DEVICE_WACOM(0x29) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x2A) },
 	{ USB_DEVICE_WACOM(0x30) },
 	{ USB_DEVICE_WACOM(0x31) },
@@ -5140,9 +5129,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ BT_DEVICE_WACOM(0x377) },
 	{ BT_DEVICE_WACOM(0x379) },
 #endif
+	// The wired One by Wacom Small and Medium share the BAMBOO_PEN contract.
 	{ USB_DEVICE_WACOM(0x37A) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x37B) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ BT_DEVICE_WACOM(0x393) },
 	{ BT_DEVICE_WACOM(0x3c6) },
 	{ BT_DEVICE_WACOM(0x3c8) },

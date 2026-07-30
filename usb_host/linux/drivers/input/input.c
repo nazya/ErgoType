@@ -2116,7 +2116,8 @@ struct input_dev *input_allocate_device(void)
 	// dev_set_name(&dev->dev, "input%lu",
 	// 	      (unsigned long)atomic_inc_return(&input_no));
 	// __module_get(THIS_MODULE);
-	// Firmware has no Linux device name allocation or module refcount.
+	// Firmware assigns the equivalent unique inputN name when the input
+	// proxy identifier is published; it has no module refcount.
 	return dev;
 }
 // EXPORT_SYMBOL(input_allocate_device);
@@ -2616,6 +2617,8 @@ int input_register_device(struct input_dev *dev)
 	// Firmware has no input_mutex; the HID lifecycle task owns device registration.
 	list_add_tail(&dev->node, &input_dev_list);
 	dev->port_proxy_id = ++input_next_proxy_id;
+	// Reuse the serialized firmware identity instead of Linux input_no.
+	dev_set_name(&dev->dev, "input%u", dev->port_proxy_id);
 	list_for_each_entry(handler, &input_handler_list, node)
 		input_attach_handler(dev, handler);
 	// }

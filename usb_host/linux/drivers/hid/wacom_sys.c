@@ -1340,7 +1340,6 @@ static int wacom_devm_kfifo_alloc(struct wacom *wacom)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 enum led_brightness wacom_leds_brightness_get(struct wacom_led *led)
 {
 	struct wacom *wacom = led->wacom;
@@ -1566,8 +1565,15 @@ static void wacom_led_groups_release(void *data)
 {
 	struct wacom *wacom = data;
 
+	/*
+	 * Firmware LED setters run on the common HID workqueue. Serialize this
+	 * port-owned lifetime edge with a setter which has not yet acquired its
+	 * USB I/O lease.
+	 */
+	mutex_lock(&wacom->lock);
 	wacom->led.groups = NULL;
 	wacom->led.count = 0;
+	mutex_unlock(&wacom->lock);
 }
 
 static int wacom_led_groups_allocate(struct wacom *wacom, int count)
@@ -1639,8 +1645,10 @@ int wacom_initialize_leds(struct wacom *wacom)
 			return error;
 		}
 
-		error = wacom_devm_sysfs_create_group(wacom,
-						      &generic_led_attr_group);
+		// error = wacom_devm_sysfs_create_group(wacom,
+		// 				      &generic_led_attr_group);
+		// Firmware exposes LED class state without Linux sysfs.
+		error = 0;
 		break;
 
 	case INTUOS4S:
@@ -1660,8 +1668,10 @@ int wacom_initialize_leds(struct wacom *wacom)
 			return error;
 		}
 
-		error = wacom_devm_sysfs_create_group(wacom,
-						      &intuos4_led_attr_group);
+		// error = wacom_devm_sysfs_create_group(wacom,
+		// 				      &intuos4_led_attr_group);
+		// Firmware exposes LED class state without Linux sysfs.
+		error = 0;
 		break;
 
 	case WACOM_24HD:
@@ -1677,8 +1687,10 @@ int wacom_initialize_leds(struct wacom *wacom)
 			return error;
 		}
 
-		error = wacom_devm_sysfs_create_group(wacom,
-						      &cintiq_led_attr_group);
+		// error = wacom_devm_sysfs_create_group(wacom,
+		// 				      &cintiq_led_attr_group);
+		// Firmware exposes LED class state without Linux sysfs.
+		error = 0;
 		break;
 
 	case INTUOS5S:
@@ -1697,8 +1709,10 @@ int wacom_initialize_leds(struct wacom *wacom)
 			return error;
 		}
 
-		error = wacom_devm_sysfs_create_group(wacom,
-						      &intuos5_led_attr_group);
+		// error = wacom_devm_sysfs_create_group(wacom,
+		// 				      &intuos5_led_attr_group);
+		// Firmware exposes LED class state without Linux sysfs.
+		error = 0;
 		break;
 
 	case INTUOSP2_BT:
@@ -1735,7 +1749,6 @@ int wacom_initialize_leds(struct wacom *wacom)
 
 	return 0;
 }
-#endif
 
 static void wacom_init_work(struct work_struct *work)
 {
@@ -2253,6 +2266,17 @@ void wacom_battery_work(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, battery_work);
 
+	/*
+	 * Linux power_supply objects retain device-core lifetime across report and
+	 * workqueue contexts. The firmware object is freed directly, so serialize
+	 * battery publication with report callbacks. Removal already owns this
+	 * lock while cancelling the work, therefore retry rather than wait.
+	 */
+	if (down_trylock(&wacom->hdev->driver_input_lock)) {
+		wacom_schedule_work(&wacom->wacom_wac, WACOM_WORKER_BATTERY);
+		return;
+	}
+
 	if ((wacom->wacom_wac.features.quirks & WACOM_QUIRK_BATTERY) &&
 	     !wacom->battery.battery) {
 		wacom_initialize_battery(wacom);
@@ -2261,6 +2285,8 @@ void wacom_battery_work(struct work_struct *work)
 		 wacom->battery.battery) {
 		wacom_destroy_battery(wacom);
 	}
+
+	up(&wacom->hdev->driver_input_lock);
 }
 
 static size_t wacom_compute_pktlen(struct hid_device *hdev)
@@ -2477,20 +2503,20 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 	if (error)
 		goto fail;
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	if (wacom->wacom_wac.features.device_type & WACOM_DEVICETYPE_PAD) {
 		error = wacom_initialize_leds(wacom);
 		if (error)
 			goto fail;
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 		error = wacom_initialize_remotes(wacom);
 		if (error)
 			goto fail;
-	}
 #else
-	// Upstream initializes LED, remote, and sysfs objects here. The active
-	// CTL-472 profile is pen-only and rejects its 64-byte ghost interface.
+		// error = wacom_initialize_remotes(wacom);
+		// The USB-only allowlist does not include ExpressKey Remote.
 #endif
+	}
 
 	if (!wireless) {
 		/* Note that if query fails it is not a hard failure */
@@ -2841,6 +2867,14 @@ static void wacom_mode_change_work(struct work_struct *work)
 	return;
 }
 
+// Firmware mutexes own a heap-backed semaphore; Linux mutexes need no release.
+static void wacom_mutex_destroy(void *data)
+{
+	struct wacom *wacom = data;
+
+	mutex_destroy(&wacom->lock);
+}
+
 static int wacom_probe(struct hid_device *hdev,
 		const struct hid_device_id *id)
 {
@@ -2883,17 +2917,22 @@ static int wacom_probe(struct hid_device *hdev,
 		wacom->intf = intf;
 	}
 
-	// mutex_init(&wacom->lock);
-	// CTL-472 has no reachable PM, LED, remote, or Bluetooth callback that
-	// locks this mutex; avoid creating unused port-owned semaphore state.
+	mutex_init(&wacom->lock);
+	// Linux mutex_init() cannot fail. The firmware mutex is heap-backed.
+	if (!mutex_initialized(&wacom->lock))
+		return -ENOMEM;
+	error = devm_add_action_or_reset(&hdev->dev, wacom_mutex_destroy, wacom);
+	if (error)
+		return error;
 	INIT_DELAYED_WORK(&wacom->init_work, wacom_init_work);
 	// INIT_DELAYED_WORK(&wacom->aes_battery_work, wacom_aes_battery_handler);
 	// INIT_WORK(&wacom->wireless_work, wacom_wireless_work);
-	// INIT_WORK(&wacom->battery_work, wacom_battery_work);
+	INIT_WORK(&wacom->battery_work, wacom_battery_work);
 	// INIT_WORK(&wacom->remote_work, wacom_remote_work);
 	// INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
 	// timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
-	// The selected pen-only profile can schedule only init_work.
+	// The active wired profiles do not reach AES, wireless, remote,
+	// mode-change, or idle-proximity callbacks.
 
 	/* ask for the report descriptor to be loaded by HID */
 	error = hid_parse(hdev);
@@ -2937,17 +2976,16 @@ static void wacom_remove(struct hid_device *hdev)
 	cancel_delayed_work_sync(&wacom->init_work);
 	// cancel_delayed_work_sync(&wacom->aes_battery_work);
 	// cancel_work_sync(&wacom->wireless_work);
-	// cancel_work_sync(&wacom->battery_work);
+	cancel_work_sync(&wacom->battery_work);
 	// cancel_work_sync(&wacom->remote_work);
 	// cancel_work_sync(&wacom->mode_change_work);
 	// timer_delete_sync(&wacom->idleprox_timer);
-	// These work/timer objects are not initialized by the CTL-472 port.
+	// These work/timer objects are not initialized by the active USB profiles.
 	if (hdev->bus == BUS_BLUETOOTH)
 		device_remove_file(&hdev->dev, &dev_attr_speed);
 
 	/* make sure we don't trigger the LEDs */
-	// wacom_led_groups_release(wacom);
-	// CTL-472 has no LED groups.
+	wacom_led_groups_release(wacom);
 
 	if (wacom->wacom_wac.features.type != REMOTE)
 		wacom_release_resources(wacom);

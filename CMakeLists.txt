@@ -710,6 +710,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_devres.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_kfifo.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/leds.c
         # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
         # Split devmon/FreeRTOS half of the Linux-shaped evdev adapter.
@@ -808,7 +809,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-params.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-rdesc.c
-        # Pinned-upstream Wacom stack, allowlisted to the wired CTL-472.
+        # Pinned-upstream Wacom stack, allowlisted to wired USB CTL-472,
+        # CTL-672, and PTK-450.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_wac.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_sys.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-topseed.c
@@ -832,8 +834,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Deferred with hid-google-stadiaff until a product FF_RUMBLE client
         # exists; ff-core remains linked for standard HID Haptics.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/input/ff-memless.c
-        # Deferred: LED/backlight class proxies are not needed by the current HID
-        # allowlist.
+        # Firmware LED class/trigger glue is linked above for USB Wacom pads;
+        # the Linux class implementation and backlight class remain deferred.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/leds/led-class.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/video/backlight/backlight.c
         # Deferred: firmware uses the reduced power_supply boundary below
