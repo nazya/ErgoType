@@ -460,6 +460,38 @@ battery test covers the immediate sparse GET/input path; the later
 firmware-selected 90-second repeat interval is not an elapsed-time claim of
 this automatic sequence.
 
+#### Deco 01 original / Parblo A610 Pro verified stage
+
+Selecting the two existing pinned UC-Logic table rows on top of the external
+Intuos checkpoint produces:
+
+```text
+host text/data/bss             605256 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+scratch X                      788 B (0x20040000..0x20040314)
+scratch X / core-1 gap         1260 B to 0x20040800
+delta from Intuos stage        +32 text / +0 data / +0 bss
+host UF2 SHA-256               a9ba49cf53d0ce0ba44679d85b11bca301809094cb7705c1721f8e93a12cbd71
+emulator text/data/bss         60912 / 0 / 254436 B
+emulator UF2 SHA-256           373df86d428d9c528dbf642b9a2931d38b5c0f8e584f218695d7f14392b65eca
+hardware verdict               passed 2026-07-31; complete focused sequence
+```
+
+The static delta is only the two selected match entries. Their pinned v1 and
+UGEE-v2 parameter, replacement-descriptor, request, input, and cleanup code was
+already linked. Runtime descriptor and input graphs still allocate from the
+heap; neither profile adds battery state or another mutable static object. The
+common UC-Logic probe initializes its embedded in-range timer, but neither
+selected profile schedules it or activates delayed work.
+
+One full and one same-PID reconnect generation per profile published and
+removed ten target inputs. All 22 heap snapshots reported `oom=0`; minimum-ever
+free heap was 46,688 B. Deco removal repeated at 60,752 B and Parblo removal at
+60,736 B without cumulative retention. Minimum free task watermarks were
+TinyUSB 265, KeyD 658, async 389, work 346, timer 348, lifecycle 85, and report
+854 words.
+
 #### Wired Wacom CTL-472 verified stage
 
 Linking the complete pinned Wacom implementation with only CTL-472

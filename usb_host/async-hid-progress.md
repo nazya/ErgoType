@@ -873,6 +873,20 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   transfers for `0302`, `0314`, and `033b` completed on the emulator side;
   host parser/work enqueue and detached power-snapshot values remain
   unobserved.
+- 2026-07-31: the focused Deco 01 original / Parblo A610 Pro matrix used host
+  UF2 SHA256
+  `a9ba49cf53d0ce0ba44679d85b11bca301809094cb7705c1721f8e93a12cbd71`
+  and emulator UF2 SHA256
+  `373df86d428d9c528dbf642b9a2931d38b5c0f8e584f218695d7f14392b65eca`
+  from `device/uclogic-deco-parblo` commit `c843295`. Deco `28bd:0042`
+  completed its v1 raw string-100/Pen/eight-key Pad path without an OUT probe;
+  Parblo `28bd:1903` completed the endpoint-`0x03` OUT probe before raw string
+  100, then Mouse/Pen/nine-key Pad/Dial input. One full and one same-PID
+  reconnect generation of each profile produced ten balanced target input
+  lifetimes and final `f15, f10`, with no `f12`, `HID_REPORT_SKIP`, or host
+  `ERR`. All 22 heap snapshots reported `oom=0`; minimum-ever free heap was
+  46,688 B, and minimum task watermarks were TinyUSB 265, KeyD 658, async 389,
+  work 346, timer 348, lifecycle 85, and report 854 words.
 
 ## Current Driver Boundary
 
@@ -910,6 +924,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   immediate GET_REPORT, and the 60-second battery timer. Removal keeps the
   pinned synchronous timer-delete-before-transport-stop lifetime. The
   Touch-ID-named IDs are keyboard-only in this scope.
+- The selected UC-Logic table now also includes exact Deco 01 original
+  `28bd:0042` and Parblo A610 Pro `28bd:1903`. They reuse the pinned v1 and
+  UGEE-v2 string/request/input paths without a new transport primitive,
+  callback, work item, or mutable static state. Their focused same-PID
+  reconnect matrix passed at the retained `64/675` parser policy. Pad keys
+  reach KeyD; pen absolute/tool values and the Parblo Dial remain downstream
+  unsupported-event boundaries.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
@@ -966,6 +987,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
+- Correct the reachable UC-Logic combined-descriptor ownership leak after a
+  successful `uclogic_params_get_desc()` followed by failing `hid_parse()` or
+  `hid_hw_start()`. Exercise it with a temporary deterministic host fault and
+  repeated cleanup plateaus, then remove the fault hook before committing.
+  Ordinary successful Deco/Parblo enumeration does not cover this branch.
 - Recheck active `c532` and Lenovo `6009/6047` at retained `64/675`. The
   unchanged combined emulator still presents memory-gated `c52f/c534/60ee`, so
   its stop at the first gated profile is not a passing automatic sequence and

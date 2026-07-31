@@ -428,6 +428,7 @@ claims for unrelated drivers.
 | 2026-07-30 | expanded `device/wacom-wired-matrix`, host `4efcd108…`, emulator `037c8fe0…` | CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650 complete `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`; all 23 physical attachments publish and remove the expected 46 Wacom input nodes, all 115 heap snapshots have `oom=0`, and the one 256-byte immediate PTH teardown difference is reclaimed; production logging does not expose exact power-snapshot values or ordering |
 | 2026-07-30 | AES/receiver `device/wacom-wired-matrix`, host `8e07cbab…`, emulator `8dd6dd64…` | Yoga 260 AES and USB receiver phases complete without a failure marker or host `ERR`; four AES and four receiver attachments produce 20 balanced input lifetimes across control/input/battery, pair/unpair/re-pair, sibling-init cancellation, held rebind/teardown controls, physical disconnect, and recovery; all 47 heap snapshots have `oom=0` and nonzero task watermarks |
 | 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID |
+| 2026-07-31 | Deco/Parblo `device/uclogic-deco-parblo` (`c843295`), host `a9ba49cf…`, emulator `373df86d…` | Deco 01 original and Parblo A610 Pro each complete an initial and same-PID reconnect generation; ten target input lifetimes balance, all 22 snapshots have `oom=0`, and terminal `f15, f10` arrives without `f12`, `HID_REPORT_SKIP`, or host `ERR` |
 
 ## Recorded Emulator Branches
 
@@ -457,6 +458,7 @@ Recorded emulator branches:
 | `device/work-input-drivers` | `67c1aea` |
 | `device/haptic-lifecycle` | `05607cc` |
 | `device/wacom-wired-matrix` | `66c5dde` |
+| `device/uclogic-deco-parblo` | `c843295` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -490,6 +492,8 @@ Recorded emulator branches:
 - `device/uclogic-tablet-matrix`: generic pen regression, Huion H640P and
   Kamvas 13 dynamic string-parameter paths, and the three-interface XP-Pen
   Deco 01 V2 interrupt-OUT/string path.
+- `device/uclogic-deco-parblo`: focused Deco 01 original v1 and Parblo A610
+  Pro UGEE-v2 string/request/input paths, including same-PID reconnect.
 - `device/primax-keyboard`: raw event rewrite and re-entry into the HID parser.
 - `device/pxrc-phoenixrc`: report fixup plus stateful raw axis shuffle.
 - `device/quirks-atmel-ma901`: name-based `hid_ignore()` quirk requiring the
@@ -1122,6 +1126,47 @@ Wireless markers prove their exact battery transfers and reconnect re-probes;
 the noop UI does not independently acknowledge the queued power snapshots.
 UI battery presentation and KeyD tablet policy remain outside this fixture.
 
+### Deco 01 original / Parblo A610 Pro coverage
+
+Branch `device/uclogic-deco-parblo` at `c843295` is the focused fixture for the
+two later exact-ID table rows. It does not replay the earlier Huion or modern
+UGEE-v2 matrices. Its exact artifacts are:
+
+```text
+host UF2 SHA-256       a9ba49cf53d0ce0ba44679d85b11bca301809094cb7705c1721f8e93a12cbd71
+host text/data/bss     605256 / 788 / 245408 B
+emulator UF2 SHA-256   373df86d428d9c528dbf642b9a2931d38b5c0f8e584f218695d7f14392b65eca
+emulator text/data/bss 60912 / 0 / 254436 B
+hardware verdict       passed 2026-07-31 for the scope below
+```
+
+Deco 01 original `28bd:0042` uses the captured three-interface USB/report
+topology and exact raw string-100 bytes. The fixture requires no OUT report,
+then sends v1 Pen states, every one of the eight Pad keys, and a compact Pen/
+last-key smoke after same-PID reconnect. Parblo A610 Pro `28bd:1903` uses a
+protocol-equivalent three-interface topology because pinned Linux replaces its
+placeholder reports after probing. Its Pen interface must receive exactly one
+10-byte endpoint-`0x03` OUT probe before the pinned 12-byte portion of raw
+string 100 is requested. The fixture then sends Pen/tilt, every one of the nine
+Pad keys, both 10-byte Dial directions, Mouse button/relative input, and a
+smaller repeat after same-PID reconnect.
+
+Failure switches to the alert keyboard and emits `f12`, followed by `a` for the
+first Deco generation, `b` for Deco reconnect, `c` for the first Parblo
+generation, `d` for Parblo reconnect, or `e` for terminal-alert failure. The
+passing sequence instead ends with alert `f15, f10`.
+
+The clean run published and removed four Deco and six Parblo target inputs.
+All ten lifetimes balanced, six `HID_IGNORED` warnings matched the deliberately
+unused interfaces, and there was no `f12`, `HID_REPORT_SKIP`, or host `ERR`.
+All 22 heap snapshots reported `oom=0`; minimum-ever free heap was 46,688 B,
+and Deco and Parblo removals repeated at 60,752 B and 60,736 B. Minimum task
+watermarks were TinyUSB 265, KeyD 658, async 389, work 346, timer 348,
+lifecycle 85, and report 854 words. Pad keys reached KeyD. Pen tool/absolute
+events and Parblo Dial reached Linux input/evdev but remained visible as the
+existing downstream unsupported-event diagnostics; this fixture does not
+claim KeyD tablet or Dial policy.
+
 ### Wired Wacom CTL-472 coverage
 
 The hardware-verified 32-reconnect revision of branch
@@ -1513,6 +1558,15 @@ and emulator CDC lines under each item.
   - compare live and removal heap/stack snapshots; require `oom=0`
   - verdict: passed 2026-07-27; complete markers, no `f12`/host `ERR`, stable
     plateaus, and 86-word minimum lifecycle watermark
+- [x] Deco 01 original / Parblo A610 Pro exact-ID matrix
+  - emulator branch `device/uclogic-deco-parblo`, commit `c843295`
+  - require exact per-profile string/probe order, all Pad keys, Parblo Dial and
+    Mouse, one same-PID reconnect per profile, and terminal `f15, f10`
+  - require ten balanced target input lifetimes, stable 60,752/60,736-byte
+    removal plateaus, `oom=0`, nonzero task watermarks, no `f12`,
+    `HID_REPORT_SKIP`, or host `ERR`
+  - verdict: passed 2026-07-31; all 22 heap snapshots have `oom=0` and the
+    lifecycle minimum is 85 words; KeyD tablet/Dial policy remains outside scope
 - [x] wired Wacom CTL-472
   - emulator branch `device/wacom-wired-matrix`
   - require `f1`, `f2`, `f3`, `f4`, terminal `f10`, and no `f12`

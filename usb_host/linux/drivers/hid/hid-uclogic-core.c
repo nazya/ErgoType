@@ -559,8 +559,9 @@ static void uclogic_remove(struct hid_device *hdev)
 static const struct hid_device_id uclogic_devices[] = {
 /*
  * Keep the complete pinned-upstream match table visible. Firmware stages
- * select the Huion dynamic, XP-Pen Deco 01 V2, Deco L/LW, and Deco Pro
- * S/SW/MW paths; CONFIG_HID_UCLOGIC_ALL_DEVICES restores every upstream match.
+ * select the Huion dynamic, Parblo A610 Pro, XP-Pen Deco 01/01 V2, Deco L/LW,
+ * and Deco Pro S/SW/MW paths; CONFIG_HID_UCLOGIC_ALL_DEVICES restores every
+ * upstream match.
  */
 #if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UCLOGIC,
@@ -601,8 +602,10 @@ static const struct hid_device_id uclogic_devices[] = {
 				USB_DEVICE_ID_UGTIZER_TABLET_GP0610) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGTIZER,
 				USB_DEVICE_ID_UGTIZER_TABLET_GT5040) },
+#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_PARBLO_A610_PRO) },
+#if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_TABLET_G5) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
@@ -613,9 +616,9 @@ static const struct hid_device_id uclogic_devices[] = {
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_G540) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_G640) },
+#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO01) },
-#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO01_V2) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,

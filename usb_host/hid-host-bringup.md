@@ -32,6 +32,9 @@ The following paths have produced input events on hardware:
 - modern XP-Pen Deco L/LW and Deco Pro S/SW/MW profiles, including battery
   traffic, wireless reconnect re-probe, dial/mouse input, and the USB Magic
   Trackpad 2 sparse-battery regression;
+- XP-Pen Deco 01 original and Parblo A610 Pro, including their distinct raw
+  string/request paths, Pen/Pad input, Parblo Mouse/Dial input, and same-PID
+  reconnect;
 - the selected external Apple USB keyboard and Mighty Mouse paths, including
   Fn/media and button mapping, the 60-second battery request,
   queued-request disconnect, and reconnect;
@@ -56,6 +59,15 @@ battery path, reusing the reduced firmware power-supply snapshot boundary.
 Its expanded automatic matrix completed on hardware on 2026-07-27 with all
 markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
 `ERR`.
+
+The later exact-ID UC-Logic extension selects only Deco 01 original
+`28bd:0042` and Parblo A610 Pro `28bd:1903` from the same complete pinned
+table. It adds no compatibility primitive, glue object, mutable state,
+battery object, or scheduled work/timer path. Its focused matrix passed on
+2026-07-31 with both initial and same-PID reconnect generations, ten balanced
+target input lifetimes, terminal `f15, f10`, no host `ERR` or
+`HID_REPORT_SKIP`, `oom=0` in all 22 heap snapshots, and nonzero task
+watermarks. The minimum lifecycle watermark was 85 words.
 
 The Wacom checkpoint additionally links complete pinned Wacom sources. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
@@ -206,6 +218,15 @@ upstream `0xba` capacity/charging descriptor and schedule the existing
 re-probe work on the exact reconnect event. This stage ends at Linux
 input/evdev and the reduced power snapshot; KeyD tablet policy and UI
 presentation remain separate work.
+
+Deco 01 original uses the pinned v1 raw string-100 path without an
+interrupt-OUT probe and publishes Pen plus eight-key Pad inputs. Parblo A610
+Pro uses the UGEE-v2 three-interface path: its Pen interface completes the
+existing endpoint-`0x03` interrupt-OUT probe before raw string 100 is read,
+then the driver publishes Mouse, Pen, and nine-key Pad inputs and translates
+both Dial directions. These synchronous-looking requests still block only the
+lifecycle task. Pad keys cross the current KeyD boundary; pen tool/absolute
+events and Dial stop at its existing unsupported-event boundary.
 
 Interrupt-IN receive is armed from `usbhid_open()` or `usbhid_start()`, not
 from probe. Ignored or failed interfaces therefore do not keep delivering

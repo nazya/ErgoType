@@ -367,6 +367,23 @@ detach with reconnect work queued, and the Magic Trackpad sparse battery
 lookup. The run reached its complete marker sequence with `oom=0`, stable heap
 plateaus, nonzero task watermarks, and no host `ERR`.
 
+The focused exact-ID extension for XP-Pen Deco 01 original `28bd:0042` and
+Parblo A610 Pro `28bd:1903` is also linked and hardware-passed. It opens only
+those two existing pinned table rows. Deco reaches the v1 raw string-100, Pen,
+and eight-key Pad path without an interrupt-OUT probe. Parblo reaches the
+existing UGEE-v2 endpoint-`0x03` interrupt-OUT probe before raw string 100,
+then Mouse, Pen, nine-key Pad, and Dial reports. The two rows add 32 bytes of
+text and no data or BSS; they add no compatibility primitive, mutable state,
+battery object, or scheduled work/timer path.
+
+The focused run completed a full generation and same-PID reconnect for each
+profile, ten balanced target input lifetimes, terminal `f15, f10`, and 22
+`oom=0` heap snapshots with no host `ERR` or `HID_REPORT_SKIP`. Deco and Parblo
+removal returned to stable 60,752-byte and 60,736-byte plateaus. All task
+watermarks remained nonzero, with lifecycle at a minimum of 85 words. Pad keys
+reach KeyD; pen tool/absolute values and Parblo Dial remain at the existing
+downstream unsupported-event boundary.
+
 ## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`

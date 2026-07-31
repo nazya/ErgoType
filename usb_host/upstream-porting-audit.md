@@ -25,6 +25,9 @@ corrections; the AES/receiver matrix passed after the receiver
 sibling-initialization and HID-ordering lifetime corrections; and the focused
 eleven-ID Intuos matrix passed after exact-ID feature-usage compaction removed
 unused duplicate metadata without changing report values or wire bytes.
+The focused UC-Logic expansion selects only Deco 01 original `28bd:0042` and
+Parblo A610 Pro `28bd:1903`; their exact-ID table-gate change passed its
+two-profile input, request, reconnect, and teardown fixture.
 The separate Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
@@ -66,12 +69,14 @@ edges, and applies safe line-preserving upstream cleanup. Priority-inheritance
 mutexes now block directly; workqueue/timer waiters sleep on notifications and
 durable predicates instead of retrying every tick.
 The repeated active-path audit, including the corrected Wacom-reachable devres,
-receiver rebind, and HID-ordering contracts described below, found no remaining
-P0/P1 lifetime, lock-order, or polling defect in the inspected
-HID/input/work call graph. This result does not certify value-level power
-snapshots, elapsed AES expiry, or removal-queue cleanup when the UI consumer
-does not start; those bounded exceptions are listed below instead of being
-hidden by speculative rewrites.
+receiver rebind, and HID-ordering contracts described below, found no other
+P0/P1 lifetime, lock-order, or polling defect in the inspected HID/input/work
+call graph. One reachable UC-Logic failed-probe ownership defect remains:
+after combined-descriptor generation, `hid_parse()` or `hid_hw_start()` can
+return without `remove()` and without freeing `drvdata->desc_ptr`. This result
+also does not certify value-level power snapshots, elapsed AES expiry, or
+removal-queue cleanup when the UI consumer does not start; those bounded
+exceptions are listed below instead of being hidden by speculative rewrites.
 
 The whole-tree diagnostic pass is also applied. Every active application/host
 `configASSERT()` receives an already computed identifier or pointer;
@@ -1180,6 +1185,21 @@ contains a hypothetical NULL check that no current caller can exercise.
   the existing reduced power-supply snapshot through pinned generic HID
   battery code. No generic URB, HIDRAW consumer, VFS, KeyD tablet policy, UI,
   or LED contract was added.
+- The exact-ID extension changes only the existing gates around Deco 01
+  original `28bd:0042` and Parblo A610 Pro `28bd:1903`. Deco reaches the pinned
+  v1 string-100/Pen/eight-key Pad path; Parblo reaches the pinned UGEE-v2
+  interrupt-OUT/string-100/Mouse/Pen/nine-key Pad/Dial path. No compatibility
+  API, wrapper, allocation branch, callback, or mutable state was added. Pad
+  keys cross the current KeyD boundary; pen absolute/tool values and Parblo
+  Dial stop at its existing unsupported-event boundary.
+- `uclogic_params_get_desc()` returns a separately allocated combined
+  descriptor through `drvdata->desc_ptr`. `hid_open_report()` copies it before
+  parsing, so HID core never owns that original allocation. Successful probe
+  frees it from `uclogic_remove()`, but the current failed-probe label releases
+  only parameter descriptors. A reached `hid_parse()` or `hid_hw_start()`
+  failure therefore leaks that allocation because `remove()` is not called.
+  This is the next explicit cleanup stage; it is not fixed or covered by the
+  successful Deco/Parblo run recorded here.
 - Enabling generic HID battery also reaches the pinned Magic Mouse/Trackpad
   battery path. Its upstream dense `report_id_hash` lookup is retained beside
   the sparse firmware lookup that preserves the full report-ID range. The
@@ -1448,7 +1468,17 @@ Current checkpoint audit:
   L/LW `28bd:0935` and Deco Pro S/SW/MW `28bd:0909/0933/0934`; its expanded
   battery/reconnect/input matrix passed on hardware on 2026-07-27 with every
   completion marker, no host `ERR`, `oom=0`, equivalent cleanup plateaus, and
-  an 86-word minimum lifecycle watermark
+  an 86-word minimum lifecycle watermark. The exact-ID Deco 01 original
+  `28bd:0042` and Parblo A610 Pro `28bd:1903` extension changed only two table
+  gates and added 32 bytes of text with no data or BSS. Host
+  `a9ba49cf53d0ce0ba44679d85b11bca301809094cb7705c1721f8e93a12cbd71`
+  and emulator
+  `373df86d428d9c528dbf642b9a2931d38b5c0f8e584f218695d7f14392b65eca`
+  completed both initial and same-PID reconnect generations, ten balanced
+  target input lifetimes, terminal `f15, f10`, and 22 `oom=0` snapshots with no
+  host `ERR` or `HID_REPORT_SKIP`; the 85-word lifecycle minimum remained
+  nonzero. Successful enumeration does not exercise the open combined-
+  descriptor failed-probe ownership finding above
 - audited the complete pinned Wacom parser/system sources and the five active
   wired call graphs. Host
   `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
