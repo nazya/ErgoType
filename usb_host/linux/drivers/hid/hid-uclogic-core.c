@@ -267,8 +267,14 @@ static int uclogic_probe(struct hid_device *hdev,
 	return 0;
 failure:
 	/* Assume "remove" might not be called if "probe" failed */
-	if (params_initialized)
+	// if (params_initialized)
+	// 	uclogic_params_cleanup(&drvdata->params);
+	// Pinned Linux leaks the separately allocated combined descriptor when
+	// hid_parse() or hid_hw_start() fails and remove() is never called.
+	if (params_initialized) {
+		kfree(drvdata->desc_ptr);
 		uclogic_params_cleanup(&drvdata->params);
+	}
 	return rc;
 }
 

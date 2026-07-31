@@ -384,6 +384,18 @@ watermarks remained nonzero, with lifecycle at a minimum of 85 words. Pad keys
 reach KeyD; pen tool/absolute values and Parblo Dial remain at the existing
 downstream unsupported-event boundary.
 
+The common UC-Logic failed-probe cleanup now also frees the separately
+allocated combined replacement descriptor before the existing parameter
+cleanup. It uses the already reachable `params_initialized` branch and does
+not change the failing call's return value or successful probe/remove order.
+Hardware fault injection exercised three `hid_hw_start()` failures after
+combined-descriptor generation; every failed generation returned to the same
+60,752-byte removal plateau, and a following normal Parblo generation
+completed input and teardown. All 25 snapshots reported `oom=0`, with a
+105-word minimum lifecycle watermark. A post-generation `hid_parse()` failure
+uses the same label and free order, but that branch remains source-audited
+rather than runtime-injected.
+
 ## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`

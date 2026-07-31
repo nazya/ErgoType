@@ -69,12 +69,12 @@ edges, and applies safe line-preserving upstream cleanup. Priority-inheritance
 mutexes now block directly; workqueue/timer waiters sleep on notifications and
 durable predicates instead of retrying every tick.
 The repeated active-path audit, including the corrected Wacom-reachable devres,
-receiver rebind, and HID-ordering contracts described below, found no other
-P0/P1 lifetime, lock-order, or polling defect in the inspected HID/input/work
-call graph. One reachable UC-Logic failed-probe ownership defect remains:
-after combined-descriptor generation, `hid_parse()` or `hid_hw_start()` can
-return without `remove()` and without freeing `drvdata->desc_ptr`. This result
-also does not certify value-level power snapshots, elapsed AES expiry, or
+receiver rebind, HID-ordering, and UC-Logic failed-probe contracts described
+below, found no other P0/P1 lifetime, lock-order, or polling defect in the
+inspected HID/input/work call graph. The UC-Logic cleanup was runtime-tested
+through reached `hid_hw_start()` failure; the equivalent `hid_parse()` branch
+remains source-audited. This result also does not certify value-level power
+snapshots, elapsed AES expiry, or
 removal-queue cleanup when the UI consumer does not start; those bounded
 exceptions are listed below instead of being hidden by speculative rewrites.
 
@@ -1170,9 +1170,10 @@ contains a hypothetical NULL check that no current caller can exercise.
   linked for a narrow ID allowlist. Both descriptor headers and
   `hid-uclogic-rdesc.c` remain byte-identical to pinned upstream. Core differs
   only at the unavailable private-usbhid include, the locally explained active
-  ID gates, and immutable driver registration; params differs only at that
-  private include, the single allocate/copy/free replacement for upstream
-  `krealloc()`, and a firmware optional-product-string guard. The original
+  ID gates and failed-probe free, and immutable driver registration; params
+  differs only at that private include, the single allocate/copy/free
+  replacement for upstream `krealloc()`, and a firmware optional-product-string
+  guard. The original
   displaced lines remain adjacent.
 - UC-Logic activates the existing task-side USB string and interrupt-OUT
   contracts. Reduced `list.h`, `ctype.h`, `string_choices.h`, and KUnit
@@ -1194,12 +1195,14 @@ contains a hypothetical NULL check that no current caller can exercise.
   Dial stop at its existing unsupported-event boundary.
 - `uclogic_params_get_desc()` returns a separately allocated combined
   descriptor through `drvdata->desc_ptr`. `hid_open_report()` copies it before
-  parsing, so HID core never owns that original allocation. Successful probe
-  frees it from `uclogic_remove()`, but the current failed-probe label releases
-  only parameter descriptors. A reached `hid_parse()` or `hid_hw_start()`
-  failure therefore leaks that allocation because `remove()` is not called.
-  This is the next explicit cleanup stage; it is not fixed or covered by the
-  successful Deco/Parblo run recorded here.
+  parsing, so HID core never owns that original allocation. Pinned Linux frees
+  it from `uclogic_remove()` after successful probe but omitted it from the
+  failed-probe label. The port retains the original cleanup beside a direct
+  `kfree(drvdata->desc_ptr)` under the existing `params_initialized` branch;
+  return values and successful remove order are unchanged. Three injected
+  `hid_hw_start()` failures after descriptor generation returned to the same
+  heap plateau before normal recovery. A reached `hid_parse()` failure uses the
+  same label and ownership order, but remains a static call-graph result.
 - Enabling generic HID battery also reaches the pinned Magic Mouse/Trackpad
   battery path. Its upstream dense `report_id_hash` lookup is retained beside
   the sparse firmware lookup that preserves the full report-ID range. The
@@ -1477,8 +1480,13 @@ Current checkpoint audit:
   completed both initial and same-PID reconnect generations, ten balanced
   target input lifetimes, terminal `f15, f10`, and 22 `oom=0` snapshots with no
   host `ERR` or `HID_REPORT_SKIP`; the 85-word lifecycle minimum remained
-  nonzero. Successful enumeration does not exercise the open combined-
-  descriptor failed-probe ownership finding above
+  nonzero. A later focused fault run exercised three reached `hid_hw_start()`
+  failures after combined-descriptor generation, repeated the 60,752-byte
+  cleanup plateau, and completed a normal recovery generation. All 25 heap
+  snapshots reported `oom=0`; minimum watermarks were TinyUSB 265, KeyD 658,
+  async 389, work 346, timer 348, lifecycle 105, and report 862 words. The
+  temporary host fault was removed; the same-label `hid_parse()` branch remains
+  source-audited only
 - audited the complete pinned Wacom parser/system sources and the five active
   wired call graphs. Host
   `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`

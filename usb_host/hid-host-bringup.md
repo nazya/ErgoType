@@ -69,6 +69,15 @@ target input lifetimes, terminal `f15, f10`, no host `ERR` or
 `HID_REPORT_SKIP`, `oom=0` in all 22 heap snapshots, and nonzero task
 watermarks. The minimum lifecycle watermark was 85 words.
 
+The common UC-Logic failed-probe path now frees the separately allocated
+combined replacement descriptor before the existing parameter cleanup. It
+retains the pinned failure label, the existing `params_initialized` predicate,
+and the original return code. A focused hardware fault exercised three reached
+`hid_hw_start()` failures after descriptor generation, repeated the same
+60,752-byte cleanup plateau, and then completed an ordinary Parblo recovery
+generation. The temporary fault hook was removed. `hid_parse()` reaches the
+same cleanup label, but its failure branch remains source-audited only.
+
 The Wacom checkpoint additionally links complete pinned Wacom sources. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES

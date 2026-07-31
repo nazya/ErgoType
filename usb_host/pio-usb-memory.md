@@ -492,6 +492,30 @@ free heap was 46,688 B. Deco removal repeated at 60,752 B and Parblo removal at
 TinyUSB 265, KeyD 658, async 389, work 346, timer 348, lifecycle 85, and report
 854 words.
 
+#### UC-Logic failed-probe cleanup stage
+
+The production cleanup, after removing the temporary fault hook, builds as:
+
+```text
+host text/data/bss             605272 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+delta from Deco/Parblo stage   +16 text / +0 data / +0 bss
+host UF2 SHA-256               e7d2e2c9469efa27ef7101c14cd070c0d75b00e39df0101fc250c3cfdd64f23c
+hardware verdict               cleanup branch passed with temporary fault;
+                               exact clean UF2 not flashed unchanged
+```
+
+The reclaimed object is runtime heap memory, so unchanged BSS cannot establish
+the behavior. Three injected `hid_hw_start()` failures after combined-
+descriptor generation each returned to the same 60,752-byte removal plateau;
+a following normal generation published and removed Mouse, Pen, and Pad and
+returned there again. All 25 snapshots reported `oom=0`, and minimum-ever free
+heap was 46,664 B. Minimum task watermarks were TinyUSB 265, KeyD 658, async
+389, work 346, timer 348, lifecycle 105, and report 862 words. The temporary
+fault hook is absent from the production source. The same-label `hid_parse()`
+failure remains a static ownership result rather than a hardware verdict.
+
 #### Wired Wacom CTL-472 verified stage
 
 Linking the complete pinned Wacom implementation with only CTL-472

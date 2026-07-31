@@ -887,6 +887,18 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `ERR`. All 22 heap snapshots reported `oom=0`; minimum-ever free heap was
   46,688 B, and minimum task watermarks were TinyUSB 265, KeyD 658, async 389,
   work 346, timer 348, lifecycle 85, and report 854 words.
+- 2026-08-01: the UC-Logic failed-probe cleanup was exercised with a temporary
+  deterministic host fault after Parblo combined-descriptor generation. Three
+  reached `hid_hw_start()` failures each completed the existing OUT/string
+  exchange and returned to the same 60,752-byte removal plateau. A following
+  normal generation published and removed Mouse, Pen, and Pad inputs. All 25
+  heap snapshots reported `oom=0`; minimum-ever free heap was 46,664 B, and
+  minimum task watermarks were TinyUSB 265, KeyD 658, async 389, work 346,
+  timer 348, lifecycle 105, and report 862 words. The temporary host fault was
+  removed. The production-clean build is `605272/788/245408`, UF2 SHA256
+  `e7d2e2c9469efa27ef7101c14cd070c0d75b00e39df0101fc250c3cfdd64f23c`;
+  that exact clean image was not flashed unchanged. `hid_parse()` reaches the
+  same cleanup label but remains source-audited only.
 
 ## Current Driver Boundary
 
@@ -987,11 +999,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Correct the reachable UC-Logic combined-descriptor ownership leak after a
-  successful `uclogic_params_get_desc()` followed by failing `hid_parse()` or
-  `hid_hw_start()`. Exercise it with a temporary deterministic host fault and
-  repeated cleanup plateaus, then remove the fault hook before committing.
-  Ordinary successful Deco/Parblo enumeration does not cover this branch.
+- Add and qualify only XP-Pen Artist 22R Pro `28bd:091b` and Artist 24 Pro
+  `28bd:092d` as the next focused UC-Logic stage. Measure the lifecycle stack,
+  preserve pinned non-Pen rejection and request ordering, and cover disconnect
+  plus clean reconnect without replaying earlier tablet matrices. Artist adds
+  no asynchronous-request primitive; do not add a TinyUSB-internal control
+  interceptor solely to manufacture a pending string transfer.
 - Recheck active `c532` and Lenovo `6009/6047` at retained `64/675`. The
   unchanged combined emulator still presents memory-gated `c52f/c534/60ee`, so
   its stop at the first gated profile is not a passing automatic sequence and

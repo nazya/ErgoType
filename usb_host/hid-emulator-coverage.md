@@ -429,6 +429,7 @@ claims for unrelated drivers.
 | 2026-07-30 | AES/receiver `device/wacom-wired-matrix`, host `8e07cbab…`, emulator `8dd6dd64…` | Yoga 260 AES and USB receiver phases complete without a failure marker or host `ERR`; four AES and four receiver attachments produce 20 balanced input lifetimes across control/input/battery, pair/unpair/re-pair, sibling-init cancellation, held rebind/teardown controls, physical disconnect, and recovery; all 47 heap snapshots have `oom=0` and nonzero task watermarks |
 | 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID |
 | 2026-07-31 | Deco/Parblo `device/uclogic-deco-parblo` (`c843295`), host `a9ba49cf…`, emulator `373df86d…` | Deco 01 original and Parblo A610 Pro each complete an initial and same-PID reconnect generation; ten target input lifetimes balance, all 22 snapshots have `oom=0`, and terminal `f15, f10` arrives without `f12`, `HID_REPORT_SKIP`, or host `ERR` |
+| 2026-08-01 | focused UC-Logic failed-probe fixture | three reached `hid_hw_start()` failures after combined-descriptor generation repeat the same cleanup plateau, then one normal Parblo generation publishes and removes Mouse/Pen/Pad; all 25 snapshots have `oom=0`, with no host `ERR`; `hid_parse()` remains source-audited only |
 
 ## Recorded Emulator Branches
 
@@ -1167,6 +1168,31 @@ events and Parblo Dial reached Linux input/evdev but remained visible as the
 existing downstream unsupported-event diagnostics; this fixture does not
 claim KeyD tablet or Dial policy.
 
+### UC-Logic failed-probe cleanup coverage
+
+A focused fixture on branch `device/uclogic-failed-probe` at `09ab11e`
+exercised the production cleanup. The exact hardware-test artifacts were host
+UF2 `9ac5393b9ff7073d3507a13cebcd3dd1856f41e9cee1075960099c29a0c19bda`
+and emulator UF2
+`ab4fc9dbefd2eee3d872a84f05140dfe9b4639b57951d4daba0a936936f17287`.
+The host test image completed the normal Parblo
+OUT/string exchange and combined-descriptor generation, then forced
+`hid_hw_start()` to fail on three separate generations. Each failed generation
+published and removed only the independently successful Mouse input and
+returned to the same 60,752-byte heap plateau. A final non-failing generation
+published and removed Mouse, Pen, and Pad and repeated that terminal plateau.
+
+The run contained six balanced target input lifetimes, seven expected
+`HID_IGNORED` warnings, no host `ERR` or `HID_REPORT_SKIP`, and `oom=0` in all
+25 heap snapshots. Minimum-ever free heap was 46,664 B. Minimum task
+watermarks were TinyUSB 265, KeyD 658, async 389, work 346, timer 348,
+lifecycle 105, and report 862 words. The temporary host fault was removed after
+the run. The production-clean host builds as `605272/788/245408`, UF2 SHA-256
+`e7d2e2c9469efa27ef7101c14cd070c0d75b00e39df0101fc250c3cfdd64f23c`,
+but that exact image was not flashed unchanged. A post-generation
+`hid_parse()` failure reaches the same cleanup label and free order; it remains
+source-audited rather than runtime-tested.
+
 ### Wired Wacom CTL-472 coverage
 
 The hardware-verified 32-reconnect revision of branch
@@ -1567,6 +1593,13 @@ and emulator CDC lines under each item.
     `HID_REPORT_SKIP`, or host `ERR`
   - verdict: passed 2026-07-31; all 22 heap snapshots have `oom=0` and the
     lifecycle minimum is 85 words; KeyD tablet/Dial policy remains outside scope
+- [x] UC-Logic failed-probe combined-descriptor cleanup
+  - three reached `hid_hw_start()` failures after descriptor generation return
+    to the same 60,752-byte plateau, followed by one normal recovery generation
+  - verdict: passed 2026-08-01 with six balanced target input lifetimes, all 25
+    snapshots at `oom=0`, and nonzero task watermarks
+  - the temporary fault control was removed; `hid_parse()` is source-audited
+    only, and the exact production-clean UF2 was not flashed unchanged
 - [x] wired Wacom CTL-472
   - emulator branch `device/wacom-wired-matrix`
   - require `f1`, `f2`, `f3`, `f4`, terminal `f10`, and no `f12`
