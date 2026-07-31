@@ -219,11 +219,11 @@ nonfatal control flow but publishes no firmware interface under the reduced
 sysfs contract. `KEY_FN_ESC` reaches Linux input for `6047`, and for `60ee`
 when its retained Lenovo row is enabled, but the current KeyD boundary logs and
 drops evdev code `0x1d1`; that downstream mapping is not part of this
-Linux-driver stage. `6009/6047` completed the focused
-hardware sequence. The corrected full `60ee` descriptor completed only at the
-temporary `64/256` parser policy; its Consumer field needs another 13,408
-bytes at 675 after a run that left 11,152 bytes free, so its upstream table row
-is retained but disabled on RP2040.
+Linux-driver stage. The combined `6009/6047/60ee` hardware sequence completed
+at temporary `64/256`; the selected `6009/6047` exact retained-policy
+regression remains pending. The full `60ee` Consumer field needs another
+13,408 bytes at 675 after a run that left 11,152 bytes free, so its upstream
+table row is retained but disabled on RP2040.
 
 ## HIDRAW and Logitech HID++ Boundary
 
@@ -292,8 +292,8 @@ virtual-child raw-request routing through the physical receiver. Firmware glue
 supplies the task-owned work/lifecycle boundary and final evdev activation.
 The exact `c52f/c534` startup, child-input, and teardown logic passed on
 hardware at temporary `64/256`; that capacity checkpoint is not support at the
-retained policy. Existing `c52b` coverage and the retained-policy `c532` pass
-remain valid. Because the IDs are absent only from the special-driver table,
+retained policy. Existing `c52b` coverage remains valid; the selected `c532`
+exact retained-policy regression remains pending. Because the IDs are absent only from the special-driver table,
 Linux-style generic fallback may still publish their physical interfaces; it
 sends no DJ/HID++ startup sequence and creates no virtual receiver child.
 
@@ -381,14 +381,20 @@ implementation while keeping a narrow USB-only match table:
 - Bamboo Capture CTH-470 `056a:00de` and Intuos5 touch M PTH-650 `056a:0027`
   enable paired Pen/Touch/Pad input and pen-versus-touch arbitration; PTH-650
   also reaches Touch Ring, LED, and ordinary USB battery paths.
+- External wired Intuos `056a:0302/0303/030e/0323` and Intuos 2
+  `056a:033b/033c/033d/033e` select the complete pinned `INTUOSHT` and
+  `INTUOSHT2` Pen/Pad paths. Touch is applicable to `0302/0303/033c/033e`;
+  `030e/0323/033b/033d` are touchless profiles.
+- External wired Intuos Pro `056a:0314/0315/0317` selects the complete pinned
+  `INTUOSPS/PM/PL` pen/touch/pad/ring/LED and battery paths.
 - Yoga 260 AES `056a:5048` enables the generic AES Pen/Touch parser, control
   exchange, delayed battery work, and idle-proximity timer.
 - Wacom USB wireless receiver `056a:0084` enables the upstream three-interface
   monitor/stylus/touch topology, pair/unpair, dynamic sibling rebind, LED, and
   receiver battery lifetime. The fixture deliberately selects the already
   active PTH-650 child profile `056a:0027`; the available receiver capture
-  reports child `033b`, which is outside the current table and would be
-  ignored. Therefore `0084 -> 0027` is protocol-path coverage, not a captured
+  reports child `033b`, which is now selected but was not part of that older
+  artifact. Therefore `0084 -> 0027` is protocol-path coverage, not a captured
   pairing.
 
 The compatibility layer provides selective nested devres groups, power-of-two
@@ -399,6 +405,16 @@ serialize with report parsing through nonblocking lock/requeue. Receiver work
 snapshots PID under the monitor parser lock. It synchronously cancels both
 sibling initialization callbacks before releasing either dynamic resource
 graph, then performs the longer rebuild without holding the monitor lock.
+
+The captured `0317` PTH-851 family descriptor repeats one explicitly declared
+vendor usage across FEATURE reports as large as 265 values. The existing
+exact-ID port quirk now also applies to `0314/0315/0317`: it preserves every
+report value and wire byte but stores one explicit usage instead of hundreds
+of duplicate mapping entries. On that capture, reused by the `0314/0315`
+emulator profiles, it removes 626 duplicate usage/priority pairs, about 20 KiB.
+The focused run measured 30,696 B free after Pro Pen probe instead of 10,688 B
+before compaction; this allowed the Finger graph to complete without reducing
+the retained `HID_MAX_USAGES=675` policy.
 
 Receiver rebind repeatedly executes `hid_hw_stop()` followed by
 `hid_hw_start()`. The port releases the connect-lifetime HID field-ordering
@@ -418,9 +434,9 @@ but leaves transport started until the next rebind or disconnect, and an
 unchanged PID is not retried automatically. These error paths are
 source-audited, not hardware-injected.
 
-The wired five-profile artifact and the later AES/receiver artifact are
-separate hardware results recorded in `hid-emulator-coverage.md`. Together
-they cover all seven active USB IDs. The wired run completed 23 physical
+The wired five-profile artifact, later AES/receiver artifact, and focused
+eleven-ID Intuos artifact are separate hardware results recorded in
+`hid-emulator-coverage.md`. The wired base run completed 23 physical
 attachments and 46 balanced input lifetimes with no host `ERR` and `oom=0` in
 all 115 heap snapshots. The AES/receiver run completed four AES and four
 receiver attachments, 20 balanced input lifetimes, pair/unpair/re-pair,
@@ -429,9 +445,9 @@ physical disconnect, and recovery. All 47 heap snapshots reported `oom=0`,
 terminal physical removal returned to the established 60,496/60,752-byte
 plateaus, and every task watermark remained nonzero.
 
-Production firmware does not log detached power-supply values, so neither run
-proves exact `PRESENT`, status, capacity, or event ordering. PTH and receiver
-pending-disconnect cases also cannot prove from a device-side USB
+Production firmware does not log detached power-supply values, so none of
+these runs proves exact `PRESENT`, status, capacity, or event ordering. PTH
+and receiver pending-disconnect cases also cannot prove from a device-side USB
 acknowledgement alone that the report task had already queued battery work.
 The AES fixture does not wait for the real 30-minute expiry. The receiver
 fixture deterministically proves cancellation while original sibling
@@ -449,9 +465,19 @@ untouched. The separate Rapoo managed extra-input regression remains pending.
 
 All other Wacom product IDs remain behind
 `CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, ExpressKey Remote, bootloader, I2C,
-PCI, Linux LED/sysfs presentation, and product IDs outside the seven-entry USB
+PCI, Linux LED/sysfs presentation, and product IDs outside the 18-entry USB
 table remain excluded. Receiver lookup can select any child PID already in
 that table; only child `056a:0027` is covered by the receiver hardware verdict.
+The focused Intuos matrix verifies mode and Pen/Pad smoke for all eleven
+selected PIDs, Pro LED initialization for `0314/0315/0317`, and Finger smoke
+for seven touch-capable profiles, with 29 balanced input lifetimes, `oom=0`,
+and terminal success. It uses family captures rather than byte-exact retail
+descriptors for every PID.
+Representative `0302/0314/033b` battery IN completions are device-side only;
+host work enqueue and detached values remain unobserved. This matrix does not
+add pending/running-work cancellation, same-PID reconnect, Touch Ring
+semantics, explicit arbitration, or receiver-child `033b` coverage to the
+older `0084 -> 0027` receiver verdict.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller

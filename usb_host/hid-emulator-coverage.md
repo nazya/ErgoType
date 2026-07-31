@@ -427,6 +427,7 @@ claims for unrelated drivers.
 | 2026-07-29 | `device/wacom-wired-matrix`, exact no-PIO host `bdf6ab6c…` and 32-reconnect emulator `61440170…` | CTL-472 completes `f1, f2, f3, f4, f10` with no `f12`; exact mode SET/GET, Pen/eraser input, pre-deadline and held-callback disconnect, recovery, 36 Pen add/removes, 36 expected ghost-interface warnings, stable removal plateaus, nonzero task watermarks, and `oom=0` |
 | 2026-07-30 | expanded `device/wacom-wired-matrix`, host `4efcd108…`, emulator `037c8fe0…` | CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650 complete `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`; all 23 physical attachments publish and remove the expected 46 Wacom input nodes, all 115 heap snapshots have `oom=0`, and the one 256-byte immediate PTH teardown difference is reclaimed; production logging does not expose exact power-snapshot values or ordering |
 | 2026-07-30 | AES/receiver `device/wacom-wired-matrix`, host `8e07cbab…`, emulator `8dd6dd64…` | Yoga 260 AES and USB receiver phases complete without a failure marker or host `ERR`; four AES and four receiver attachments produce 20 balanced input lifetimes across control/input/battery, pair/unpair/re-pair, sibling-init cancellation, held rebind/teardown controls, physical disconnect, and recovery; all 47 heap snapshots have `oom=0` and nonzero task watermarks |
+| 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID |
 
 ## Recorded Emulator Branches
 
@@ -455,7 +456,7 @@ Recorded emulator branches:
 | `device/zydacron-remote` | `40ee6a8` |
 | `device/work-input-drivers` | `67c1aea` |
 | `device/haptic-lifecycle` | `05607cc` |
-| `device/wacom-wired-matrix` | `66351b1` |
+| `device/wacom-wired-matrix` | `66c5dde` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -553,7 +554,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; selected USB IDs `056a:0027/0029/0084/00de/037a/037b/5048` | historical CTL-472, expanded five-profile wired, and separate AES/receiver `wacom-wired-matrix` artifacts passed on hardware; exact power values, elapsed AES expiry, other receiver children, and Remote remain outside the verdict |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; seven base IDs plus external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e` | historical CTL-472, expanded five-profile wired, separate AES/receiver, and focused eleven-ID Intuos `wacom-wired-matrix` artifacts passed on hardware; exact power values, elapsed AES expiry, receiver child profiles other than `0027`, byte-exact retail descriptors for every Intuos PID, and Remote remain outside the verdict |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -574,7 +575,9 @@ Saitek, Topre, Wacom,
 and Zydacron. Apple and Microsoft passed their focused exact-artifact hardware
 runs on 2026-07-31. Wacom's historical exact
 32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
-separate AES/receiver artifact are hardware-verified. Exact power-snapshot
+separate AES/receiver artifact are hardware-verified; its focused external
+wired Intuos artifact passed all eleven selected IDs using the documented
+family captures. Exact power-snapshot
 values, elapsed AES expiry, receiver children outside selected profile
 `056a:0027`, and Remote coverage remain separate.
 Core/common glue (`hid-core`,
@@ -591,7 +594,8 @@ The existing emulator set plus the hardware-verified work-input, combined
 haptic/Trackpad, Microsoft, Apple, exact Wacom, and temporary-capacity
 Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
 Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
-Yoga 260 AES and USB receiver flows, active Logitech `c532`, and Lenovo
+Yoga 260 AES/USB receiver plus external wired Intuos flows, active Logitech
+`c532`, and Lenovo
 `6009/6047`. The active allowlist is covered except for the Holtek mouse
 driver-specific hardware result. Memory-gated `c52f/c534/60ee` have logic
 coverage at temporary `64/256`, not RP2040 support at retained `64/675`.
@@ -1303,11 +1307,11 @@ captured 522-byte touch and 434-byte pen report descriptors. The receiver uses
 the captured three-interface ACK-40401 topology and monitor/pen descriptors;
 its touch interface reuses the exact PTH-650 descriptor.
 
-The available receiver capture reports child PID `033b`, which is outside the
-active table and would be ignored. The fixture deliberately selects already
-active PTH-650 profile `0027` to exercise the same pinned sibling-rebind path.
-This is protocol coverage, not a claim that `0084 -> 0027` was captured from
-retail hardware.
+The available receiver capture reports child PID `033b`, which is selected by
+the later Intuos stage but was not part of this older receiver artifact. The
+fixture deliberately selects PTH-650 profile `0027` to exercise the same
+pinned sibling-rebind path. This is protocol coverage, not a claim that
+`0084 -> 0027` was captured from retail hardware.
 
 The exact pair and audited host log are:
 
@@ -1368,6 +1372,74 @@ branches remain static workqueue audit results.
 Bluetooth, ExpressKey Remote, bootloader, I2C, PCI, receiver children outside
 the selected `0027` profile, and all other Wacom IDs remain outside this
 fixture.
+
+### External wired Wacom Intuos coverage
+
+The focused `device/wacom-wired-matrix` artifact selects eleven external wired
+profiles without replaying the previously qualified base, AES, or receiver
+matrices: Intuos `056a:0302/0303/030e/0323`, Intuos Pro
+`056a:0314/0315/0317`, and Intuos 2 `056a:033b/033c/033d/033e`. Exact captures
+are available only for PTH-851 `0317` Pen/Pad and CTH-490 `033c`
+Pen/Pad/Touch plus its compatibility mouse. The `0314/0315/0317` profiles use
+`0317` Pen/Pad plus the earlier PTH-650 Touch capture; `033b/033d/033e` reuse
+the `033c` topology; and `0302/0303/030e/0323` reuse the earlier CTH-470 Pen
+plus CTH-490 Pad/Touch captures. This verifies selected identities and family
+behavior, not byte-identical retail topology for every model.
+
+The exact pair and audited host log are:
+
+```text
+host UF2 SHA-256       1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed
+host text/data/bss     605224 / 788 / 245408 B
+emulator UF2 SHA-256   93f034b64d9eec4537477acfb9763d3cbe0590017338f5a561619b74d5da2fac
+emulator text/data/bss 66080 / 0 / 254480 B
+host log SHA-256       070ac67476e632924b5cb7a2491989dc5c445b455751e7e8e792a63d05d3cd10
+hardware verdict       passed 2026-07-31 for the qualified scope below
+```
+
+All eleven selected PID profiles completed mode SET/GET and Pen/Pad smoke;
+`0314/0315/0317` completed Pro LED initialization, and the seven touch-capable
+profiles completed Finger smoke. The sequence performed ten different-PID
+detach/attach transitions. Representative battery reports were injected for
+`0302`, `0314`, and `033b`. The profiles published and removed 29 expected
+Pen/Pad/Finger input nodes and produced eleven
+expected compatibility-interface `HID_IGNORED` and seven
+`EVDEV_BATCH_CAP` warnings, and ended with `f15, f10`. No `f12`, host `ERR`,
+timeout, input-drop marker, generic compatibility-mouse input, or OOM appeared.
+
+The first Pro run exposed a target-memory boundary rather than an emulator
+failure. Linux normally duplicates a single explicitly declared vendor usage
+to every VARIABLE Feature report value. On the captured `0317` PTH-851 family
+descriptor this created 626 duplicate usage/priority pairs; the emulator
+reuses that capture for `0314/0315`. The exact-ID port quirk for
+`0314/0315/0317` retains the complete report count, value/new-value arrays,
+wire length, raw bytes, and request return semantics, but stores only the one
+declared usage mapping consumed by pinned Wacom. It is a firmware memory
+optimization, not an upstream Linux bugfix and not a global reduction of
+`HID_MAX_USAGES`. The 626-pair count is not a claim about separately captured
+retail `0314/0315` descriptors.
+
+Before that compaction, Pro Pen and Pad left 10,688 and 10,560 B free and the
+Finger probe failed with `HID_PROBE_NOMEM`, `oom=2`, and a 976-byte
+minimum-ever value. In the verified image the corresponding snapshots were
+30,696, 30,568, and 17,320 B free. All 63 heap snapshots reported `oom=0`, the
+run's minimum-ever value was 12,832 B, and every terminal tablet removal
+returned to 60,736 B free without cumulative retention. Minimum remaining
+task watermarks were TinyUSB 265, KeyD 658, async 384, work 207, timer 348,
+lifecycle 212, and report 859 words.
+
+The fixture completes representative battery interrupt-IN transfers on the
+emulator side, but that cannot prove host parser/work enqueue. Production
+firmware does not log detached power-supply snapshots, so exact `PRESENT`,
+status, capacity, and event ordering remain outside this verdict.
+
+This focused sequence advances only after each profile's initialization and
+input smoke completes. It does not add pending/running-work cancellation,
+same-PID reconnect, Touch Ring semantics, explicit pen-touch arbitration,
+receiver `0084 -> 033b`, or exact multitouch/max-contact oracles. Earlier
+focused Wacom fixtures cover the cancellation, same-PID reconnect, ring, and
+arbitration paths; receiver `0084 -> 033b` and exact multitouch/max-contact
+oracles remain uncovered.
 
 Heavier FF drivers should stay deferred for now:
 
@@ -1490,6 +1562,25 @@ and emulator CDC lines under each item.
     all 47 heap snapshots; exact power values/order, real 30-minute AES expiry,
     post-promotion/running original pre-PID callback, and other receiver child
     profiles remain outside the verdict
+- [x] external wired Wacom Intuos matrix
+  - exact host
+    `1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed`
+    and emulator
+    `93f034b64d9eec4537477acfb9763d3cbe0590017338f5a561619b74d5da2fac`
+  - require all eleven selected PID profiles to complete mode SET/GET and
+    Pen/Pad smoke, the three Pro profiles to complete LED initialization, and
+    the seven touch-capable profiles to complete Finger smoke
+  - require 29 balanced input lifetimes, ten different-PID detach/attach
+    transitions, representative `0302/0314/033b` battery IN completion,
+    `f15, f10`, no `f12` or host `ERR`, `oom=0`, and nonzero task watermarks
+  - require the three Pro profiles to complete paired Finger probe under the
+    retained `64/675` parser policy and every profile removal to return to one
+    stable heap plateau
+  - verdict: passed 2026-07-31; all 63 heap snapshots reported `oom=0`, minimum
+    heap was 12,832 B, terminal removals returned to 60,736 B, and the Pro
+    feature-usage optimization retained full report values and wire bytes;
+    family captures do not establish byte-exact retail descriptors for every
+    selected PID, and exact power snapshots remain unobserved
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

@@ -819,8 +819,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-core.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-params.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-uclogic-rdesc.c
-        # Pinned-upstream Wacom stack, allowlisted to wired USB CTL-472,
-        # CTL-672, and PTK-450.
+        # Pinned-upstream Wacom stack, selected to the measured base profiles
+        # plus curated external wired Intuos and Intuos Pro USB models.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_wac.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/wacom_sys.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-topseed.c

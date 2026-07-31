@@ -431,20 +431,25 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
-- The complete pinned Wacom sources use a narrow USB-only table containing
-  PTH-650 `056a:0027`, PTK-450 `056a:0029`, receiver `056a:0084`, CTH-470
-  `056a:00de`, CTL-472 `056a:037a`, CTL-672 `056a:037b`, and Yoga 260 AES
-  `056a:5048`. The active upstream paths retain Pen/Pad/Touch parsing,
+- The complete pinned Wacom sources use a narrow USB-only table containing the
+  seven hardware-tested base IDs `056a:0027/0029/0084/00de/037a/037b/5048`
+  plus external wired Intuos `0302/0303/030e/0323`, Intuos 2
+  `033b/033c/033d/033e`, and Intuos Pro `0314/0315/0317`. The active upstream
+  paths retain Pen/Pad/Touch parsing,
   ExpressKeys, Touch Ring, LED control, pen-touch arbitration, ordinary/AES
   battery, delayed initialization, idle proximity, and receiver
   pair/unpair/re-pair with dynamic sibling rebind. Rebind clears the
   connect-lifetime HID field-ordering graph after the low-level transport has
   stopped, so the next `hid_hw_start()` rebuilds it without accumulating stale
   allocations. The separate wired and AES/receiver automatic fixtures passed
-  their complete hardware runs. Bluetooth, ExpressKey Remote, bootloader, I2C,
-  PCI, and product IDs outside the seven-entry USB table remain gated. Receiver
-  lookup can resolve any child PID already in that table; hardware receiver
-  coverage is limited to child `056a:0027`.
+  their complete hardware runs for the original seven IDs. The focused
+  eleven-ID Intuos matrix also passed with 29 balanced input-node lifetimes,
+  `oom=0`, and terminal `f15, f10`. Its family captures verify exact-ID
+  selection and reused parser-family/mode/input smoke, but are not byte-exact
+  retail descriptors for every model. Bluetooth,
+  ExpressKey Remote, bootloader, I2C, PCI, and every other product ID remain
+  gated. Receiver lookup can resolve any child PID already in the selected
+  table; hardware receiver coverage is still limited to child `056a:0027`.
 - CTH padding-only report IDs 2 and 3 make pinned
   `hid_report_process_ordering()` request zero bytes. Linux returns
   `ZERO_SIZE_PTR` and later accepts that sentinel in `kfree()`. The former
@@ -530,8 +535,8 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   boundary; no `EVDEV_INPUT_DROP` or host transport error appeared.
   Production logs do not expose exact power-snapshot values/order. The fixture
   does not wait for the real 30-minute AES battery expiry, and its receiver
-  child `0027` is a selected active profile. Captured child `033b` is outside
-  the active table and would be ignored.
+  child `0027` is a selected active profile. Captured child `033b` is selected
+  by the current Intuos table, but that older artifact did not exercise it.
 - 2026-07-30: the five-profile wired Wacom checkpoint used exact host UF2
   SHA256
   `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`
@@ -847,6 +852,27 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   RP2040 heap. The full `60ee` Consumer field needs 13,408 bytes more than its
   256-usage run, which left 11,152 bytes free. Their upstream rows are retained
   but disabled for the RP2040 build.
+- 2026-07-31: the focused external wired Wacom Intuos matrix used host UF2
+  SHA256
+  `1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed`
+  and emulator UF2 SHA256
+  `93f034b64d9eec4537477acfb9763d3cbe0590017338f5a561619b74d5da2fac`.
+  Eleven selected PID profiles `0302/0303/030e/0314/0315/0317/0323/033b/033c/
+  033d/033e` published and removed 29 expected Pen/Pad/Finger nodes, produced
+  eleven expected rejected compatibility-interface `HID_IGNORED` and seven
+  bounded touch-batch warnings, and completed with `f15, f10`, no `f12`, no
+  host `ERR`, and `oom=0` in all 63 heap snapshots. Exact-ID feature-usage
+  compaction for the three Intuos Pro IDs preserved every report value while
+  removing duplicate
+  vendor-usage metadata from the captured `0317` family descriptor reused for
+  `0314/0315`: the Pro Pen snapshot improved from 10,688 to 30,696 B free,
+  allowing Finger probe to complete at 17,320 B free. Minimum-ever heap
+  was 12,832 B; terminal profile removals returned to 60,736 B. Minimum task
+  watermarks were TinyUSB 265, KeyD 658, async 384, work 207, timer 348,
+  lifecycle 212, and report 859 words. Representative battery report IN
+  transfers for `0302`, `0314`, and `033b` completed on the emulator side;
+  host parser/work enqueue and detached power-snapshot values remain
+  unobserved.
 
 ## Current Driver Boundary
 
@@ -870,7 +896,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   UI task reads and currently ignores detached `ADDED`/`CHANGED` snapshots,
   then removes the personal queue after terminal `REMOVED`. Power events do
   not enter KeyD or the ordinary devmon queue, and UI presentation is deferred.
-- The Microsoft WIP selects USB
+- The Microsoft stage selects USB
   `045e:0048/009d/00b4/00db/00dc/00e3/00f9/0713/071d/0730/0732/0750/076c/
   07da`. It exercises pinned report-fixup, mapping/mapped, event, and
   parse/start/remove paths plus the narrow per-device fix for upstream's
@@ -896,9 +922,10 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Bluetooth-proxy, and Dinovo receivers remain compile-gated. The driver
   retains multiple virtual-child slots,
   standard mouse/keyboard/Consumer/power/media descriptors, HID++ descriptors,
-  and raw-request routing through the physical receiver. `c532` passed the
-  retained policy; `c52f/c534` passed only the temporary `64/256` logic check.
-- The Lenovo WIP selects external USB `17ef:6009/6047`; its full `60ee` row is
+  and raw-request routing through the physical receiver. The selected `c532`
+  exact retained-policy regression remains pending; `c52f/c534` passed only
+  the temporary `64/256` logic check.
+- The Lenovo stage selects external USB `17ef:6009/6047`; its full `60ee` row is
   retained but memory-gated on RP2040. It retains pinned
   report validation, Button-16/Fn/vendor mappings, middle-button wheel
   arbitration, async `6009` feature SET_REPORT, and the sequential synchronous
@@ -916,16 +943,20 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   The earlier two-OOM result used 256 fields. Heap values are in
   `hid-emulator-coverage.md` and `pio-usb-memory.md`.
 - The corrected Logitech/Lenovo fixture separately passed all six new profiles
-  at temporary `64/256`. `6009/6047` retain their earlier 675-usage result;
-  `c52f/c534/60ee` are not selected in the RP2040 build after the measured
-  capacity result.
+  at temporary `64/256`. The selected `c532/6009/6047` exact retained-policy
+  regression remains pending; `c52f/c534/60ee` are not selected in the RP2040
+  build after the measured capacity result.
 - FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, and
   broader real-device DJ product coverage remain outside that DJ candidate.
-  The seven active Wacom USB IDs are a separate linked, hardware-passed
-  parser/workqueue/timer result covering Pen, Pad, Touch, LED, arbitration,
-  ordinary/AES/receiver battery traffic, receiver rebind, and balanced
-  reconnect teardown. Exact power-snapshot values, real 30-minute AES expiry,
-  and UI-consumer startup failure are not part of that verdict.
+  The original seven Wacom IDs collectively have parser, delayed-work, timer,
+  LED, arbitration, battery, receiver-rebind, reconnect, and balanced-teardown
+  coverage across their focused fixtures. The later eleven-ID Intuos fixture
+  adds exact-ID selection, mode exchange, Pro LED initialization, Pen/Pad plus
+  seven Finger smoke paths, ten different-PID detach/attach transitions,
+  balanced teardown, and the measured memory result. It uses family captures
+  and does not add pending/running-work cancellation, same-PID reconnect,
+  Touch Ring semantics, explicit arbitration, receiver `0084 -> 033b`, or
+  exact power-snapshot coverage.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of

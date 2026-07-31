@@ -639,8 +639,63 @@ disconnect, and recovery. It does not wait for real 30-minute AES expiry or
 prove exact power-snapshot values/order. A device-side report acknowledgement
 also cannot prove that every PTH/receiver pending battery callback had already
 been queued. The selected receiver child `0027` is a protocol-equivalent active
-profile; captured child `033b` is outside the active table and would be
-ignored.
+profile; captured child `033b` is selected by the later Intuos stage but was
+not exercised by this receiver artifact.
+
+#### External wired Wacom Intuos verified stage
+
+Selecting eleven external wired Intuos/Intuos Pro/Intuos 2 IDs and enabling
+duplicate VARIABLE Feature usage compaction for the three Pro IDs produces:
+
+```text
+host text/data/bss             605224 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+scratch X                      788 B (0x20040000..0x20040314)
+scratch X / core-1 gap         1260 B to 0x20040800
+host UF2 SHA-256               1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed
+emulator text/data/bss         66080 / 0 / 254480 B
+emulator UF2 SHA-256           93f034b64d9eec4537477acfb9763d3cbe0590017338f5a561619b74d5da2fac
+hardware verdict               passed 2026-07-31 for the qualified scope below
+```
+
+The port quirk does not reduce `HID_MAX_USAGES`, report count, cached
+value/new-value storage, wire length, raw/control payloads, or request return
+semantics. It stores only the explicitly declared usage callback for
+FEATURE+VARIABLE fields whose same vendor usage Linux would repeat to every
+value. On the captured `0317` PTH-851 family descriptor this avoids 626
+duplicate `hid_usage`/priority pairs, about 20 KiB of persistent heap; the
+emulator reuses that capture for `0314/0315`, so the count is not a claim about
+separately captured retail descriptors. Selection is limited to exact Wacom
+`056a:0084/0314/0315/0317/5048`; other HID drivers retain normal Linux
+expansion because their mapping callbacks may depend on every usage index.
+The selected Pro call graph does not request the large compressed B1/B2 vendor
+reports;
+its mode, LED, and proximity operations use separate small reports, and the
+normal feature-mapping pass iterates only `field->maxusage`.
+
+Relative to the preceding retained-policy host build, this exact-ID stage adds
+1,728 bytes of text and no data or BSS; `__bss_end__` and the 280-byte main-bank
+headroom are unchanged. The optimization targets persistent per-device heap
+instead of trading away parser compatibility globally.
+
+The distinguishing pre-compaction run left 10,688 B after Pro Pen and 10,560 B
+after Pad, then failed Finger probe with `oom=2` and a 976-byte minimum-ever
+counter. The verified image left 30,696 B after Pen, 30,568 B after Pad, and
+17,320 B after Finger. All eleven profiles completed 29 balanced input
+lifetimes and terminal `f15, f10`; all 63 heap snapshots reported `oom=0`.
+Minimum-ever free heap was 12,832 B, and every terminal tablet removal returned
+to 60,736 B without cumulative retention.
+
+Minimum remaining task watermarks were TinyUSB 265, KeyD 658, async 384,
+work 207, timer 348, lifecycle 212, and report 859 words. Seven
+`EVDEV_BATCH_CAP` warnings and unsupported tablet event messages remain at the
+downstream KeyD boundary; there was no host `ERR` or input-drop marker. The
+family captures are not byte-exact retail descriptors for every selected PID.
+Representative battery reports are injected only for `0302`, `0314`, and
+`033b`. Only emulator-side interrupt-IN completion is established; host
+parser/work enqueue and exact detached power-snapshot values remain
+unobserved.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware

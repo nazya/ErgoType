@@ -4263,13 +4263,15 @@ static int usbhid_parse(struct hid_device *hid)
 		return -ENODEV;
 
 	/*
-	 * The exact Wacom 0x5048 and wireless-receiver descriptors contain large
-	 * VARIABLE feature reports whose single vendor usage is repeated up to 261
-	 * times. The pinned Wacom driver maps only the explicitly declared usage
-	 * while retaining every report value and byte for its real control paths.
+	 * Exact 0x0084/0x5048 and captured 0x0317 Pro-family descriptors have
+	 * VARIABLE Features whose last explicit usage Linux expands to 265 values.
+	 * Scoped Wacom callers never use repeated maps; values/raw bytes stay full.
+	 * 0x0314/0x0315 reuse the family quirk without retail-descriptor claims.
 	 */
 	if (hid->vendor == 0x056a &&
-	    (hid->product == 0x0084 || hid->product == 0x5048)) {
+	    (hid->product == 0x0084 || hid->product == 0x0314 ||
+	     hid->product == 0x0315 || hid->product == 0x0317 ||
+	     hid->product == 0x5048)) {
 		quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
 		hid->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
 		transport_quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;

@@ -51,14 +51,19 @@ The active implementation now has these properties:
   callback before devres can release its owner.
   Ordinary and AES battery callbacks use nonblocking parser-lock retry because
   firmware power-supply unregister frees directly.
-  Separate wired and AES/receiver hardware runs covered disconnect before a
-  delayed deadline, held mode/LED/rebind callbacks, active-touch teardown,
-  pair/unpair/re-pair, physical disconnect, recovery, and reconnect for all
-  seven active USB IDs. Their 115 and 47 heap snapshots respectively reported
-  `oom=0`, with nonzero task watermarks. Production logs did not expose exact
-  power-snapshot values, the AES run did not wait for the real 30-minute
-  expiry, and device-side acknowledgement cannot prove every pending battery
-  work enqueue. Promotion-before-callback, simultaneous synchronous cancel,
+  Across the seven then-active USB IDs, separate wired and AES/receiver
+  hardware runs collectively covered disconnect before a delayed deadline,
+  held mode/LED/rebind callbacks, active-touch teardown, pair/unpair/re-pair,
+  physical disconnect, recovery, and reconnect. Their 115 and 47 heap
+  snapshots respectively reported `oom=0`, with nonzero task watermarks.
+  Production logs did not expose exact power-snapshot values, the AES run did
+  not wait for the real 30-minute expiry, and device-side acknowledgement
+  cannot prove every pending battery
+  work enqueue. The later focused eleven-ID Intuos fixture reused the same
+  applicable mode/LED request paths and completed with 29 balanced input
+  lifetimes, `oom=0`, and no host `ERR`; it added no asynchronous-request
+  primitive and did not extend the asynchronous-cancellation verdict.
+  Promotion-before-callback, simultaneous synchronous cancel,
   callback self-requeue, queue destruction, and tick wrap remain statically
   audited generic branches rather than hardware-covered claims.
 - Device and string pre-probe policy is lifecycle-owned and uses that same

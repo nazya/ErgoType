@@ -57,13 +57,34 @@ Its expanded automatic matrix completed on hardware on 2026-07-27 with all
 markers, stable cleanup plateaus, `oom=0`, nonzero task watermarks, and no host
 `ERR`.
 
-The Wacom checkpoint additionally links complete pinned Wacom sources and
-matches seven USB IDs: CTL-472 `056a:037a`, CTL-672 `056a:037b`, PTK-450
-`056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
-`056a:5048`, and receiver `056a:0084`. Together they reach the upstream Pen,
+The Wacom checkpoint additionally links complete pinned Wacom sources. The
+hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
+PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
+`056a:5048`, and receiver `056a:0084`. The later focused Intuos stage adds
+external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e`.
+Together the selected profiles reach the upstream Pen,
 Pad, Touch, ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES battery,
 idle-proximity timer, and receiver pair/unpair plus sibling-rebind paths
 applicable to those profiles.
+
+The captured `0317` PTH-851 family descriptor repeats one vendor usage across
+FEATURE reports as large as 265 values. Linux materializes one usage mapping
+per value; the exact-ID firmware quirk for `0314/0315/0317` keeps all report
+values and bytes but retains only the explicitly declared mapping entry. This
+is a port memory optimization, not an upstream bugfix. On the captured `0317`
+descriptor, reused by the `0314/0315` emulator profiles, it removes 626
+duplicate usage/priority pairs, about 20 KiB. It raised free heap after Pro Pen
+probe from 10,688 to 30,696 B and allowed the paired Finger interface to
+register without changing `HID_MAX_USAGES=675`.
+
+The focused Intuos host/emulator pair passed on 2026-07-31. Eleven selected PID
+profiles published and removed 29 Pen/Pad/Finger nodes, all 63 heap snapshots
+reported `oom=0`, terminal removals returned to 60,736 B free, every task
+watermark stayed nonzero, and the fixture ended with `f15, f10` without a host
+`ERR`. The matrix exercises every selected identity with documented family
+captures: mode and Pen/Pad smoke for all eleven, Pro LED initialization for
+three, and Finger smoke for seven. It is not a byte-exact retail descriptor
+matrix.
 
 The exact five-profile wired pair recorded in `hid-emulator-coverage.md`
 completed
@@ -99,15 +120,15 @@ dynamic resource release, held rebind/teardown controls, physical disconnect,
 and recovery. All 47 heap snapshots reported `oom=0`, removal returned to the
 established 60,496/60,752-byte plateaus after terminal physical disconnect,
 and every task watermark remained nonzero. The selected receiver child is
-active PTH-650 profile `056a:0027`. The available capture reports `033b`, which
-is outside the active table and would be ignored; the test therefore does not
-claim a captured `0084 -> 0027` pairing.
+active PTH-650 profile `056a:0027`. The available capture reports `033b`;
+that child is selected by the later Intuos stage but was not part of this older
+artifact, so the test does not claim a captured `0084 -> 0027` pairing.
 
 Production logs still do not expose exact detached battery fields or ordering,
 and the AES fixture does not wait for the real 30-minute expiry. The receiver
 fixture deterministically covers initial sibling work while pending but cannot
 externally hold the short pre-PID callback after workqueue promotion or during
-execution. Receiver lookup can select any child PID in the active seven-entry
+execution. Receiver lookup can select any child PID in the current exact-ID
 table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
 ExpressKey Remote, bootloader, I2C, PCI, and product IDs outside that table
 remain excluded.
@@ -560,8 +581,9 @@ Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
 Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
 the USB-only Magic Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
-separate narrow USB ID gates; the active Wacom gate contains only the seven
-USB IDs listed above.
+separate narrow USB ID gates. The Wacom gate contains the seven
+hardware-tested base IDs plus eleven external wired Intuos exact-ID selections
+hardware-tested with the documented family captures above.
 Microsoft is likewise narrow: 14 wired non-gaming USB IDs are selected, while
 SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF remain compile-gated
 with matching special-driver gates. The exact per-device-release pair passed
@@ -582,16 +604,17 @@ The pinned Logitech DJ runtime selects USB receivers `046d:c52b/c532`.
 Upstream `c52f/c534` rows and their mouse-only/HID++ types remain intact behind
 the broader gate after their retained-policy RP2040 memory result. Gaming,
 Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain
-gated. Existing `c52b` coverage and the retained-policy `c532` pass remain
-valid; `c52f/c534` passed request/input/teardown only at temporary `64/256`.
+gated. Existing `c52b` coverage remains valid; the selected `c532` exact
+retained-policy active-ID regression is pending. `c52f/c534` passed
+request/input/teardown only at temporary `64/256`.
 The complete pinned Lenovo driver selects external USB TrackPoint keyboards
 `17ef:6009/6047`; the full `60ee` row is retained but memory-gated. Bluetooth,
 I2C, ScrollPoint, dock, tablet, and audio LED-class paths remain gated; Legion
 is a separate unlinked driver family. The active paths retain their upstream
 report validation, TrackPoint/Fn mapping, middle-button wheel arbitration, and
-feature/raw request ordering. `6009/6047` completed their hardware sequence.
-The current KeyD boundary still drops `KEY_FN_ESC`; `60ee` has only a temporary
-`64/256` logic result and is not selected on RP2040.
+feature/raw request ordering. Their exact retained-policy active-ID regression
+is pending. The current KeyD boundary still drops `KEY_FN_ESC`; `60ee` has only
+a temporary `64/256` logic result and is not selected on RP2040.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.
