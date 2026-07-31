@@ -392,6 +392,7 @@ sources so their enablement contract remains visible.
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact-ID explicit-feature-usage compaction for Wacom `056a:0084/5048`, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and post-transport-stop release of connect-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
+| `hid-apple.c` | Complete pinned source with exactly 18 external wired USB IDs active; Bluetooth, internal/legacy keyboard and trackpad, Touch Bar, and backlight-only rows/code remain adjacent behind `CONFIG_HID_APPLE_ALL_DEVICES`; battery report lookup uses the sparse registry and the driver descriptor is immutable. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-microsoft.c` | Complete pinned source with exactly 14 non-gaming wired USB IDs active; SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF state/code/table rows remain adjacent behind `CONFIG_HID_MICROSOFT_ALL_DEVICES`; the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
@@ -463,7 +464,7 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 24 vendor driver descriptor translation units across 23 enabled
+- CMake links 25 vendor driver descriptor translation units across 24 enabled
   vendor `CONFIG_HID_*` families (the compound Holtek config contributes
   keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
   are also linked. Stadia has no reduced config gate and is excluded simply by
@@ -486,6 +487,21 @@ it contains no callback, logging, allocation, or wait.
   2026-07-31: F14 and F15 were released by their owning interfaces before
   removal, all representative profiles completed, and terminal `f10` arrived
   with `oom=0`, stable removal heap, and no host `ERR`.
+- The imported `hid-apple.c` matches exactly external USB IDs
+  `05ac:0304/021d/021e/021f/0220/0221/0222/024f/0250/0251/0267/026c/029a/
+  029c/029f/0320/0321/0322`. `apple_devices[]` and
+  `hid_have_special_driver[]` contain the same active set. Every Bluetooth,
+  internal/legacy, trackpad-only, Touch Bar, and backlight-only row is gated in
+  both places, preserving generic fallback. The active call graph retains
+  upstream allocation and parse/start returns, the nonfatal void battery
+  request, and `timer_delete_sync()` before transport stop. Its only report
+  registry adaptation is the existing sparse lookup beside the retained dense
+  hash line. The exact focused pair passed on hardware on 2026-07-31: both
+  mapping tables, Mighty Mouse buttons, immediate and 60-second battery GET,
+  pre-deadline teardown, queued-request disconnect, and reconnect completed
+  before terminal `f10`, with stable removal heap, `oom=0`, and no host `ERR`.
+  The fixture delivered both relative Z signs, but production CDC has no
+  REL_HWHEEL marker, so their inversion remains source-audited.
 - The imported `hid-magicmouse.c` matches only USB Magic Mouse 2 and Trackpad 2
   IDs. Its synchronous mode SET runs from lifecycle task context through the
   existing async EP0 owner. USB Mouse 2 returns before the upstream delayed
@@ -1347,9 +1363,9 @@ Current checkpoint audit:
 - retained the prior whole-file audit and diffed the newly linked
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
-  both linked Wacom translation units and `hid-microsoft.c` against the same
-  pin. There are now 37 linked Linux-derived C translation units; thirty-six
-  have an upstream source
+  both linked Wacom translation units, `hid-microsoft.c`, and `hid-apple.c`
+  against the same pin. There are now 38 linked Linux-derived C translation
+  units; thirty-seven have an upstream source
   counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres

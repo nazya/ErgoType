@@ -76,6 +76,51 @@ followed by the expected mapped key event. Packed-wheel output has no
 production CDC marker and remains source-audited unless observed at the
 firmware's USB output.
 
+### Hardware-verified Apple external-USB host and focused fixture
+
+The Apple host selects 18 external USB keyboard/Mighty Mouse IDs,
+and the focused fixture is intentionally limited to four distinct behaviors
+rather than one
+reconnect per PID:
+
+- Aluminum Rev B `05ac:024f` for Fn translation and `ALWAYS_POLL`;
+- Mighty Mouse `05ac:0304` for button swap and inverted horizontal wheel;
+- Magic Keyboard 2015 `05ac:0267` for the older key table, ISO/JIS correction,
+  the protocol-equivalent 83-byte battery-fixup signature, and cancellation
+  before its deadline;
+- Magic Keyboard 2024 `05ac:0320` for the newer F4/F5/F6 table, one real
+  60-second battery deadline, disconnect during GET_REPORT, and reconnect.
+
+The exact hardware-verified artifacts are:
+
+```text
+host UF2 SHA-256       e55bc54d78acc77e14548d6f7dfc6f816fe8d00f712803c7aef9fb977cc5f096
+host text/data/bss     600920 / 788 / 245360 B
+emulator branch        device/apple-external-usb
+emulator UF2 SHA-256   6e6ba43c7efad0677a372079f079701e5fa51f8cb65c30f4321a3fbaafe72255
+emulator text/data/bss 60296 / 0 / 254452 B
+emulator UF2 size      120832 B
+hardware verdict       passed 2026-07-31
+```
+
+The regular `hid_hw_request()` GET is rounded to EP0 maxpacket by the existing
+upstream-shaped transport. With `bMaxPacketSize0=64`, the fixture requires
+setup `a1 01 84 01 01 00 40 00`; this is not the exact-length raw-request
+contract used by other drivers. Its terminal `f10` is internally gated by the
+immediate GET, exact second-GET setup near 60 seconds, canceled queued SETUP
+callback, and fresh GET after reconnect. Production CDC does not log the raw
+GET itself. The exact pair reached terminal `f10` after all of those gates,
+with no `f12` or host `ERR`. Aluminum, Mighty Mouse buttons, and both Magic
+Keyboard profiles produced their expected host-visible mapped input. The
+fixture also delivered both signs of relative Z, but production CDC has no
+REL_HWHEEL marker, so the inversion remains source-audited. The 2024 profile
+disconnected with the delayed GET queued, reconnected, completed a fresh
+immediate GET, and returned to the same 60496-byte removal plateau. The run
+reported `oom=0`, a 38224-byte minimum-ever free heap, and nonzero minimum task
+watermarks: TUH 265, KeyD 658, async 395, work 346, timer 315, lifecycle 220,
+and report 870 words. Exact detached power-snapshot values remain outside the
+production-log verdict.
+
 ### Hardware-verified work-input and long-enumeration fixture
 
 Host checkpoint `hid: enable audited work-input drivers` enables the upstream-shaped `hid-elecom.c`,
@@ -439,9 +484,9 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; the `holtek-mouse` hardware pass remains pending |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | `work-input-drivers`, `microsoft-usb`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
-| driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified |
+| `report_fixup` | `hid-apple`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; the `holtek-mouse` hardware pass remains pending |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
+| driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified |
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
@@ -449,6 +494,7 @@ drivers are not counted here.
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
+| periodic regular GET_REPORT and timer teardown | `hid-apple` Magic Keyboard battery path | `apple-external-usb` verified immediate GET, one real 60-second deadline, queued-request disconnect, timer teardown, and reconnect |
 | USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | `rapoo-2_4g-receiver`, `razer-blackwidow` |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
@@ -469,10 +515,10 @@ passes rather than normal-driver gaps.
 Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
-Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
+Apple external USB, Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Microsoft, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom,
-and Zydacron; each has a matching emulator branch. The Microsoft branch passed
-its exact fixed-host hardware run on 2026-07-31. Wacom's historical exact
+and Zydacron. Apple and Microsoft passed their focused exact-artifact hardware
+runs on 2026-07-31. Wacom's historical exact
 32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
 separate AES/receiver artifact are hardware-verified. Exact power-snapshot
 values, elapsed AES expiry, receiver children outside selected profile
@@ -488,11 +534,11 @@ reuse an already tested hook shape.
 ## Coverage Decision
 
 The existing emulator set plus the hardware-verified work-input, combined
-haptic/Trackpad, Microsoft, and exact Wacom fixtures covers the active allowlist,
+haptic/Trackpad, Microsoft, Apple, and exact Wacom fixtures covers the
 long-enumeration success path, normal USB Magic Trackpad 2 path, and the
 selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/Yoga 260 AES and USB
-receiver flows. The Holtek mouse driver-specific hardware result remains
-pending.
+receiver flows. The active allowlist is covered except for the Holtek mouse
+driver-specific hardware result.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. The complete Wacom fixture also passed the working input/devres
 and evdev identity correction. The later fixture certifies the selected

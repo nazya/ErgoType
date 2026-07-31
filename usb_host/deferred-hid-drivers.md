@@ -144,6 +144,39 @@ and F15 in owner order before either interface removal, all representative
 profiles returned to the same 60752-byte free-heap plateau, and the run reached
 terminal `f10` with `oom=0` and no host `ERR`.
 
+## Active Apple External USB Boundary
+
+The complete pinned `hid-apple.c` is linked for 18 external wired devices:
+Mighty Mouse `05ac:0304`; Aluminum Mini `021d/021e/021f`; Aluminum
+`0220/0221/0222`; Aluminum Rev B `024f/0250/0251`; Magic Keyboard 2015
+`0267/026c`; Magic Keyboard 2021 `029a/029c/029f`; and Magic Keyboard 2024
+`0320/0321/0322`. The Touch-ID-named products are supported only as
+keyboards; no fingerprint interface is claimed.
+
+Bluetooth, internal Fountain/Geyser/Wellspring/T2 devices, trackpad-only
+interfaces, Touch Bar, and backlight-only endpoints remain visible behind
+`CONFIG_HID_APPLE_ALL_DEVICES`. The same exact boundary is mirrored in
+`hid_have_special_driver[]`, so excluded Apple USB products retain generic HID
+fallback. The active scope needs no Apple LED/backlight or Linux sysfs proxy.
+
+The active driver preserves upstream Fn/F-key translation, ISO/JIS correction,
+Mighty Mouse button/HWheel handling, and the Magic Keyboard battery descriptor
+and 60-second timer. The firmware difference in `apple_fetch_battery()` is
+limited to the existing sparse report lookup beside the retained upstream
+`report_id_hash[]` line. Removal still synchronously deletes the battery timer
+before `hid_hw_stop()` drains queued or in-flight GET_REPORT requests and
+before devres releases `apple_sc`, reports, or battery state.
+
+The exact host and compact four-profile fixture passed on hardware on
+2026-07-31. The run covered Aluminum Fn release ordering, Mighty Mouse button
+mapping, both Magic Keyboard generations, cancellation before the
+2015 timer deadline, one real 60-second 2024 battery deadline, disconnect with
+the GET queued, and a fresh GET after reconnect. Terminal `f10` arrived with
+`oom=0`, stable Magic removal heap, nonzero task watermarks, and no host `ERR`.
+Production logs still do not expose detached battery snapshot values.
+They also do not expose REL_HWHEEL; both relative Z signs were delivered by
+the fixture, while their inversion remains source-audited.
+
 ## HIDRAW and Logitech HID++ Boundary
 
 HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard

@@ -32,6 +32,9 @@ The following paths have produced input events on hardware:
 - modern XP-Pen Deco L/LW and Deco Pro S/SW/MW profiles, including battery
   traffic, wireless reconnect re-probe, dial/mouse input, and the USB Magic
   Trackpad 2 sparse-battery regression;
+- the selected external Apple USB keyboard and Mighty Mouse paths, including
+  Fn/media and button mapping, the 60-second battery request,
+  queued-request disconnect, and reconnect;
 - the PMW pointing-device path, independently of USB host input.
 
 The current exact-class stage additionally selects M560 `046d:402d`,
@@ -536,9 +539,9 @@ current sizes are recorded in `pio-usb-memory.md`.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
-Kye, Microsoft, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus
-generic multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2
-driver.
+Kye, Microsoft, Apple external USB, Primax, PXRC, Rapoo, Razer, Saitek, Topre,
+and Zydacron, plus generic multitouch, HID Haptics, and the USB-only Magic
+Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
 separate narrow USB ID gates; the active Wacom gate contains only the seven
 USB IDs listed above.
@@ -549,6 +552,15 @@ on hardware on 2026-07-31: the two Office interfaces released F14 and F15
 independently before removal, all representative profiles completed, removal
 heap returned to 60752 bytes, and the terminal result was `f10` with `oom=0`
 and no host `ERR`.
+Apple is limited to 18 external wired keyboard/Mighty Mouse IDs. Internal and
+legacy Apple keyboard/trackpad devices, Bluetooth, Touch Bar, and backlight-only
+endpoints remain compile-gated with matching special-driver gates. Touch-ID
+models are treated only as keyboards. The focused four-profile artifact passed
+on hardware on 2026-07-31: both mapping tables, Mighty Mouse buttons, immediate
+and 60-second battery GET, queued-request disconnect, and reconnect completed
+before terminal `f10`, with stable removal heap, `oom=0`, and no host `ERR`.
+The fixture delivered both relative Z signs, but production CDC has no
+REL_HWHEEL marker, so their inversion remains source-audited.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.

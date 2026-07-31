@@ -39,6 +39,33 @@ Its exact input and control coverage is recorded in
 `hid-emulator-coverage.md`; the preceding Wacom AES/receiver memory result
 remains recorded in its stage below.
 
+The cumulative Apple external-USB stage passed its exact hardware fixture:
+
+```text
+text/data/bss                 600920 / 788 / 245360 B
+__bss_end__                   0x2003feb8
+main-bank headroom            328 B to 0x20040000
+delta from Microsoft stage    +4624 text / +0 data / +48 bss
+delta from Wacom baseline     +6560 text / +0 data / +96 bss
+UF2 SHA-256                   e55bc54d78acc77e14548d6f7dfc6f816fe8d00f712803c7aef9fb977cc5f096
+emulator UF2 SHA-256          6e6ba43c7efad0677a372079f079701e5fa51f8cb65c30f4321a3fbaafe72255
+emulator text/data/bss        60296 / 0 / 254452 B
+hardware verdict              passed 2026-07-31; complete focused sequence
+```
+
+The exact static increase over Microsoft is only the linker-owned 48-byte
+builtin-driver runtime. The module-parameter values are compile-time firmware
+defaults and produce no additional mutable storage in this build. A matched
+Magic Keyboard interface allocates its devres-owned `apple_sc`, generic battery
+state, timer/request state, and reduced power-supply queue from the runtime
+heap; none of those per-device objects are included in the static figures.
+
+The run reached terminal `f10` with no `f12`, host `ERR`, or OOM. Minimum-ever
+free heap was 38224 bytes. Removal after Magic Keyboard 2015 and both Magic
+Keyboard 2024 generations returned to the same 60496-byte plateau. Minimum
+free task watermarks were TUH 265, KeyD 658, async 395, work 346, timer 315,
+lifecycle 220, and report 870 words.
+
 The original 232 KiB heap experiment is historical evidence for the static-RAM
 ceiling. With that tested host branch, the link failed with:
 

@@ -738,6 +738,10 @@ target_sources(${PROJECT_NAME} PUBLIC
         # c52b receiver. Other receiver IDs and child HID++ remain gated.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
+        # Pinned Apple driver, selected to external wired USB keyboards and
+        # Mighty Mouse; legacy, Bluetooth, internal, Touch Bar, and
+        # backlight-only devices remain gated in the source.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-apple.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
         # Deferred: HIDDEV-forced driver; keep out until hiddev proxy coverage is

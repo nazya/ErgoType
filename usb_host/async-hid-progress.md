@@ -790,6 +790,25 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   reports produced F14 down, F15 down, F14 up, F15 up before either interface
   removal; all representative profiles completed; removal free heap returned
   to 60752 bytes; and terminal `f10` arrived with `oom=0` and no host `ERR`.
+- 2026-07-31: the hardware-verified Apple external-USB stage links the complete
+  pinned driver with exactly 18 wired keyboard/Mighty Mouse IDs. Bluetooth,
+  internal/legacy, trackpad-only, Touch Bar, and backlight-only rows remain
+  gated with matching special-driver gates. The stage builds as
+  `text/data/bss=600920/788/245360`, with `__bss_end__=0x2003feb8`, 328 bytes
+  of main-bank headroom, and host UF2 SHA-256
+  `e55bc54d78acc77e14548d6f7dfc6f816fe8d00f712803c7aef9fb977cc5f096`.
+  The compact four-profile emulator builds as
+  `text/data/bss=60296/0/254452`, with UF2 SHA-256
+  `6e6ba43c7efad0677a372079f079701e5fa51f8cb65c30f4321a3fbaafe72255`.
+  The exact pair passed on hardware. Aluminum Fn/F-key translation, Mighty
+  Mouse button handling, both Magic Keyboard mapping tables, immediate
+  and 60-second battery GET_REPORT, pre-deadline timer teardown, disconnect
+  with the delayed GET queued, and a fresh GET after reconnect all completed
+  before terminal `f10`. There was no `f12` or host `ERR`; `oom=0`, the Magic
+  removal plateau remained 60496 bytes through reconnect, and every task
+  watermark remained nonzero. The fixture also delivered positive and negative
+  Mighty Mouse Z reports, but production CDC has no REL_HWHEEL marker, so the
+  inversion remains source-audited rather than directly observed.
 
 ## Current Driver Boundary
 
@@ -820,6 +839,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   function-static F14--F18 release ownership. No Microsoft work, timer, FF, or
   request object is reachable. The first complete run demonstrated the
   cross-device bug; the exact per-device fixed-host pair passed on 2026-07-31.
+- The Apple stage selects USB
+  `05ac:0304/021d/021e/021f/0220/0221/0222/024f/0250/0251/0267/026c/029a/
+  029c/029f/0320/0321/0322`. It reaches pinned Fn/media/navigation mapping,
+  Mighty Mouse button/HWheel quirks, Magic Keyboard battery descriptor fixup,
+  immediate GET_REPORT, and the 60-second battery timer. Removal keeps the
+  pinned synchronous timer-delete-before-transport-stop lifetime. The
+  Touch-ID-named IDs are keyboard-only in this scope.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
@@ -854,10 +880,8 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- After the Microsoft WIP checkpoint, import the selected external wired USB
-  scope from pinned `hid-apple.c`; then expand ordinary Logitech DJ receiver
-  IDs and external Lenovo USB TrackPoint keyboards as separate audited WIP
-  stages.
+- Expand ordinary Logitech DJ receiver IDs and external Lenovo USB TrackPoint
+  keyboards as separate audited WIP stages.
 - Keep HIDRAW lifecycle-only until a concrete useful USB consumer defines the
   required bounded report/subscriber contract. HIDDEV/VFS is outside the
   current roadmap.
