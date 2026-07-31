@@ -434,8 +434,8 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 - The complete pinned Wacom sources use a narrow USB-only table containing the
   seven hardware-tested base IDs `056a:0027/0029/0084/00de/037a/037b/5048`
   plus external wired Intuos `0302/0303/030e/0323`, Intuos 2
-  `033b/033c/033d/033e`, and Intuos Pro `0314/0315/0317`. The active upstream
-  paths retain Pen/Pad/Touch parsing,
+  `033b/033c/033d/033e`, Intuos Pro `0314/0315/0317`, and wired Cintiq 13HD
+  `0304`. The active upstream paths retain Pen/Pad/Touch parsing,
   ExpressKeys, Touch Ring, LED control, pen-touch arbitration, ordinary/AES
   battery, delayed initialization, idle proximity, and receiver
   pair/unpair/re-pair with dynamic sibling rebind. Rebind clears the
@@ -450,6 +450,10 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   ExpressKey Remote, bootloader, I2C, PCI, and every other product ID remain
   gated. Receiver lookup can resolve any child PID already in the selected
   table; hardware receiver coverage is still limited to child `056a:0027`.
+  The focused `0304` fixture also passed delayed mode exchange, Pen and
+  nine-button Pad input, pre-deadline cancellation, same-PID reconnect, and
+  balanced teardown. Its report descriptor is protocol-equivalent rather than
+  a retail capture, and the verdict does not include Touch Ring or `ABS_WHEEL`.
 - CTH padding-only report IDs 2 and 3 make pinned
   `hid_report_process_ordering()` request zero bytes. Linux returns
   `ZERO_SIZE_PTR` and later accepts that sentinel in `kfree()`. The former
@@ -914,6 +918,22 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   not visible in production logging and remains source-audited. The run used
   the existing 512-word lifecycle stack; future lifecycle changes must
   remeasure its 36-word observed margin.
+- 2026-08-01: exact wired Cintiq 13HD `056a:0304` was exercised with host UF2
+  SHA256
+  `ec47bd6725c1b2b49f7ded92fc220a7fb5d2408ee8a479dd76a6aeaa612546a5`
+  and emulator commit `160a0ac`, UF2 SHA256
+  `1f7bb41c608e2d9595320a28523cc3cf9d82859a25504230334450fbc00c0a9c`.
+  Three physical generations produced six balanced Pen/Pad lifetimes. The
+  device-side oracle accepted no Feature traffic after a pre-deadline
+  disconnect, then one Feature report 2 SET/GET exchange with value 2 in each
+  of two fresh generations. Pen enter/move/exit, serial `0x12345678`, all nine
+  Pad buttons, and reconnect completed `f1, f2, f3, f10` without `f12`, host
+  `ERR`, `HID_REPORT_SKIP`, or OOM. All 21 heap snapshots reported `oom=0`;
+  terminal Cintiq removals returned to `60752/48520/9`, and minimum watermarks
+  were TinyUSB 265, KeyD 658, async 389, work 217, timer 348, lifecycle 218,
+  and report 859 words. The 91-byte report descriptor is protocol-equivalent,
+  not a retail capture; Touch, Touch Ring, and `ABS_WHEEL` remain outside the
+  verdict.
 
 ## Current Driver Boundary
 
@@ -1005,6 +1025,9 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   and does not add pending/running-work cancellation, same-PID reconnect,
   Touch Ring semantics, explicit arbitration, receiver `0084 -> 033b`, or
   exact power-snapshot coverage.
+  The later exact `0304` fixture adds WACOM_13HD mode/Pen/nine-button Pad,
+  pre-deadline cancellation, same-PID reconnect, and balanced teardown, but no
+  retail-descriptor, Touch, Touch Ring, or `ABS_WHEEL` claim.
 - Drivers that need generic USB URBs, interrupt-IN synchronous messages,
   HID requests beyond 16 KiB, USB messages beyond the 16-bit wire length,
   broad Linux subsystem state, or unaudited callback behavior stay out of
@@ -1014,16 +1037,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Rebuild only exact wired Cintiq 13HD `056a:0304` next; keep
-  `056a:0333/0335` gated and leave `ktime_after()` unchanged. Its single-Pico
-  fixture must cover delayed Feature report ID 2 SET/GET with value 2, Pen
-  report ID 16 enter/move/exit, Pad report ID 17 all nine buttons without a
-  ring/`ABS_WHEEL` claim, disconnect before the approximately one-second
-  deadline, reconnect, heap plateaus, and stack watermarks.
-- Qualify `056a:0333/0335` later with two simultaneously live device-level
+- Qualify `056a:0333/0335` next with two simultaneously live device-level
   PIDs under one common parent/hub and both arrival orders. A single Pico
-  cannot represent that topology, so neither row belongs in the `0304` stage.
-- Change reduced `ktime_after()` only in a third independent stage with a
+  cannot represent that topology, so neither row should be enabled without
+  the paired fixture.
+- Change reduced `ktime_after()` only in the following independent stage with a
   deterministic counter-wrap test. Signed modulo-`2^32` ordering is valid only
   when the compared distance is below `2^31` milliseconds; do not claim
   arbitrary long-gap correctness.

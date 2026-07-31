@@ -431,6 +431,7 @@ claims for unrelated drivers.
 | 2026-07-31 | Deco/Parblo `device/uclogic-deco-parblo` (`c843295`), host `a9ba49cf…`, emulator `373df86d…` | Deco 01 original and Parblo A610 Pro each complete an initial and same-PID reconnect generation; ten target input lifetimes balance, all 22 snapshots have `oom=0`, and terminal `f15, f10` arrives without `f12`, `HID_REPORT_SKIP`, or host `ERR` |
 | 2026-08-01 | focused UC-Logic failed-probe fixture | three reached `hid_hw_start()` failures after combined-descriptor generation repeat the same cleanup plateau, then one normal Parblo generation publishes and removes Mouse/Pen/Pad; all 25 snapshots have `oom=0`, with no host `ERR`; `hid_parse()` remains source-audited only |
 | 2026-08-01 | Artist `device/uclogic-artist` (`287acbf`), host `34aeccba…`, emulator `7173d5f1…` | Artist 22R full input plus reconnect smoke and Artist 24 input complete six balanced Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, and terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; exact Artist 24 reconstructed ABS_X is not visible in production logging |
+| 2026-08-01 | Cintiq 13HD `device/wacom-cintiq-13hd` (`160a0ac`), host `ec47bd67…`, emulator `1f7bb41c…` | three `056a:0304` generations complete pre-deadline cancellation, two exact Feature report 2 mode exchanges, Pen input, all nine Pad buttons, same-PID reconnect, six balanced Pen/Pad lifetimes, 21 `oom=0` snapshots, and terminal `f1, f2, f3, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; the descriptor is protocol-equivalent and does not prove Touch Ring or `ABS_WHEEL` |
 
 ## Recorded Emulator Branches
 
@@ -462,6 +463,7 @@ Recorded emulator branches:
 | `device/wacom-wired-matrix` | `66c5dde` |
 | `device/uclogic-deco-parblo` | `c843295` |
 | `device/uclogic-artist` | `287acbf` |
+| `device/wacom-cintiq-13hd` | `160a0ac` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -499,6 +501,8 @@ Recorded emulator branches:
   Pro UGEE-v2 string/request/input paths, including same-PID reconnect.
 - `device/uclogic-artist`: focused Artist 22R/24 Pro OUT-before-string
   initialization, Pen/Pad/Dial layouts, and same-PID 22R reconnect.
+- `device/wacom-cintiq-13hd`: focused `056a:0304` delayed mode exchange,
+  pre-deadline cancellation, Pen/nine-button Pad input, and same-PID reconnect.
 - `device/primax-keyboard`: raw event rewrite and re-entry into the HID parser.
 - `device/pxrc-phoenixrc`: report fixup plus stateful raw axis shuffle.
 - `device/quirks-atmel-ma901`: name-based `hid_ignore()` quirk requiring the
@@ -563,7 +567,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; seven base IDs plus external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e` | historical CTL-472, expanded five-profile wired, separate AES/receiver, and focused eleven-ID Intuos `wacom-wired-matrix` artifacts passed on hardware; exact power values, elapsed AES expiry, receiver child profiles other than `0027`, byte-exact retail descriptors for every Intuos PID, and Remote remain outside the verdict |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; seven base IDs plus external wired `056a:0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e` | historical CTL-472, expanded five-profile wired, separate AES/receiver, focused eleven-ID Intuos, and focused Cintiq 13HD artifacts passed on hardware; exact power values, elapsed AES expiry, receiver child profiles other than `0027`, byte-exact retail descriptors for every selected PID, Cintiq Touch pair `0333/0335`, and Remote remain outside the verdict |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -586,7 +590,8 @@ runs on 2026-07-31. Wacom's historical exact
 32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
 separate AES/receiver artifact are hardware-verified; its focused external
 wired Intuos artifact passed all eleven selected IDs using the documented
-family captures. Exact power-snapshot
+family captures, and the focused Cintiq 13HD artifact passed exact `0304`.
+Exact power-snapshot
 values, elapsed AES expiry, receiver children outside selected profile
 `056a:0027`, and Remote coverage remain separate.
 Core/common glue (`hid-core`,
@@ -603,8 +608,8 @@ The existing emulator set plus the hardware-verified work-input, combined
 haptic/Trackpad, Microsoft, Apple, exact Wacom, and temporary-capacity
 Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
 Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
-Yoga 260 AES/USB receiver plus external wired Intuos flows, active Logitech
-`c532`, and Lenovo
+Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
+`056a:0304` flows, active Logitech `c532`, and Lenovo
 `6009/6047`. The active allowlist is covered except for the Holtek mouse
 driver-specific hardware result. Memory-gated `c52f/c534/60ee` have logic
 coverage at temporary `64/256`, not RP2040 support at retained `64/675`.
@@ -1247,6 +1252,52 @@ numeric ABS_X value, so sending the 24 Pro high-X report establishes transport
 and execution of the size-12 raw-event branch but not the exact reconstructed
 coordinate value.
 
+### Wired Wacom Cintiq 13HD coverage
+
+The focused fixture is commit `160a0ac` on branch
+`device/wacom-cintiq-13hd`. It uses ordinary TinyUSB descriptors, HID
+callbacks, and soft disconnect/reconnect. No retail `056a:0304` report
+descriptor capture is available, so its 91-byte descriptor is deliberately
+protocol-equivalent: one 10-byte Pen input report ID 16, one 10-byte Pad input
+report ID 17, and Feature report ID 2 with one data byte. It does not claim
+byte-exact retail topology, Touch, Touch Ring, or `ABS_WHEEL`.
+
+The exact hardware-test artifacts are:
+
+```text
+host UF2 SHA-256       ec47bd6725c1b2b49f7ded92fc220a7fb5d2408ee8a479dd76a6aeaa612546a5
+host text/data/bss     605456 / 788 / 245408 B
+emulator UF2 SHA-256   1f7bb41c608e2d9595320a28523cc3cf9d82859a25504230334450fbc00c0a9c
+emulator text/data/bss 48828 / 0 / 252372 B
+hardware verdict       passed 2026-08-01 for the scope below
+```
+
+The first Cintiq generation disconnects at 600 ms, before the approximately
+one-second initialization deadline, and waits another 1,600 ms while detached.
+The fixture rejects any mode SET or GET during that generation or after its
+disconnect. The next generation requires exactly one Feature report 2 SET with
+value 2 no earlier than 900 ms, followed by exactly one matching GET. It sends
+Pen enter/move/exit with serial `0x12345678`, then all nine numbered Pad
+buttons. A same-PID reconnect requires a fresh SET/GET exchange before Pen and
+the ninth-button smoke. The terminal alert sequence is `f1, f2, f3, f10`;
+`f12` plus a phase letter reports failure.
+
+The hardware log contained three Cintiq generations, six matching Pen/Pad
+adds and removes, all nine Pad mappings `f13` through `f21`, and the expected
+second `f21` reconnect smoke. All 21 heap snapshots reported `oom=0`,
+minimum-ever free heap was 47,592 B, and every terminal Cintiq removal returned
+to `free/largest/blocks=60752/48520/9`. Minimum task watermarks were TinyUSB
+265, KeyD 658, async 389, work 217, timer 348, lifecycle 218, and report 859
+words. No `f12`, host `ERR`, or `HID_REPORT_SKIP` appeared. The diagnostics for
+tablet ABS/tool/tip and MSC serial `305419896` are the existing downstream
+KeyD boundary; the latter is the test serial `0x12345678`.
+
+This fixture proves Wacom-specific cancellation before the delayed deadline
+and two clean initialization generations. It does not add a disconnect while
+the callback is running, generic promotion-window cancellation, simultaneous
+cancelers, callback self-requeue, delayed queue destruction, tick-wrap, or the
+paired `056a:0333/0335` topology to the existing common-layer verdicts.
+
 ### Wired Wacom CTL-472 coverage
 
 The hardware-verified 32-reconnect revision of branch
@@ -1722,6 +1773,22 @@ and emulator CDC lines under each item.
     feature-usage optimization retained full report values and wire bytes;
     family captures do not establish byte-exact retail descriptors for every
     selected PID, and exact power snapshots remain unobserved
+- [x] wired Wacom Cintiq 13HD `056a:0304`
+  - exact host
+    `ec47bd6725c1b2b49f7ded92fc220a7fb5d2408ee8a479dd76a6aeaa612546a5`
+    and emulator branch `device/wacom-cintiq-13hd`, commit `160a0ac`, image
+    `1f7bb41c608e2d9595320a28523cc3cf9d82859a25504230334450fbc00c0a9c`
+  - require `f1, f2, f3, f10`, no `f12`, host `ERR`, `HID_REPORT_SKIP`, or OOM
+  - require pre-deadline cancellation with no late Feature traffic, then two
+    fresh Feature report 2 SET/GET exchanges with value 2
+  - require Pen enter/move/exit, serial `0x12345678`, all nine Pad buttons,
+    same-PID reconnect, six balanced Pen/Pad lifetimes, stable terminal heap,
+    and nonzero task watermarks
+  - verdict: passed 2026-08-01; all 21 snapshots reported `oom=0`, every
+    terminal Cintiq removal returned to `60752/48520/9`, and the minimum
+    lifecycle watermark was 218 words
+  - the protocol-equivalent descriptor is not a retail capture; Touch, Touch
+    Ring, `ABS_WHEEL`, and paired `056a:0333/0335` remain outside this verdict
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator

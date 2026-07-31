@@ -5109,8 +5109,9 @@ const struct hid_device_id wacom_ids[] = {
 	// INTUOSHT, INTUOSHT2, and first-generation Intuos Pro paths.
 	{ USB_DEVICE_WACOM(0x302) },
 	{ USB_DEVICE_WACOM(0x303) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// The wired Cintiq 13HD reuses the active Pen/Pad path.
 	{ USB_DEVICE_WACOM(0x304) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x307) },
 	{ USB_DEVICE_WACOM(0x309) },
 	{ USB_DEVICE_WACOM(0x30A) },

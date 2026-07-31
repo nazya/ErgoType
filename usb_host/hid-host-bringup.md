@@ -97,7 +97,8 @@ The Wacom checkpoint additionally links complete pinned Wacom sources. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
 `056a:5048`, and receiver `056a:0084`. The later focused Intuos stage adds
-external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e`.
+external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e`,
+and the focused Cintiq stage adds wired `056a:0304`.
 Together the selected profiles reach the upstream Pen,
 Pad, Touch, ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES battery,
 idle-proximity timer, and receiver pair/unpair plus sibling-rebind paths
@@ -121,6 +122,17 @@ watermark stayed nonzero, and the fixture ended with `f15, f10` without a host
 captures: mode and Pen/Pad smoke for all eleven, Pro LED initialization for
 three, and Finger smoke for seven. It is not a byte-exact retail descriptor
 matrix.
+
+The focused Cintiq 13HD host/emulator pair passed on 2026-08-01. Three
+`056a:0304` generations published and removed six Pen/Pad nodes. Its
+device-side oracle verified cancellation before the one-second initialization
+deadline, then exact Feature report 2 SET/GET with value 2 in each of two fresh
+generations. Pen enter/move/exit, serial `0x12345678`, all nine Pad buttons,
+and same-PID reconnect completed `f1, f2, f3, f10`. All 21 snapshots reported
+`oom=0`, terminal Cintiq removals repeated `60752/48520/9`, every task
+watermark remained nonzero, and there was no `f12`, host `ERR`, or
+`HID_REPORT_SKIP`. The protocol-equivalent descriptor is not a retail capture;
+Touch, Touch Ring, and `ABS_WHEEL` are outside this verdict.
 
 The exact five-profile wired pair recorded in `hid-emulator-coverage.md`
 completed
@@ -628,7 +640,8 @@ the USB-only Magic Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
 separate narrow USB ID gates. The Wacom gate contains the seven
 hardware-tested base IDs plus eleven external wired Intuos exact-ID selections
-hardware-tested with the documented family captures above.
+hardware-tested with the documented family captures above, plus focused wired
+Cintiq 13HD `056a:0304`.
 Microsoft is likewise narrow: 14 wired non-gaming USB IDs are selected, while
 SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF remain compile-gated
 with matching special-driver gates. The exact per-device-release pair passed
@@ -696,7 +709,7 @@ operation itself. Fixed-size `async_msg()` diagnostics are used because the
 normal logger's roughly 2 KiB local frame does not fit the 384-word workqueue
 and timer stacks.
 
-The two Wacom hardware matrices specifically covered cancellation before the
+The focused Wacom hardware matrices specifically covered cancellation before the
 one-second deadline, disconnect while mode, LED, rebind, or teardown control
 was held, pending AES work, timer cancellation, active-touch removal, and
 receiver re-pair/recovery. They did not deterministically force the generic

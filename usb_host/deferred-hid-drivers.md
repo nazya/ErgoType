@@ -438,6 +438,9 @@ implementation while keeping a narrow USB-only match table:
   `030e/0323/033b/033d` are touchless profiles.
 - External wired Intuos Pro `056a:0314/0315/0317` selects the complete pinned
   `INTUOSPS/PM/PL` pen/touch/pad/ring/LED and battery paths.
+- Wired Cintiq 13HD `056a:0304` selects the existing pinned `WACOM_13HD`
+  Pen/Pad path, nine numbered buttons, and one-second Feature report 2 mode
+  exchange. Its focused fixture does not claim Touch Ring or `ABS_WHEEL`.
 - Yoga 260 AES `056a:5048` enables the generic AES Pen/Touch parser, control
   exchange, delayed battery work, and idle-proximity timer.
 - Wacom USB wireless receiver `056a:0084` enables the upstream three-interface
@@ -485,8 +488,9 @@ but leaves transport started until the next rebind or disconnect, and an
 unchanged PID is not retried automatically. These error paths are
 source-audited, not hardware-injected.
 
-The wired five-profile artifact, later AES/receiver artifact, and focused
-eleven-ID Intuos artifact are separate hardware results recorded in
+The wired five-profile artifact, later AES/receiver artifact, focused
+eleven-ID Intuos artifact, and focused Cintiq 13HD artifact are separate
+hardware results recorded in
 `hid-emulator-coverage.md`. The wired base run completed 23 physical
 attachments and 46 balanced input lifetimes with no host `ERR` and `oom=0` in
 all 115 heap snapshots. The AES/receiver run completed four AES and four
@@ -516,7 +520,7 @@ untouched. The separate Rapoo managed extra-input regression remains pending.
 
 All other Wacom product IDs remain behind
 `CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, ExpressKey Remote, bootloader, I2C,
-PCI, Linux LED/sysfs presentation, and product IDs outside the 18-entry USB
+PCI, Linux LED/sysfs presentation, and product IDs outside the 19-entry USB
 table remain excluded. Receiver lookup can select any child PID already in
 that table; only child `056a:0027` is covered by the receiver hardware verdict.
 The focused Intuos matrix verifies mode and Pen/Pad smoke for all eleven
@@ -529,6 +533,15 @@ host work enqueue and detached values remain unobserved. This matrix does not
 add pending/running-work cancellation, same-PID reconnect, Touch Ring
 semantics, explicit arbitration, or receiver-child `033b` coverage to the
 older `0084 -> 0027` receiver verdict.
+
+The focused `056a:0304` fixture completed three physical generations and six
+balanced Pen/Pad lifetimes. Its device-side oracle accepted cancellation before
+the initialization deadline, then exact Feature SET/GET with value 2 in two
+fresh generations. Pen enter/move/exit, serial `0x12345678`, all nine Pad
+buttons, and same-PID reconnect reached terminal `f1, f2, f3, f10` without
+`f12`, host `ERR`, `HID_REPORT_SKIP`, or OOM. The 91-byte report descriptor is
+protocol-equivalent because no retail `0304` capture is available; Touch,
+Touch Ring, and `ABS_WHEEL` remain outside this verdict.
 
 `CONFIG_HID_HOLTEK` is compound upstream. Firmware links its keyboard and mouse
 descriptor-fixup drivers, but not the separate On Line Grip game-controller

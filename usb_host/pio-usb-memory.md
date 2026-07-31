@@ -550,6 +550,39 @@ whole-run minimum-ever free counter was 47,592 B. Minimum task watermarks were
 TinyUSB 265, KeyD 658, async 389, work 346, timer 348, lifecycle 36, and
 report 873 words.
 
+#### Wired Cintiq 13HD verified stage
+
+Selecting exact wired Cintiq 13HD `056a:0304` on top of the Artist stage
+produces:
+
+```text
+host text/data/bss             605456 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+delta from Artist stage        +152 text / +0 data / +0 bss
+host UF2 SHA-256               ec47bd6725c1b2b49f7ded92fc220a7fb5d2408ee8a479dd76a6aeaa612546a5
+emulator text/data/bss         48828 / 0 / 252372 B
+emulator UF2 SHA-256           1f7bb41c608e2d9595320a28523cc3cf9d82859a25504230334450fbc00c0a9c
+hardware verdict               passed 2026-08-01; focused 0304 sequence
+```
+
+The selected row reuses the already linked pinned `WACOM_13HD` parser and
+one-second initialization work, adding no mutable static object, task, queue,
+data, or BSS. Three physical generations produced six balanced Pen/Pad
+lifetimes. All 21 snapshots reported `oom=0`; minimum-ever free heap was
+47,592 B. Each terminal Cintiq removal returned to
+`free/largest/blocks=60752/48520/9`; live Pen/Pad snapshots were
+48,736/48,608 B free. Minimum task watermarks were TinyUSB 265, KeyD 658,
+async 389, work 217, timer 348, lifecycle 218, and report 859 words.
+
+The first generation disconnected before the delayed deadline without a late
+Feature exchange. The next two generations completed exact Feature report 2
+SET/GET with value 2; the first ran Pen and all nine Pad buttons, and the
+second repeated Pen plus the final Pad button after same-PID reconnect. The
+emulator's 91-byte descriptor is protocol-equivalent because no retail `0304`
+capture is available. These measurements do not establish Touch, Touch Ring,
+or `ABS_WHEEL` behavior.
+
 #### Wired Wacom CTL-472 verified stage
 
 Linking the complete pinned Wacom implementation with only CTL-472
