@@ -67,6 +67,10 @@ typedef long loff_t;
 #define CONFIG_HID_HAPTIC 1
 #define CONFIG_HID_MULTITOUCH 1
 #define CONFIG_HID_MAGICMOUSE 1
+#define CONFIG_HID_MICROSOFT 1
+// Keep SideWinder, Bluetooth, and force feedback visible but outside the
+// selected wired non-gaming Microsoft device table.
+// #define CONFIG_HID_MICROSOFT_ALL_DEVICES 1
 #define CONFIG_HID_LOGITECH_HIDPP 1
 #define CONFIG_HID_LOGITECH_DJ 1
 // #define CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS 1

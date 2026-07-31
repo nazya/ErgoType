@@ -393,6 +393,7 @@ sources so their enablement contract remains visible.
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact-ID explicit-feature-usage compaction for Wacom `056a:0084/5048`, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and post-transport-stop release of connect-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
+| `hid-microsoft.c` | Complete pinned source with exactly 14 non-gaming wired USB IDs active; SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF state/code/table rows remain adjacent behind `CONFIG_HID_MICROSOFT_ALL_DEVICES`; the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receiver `046d:c52b` active and the other upstream receiver IDs retained behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
 | `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with exact USB allowlist `056a:0027/0029/0084/00de/037a/037b/5048`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver battery, timer, and receiver rebind paths are active. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage. Bluetooth, Remote, bootloader, I2C, PCI, and all other product IDs remain gated; the driver descriptor is immutable. |
@@ -462,7 +463,7 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 23 vendor driver descriptor translation units across 22 enabled
+- CMake links 24 vendor driver descriptor translation units across 23 enabled
   vendor `CONFIG_HID_*` families (the compound Holtek config contributes
   keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
   are also linked. Stadia has no reduced config gate and is excluded simply by
@@ -470,6 +471,21 @@ it contains no callback, logging, allocation, or wait.
   `hid-holtekff` ID is left generic instead of being marked as having an absent
   special driver. Active vendor/generic changes keep adjacent upstream lines
   and reasons; no unrelated vendor-flow rewrite was found.
+- The imported `hid-microsoft.c` matches exactly USB IDs
+  `045e:0048/009d/00b4/00db/00dc/00e3/00f9/0713/071d/0730/0732/0750/076c/
+  07da`. `ms_devices[]` and `hid_have_special_driver[]` contain the same active
+  set. SideWinder `003b` and every Bluetooth/FF row are compile-gated in both
+  places, preserving generic fallback for excluded USB hardware. The complete
+  active call graph uses only devres-owned `ms_data`; its allocation,
+  `hid_parse()`, and `hid_hw_start()` returns remain pinned, and it adds no
+  work/timer/request object. A two-device hardware run demonstrated that the
+  upstream function-static F14--F18 release state crosses HID owners. The
+  original static line remains commented beside the active per-device
+  `ms_data` replacement; it adds no wrapper, lock, return-value change, or
+  global BSS. The exact fixed-host/emulator pair passed on hardware on
+  2026-07-31: F14 and F15 were released by their owning interfaces before
+  removal, all representative profiles completed, and terminal `f10` arrived
+  with `oom=0`, stable removal heap, and no host `ERR`.
 - The imported `hid-magicmouse.c` matches only USB Magic Mouse 2 and Trackpad 2
   IDs. Its synchronous mode SET runs from lifecycle task context through the
   existing async EP0 owner. USB Mouse 2 returns before the upstream delayed
@@ -1331,8 +1347,9 @@ Current checkpoint audit:
 - retained the prior whole-file audit and diffed the newly linked
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
-  both linked Wacom translation units against the same pin. There are now 36
-  linked Linux-derived C translation units; thirty-five have an upstream source
+  both linked Wacom translation units and `hid-microsoft.c` against the same
+  pin. There are now 37 linked Linux-derived C translation units; thirty-six
+  have an upstream source
   counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres

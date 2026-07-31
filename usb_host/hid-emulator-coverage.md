@@ -17,6 +17,65 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### Hardware-verified Microsoft wired-USB fixture
+
+The compact `device/microsoft-usb` fixture is based on commit `c4e5361` plus
+the current initial-profile activation-delay working-tree change. It groups
+the 14 active Microsoft IDs by six distinct driver behaviors instead of
+reconnecting once per identical quirk row:
+
+- Office Keyboard `045e:0048` covers every ergonomic mapping/event branch,
+  all F14--F18 selectors, and two simultaneous HID interfaces with interleaved
+  per-device `last_key` ownership;
+- Presenter `045e:0713` covers its five vendor controls separately;
+- LK6K `045e:00f9` supplies exactly 571 descriptor bytes with
+  `rdesc[557]=0x19` and `rdesc[559]=0x29`, then sends A/B/C;
+- Wireless Optical Desktop `045e:009d` rejects any GET_REPORT and requires
+  exactly one feature SET_REPORT for ID 9 with payload `0x05`;
+- Comfort Mouse `045e:076c` asserts only the second duplicate Button 1 usage;
+- Power Cover `045e:07da` covers forced HIDINPUT and one same-PID reconnect.
+
+The fixture changes descriptors only while D+ is down and waits for every
+report completion. Terminal `f10` means the device-side sequence completed;
+`f12` followed by `a` through `f` identifies the failed phase. Its initial
+Office profile now uses the same post-mount activation delay as every
+reconnect profile, after the first hardware run proved that device-side mount
+can precede the host's final input activation.
+
+The first complete-input run used host
+`360637adc1b5b5d829f75ac85d99b50eeffcb5930bc442d7629d9baa7af11fe2`
+and emulator
+`10ac61fa8725694d7061425855d33b50dc50547b33ac778609933efa84d1fde2`.
+The complete sequence reached `f10` with balanced Microsoft-profile removal,
+`oom=0`, and no host `ERR`, but the run rejected pinned upstream's
+function-static ownership: the interleaved F14 remained pressed until
+input-device disconnect.
+
+The current per-device fix is built as:
+
+```text
+host UF2 SHA-256       f809966886aa4bdaf42c694055ea08b9313d4dbd1120f1a96f0cebd8ba71fd48
+emulator UF2 SHA-256   10ac61fa8725694d7061425855d33b50dc50547b33ac778609933efa84d1fde2
+emulator text/data/bss 59364 / 0 / 255012 B
+hardware verdict       passed 2026-07-31
+```
+
+The exact pair passed on hardware on 2026-07-31. All eight Microsoft interface
+lifetimes were balanced, including two simultaneous Office Keyboard
+interfaces and two clean Power Cover generations. The decisive interleave was
+F14 down, F15 down, F14 up, F15 up before either Office interface was removed.
+The fixture reached terminal `f10` with no `f12`, host `ERR`, `WARN`, or OOM.
+Free heap returned to 60752 bytes after each complete profile; the recorded
+minimum-ever free heap was 47592 bytes. Minimum free task watermarks remained
+nonzero: TUH 265, KeyD 658, async 430, work 346, timer 348, lifecycle 171, and
+report 862 words.
+
+The repeated `unrecognized evdev event type: 4` lines are the existing
+downstream KeyD boundary for Linux `EV_MSC`/`MSC_SCAN`; every relevant line was
+followed by the expected mapped key event. Packed-wheel output has no
+production CDC marker and remains source-audited unless observed at the
+firmware's USB output.
+
 ### Hardware-verified work-input and long-enumeration fixture
 
 Host checkpoint `hid: enable audited work-input drivers` enables the upstream-shaped `hid-elecom.c`,
@@ -287,6 +346,7 @@ Recorded emulator branches:
 | `device/holtek-kbd-a055` | `bd6753f` |
 | `device/ite8595-rfkill` | `4686eea` |
 | `device/kye-easypen-m406` | `cd1f262` |
+| `device/microsoft-usb` | `c4e5361` plus the tested activation-delay working-tree change |
 | `device/primax-keyboard` | `a187788` |
 | `device/pxrc-phoenixrc` | `8072356` |
 | `device/quirks-atmel-ma901` | `f35de09` |
@@ -309,6 +369,10 @@ Recorded emulator branches:
   suppressed normal mapping, raw media-key events.
 - `device/cypress-mouse`: Cypress mapped/event path; Button 5 + wheel rewrite
   coverage.
+- `device/microsoft-usb`: six representative identities cover every active
+  Microsoft quirk branch, one same-PID reconnect, exact NOGET control
+  behavior, and per-device `last_key` ownership; the exact fixed-host pair
+  passed on hardware on 2026-07-31.
 - `device/google-stadiaff`: Google Stadia VID/PID and a report descriptor with
   gamepad input report ID 1 plus rumble output report ID 5. This branch
   exercised `hid-google-stadiaff.c` plus `ff-memless.c` with the short
@@ -375,9 +439,9 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; `holtek-mouse` fixture written, hardware pass pending |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-zydacron` | `work-input-drivers`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
-| driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `saitek-rat7` |
+| `report_fixup` | `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; the `holtek-mouse` hardware pass remains pending |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | `work-input-drivers`, `microsoft-usb`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
+| driver `.event` hooks | `hid-a4tech`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified |
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
@@ -406,8 +470,9 @@ Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
 Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
-Kensington, KYE, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom, and
-Zydacron; each has a matching emulator branch. Wacom's historical exact
+Kensington, KYE, Microsoft, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom,
+and Zydacron; each has a matching emulator branch. The Microsoft branch passed
+its exact fixed-host hardware run on 2026-07-31. Wacom's historical exact
 32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
 separate AES/receiver artifact are hardware-verified. Exact power-snapshot
 values, elapsed AES expiry, receiver children outside selected profile
@@ -423,10 +488,11 @@ reuse an already tested hook shape.
 ## Coverage Decision
 
 The existing emulator set plus the hardware-verified work-input, combined
-haptic/Trackpad, and exact Wacom fixtures covers the active allowlist,
+haptic/Trackpad, Microsoft, and exact Wacom fixtures covers the active allowlist,
 long-enumeration success path, normal USB Magic Trackpad 2 path, and the
 selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/Yoga 260 AES and USB
-receiver flows. The Holtek mouse driver-specific result remains pending.
+receiver flows. The Holtek mouse driver-specific hardware result remains
+pending.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. The complete Wacom fixture also passed the working input/devres
 and evdev identity correction. The later fixture certifies the selected

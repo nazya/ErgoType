@@ -777,6 +777,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lcpower.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-macally.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-maltron.c
+        # Pinned Microsoft driver, selected to wired non-gaming USB keyboards,
+        # mice, and Presenter 8K; SideWinder, Bluetooth, and FF remain gated.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-microsoft.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-monterey.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-nti.c
         # Deferred: legacy keyboard/trackpad family; enable only for requested

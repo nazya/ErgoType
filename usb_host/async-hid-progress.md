@@ -777,6 +777,19 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 - Callback-side mount and descriptor debug logs were removed. Sticky callback
   fault bits are drained and logged by the lifecycle task; async timeout and
   report-request status logs remain task-side.
+- 2026-07-31: the Microsoft wired-USB WIP links the complete pinned
+  driver with exactly 14 non-gaming USB IDs. SideWinder, Bluetooth, and FF
+  remain compile-gated with matching special-driver gates. Its first complete
+  hardware run reached every profile but demonstrated cross-device ownership
+  in upstream's function-static F14--F18 state. The current per-device
+  candidate builds as `text/data/bss=596296/788/245312`, with
+  `__bss_end__=0x2003fe88`, 376 bytes of main-bank headroom, and host UF2
+  SHA-256
+  `f809966886aa4bdaf42c694055ea08b9313d4dbd1120f1a96f0cebd8ba71fd48`.
+  The exact fixed-host/emulator pair passed on hardware: the interleaved Office
+  reports produced F14 down, F15 down, F14 up, F15 up before either interface
+  removal; all representative profiles completed; removal free heap returned
+  to 60752 bytes; and terminal `f10` arrived with `oom=0` and no host `ERR`.
 
 ## Current Driver Boundary
 
@@ -800,6 +813,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   UI task reads and currently ignores detached `ADDED`/`CHANGED` snapshots,
   then removes the personal queue after terminal `REMOVED`. Power events do
   not enter KeyD or the ordinary devmon queue, and UI presentation is deferred.
+- The Microsoft WIP selects USB
+  `045e:0048/009d/00b4/00db/00dc/00e3/00f9/0713/071d/0730/0732/0750/076c/
+  07da`. It exercises pinned report-fixup, mapping/mapped, event, and
+  parse/start/remove paths plus the narrow per-device fix for upstream's
+  function-static F14--F18 release ownership. No Microsoft work, timer, FF, or
+  request object is reachable. The first complete run demonstrated the
+  cross-device bug; the exact per-device fixed-host pair passed on 2026-07-31.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
@@ -834,11 +854,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Define the minimal HIDRAW proxy consumer before extending the current
-  lifecycle-only object. Audit bounded report storage, subscriber wake and
-  revocation, overflow policy, and reconnect-generation fencing, then cover
-  delivery, overflow, pending-data disconnect, and reconnect with one focused
-  emulator phase.
+- After the Microsoft WIP checkpoint, import the selected external wired USB
+  scope from pinned `hid-apple.c`; then expand ordinary Logitech DJ receiver
+  IDs and external Lenovo USB TrackPoint keyboards as separate audited WIP
+  stages.
+- Keep HIDRAW lifecycle-only until a concrete useful USB consumer defines the
+  required bounded report/subscriber contract. HIDDEV/VFS is outside the
+  current roadmap.
 - Run the existing `device/rapoo-2_4g-receiver` fixture against the exact
   current host as the second managed extra-input regression. Record both extra
   inputs, ordinary input, disconnect/reconnect, removal plateaus, stack

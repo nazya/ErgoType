@@ -15,19 +15,29 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
-The latest exact hardware-tested host image recorded here is the Wacom
-AES/receiver matrix:
+The latest exact hardware-tested host image recorded here is the Microsoft
+wired-USB per-device-release matrix:
 
 ```text
-text/data/bss                 594360 / 788 / 245264 B
-__bss_end__                   0x2003fe58
-main-bank headroom            424 B to 0x20040000
-UF2 SHA-256                   8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8
-hardware verdict              passed 2026-07-30 for the qualified Wacom scope
+text/data/bss                 596296 / 788 / 245312 B
+__bss_end__                   0x2003fe88
+main-bank headroom            376 B to 0x20040000
+delta from Wacom baseline     +1936 text / +0 data / +48 bss
+UF2 SHA-256                   f809966886aa4bdaf42c694055ea08b9313d4dbd1120f1a96f0cebd8ba71fd48
+hardware verdict              passed 2026-07-31
 ```
 
-Its exact emulator, dynamic heap measurements, and power-snapshot limitation
-are recorded in the AES/receiver Wacom stage below.
+The 48-byte static increase is one linker-owned builtin-driver runtime record.
+The demonstrated upstream function-static `last_key` has moved into
+devres-owned `ms_data`, adding four dynamic bytes per bound Microsoft HID
+instead of global BSS. No Microsoft workqueue, timer, force-feedback, or
+asynchronous-request object is linked. The exact emulator returned free heap
+to 60752 bytes after each representative Microsoft profile and recorded
+47592 bytes minimum-ever free heap. Minimum free task watermarks were TUH 265,
+KeyD 658, async 430, work 346, timer 348, lifecycle 171, and report 862 words.
+Its exact input and control coverage is recorded in
+`hid-emulator-coverage.md`; the preceding Wacom AES/receiver memory result
+remains recorded in its stage below.
 
 The original 232 KiB heap experiment is historical evidence for the static-RAM
 ceiling. With that tested host branch, the link failed with:

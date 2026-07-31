@@ -116,6 +116,34 @@ specific hardware request instead of paying static registry RAM by default.
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
+## Active Microsoft Wired USB Boundary
+
+The complete pinned `hid-microsoft.c` is linked with a deliberately narrow
+non-gaming USB table. Active IDs are `045e:0048`, `009d`, `00b4`, `00db`,
+`00dc`, `00e3`, `00f9`, `0713`, `071d`, `0730`, `0732`, `0750`, `076c`, and
+`07da`. They retain the upstream ergonomic/vendor-key mappings, presenter
+controls, 571-byte descriptor correction, `NOGET`, duplicate-usage handling,
+and forced-HIDINPUT branches.
+
+SideWinder `045e:003b`, Bluetooth Presenter/Surface Dial, Xbox/8BitDo, and the
+force-feedback worker remain visible behind
+`CONFIG_HID_MICROSOFT_ALL_DEVICES`. Their matching entries are gated in both
+the driver table and `hid_have_special_driver[]`, so an excluded USB device is
+not denied generic HID fallback. Neither `ff-memless` nor a game-controller
+consumer is added.
+
+The active Microsoft call graph allocates only devres-owned `ms_data`; it adds
+no work, timer, or asynchronous request lifetime. The first complete hardware
+run demonstrated that pinned upstream's function-static F14--F18 `last_key`
+crosses two simultaneous ergonomic HID owners and leaves F14 pressed until
+disconnect. The port now retains that upstream static line commented beside a
+narrow bugfix and stores the selector in per-device `ms_data`. This adds four
+dynamic bytes per bound Microsoft HID and no static BSS; the exact fixed-host
+pair passed on hardware on 2026-07-31. Its two-device interleave released F14
+and F15 in owner order before either interface removal, all representative
+profiles returned to the same 60752-byte free-heap plateau, and the run reached
+terminal `f10` with `oom=0` and no host `ERR`.
+
 ## HIDRAW and Logitech HID++ Boundary
 
 HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard

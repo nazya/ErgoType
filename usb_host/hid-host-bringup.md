@@ -536,11 +536,19 @@ current sizes are recorded in `pio-usb-memory.md`.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
-Kye, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus generic
-multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2 driver.
+Kye, Microsoft, Primax, PXRC, Rapoo, Razer, Saitek, Topre, and Zydacron, plus
+generic multitouch, HID Haptics, and the USB-only Magic Mouse 2 / Trackpad 2
+driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
 separate narrow USB ID gates; the active Wacom gate contains only the seven
 USB IDs listed above.
+Microsoft is likewise narrow: 14 wired non-gaming USB IDs are selected, while
+SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF remain compile-gated
+with matching special-driver gates. The exact per-device-release pair passed
+on hardware on 2026-07-31: the two Office interfaces released F14 and F15
+independently before removal, all representative profiles completed, removal
+heap returned to 60752 bytes, and the terminal result was `f10` with `oom=0`
+and no host `ERR`.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.
