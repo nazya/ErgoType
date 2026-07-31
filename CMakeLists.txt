@@ -734,8 +734,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Staged direct USB HID++ request/reply, pre-connect identity, and
         # battery. Broader capability and receiver paths remain behind gates.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-hidpp.c
-        # Pinned-upstream Unifying/DJ port, currently gated to the covered
-        # c52b receiver. Other receiver IDs and child HID++ remain gated.
+        # Pinned-upstream Unifying/DJ port for c52b/c532. Nano c52f/c534 need
+        # more RP2040 heap at the retained usage limit; other rows stay gated.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         # Pinned Apple driver, selected to external wired USB keyboards and
@@ -778,6 +778,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kensington.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-keytouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kye.c
+        # Complete pinned Lenovo driver for external USB TrackPoint keyboards
+        # 6009/6047; full 60ee is retained but exceeds the RP2040 heap at 675.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lenovo.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lcpower.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-macally.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-maltron.c

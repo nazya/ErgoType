@@ -30,6 +30,15 @@ The active implementation now has these properties:
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts
   through the upstream usbhid helpers and generic task-side
   `usb_control_msg()` / `usb_interrupt_msg()` waits.
+- The selected Lenovo USB layer adds both existing request forms without a new
+  transport primitive. `17ef:6009` queues a nonfatal `hid_hw_request()`
+  SET_REPORT snapshot which `hid_hw_stop()` cancels and drains before report
+  and devres release. Active `17ef:6047`, and retained `60ee` when its
+  memory-gated row is enabled, issue sequential synchronous
+  `hid_hw_raw_request()` SET_REPORT commands. Exact-interface disconnect wakes
+  the waiter with `-ENODEV` before its three-byte buffer is freed. The pinned
+  driver continues subsequent commands and does not turn their failures into
+  probe failure.
 - The task-only workqueue now owns a wrap-safe delayed-work deadline list.
   The active USB Wacom profiles use it for pinned one-second initialization;
   AES additionally uses delayed battery expiry. Feature GET/SET operations run

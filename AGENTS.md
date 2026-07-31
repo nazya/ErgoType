@@ -6,6 +6,7 @@
 - Before a logic change, describe the current failure, proposed behavior, and risk.
 - Do not add checks for hypothetical callers, future edits, or states excluded by current code and configuration.
 - Do not write set-then-check control flow such as `x.type = FOO; if (x.type == FOO)`.
+- Never put function calls with side effects inside `assert(...)` or `configASSERT(...)`; execute them separately and handle runtime failures independently of `NDEBUG`.
 - Do not modify comments unless comment changes are explicitly requested.
 
 ## Upstream Porting

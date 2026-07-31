@@ -423,7 +423,9 @@ temporarily needed both allocations at once, or 55,296 B.
 These are allocation requests. If a persistent report or field allocation
 fails, the port now propagates `-ENOMEM` through parser and driver-core cleanup;
 the lifecycle task rejects and destroys the whole interface instead of binding
-a partial report graph. Upstream's non-OOM `HID_MAX_FIELDS` truncation remains.
+a partial report graph. `ERR: HID_FIELD_NOMEM` identifies the exact failed
+field allocation; absence of that marker is not by itself attachment success.
+Upstream's non-OOM `HID_MAX_FIELDS` truncation remains.
 
 Consequently, merely moving these objects to flash is not possible: report
 descriptors determine their contents at runtime. A static generated mapping or
@@ -489,6 +491,19 @@ child creation, keyboard input, and lifecycle cleanup while retaining only
 Consumer selectors 1 through 256. The detailed measurements are recorded in
 [`pio-usb-memory.md`](pio-usb-memory.md).
 
+The focused Logitech/Lenovo fixture later completed `c532/c52f/c534` and
+`6009/6047/60ee` at temporary `64/256`. For `c52f/c534`, the physical
+652-usage Consumer field and the virtual 675-entry field request 42,696 bytes
+at the retained cap, 26,080 bytes more than their pair at 256. The corrected
+full `60ee` descriptor left 11,152 bytes free at 256 while its Consumer field
+alone grows by 13,408 bytes at 675. The upstream rows remain in source, but
+`c52f/c534/60ee` are therefore not selected by the RP2040 special-driver
+tables. Their temporary run proves request/input/lifetime logic only.
+The gated IDs are not globally ignored: generic HID may publish smaller
+physical interfaces, but it does not send receiver startup reports or create
+virtual children. A `60ee` generic attempt may therefore publish its smaller
+interfaces before the wide mouse/Consumer interface reaches the heap boundary.
+
 Similar capacity limits may affect devices with wide usage ranges, many report
 fields, several simultaneous receiver children, or several large composite
 HID interfaces. This is not a blanket limitation on keyboards or mice; it is a
@@ -497,7 +512,7 @@ a measured compatibility case.
 
 Two informational messages make the deliberate policy visible:
 
-- `INFO: HID_FIELDS64_UPSTREAM256` is emitted for every
+- `INFO: HID_FIELDS64_UPSTREAM256` is emitted after every successful
   `hid_open_report()`; it announces the configured field-table difference and
   does not mean that a descriptor reached 64 fields.
 - `INFO: HID_USAGES675_UP_12288` is emitted when the DJ HID++ keyboard
@@ -515,7 +530,9 @@ The working configuration intentionally keeps these changes:
 
 - explicit usage ranges reserve parser-local storage once at the final bounded
   size instead of repeatedly growing and copying it;
-- `HID_MAX_FIELDS=64`, with `HID_FIELDS64_UPSTREAM256` on every report open;
+- `HID_MAX_FIELDS=64`, with `HID_FIELDS64_UPSTREAM256` after every successful
+  report open and `HID_FIELD_NOMEM` on an exact persistent-field allocation
+  failure;
 - `HID_MAX_USAGES=675`, with the DJ-connection policy marker
   `HID_USAGES675_UP_12288` and `HID_USAGE_CAP_DROP` for an actual out-of-range
   selector;
@@ -539,9 +556,9 @@ current sizes are recorded in `pio-usb-memory.md`.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
-Kye, Microsoft, Apple external USB, Primax, PXRC, Rapoo, Razer, Saitek, Topre,
-and Zydacron, plus generic multitouch, HID Haptics, and the USB-only Magic
-Mouse 2 / Trackpad 2 driver.
+Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
+Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
+the USB-only Magic Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
 separate narrow USB ID gates; the active Wacom gate contains only the seven
 USB IDs listed above.
@@ -561,6 +578,20 @@ and 60-second battery GET, queued-request disconnect, and reconnect completed
 before terminal `f10`, with stable removal heap, `oom=0`, and no host `ERR`.
 The fixture delivered both relative Z signs, but production CDC has no
 REL_HWHEEL marker, so their inversion remains source-audited.
+The pinned Logitech DJ runtime selects USB receivers `046d:c52b/c532`.
+Upstream `c52f/c534` rows and their mouse-only/HID++ types remain intact behind
+the broader gate after their retained-policy RP2040 memory result. Gaming,
+Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain
+gated. Existing `c52b` coverage and the retained-policy `c532` pass remain
+valid; `c52f/c534` passed request/input/teardown only at temporary `64/256`.
+The complete pinned Lenovo driver selects external USB TrackPoint keyboards
+`17ef:6009/6047`; the full `60ee` row is retained but memory-gated. Bluetooth,
+I2C, ScrollPoint, dock, tablet, and audio LED-class paths remain gated; Legion
+is a separate unlinked driver family. The active paths retain their upstream
+report validation, TrackPoint/Fn mapping, middle-button wheel arbitration, and
+feature/raw request ordering. `6009/6047` completed their hardware sequence.
+The current KeyD boundary still drops `KEY_FN_ESC`; `60ee` has only a temporary
+`64/256` logic result and is not selected on RP2040.
 Stadia rumble through `ff-memless` and Holtek's separate On Line Grip
 game-controller driver remain unlinked; their IDs are not advertised as
 requiring an absent special driver.
@@ -704,7 +735,8 @@ wrote into adjacent `mt_device` state on RP2040.
 | `ERR: HID_ENUM_CONFIG_INVALID` | The short header or completed full configuration descriptor was short, malformed, or inconsistent with its retained `wTotalLength`; no class parser received it. |
 | `ERR: HID_WQ_INIT_TWICE` | Workqueue initialization was invoked after its mutex had already been published. |
 | `ERR: HID_LOCK_INIT_TWICE` | Shared transport synchronization was initialized twice. Ordinary lock misuse is debug-asserted after evaluating the FreeRTOS call; it has no separate async diagnostic/fail-stop path. |
-| `INFO: HID_FIELDS64_UPSTREAM256` | A report descriptor is being opened with the firmware's 64-field table rather than upstream Linux's 256-field table. This is a policy marker, not proof that the limit was reached. |
+| `ERR: HID_FIELD_NOMEM` | Allocation of one exact persistent `hid_field` graph failed; parser and driver-core cleanup reject the interface rather than bind a partial graph. |
+| `INFO: HID_FIELDS64_UPSTREAM256` | A report descriptor opened successfully with the firmware's 64-field table rather than upstream Linux's 256-field table. This is a policy marker, not proof that the limit was reached. |
 | `INFO: HID_USAGES675_UP_12288` | The DJ HID++ keyboard-connection path selected the firmware's 675-usage policy rather than upstream Linux's 12,288. This policy marker is not itself an OOM result. |
 | `WARN: HID_USAGE_CAP_DROP` | A report used an array selector outside the retained 675-entry field lookup. |
 | `DBG: HID_REPORT_OUT_Q` / `DBG: HID_REPORT_OUT_OK` | `.request()` routed an OUTPUT report through interrupt OUT and it completed. |

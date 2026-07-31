@@ -177,6 +177,54 @@ Production logs still do not expose detached battery snapshot values.
 They also do not expose REL_HWHEEL; both relative Z signs were delivered by
 the fixture, while their inversion remains source-audited.
 
+## Active Lenovo External USB Boundary
+
+The complete pinned `hid-lenovo.c` is linked with three external USB
+TrackPoint keyboard rows retained:
+
+- ThinkPad USB Keyboard with TrackPoint `17ef:6009`;
+- ThinkPad Compact USB Keyboard with TrackPoint `17ef:6047`;
+- ThinkPad TrackPoint Keyboard II USB `17ef:60ee`.
+
+Only `6009/6047` are selected in `lenovo_devices[]`.
+`hid_have_special_driver[]` retains the same pinned Linux pair. The adjacent
+`60ee` row is behind `CONFIG_HID_LENOVO_ALL_DEVICES`; generic HID can attempt
+fallback, but its full report graph cannot be allocated at retained 675 usages
+on RP2040. Bluetooth, I2C, ScrollPoint, Pro Dock, tablet, and Linux
+audio-LED-trigger paths remain visible but inactive; Legion is a separate
+unlinked driver family. Other excluded USB products retain generic HID
+fallback.
+`CONFIG_HID_LENOVO_ALL_DEVICES` is a documentary source gate, not a supported
+standalone build switch; the retained tablet portion still requires the
+separately deferred Linux LED class.
+
+The `6009` TrackPoint half retains pinned validation of feature report 4 and
+output report 3, the Button-16-to-F20 mapping, Windows-compatible defaults, and
+one nonfatal asynchronous feature SET_REPORT. The direct report lookup uses
+the existing sparse report registry; validation proves the report before that
+lookup, so no new defensive check is present.
+
+The mouse interfaces of `6047` and `60ee` retain the pinned three-byte
+synchronous raw-request command sequence, Fn/vendor mappings, wheel axes, and
+middle-button click-versus-scroll state machine. Their keyboard interfaces
+remain normal HID input and allocate no Lenovo state; the third `60ee` vendor
+interface likewise carries no active Lenovo state. Disconnect completes the
+exact-interface synchronous waiter before its command buffer is freed; the
+asynchronous `6009` report snapshot is cancelled and drained by
+`hid_hw_stop()` before report/devres release.
+
+The active `lenovo_drvdata` is 28 bytes because tablet work and unavailable
+Linux audio LED-class state remain gated. Sysfs group creation keeps its pinned
+nonfatal control flow but publishes no firmware interface under the reduced
+sysfs contract. `KEY_FN_ESC` reaches Linux input for `6047`, and for `60ee`
+when its retained Lenovo row is enabled, but the current KeyD boundary logs and
+drops evdev code `0x1d1`; that downstream mapping is not part of this
+Linux-driver stage. `6009/6047` completed the focused
+hardware sequence. The corrected full `60ee` descriptor completed only at the
+temporary `64/256` parser policy; its Consumer field needs another 13,408
+bytes at 675 after a run that left 11,152 bytes free, so its upstream table row
+is retained but disabled on RP2040.
+
 ## HIDRAW and Logitech HID++ Boundary
 
 HIDRAW is a Linux client interface, not a device protocol. Ordinary keyboard
@@ -230,13 +278,24 @@ foundation links a deliberately narrow slice from pinned upstream
   including their class-specific input hooks and delayed initialization.
 
 The first single-M705 receiver checkpoint has since been superseded by the
-pinned-upstream-shaped `hid-logitech-dj.c` port. Runtime matching still enables
-only receiver `046d:c52b`; the other upstream receiver IDs remain behind
-`CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The active port retains the upstream
-multi-slot virtual-child model, standard mouse/keyboard/Consumer/power/media
-descriptors, HID++ descriptors, and virtual-child raw-request routing through
-the physical receiver. Firmware glue supplies the task-owned work/lifecycle
-boundary and final evdev activation.
+pinned-upstream-shaped `hid-logitech-dj.c` port. Runtime matching enables
+`046d:c52b/c532`. The adjacent upstream `c52f` mouse-only and `c534` HID++ rows
+remain intact behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`: at the retained
+`HID_MAX_USAGES=675`, their physical 652-usage Consumer field requests 20,980
+bytes and their 675-entry virtual-child field requests 21,716 bytes. Those two
+persistent allocations alone total 42,696 bytes and do not fit the RP2040 heap
+with the receiver graph. Gaming, Lightspeed/Powerplay, legacy 27 MHz,
+Bluetooth-proxy, and Dinovo rows remain behind the same broader gate. The
+active port retains the upstream multi-slot virtual-child model, standard
+mouse/keyboard/Consumer/power/media descriptors, HID++ descriptors, and
+virtual-child raw-request routing through the physical receiver. Firmware glue
+supplies the task-owned work/lifecycle boundary and final evdev activation.
+The exact `c52f/c534` startup, child-input, and teardown logic passed on
+hardware at temporary `64/256`; that capacity checkpoint is not support at the
+retained policy. Existing `c52b` coverage and the retained-policy `c532` pass
+remain valid. Because the IDs are absent only from the special-driver table,
+Linux-style generic fallback may still publish their physical interfaces; it
+sends no DJ/HID++ startup sequence and creates no virtual receiver child.
 
 The exact-class extension keeps the upstream IDs and quirks:
 M560 `046d:402d`, T650 `046d:4101`, K400 `046d:4024`, and K750

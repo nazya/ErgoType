@@ -15,8 +15,7 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
-The latest exact hardware-tested host image recorded here is the Microsoft
-wired-USB per-device-release matrix:
+The Microsoft wired-USB per-device-release checkpoint was:
 
 ```text
 text/data/bss                 596296 / 788 / 245312 B
@@ -65,6 +64,55 @@ free heap was 38224 bytes. Removal after Magic Keyboard 2015 and both Magic
 Keyboard 2024 generations returned to the same 60496-byte plateau. Minimum
 free task watermarks were TUH 265, KeyD 658, async 395, work 346, timer 315,
 lifecycle 220, and report 870 words.
+
+The corrected ordinary-Logitech-receiver and Lenovo external-USB diagnostic
+completed on hardware at temporary `HID_MAX_FIELDS=64`,
+`HID_MAX_USAGES=256`:
+
+```text
+host UF2 SHA-256              9546c46c0196718cfabd2d8b7662468598ed86701285d3a8eead81996dc0de88
+emulator UF2 SHA-256          4fb530a84cec731a4cbde00fe22502384c8eedc9daacffc6e1fd68df9f216636
+hardware verdict              passed at temporary 64/256; terminal f10
+c52f minimum free heap        17000 B
+c534 minimum free heap         9296 B
+60ee attached free heap       11152 B
+receiver removal plateau      60752 B
+oom                            0
+```
+
+At 256 usages, each `c52f/c534` physical and virtual wide Consumer field is
+8,308 bytes. At the retained 675 cap, the physical range contains 652 entries
+and requests 20,980 bytes, while the virtual range is capped at 675 and
+requests 21,716 bytes. The pair therefore grows from 16,616 to 42,696 bytes,
+an additional 26,080 bytes which cannot fit with the live receiver graph. The
+full corrected `60ee` descriptor has a Consumer range from 1 through 767; its
+field alone grows by 13,408 bytes from a run which left only 11,152 bytes free.
+
+The RP2040 build therefore restores the retained `64/675` policy but selects
+special drivers only for Logitech `c52b/c532` and Lenovo `6009/6047`. The exact
+upstream `c52f/c534/60ee` rows and driver logic remain in source behind compile
+gates.
+Their `64/256` run is lifecycle and request/input evidence, not support at the
+retained memory policy. The exact `ERR: HID_FIELD_NOMEM` marker now identifies
+a failed persistent field allocation; it was not emitted in the passing
+temporary-policy run.
+
+The gated IDs still have Linux-style generic fallback. `c52f/c534` may publish
+their physical generic interfaces, but receive no DJ/HID++ startup sequence and
+create no virtual child. A standalone `60ee` can publish smaller generic
+interfaces before its wide mouse/Consumer interface reaches the memory
+boundary. The unchanged combined emulator waits for `c52f` startup reports and
+therefore stops there; it cannot reach `c534/60ee` in the same run.
+
+The resulting retained-policy host build is:
+
+```text
+text/data/bss                 603496 / 788 / 245408 B
+__bss_end__                   0x2003fee8
+main-bank headroom            280 B to 0x20040000
+UF2 SHA-256                   a937994862faabf54c7fd98372d650fd89215ecbfab3f3449b0a245f488d6127
+hardware verdict              not rerun after allowlist gating
+```
 
 The original 232 KiB heap experiment is historical evidence for the static-RAM
 ceiling. With that tested host branch, the link failed with:
@@ -244,7 +292,8 @@ standard descriptor set plus the HID++ descriptor, and several virtual
 children may coexist. This restores the upstream driver shape, but the RP2040
 heap cannot represent every graph that upstream Linux can represent.
 
-The current firmware policy and static layout are:
+The retained firmware policy and then-current static layout for that checkpoint
+were:
 
 ```text
 HID_MAX_FIELDS                64 (upstream Linux: 256)

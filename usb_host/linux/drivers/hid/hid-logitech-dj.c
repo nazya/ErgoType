@@ -2192,14 +2192,19 @@ static const struct hid_device_id logi_dj_receivers[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_UNIFYING_RECEIVER),
 	 .driver_data = recvr_type_dj},
-	// Upstream Linux enables every receiver below. This firmware stage has
-	// hardware coverage only for the 046d:c52b receiver above.
-#if defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
+	// Upstream Linux enables every receiver below. Firmware selects c532
+	// separately from the memory-gated and non-ordinary receiver rows.
+#if defined(CONFIG_HID_LOGITECH_DJ_ORDINARY_RECEIVERS) || \
+	defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
 	{ /* Logitech unifying receiver (0xc532) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_UNIFYING_RECEIVER_2),
 	 .driver_data = recvr_type_dj},
+#endif
 
+#if defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
+	// Retain the upstream Nano rows, but keep them inactive in the RP2040 DJ
+	// driver: their physical and virtual Consumer graphs exceed the heap at 675.
 	{ /* Logitech Nano mouse only receiver (0xc52f) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_NANO_RECEIVER),
@@ -2208,7 +2213,6 @@ static const struct hid_device_id logi_dj_receivers[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_NANO_RECEIVER_2),
 	 .driver_data = recvr_type_hidpp},
-
 	{ /* Logitech G700(s) receiver (0xc531) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_G700_RECEIVER),

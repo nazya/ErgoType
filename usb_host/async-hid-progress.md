@@ -809,6 +809,44 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   watermark remained nonzero. The fixture also delivered positive and negative
   Mighty Mouse Z reports, but production CDC has no REL_HWHEEL marker, so the
   inversion remains source-audited rather than directly observed.
+- 2026-07-31: the unverified ordinary-Logitech-receiver WIP expands the
+  existing pinned DJ table from `046d:c52b` to `c52b/c532/c52f/c534`,
+  preserving the pinned DJ, mouse-only, and HID++ receiver types. Gaming,
+  Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain
+  gated. The cumulative candidate builds as
+  `text/data/bss=600968/788/245360`, with `__bss_end__=0x2003feb8`, 328 bytes
+  of main-bank headroom, and host UF2 SHA-256
+  `c222b8b396e88aa402171cb9247728a1574477e673b986de0ec633c68bfa2d5a`.
+  The 48-byte text increase is the three selected table rows; mutable static
+  state is unchanged. These are build/audit facts only; focused emulator and
+  hardware verdicts are pending.
+- 2026-07-31: the same unverified hardware stage now also imports complete
+  pinned `hid-lenovo.c` and selects only external USB
+  `17ef:6009/6047/60ee`. Bluetooth, I2C, ScrollPoint, dock, tablet, and Linux
+  audio LED-class paths remain gated; Legion is a separate unlinked family.
+  The combined candidate builds
+  as `text/data/bss=603504/788/245408`, with
+  `__bss_end__=0x2003fee8`, 280 bytes of main-bank headroom, and host UF2
+  SHA-256
+  `269e20807a5dcac4acbe8a9bf6fcd782a5633e4a193f7373cd4cb136078d918f`.
+  The active Lenovo state is 28 bytes per configured TrackPoint interface and
+  the static increase includes one 48-byte builtin-driver runtime. The compact
+  combined emulator builds as `text/data/bss=62244/0/254452`, with UF2
+  SHA-256
+  `1f8903038ff59a2f9f849b3ea85b8351fc1e98c631854674efd131bd274721f6`.
+  The first combined run failed in the broad c532 phase before child
+  publication. The rebuilt emulator emits a `1` through `7` after `f12,a` to
+  identify the exact c532 predicate; that diagnostic artifact has no hardware
+  verdict yet.
+- 2026-07-31: the corrected combined fixture subsequently reached terminal
+  `f10` at temporary `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=256`, with exact
+  `c532/c52f/c534` receiver exchanges, Lenovo `6009/6047/60ee`, balanced
+  removal, `oom=0`, and nonzero watermarks. This proves the staged logic, not
+  retained-policy capacity. At 675, each `c52f/c534` physical-plus-virtual
+  wide-field pair needs 26,080 bytes more than at 256 and cannot coexist in the
+  RP2040 heap. The full `60ee` Consumer field needs 13,408 bytes more than its
+  256-usage run, which left 11,152 bytes free. Their upstream rows are retained
+  but disabled for the RP2040 build.
 
 ## Current Driver Boundary
 
@@ -851,11 +889,24 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
   API.
 - The first reduced single-M705 checkpoint was superseded by the
-  pinned-upstream-shaped `hid-logitech-dj.c` port. Receiver `046d:c52b` is
-  active; other upstream receiver IDs remain compile-gated. The driver retains
-  multiple virtual-child slots, standard mouse/keyboard/Consumer/power/media
-  descriptors, HID++ descriptors, and raw-request routing through the physical
-  receiver.
+  pinned-upstream-shaped `hid-logitech-dj.c` port. Receivers `046d:c52b/c532`
+  are active. The pinned `c52f/c534` mouse-only and HID++ rows remain adjacent
+  but are disabled on RP2040 because their physical and virtual Consumer fields
+  exceed the heap at 675 usages. Gaming, Lightspeed/Powerplay, 27 MHz,
+  Bluetooth-proxy, and Dinovo receivers remain compile-gated. The driver
+  retains multiple virtual-child slots,
+  standard mouse/keyboard/Consumer/power/media descriptors, HID++ descriptors,
+  and raw-request routing through the physical receiver. `c532` passed the
+  retained policy; `c52f/c534` passed only the temporary `64/256` logic check.
+- The Lenovo WIP selects external USB `17ef:6009/6047`; its full `60ee` row is
+  retained but memory-gated on RP2040. It retains pinned
+  report validation, Button-16/Fn/vendor mappings, middle-button wheel
+  arbitration, async `6009` feature SET_REPORT, and the sequential synchronous
+  `6047/60ee` configuration requests. Bluetooth, I2C, ScrollPoint, dock,
+  tablet, and audio LED-class paths remain gated; Legion is a separate
+  unlinked family. Sysfs publication is a nonfatal reduced no-op. `KEY_FN_ESC`
+  currently stops at the downstream
+  KeyD mapping boundary rather than being silently claimed as remappable.
 - The full automatic sequence passed with temporary RP2040 parser limits
   `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256`. At the retained `64/675` policy,
   standalone M705 and ordinary DJ keyboard children work both separately and
@@ -864,6 +915,10 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   RP2040 heap boundary as a standalone child and adds the run's only OOM count.
   The earlier two-OOM result used 256 fields. Heap values are in
   `hid-emulator-coverage.md` and `pio-usb-memory.md`.
+- The corrected Logitech/Lenovo fixture separately passed all six new profiles
+  at temporary `64/256`. `6009/6047` retain their earlier 675-usage result;
+  `c52f/c534/60ee` are not selected in the RP2040 build after the measured
+  capacity result.
 - FF, high-resolution wheel, vendor keys, direct-touchpad subclasses, and
   broader real-device DJ product coverage remain outside that DJ candidate.
   The seven active Wacom USB IDs are a separate linked, hardware-passed
@@ -880,8 +935,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Expand ordinary Logitech DJ receiver IDs and external Lenovo USB TrackPoint
-  keyboards as separate audited WIP stages.
+- Recheck active `c532` and Lenovo `6009/6047` at retained `64/675`. The
+  unchanged combined emulator still presents memory-gated `c52f/c534/60ee`, so
+  its stop at the first gated profile is not a passing automatic sequence and
+  must not be relabelled as one. Generic HID sends no Nano startup writes, so
+  the fixture stops at `c52f` and does not reach `c534/60ee`. Do not change that
+  emulator without explicit permission.
 - Keep HIDRAW lifecycle-only until a concrete useful USB consumer defines the
   required bounded report/subscriber contract. HIDDEV/VFS is outside the
   current roadmap.

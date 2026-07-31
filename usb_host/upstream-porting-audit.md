@@ -390,13 +390,14 @@ sources so their enablement contract remains visible.
 | `ff-memless.c` | Its two upstream `event_lock` scopes use the per-input task-context PI mutex; the original `guard(spinlock_irq*)` lines remain adjacent. |
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
-| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact-ID explicit-feature-usage compaction for Wacom `056a:0084/5048`, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and post-transport-stop release of connect-lifetime field ordering for reversible Wacom rebind. |
+| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, exact-ID explicit-feature-usage compaction for Wacom `056a:0084/5048`, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and post-transport-stop release of connect-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-apple.c` | Complete pinned source with exactly 18 external wired USB IDs active; Bluetooth, internal/legacy keyboard and trackpad, Touch Bar, and backlight-only rows/code remain adjacent behind `CONFIG_HID_APPLE_ALL_DEVICES`; battery report lookup uses the sparse registry and the driver descriptor is immutable. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-microsoft.c` | Complete pinned source with exactly 14 non-gaming wired USB IDs active; SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF state/code/table rows remain adjacent behind `CONFIG_HID_MICROSOFT_ALL_DEVICES`; the driver descriptor is immutable. |
+| `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
-| `hid-logitech-dj.c` | Full pinned source with receiver `046d:c52b` active and the other upstream receiver IDs retained behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
+| `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
 | `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with exact USB allowlist `056a:0027/0029/0084/00de/037a/037b/5048`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver battery, timer, and receiver rebind paths are active. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage. Bluetooth, Remote, bootloader, I2C, PCI, and all other product IDs remain gated; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
@@ -464,7 +465,7 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 25 vendor driver descriptor translation units across 24 enabled
+- CMake links 26 vendor driver descriptor translation units across 25 enabled
   vendor `CONFIG_HID_*` families (the compound Holtek config contributes
   keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
   are also linked. Stadia has no reduced config gate and is excluded simply by
@@ -502,6 +503,26 @@ it contains no callback, logging, allocation, or wait.
   before terminal `f10`, with stable removal heap, `oom=0`, and no host `ERR`.
   The fixture delivered both relative Z signs, but production CDC has no
   REL_HWHEEL marker, so their inversion remains source-audited.
+- The imported `hid-lenovo.c` actively matches external USB IDs
+  `17ef:6009/6047`. `lenovo_devices[]` retains the adjacent `60ee` row behind
+  `CONFIG_HID_LENOVO_ALL_DEVICES`, while
+  `hid_have_special_driver[]` retains pinned Linux's narrower `6009/6047`
+  pair. A `60ee` interface therefore falls through to generic HID only if its
+  report graph can be allocated; retained-policy memory accounting proves that
+  its full graph cannot be published on RP2040, but no 675-usage run has yet
+  identified which exact allocation fails. Bluetooth, I2C, ScrollPoint, Pro Dock,
+  tablet, and related LED/work rows are gated, preserving generic fallback for
+  excluded USB devices; Legion is a separate unlinked driver family. The
+  active call graph preserves pinned allocation, `hid_parse()`,
+  `hid_hw_start()`, required-report validation, sysfs warning,
+  raw-request, and probe-unwind returns. Feature report 4 and output report 3
+  retain their upstream dense lookup lines beside sparse registry replacements;
+  validation proves both before use, so no new NULL check was added. With
+  Linux audio LED class absent, the active `lenovo_drvdata` is 28 bytes and
+  contains no work, mutex, or LED object. `6009` asynchronous report teardown
+  and `6047` synchronous raw-request disconnect use the existing audited
+  transport fences. The retained `60ee` code uses the same fence when enabled.
+  `KEY_FN_ESC` remains a documented downstream KeyD gap.
 - The imported `hid-magicmouse.c` matches only USB Magic Mouse 2 and Trackpad 2
   IDs. Its synchronous mode SET runs from lifecycle task context through the
   existing async EP0 owner. USB Mouse 2 returns before the upstream delayed
@@ -562,9 +583,13 @@ it contains no callback, logging, allocation, or wait.
   class generations, K400/K750 input, expected retained-capacity behavior, and
   the final direct regression.
 - The first reduced single-M705 DJ checkpoint was replaced by the full pinned
-  upstream port. Runtime matching enables `046d:c52b`, while the other receiver
-  IDs stay behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The upstream
-  multi-slot child table, mouse/keyboard/Consumer/power/media/HID++ descriptors,
+  upstream port. Runtime matching enables `046d:c52b/c532` with the exact
+  pinned `recvr_type_dj` assignment. The adjacent `c52f/c534`
+  `recvr_type_mouse_only` and `recvr_type_hidpp` rows remain intact behind the
+  broader gate. Gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy,
+  and Dinovo rows stay behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The
+  upstream multi-slot child
+  table, mouse/keyboard/Consumer/power/media/HID++ descriptors,
   pair/unpair/link-loss/connection handling, and virtual-child raw-request
   routing remain present. Firmware adaptations provide task-owned work,
   lifecycle destruction, sparse report lookup, and final evdev activation.
@@ -573,7 +598,12 @@ it contains no callback, logging, allocation, or wait.
   and ordinary keyboard children work; only the standalone complete eQuad
   keyboard profile reaches the RP2040 capacity boundary documented in
   `pio-usb-memory.md`. The earlier simultaneous-child limit was measured with
-  the upstream-sized 256-field table.
+  the upstream-sized 256-field table. A later exact `64/256` fixture proved
+  `c52f/c534` startup, input, and teardown, but their two persistent wide fields
+  need another 26,080 bytes at 675. They are disabled on RP2040 rather than
+  inheriting that temporary capacity verdict; `c532` remains selected. Generic
+  fallback may publish the gated Nano receivers' physical interfaces, but does
+  not run their DJ/HID++ startup or create virtual children.
 - `hid-haptic.h` is byte-for-byte baseline. `hid-multitouch.c` retains three
   adjacent, explained `jiffies` member-token substitutions and imports upstream
   `8813b061`: active contacts use a `maxcontacts`-sized bitmap and the RUNNING
@@ -1363,9 +1393,9 @@ Current checkpoint audit:
 - retained the prior whole-file audit and diffed the newly linked
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
-  both linked Wacom translation units, `hid-microsoft.c`, and `hid-apple.c`
-  against the same pin. There are now 38 linked Linux-derived C translation
-  units; thirty-seven have an upstream source
+  both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`, and
+  `hid-lenovo.c` against the same pin. There are now 39 linked Linux-derived C
+  translation units; thirty-eight have an upstream source
   counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres

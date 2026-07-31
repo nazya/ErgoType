@@ -121,6 +121,59 @@ watermarks: TUH 265, KeyD 658, async 395, work 346, timer 315, lifecycle 220,
 and report 870 words. Exact detached power-snapshot values remain outside the
 production-log verdict.
 
+### Measured ordinary-Logitech and Lenovo capacity pair
+
+The combined fixture covers Logitech USB receivers `046d:c532/c52f/c534` and
+external Lenovo USB TrackPoint keyboards `17ef:6009/6047/60ee` without
+replaying the existing `c52b` matrix. Its exact corrected pair completed on
+hardware with temporary `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=256`.
+
+The compact combined fixture covers only the newly reached behavior:
+
+- Logitech `c532` as a real three-interface DJ receiver, including exact
+  switch-to-DJ, notifications, paired-device query, child input, and unpair;
+- Logitech `c52f` as a real two-interface mouse-only receiver, including its
+  unnumbered high-resolution mouse report and full physical/virtual detach;
+- Logitech `c534` as a real two-interface HID++ receiver, including its
+  numbered mouse report, shared-interface lifetime, and reconnect;
+- Lenovo `6009` keyboard plus TrackPoint, Button 16/F20, validated feature
+  report 4 and output report 3, exact default feature payload, disconnect with
+  the asynchronous SET pending, then one normal generation;
+- Lenovo `6047` keyboard plus mouse, exact four feature commands, Fn-F12 raw
+  fixup, middle-click/wheel arbitration, disconnect during the first
+  synchronous SET, then one normal generation;
+- Lenovo `60ee` keyboard, mouse, and third vendor/no-input HID interface,
+  exact three feature commands, one report-ID-5 vendor key, input, and normal
+  detach.
+
+Gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, Dinovo, Bolt,
+and all non-USB Lenovo paths are outside this fixture. The exact temporary
+capacity pair is:
+
+```text
+host parser policy     HID_MAX_FIELDS=64, HID_MAX_USAGES=256
+host UF2 SHA-256       9546c46c0196718cfabd2d8b7662468598ed86701285d3a8eead81996dc0de88
+emulator branch        device/logitech-lenovo-usb
+emulator UF2 SHA-256   4fb530a84cec731a4cbde00fe22502384c8eedc9daacffc6e1fd68df9f216636
+hardware verdict       passed at temporary 64/256; not retained-policy support
+```
+
+The run reached terminal `f10` with no host `ERR`, `oom=0`, balanced removals,
+and nonzero task watermarks. `c52f` reached `min=17000`, `c534` reached
+`min=9296`, and both returned to the 60,752-byte removal plateau. The corrected
+full `60ee` graph left 11,152 bytes free and returned to 60,496 after removal.
+
+That logic result exposed a retained-policy capacity failure. At 675 usages,
+each Nano profile needs a 20,980-byte physical Consumer field and a
+21,716-byte virtual Consumer field, 26,080 bytes more per pair than at 256.
+The full `60ee` Consumer field alone grows another 13,408 bytes. Consequently
+the RP2040 host now selects only `c52b/c532` and Lenovo `6009/6047`; the pinned
+`c52f/c534/60ee` rows remain in source behind compile gates. The emulator is
+unchanged and still presents all six profiles, so it is no longer a passing
+automatic sequence for that reduced host allowlist. It stops at `c52f` because
+generic HID sends none of the DJ startup reports; that unchanged run does not
+reach or independently verify the `c534` gate or `60ee` allocation boundary.
+
 ### Hardware-verified work-input and long-enumeration fixture
 
 Host checkpoint `hid: enable audited work-input drivers` enables the upstream-shaped `hid-elecom.c`,
@@ -516,7 +569,8 @@ Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
 Apple external USB, Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
-Kensington, KYE, Microsoft, Primax, PXRC, Rapoo, Razer, Saitek, Topre, Wacom,
+Kensington, KYE, Lenovo `6009/6047`, Microsoft, Primax, PXRC, Rapoo, Razer,
+Saitek, Topre, Wacom,
 and Zydacron. Apple and Microsoft passed their focused exact-artifact hardware
 runs on 2026-07-31. Wacom's historical exact
 32-reconnect CTL-472 artifact, expanded five-profile wired artifact, and
@@ -534,11 +588,13 @@ reuse an already tested hook shape.
 ## Coverage Decision
 
 The existing emulator set plus the hardware-verified work-input, combined
-haptic/Trackpad, Microsoft, Apple, and exact Wacom fixtures covers the
-long-enumeration success path, normal USB Magic Trackpad 2 path, and the
-selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/Yoga 260 AES and USB
-receiver flows. The active allowlist is covered except for the Holtek mouse
-driver-specific hardware result.
+haptic/Trackpad, Microsoft, Apple, exact Wacom, and temporary-capacity
+Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
+Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
+Yoga 260 AES and USB receiver flows, active Logitech `c532`, and Lenovo
+`6009/6047`. The active allowlist is covered except for the Holtek mouse
+driver-specific hardware result. Memory-gated `c52f/c534/60ee` have logic
+coverage at temporary `64/256`, not RP2040 support at retained `64/675`.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. The complete Wacom fixture also passed the working input/devres
 and evdev identity correction. The later fixture certifies the selected
@@ -1357,6 +1413,11 @@ and emulator CDC lines under each item.
   - the complete HID++ eQuad keyboard profile exceeds the available RP2040
     heap and adds exactly one OOM count
   - teardown recovers and following standalone devices still work
+- [x] Logitech Nano and full Lenovo logic at temporary `64/256`
+  - `c532/c52f/c534` and `6009/6047/60ee` reached terminal `f10`, with
+    balanced cleanup, `oom=0`, and nonzero watermarks
+  - retained 675-usage allocation arithmetic excludes `c52f/c534/60ee` from
+    the RP2040 special-driver allowlist; this is not a retained-policy pass
 - [x] practical exact-class HID++/Unifying matrix
   - emulator branch `device/logitech-hidpp-unifying-matrix`
   - two M560 and two T650 generations, then one K400 and one K750 generation

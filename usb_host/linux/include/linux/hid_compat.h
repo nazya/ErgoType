@@ -60,6 +60,12 @@ typedef long loff_t;
 #define CONFIG_HID_ITE 1
 #define CONFIG_HID_KENSINGTON 1
 #define CONFIG_HID_KYE 1
+#define CONFIG_HID_LENOVO 1
+// Keep the RP2040-memory-gated 60ee plus Bluetooth, I2C, ScrollPoint, dock,
+// tablet, and their LED/work paths visible in the complete pinned source.
+// This is not a standalone supported switch: the retained tablet portion
+// deliberately still requires the separately unsupported Linux LED class.
+// #define CONFIG_HID_LENOVO_ALL_DEVICES 1
 #define CONFIG_HID_PRIMAX 1
 #define CONFIG_HID_PXRC 1
 #define CONFIG_HID_RAPOO 1
@@ -77,8 +83,11 @@ typedef long loff_t;
 // #define CONFIG_HID_MICROSOFT_ALL_DEVICES 1
 #define CONFIG_HID_LOGITECH_HIDPP 1
 #define CONFIG_HID_LOGITECH_DJ 1
+#define CONFIG_HID_LOGITECH_DJ_ORDINARY_RECEIVERS 1
 // #define CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS 1
-// The current hardware stage enables only the covered 046d:c52b receiver.
+// Select c52b plus c532. The retained c52f/c534 rows need both their physical
+// and virtual Consumer graphs and exceed the RP2040 heap at HID_MAX_USAGES=675;
+// gaming, 27 MHz, Bluetooth-proxy, and Dinovo rows share the broader gate.
 /*
  * Direct-USB HID++ is enabled in measured stages. Request/reply remains the
  * transport umbrella, while identity opens only upstream pre-connect name and

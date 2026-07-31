@@ -175,8 +175,12 @@ static struct hid_field *hid_register_field(struct hid_report *report,
 			  usages * sizeof(struct hid_usage) +
 			  (usages + 2 * value_count) * sizeof(unsigned int)),
 			 GFP_KERNEL);
-	if (!field)
+	if (!field) {
+		// Upstream Linux: return NULL;
+		// Firmware identifies this exact allocation failure without changing it.
+		async_msg("ERR: HID_FIELD_NOMEM");
 		return NULL;
+	}
 
 	field->index = report->maxfield++;
 	report->field[field->index] = field;
@@ -1563,8 +1567,6 @@ int hid_open_report(struct hid_device *device)
 	if (WARN_ON(device->status & HID_STAT_PARSED))
 		return -EBUSY;
 
-	async_msg("INFO: HID_FIELDS64_UPSTREAM256");
-
 	start = device->bpf_rdesc;
 	if (WARN_ON(!start))
 		return -ENODEV;
@@ -1601,6 +1603,9 @@ int hid_open_report(struct hid_device *device)
 		hid_close_report(device);
 		return error;
 	}
+	// Upstream Linux has no field-table policy marker. Emit the firmware marker
+	// only after success so it cannot hide the exact allocation-failure message.
+	async_msg("INFO: HID_FIELDS64_UPSTREAM256");
 
 	return 0;
 }
