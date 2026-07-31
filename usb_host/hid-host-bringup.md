@@ -78,6 +78,21 @@ and the original return code. A focused hardware fault exercised three reached
 generation. The temporary fault hook was removed. `hid_parse()` reaches the
 same cleanup label, but its failure branch remains source-audited only.
 
+The exact Artist extension selects XP-Pen Artist 22R Pro `28bd:091b` and
+Artist 24 Pro `28bd:092d`. It keeps the complete pinned parameter,
+replacement-descriptor, raw-event, Pen, 20-button Pad, and two-Dial paths with
+the existing 512-word lifecycle task. No new request type, work item, timer,
+battery object, or mutable driver state is introduced.
+
+Its focused host/emulator pair passed on 2026-08-01. A full 22R generation,
+same-PID 22R reconnect smoke, and 24 Pro generation produced six balanced
+Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, a
+36-word minimum lifecycle watermark, and terminal `f15, f10` without host
+`ERR`, `f12`, or `HID_REPORT_SKIP`. The fixture gates exact endpoint-`0x03`
+OUT-before-string-100 ordering. Production logging does not expose the numeric
+Artist 24 ABS_X result, so the exact fragmented-X value remains source-audited.
+Future lifecycle changes must remeasure the observed 36-word margin.
+
 The Wacom checkpoint additionally links complete pinned Wacom sources. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES

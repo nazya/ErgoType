@@ -1193,6 +1193,23 @@ contains a hypothetical NULL check that no current caller can exercise.
   API, wrapper, allocation branch, callback, or mutable state was added. Pad
   keys cross the current KeyD boundary; pen absolute/tool values and Parblo
   Dial stop at its existing unsupported-event boundary.
+- The Artist extension likewise moves only the exact pinned rows for Artist
+  22R Pro `28bd:091b` and Artist 24 Pro `28bd:092d` outside the all-devices
+  gate. Star06 remains gated, and every other row keeps its prior gate and
+  table order. Both profiles retain
+  the upstream interface-2 OUT/string-100 parameter initialization, generated
+  Pen/20-button Pad/two-Dial descriptors, raw-event handling, and cleanup;
+  Artist 24 retains `fragmented_hires2`. The existing 512-word lifecycle stack
+  remains unchanged and left 36 words free in the complete matrix. No wrapper,
+  duplicate state, request type, work item, timer, resource-budget, or
+  return-value change was added.
+- Pinned Artist initialization returns `-EINVAL` on each non-Pen interface.
+  The reduced synchronous device model retains only `-ENOMEM` while trying
+  registered drivers and returns `-ENODEV` when none binds, so the reachable
+  firmware result is the existing `HID_IGNORED` topology warning. Three
+  physical Artist generations produced exactly six such warnings in the
+  focused run. This is the existing device-model boundary, not a driver-local
+  rewrite of the Linux return.
 - `uclogic_params_get_desc()` returns a separately allocated combined
   descriptor through `drvdata->desc_ptr`. `hid_open_report()` copies it before
   parsing, so HID core never owns that original allocation. Pinned Linux frees
@@ -1486,7 +1503,19 @@ Current checkpoint audit:
   snapshots reported `oom=0`; minimum watermarks were TinyUSB 265, KeyD 658,
   async 389, work 346, timer 348, lifecycle 105, and report 862 words. The
   temporary host fault was removed; the same-label `hid_parse()` branch remains
-  source-audited only
+  source-audited only. The following exact Artist rows add another 32 bytes of
+  text and no data/BSS while retaining the existing lifecycle stack. Host
+  `34aeccbabd836ec82cd5d6f627ac03fd0be9b658af56711b18b0c1835161cc73`
+  with emulator
+  `7173d5f1baa3598f405b4eb85456f7efabaf04bfc086ff488e04b416e27159ce`
+  completed three physical Artist generations, six balanced Pen/Pad
+  lifetimes, six expected `HID_IGNORED`, and 21 `oom=0` snapshots with a
+  36-word minimum lifecycle watermark and no host `ERR`, `f12`, or
+  `HID_REPORT_SKIP`. The protocol oracle enforces exact OUT-before-string-100
+  order. Production logging does not expose the numeric Artist 24 ABS_X result,
+  so the exact reconstructed value remains source-audited. The 36-word margin
+  belongs only to this measured call graph and build and must be rechecked if
+  either changes
 - audited the complete pinned Wacom parser/system sources and the five active
   wired call graphs. Host
   `4efcd10843585da2ef41265be760bfba5b405e156b0e095c2a98d45d2ce604e5`

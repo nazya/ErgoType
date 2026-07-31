@@ -899,6 +899,21 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `e7d2e2c9469efa27ef7101c14cd070c0d75b00e39df0101fc250c3cfdd64f23c`;
   that exact clean image was not flashed unchanged. `hid_parse()` reaches the
   same cleanup label but remains source-audited only.
+- 2026-08-01: exact Artist 22R Pro `28bd:091b` and Artist 24 Pro `28bd:092d`
+  were exercised with host UF2 SHA256
+  `34aeccbabd836ec82cd5d6f627ac03fd0be9b658af56711b18b0c1835161cc73`
+  and emulator UF2 SHA256
+  `7173d5f1baa3598f405b4eb85456f7efabaf04bfc086ff488e04b416e27159ce`.
+  The compact sequence ran the full 22R Pen/20-button Pad/two-Dial matrix, a
+  same-PID 22R reconnect smoke, then the 24 Pro Pen/representative Pad/two-Dial
+  matrix. Six Pen/Pad input lifetimes balanced, six expected non-Pen interfaces
+  produced `HID_IGNORED`, all 21 heap snapshots had `oom=0`, and terminal
+  `f15, f10` arrived with no `f12`, `HID_REPORT_SKIP`, or host `ERR`. Minimum
+  task watermarks were TinyUSB 265, KeyD 658, async 389, work 346, timer 348,
+  lifecycle 36, and report 873 words. Exact Artist 24 reconstructed ABS_X is
+  not visible in production logging and remains source-audited. The run used
+  the existing 512-word lifecycle stack; future lifecycle changes must
+  remeasure its 36-word observed margin.
 
 ## Current Driver Boundary
 
@@ -937,12 +952,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   pinned synchronous timer-delete-before-transport-stop lifetime. The
   Touch-ID-named IDs are keyboard-only in this scope.
 - The selected UC-Logic table now also includes exact Deco 01 original
-  `28bd:0042` and Parblo A610 Pro `28bd:1903`. They reuse the pinned v1 and
-  UGEE-v2 string/request/input paths without a new transport primitive,
-  callback, work item, or mutable static state. Their focused same-PID
-  reconnect matrix passed at the retained `64/675` parser policy. Pad keys
-  reach KeyD; pen absolute/tool values and the Parblo Dial remain downstream
-  unsupported-event boundaries.
+  `28bd:0042`, Parblo A610 Pro `28bd:1903`, Artist 22R Pro `28bd:091b`, and
+  Artist 24 Pro `28bd:092d`. They reuse pinned string/request/input paths
+  without a new transport primitive or mutable static state. Their focused
+  matrices passed at the retained `64/675` parser policy. Pad keys and Dials
+  reach Linux input; unsupported tablet semantics remain visible at the
+  downstream KeyD boundary.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
@@ -999,12 +1014,19 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
-- Add and qualify only XP-Pen Artist 22R Pro `28bd:091b` and Artist 24 Pro
-  `28bd:092d` as the next focused UC-Logic stage. Measure the lifecycle stack,
-  preserve pinned non-Pen rejection and request ordering, and cover disconnect
-  plus clean reconnect without replaying earlier tablet matrices. Artist adds
-  no asynchronous-request primitive; do not add a TinyUSB-internal control
-  interceptor solely to manufacture a pending string transfer.
+- Rebuild only exact wired Cintiq 13HD `056a:0304` next; keep
+  `056a:0333/0335` gated and leave `ktime_after()` unchanged. Its single-Pico
+  fixture must cover delayed Feature report ID 2 SET/GET with value 2, Pen
+  report ID 16 enter/move/exit, Pad report ID 17 all nine buttons without a
+  ring/`ABS_WHEEL` claim, disconnect before the approximately one-second
+  deadline, reconnect, heap plateaus, and stack watermarks.
+- Qualify `056a:0333/0335` later with two simultaneously live device-level
+  PIDs under one common parent/hub and both arrival orders. A single Pico
+  cannot represent that topology, so neither row belongs in the `0304` stage.
+- Change reduced `ktime_after()` only in a third independent stage with a
+  deterministic counter-wrap test. Signed modulo-`2^32` ordering is valid only
+  when the compared distance is below `2^31` milliseconds; do not claim
+  arbitrary long-gap correctness.
 - Recheck active `c532` and Lenovo `6009/6047` at retained `64/675`. The
   unchanged combined emulator still presents memory-gated `c52f/c534/60ee`, so
   its stop at the first gated profile is not a passing automatic sequence and

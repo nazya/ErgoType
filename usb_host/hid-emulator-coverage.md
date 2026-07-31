@@ -430,6 +430,7 @@ claims for unrelated drivers.
 | 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID |
 | 2026-07-31 | Deco/Parblo `device/uclogic-deco-parblo` (`c843295`), host `a9ba49cf…`, emulator `373df86d…` | Deco 01 original and Parblo A610 Pro each complete an initial and same-PID reconnect generation; ten target input lifetimes balance, all 22 snapshots have `oom=0`, and terminal `f15, f10` arrives without `f12`, `HID_REPORT_SKIP`, or host `ERR` |
 | 2026-08-01 | focused UC-Logic failed-probe fixture | three reached `hid_hw_start()` failures after combined-descriptor generation repeat the same cleanup plateau, then one normal Parblo generation publishes and removes Mouse/Pen/Pad; all 25 snapshots have `oom=0`, with no host `ERR`; `hid_parse()` remains source-audited only |
+| 2026-08-01 | Artist `device/uclogic-artist` (`287acbf`), host `34aeccba…`, emulator `7173d5f1…` | Artist 22R full input plus reconnect smoke and Artist 24 input complete six balanced Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, and terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; exact Artist 24 reconstructed ABS_X is not visible in production logging |
 
 ## Recorded Emulator Branches
 
@@ -460,6 +461,7 @@ Recorded emulator branches:
 | `device/haptic-lifecycle` | `05607cc` |
 | `device/wacom-wired-matrix` | `66c5dde` |
 | `device/uclogic-deco-parblo` | `c843295` |
+| `device/uclogic-artist` | `287acbf` |
 
 - `device/a4tech-x5-005d`: A4Tech mapping/mapped/event/probe path; wheel
   orientation and hi-res wheel behavior.
@@ -495,6 +497,8 @@ Recorded emulator branches:
   Deco 01 V2 interrupt-OUT/string path.
 - `device/uclogic-deco-parblo`: focused Deco 01 original v1 and Parblo A610
   Pro UGEE-v2 string/request/input paths, including same-PID reconnect.
+- `device/uclogic-artist`: focused Artist 22R/24 Pro OUT-before-string
+  initialization, Pen/Pad/Dial layouts, and same-PID 22R reconnect.
 - `device/primax-keyboard`: raw event rewrite and re-entry into the HID parser.
 - `device/pxrc-phoenixrc`: report fixup plus stateful raw axis shuffle.
 - `device/quirks-atmel-ma901`: name-based `hid_ignore()` quirk requiring the
@@ -1192,6 +1196,56 @@ the run. The production-clean host builds as `605272/788/245408`, UF2 SHA-256
 but that exact image was not flashed unchanged. A post-generation
 `hid_parse()` failure reaches the same cleanup label and free order; it remains
 source-audited rather than runtime-tested.
+
+### XP-Pen Artist 22R Pro / Artist 24 Pro coverage
+
+The focused fixture is commit `287acbf` on branch `device/uclogic-artist`. It
+uses ordinary TinyUSB descriptors and callbacks and does not replay the earlier
+UC-Logic matrices. The exact hardware-test artifacts are:
+
+```text
+host UF2 SHA-256       34aeccbabd836ec82cd5d6f627ac03fd0be9b658af56711b18b0c1835161cc73
+host text/data/bss     605304 / 788 / 245408 B
+emulator UF2 SHA-256   7173d5f1baa3598f405b4eb85456f7efabaf04bfc086ff488e04b416e27159ce
+emulator text/data/bss 49780 / 0 / 252360 B
+hardware verdict       passed 2026-08-01 for the scope below
+```
+
+Each physical profile exposes two deliberately rejected compatibility
+interfaces and the interface-2 interrupt IN/OUT path used by pinned UC-Logic.
+The fixture's internal oracle accepts exactly one 10-byte Output report before
+exactly one raw string-100 request, with the 12-byte Artist 22R or 14-byte
+Artist 24 response. It then sends 10-byte 22R or 12-byte 24 Pen/frame reports.
+The 22R generation exercises all 20 Pad buttons and both directions of both
+Dials, followed by one same-PID Pen/Pad reconnect smoke. The 24 generation
+exercises Pen, the first and last Pad buttons, both Dials, and report bytes that
+enter the pinned `fragmented_hires2` rewrite. Alert markers are
+`f1, f2, f3, f15, f10`; a recorded phase failure is signalled by `f12` plus
+its phase key.
+
+The clean run produced three physical Artist generations, six balanced Pen/Pad
+input lifetimes, and six expected `HID_IGNORED` warnings. All 21 heap snapshots
+reported `oom=0`; Artist Pad removal returned to 60,752 B after every
+generation, and the minimum-ever free counter was 47,592 B. Minimum task
+watermarks were TinyUSB 265, KeyD 658, async 389, work 346, timer 348,
+lifecycle 36, and report 873 words. There was no `f12`, `HID_REPORT_SKIP`, or
+host `ERR`.
+
+This final sizing run retained the existing 512-word lifecycle stack. Its
+36-word observed margin must be remeasured after any lifecycle call-graph or
+build change. Removing the now-unneeded comment-only `main.c` diff changed only
+compiled source-line diagnostics; the resulting clean host rebuild has SHA-256
+`17ed2e5637f149b7c1909edd1789597977c825529e26e34a5226efac4dd07770` and was
+not flashed unchanged.
+
+The first 15 Artist Pad buttons reached the existing KeyD mappings in the full
+22R pass; the final five remained the known unsupported-code boundary. Low-
+resolution Dial events were consumed while their high-resolution companion
+codes remained downstream diagnostics. Pen pressure/tool/tip/tilt diagnostics
+are likewise outside current KeyD policy. Production CDC does not print the
+numeric ABS_X value, so sending the 24 Pro high-X report establishes transport
+and execution of the size-12 raw-event branch but not the exact reconstructed
+coordinate value.
 
 ### Wired Wacom CTL-472 coverage
 

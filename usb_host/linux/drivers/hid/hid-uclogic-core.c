@@ -566,8 +566,8 @@ static const struct hid_device_id uclogic_devices[] = {
 /*
  * Keep the complete pinned-upstream match table visible. Firmware stages
  * select the Huion dynamic, Parblo A610 Pro, XP-Pen Deco 01/01 V2, Deco L/LW,
- * and Deco Pro S/SW/MW paths; CONFIG_HID_UCLOGIC_ALL_DEVICES restores every
- * upstream match.
+ * Deco Pro S/SW/MW, and Artist 22R/24 Pro paths;
+ * CONFIG_HID_UCLOGIC_ALL_DEVICES restores every upstream match.
  */
 #if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UCLOGIC,
@@ -640,11 +640,11 @@ static const struct hid_device_id uclogic_devices[] = {
 #if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_STAR06) },
+#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_22R_PRO) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_24_PRO) },
-#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, uclogic_devices);

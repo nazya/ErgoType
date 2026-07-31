@@ -516,6 +516,40 @@ heap was 46,664 B. Minimum task watermarks were TinyUSB 265, KeyD 658, async
 fault hook is absent from the production source. The same-label `hid_parse()`
 failure remains a static ownership result rather than a hardware verdict.
 
+#### XP-Pen Artist 22R / 24 Pro verified stage
+
+Selecting the two exact Artist IDs with the existing 512-word lifecycle task
+produces:
+
+```text
+host text/data/bss             605304 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+delta from cleanup stage       +32 text / +0 data / +0 bss
+lifecycle startup-heap delta   +0 B
+hardware-test host UF2        34aeccbabd836ec82cd5d6f627ac03fd0be9b658af56711b18b0c1835161cc73
+production-clean host UF2     17ed2e5637f149b7c1909edd1789597977c825529e26e34a5226efac4dd07770
+emulator text/data/bss         49780 / 0 / 252360 B
+emulator UF2 SHA-256           7173d5f1baa3598f405b4eb85456f7efabaf04bfc086ff488e04b416e27159ce
+hardware-test verdict          passed 2026-08-01; focused Artist sequence
+```
+
+The static delta is only the two selected match entries. The hardware
+watermark was 36 words for the nested Artist initializer at the retained
+`64/675` parser policy. This is the measured margin for the current call graph
+and build, not a general bound; remeasure it after either changes. The clean
+rebuild removes only the now-unneeded comment in `main.c`, so its different
+source-line diagnostics were not reflashed.
+
+Three physical Artist generations produced six balanced Pen/Pad lifetimes.
+Artist 22R repeated 50,568 B after Pen, 50,440 B after Pad, 59,960 B after Pen
+removal, and 60,752 B after Pad removal across its initial and reconnect
+generations. Artist 24 used 50,536/50,408 B live and returned through the same
+59,960/60,752 B removal plateaus. All 21 snapshots reported `oom=0`; the
+whole-run minimum-ever free counter was 47,592 B. Minimum task watermarks were
+TinyUSB 265, KeyD 658, async 389, work 346, timer 348, lifecycle 36, and
+report 873 words.
+
 #### Wired Wacom CTL-472 verified stage
 
 Linking the complete pinned Wacom implementation with only CTL-472

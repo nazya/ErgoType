@@ -396,6 +396,28 @@ completed input and teardown. All 25 snapshots reported `oom=0`, with a
 uses the same label and free order, but that branch remains source-audited
 rather than runtime-injected.
 
+The exact Artist extension selects wired XP-Pen Artist 22R Pro `28bd:091b`
+and Artist 24 Pro `28bd:092d`; every other row retains its preceding active or
+gated state.
+Both retain the pinned three-interface topology: interfaces 0 and 1 are
+rejected, while interface 2 performs one 10-byte endpoint-`0x03` OUT before
+reading raw string 100 and publishes Pen and 20-button/two-Dial Pad inputs.
+Artist 24 also retains the pinned `fragmented_hires2` report rewrite. The
+nested parameter initializer retains the existing 512-word lifecycle stack.
+No battery, scheduled work, timer, or new async request contract is activated.
+
+The focused hardware run used a full Artist 22R matrix, a same-PID 22R
+reconnect smoke, and one Artist 24 matrix. Six Pen/Pad input lifetimes balanced;
+the six expected non-Pen bind failures appeared as `HID_IGNORED`; all 21 heap
+snapshots had `oom=0`; the minimum lifecycle watermark was 36 words; and the
+run reached terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host
+`ERR`. The fixture's internal oracle proves exact OUT-before-string ordering
+for each generation. The log shows the downstream tablet diagnostics but not
+the numeric ABS_X value after the Artist 24 rewrite, so that value remains
+source-audited rather than hardware-observed. The final 512-word sizing run
+left 36 words free; this measured margin must be rechecked if the lifecycle
+call graph or build configuration changes.
+
 ## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
