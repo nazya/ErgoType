@@ -583,6 +583,35 @@ emulator's 91-byte descriptor is protocol-equivalent because no retail `0304`
 capture is available. These measurements do not establish Touch, Touch Ring,
 or `ABS_WHEEL` behavior.
 
+#### XP-Pen Star G640 Rev A verified stage
+
+Selecting exact wired Star G640 Rev A `28bd:0094` on top of the Cintiq stage
+produces:
+
+```text
+host text/data/bss             605472 / 788 / 245408 B
+host __bss_end__               0x2003fee8
+host main-bank headroom        280 B to 0x20040000
+delta from Cintiq stage        +16 text / +0 data / +0 bss
+host UF2 SHA-256               f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b
+emulator text/data/bss         48196 / 0 / 252360 B
+emulator UF2 SHA-256           e0752af65e13a55e8032e1d1d4eb66216a6a688ff65b76d1f51d9dcd05ceb385
+hardware verdict               passed 2026-08-01; focused 0094 sequence
+```
+
+The static delta is one existing pinned match entry; the driver adds no task,
+queue, mutable static object, data, or BSS. The first generation canceled the
+raw string-100 request during its device callback and returned to the repeated
+pre-probe plateau `60736/56416/7`. The following full and same-PID reconnect
+generations each published and removed one Pen input. Their live snapshot
+repeated `53608/53512/4`, and both removals repeated `60744/54464/9`.
+
+All 13 heap snapshots reported `oom=0`; minimum-ever free heap was 47,592 B.
+Minimum task watermarks were TinyUSB 265, KeyD 658, async 389, work 346, timer
+348, lifecycle 85, and report 854 words. The fixture uses protocol-equivalent
+parameters and reports rather than a retail capture; production logging does
+not expose exact numeric X/Y values.
+
 #### Wired Wacom CTL-472 verified stage
 
 Linking the complete pinned Wacom implementation with only CTL-472

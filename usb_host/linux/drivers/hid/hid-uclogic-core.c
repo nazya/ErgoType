@@ -565,8 +565,8 @@ static void uclogic_remove(struct hid_device *hdev)
 static const struct hid_device_id uclogic_devices[] = {
 /*
  * Keep the complete pinned-upstream match table visible. Firmware stages
- * select the Huion dynamic, Parblo A610 Pro, XP-Pen Deco 01/01 V2, Deco L/LW,
- * Deco Pro S/SW/MW, and Artist 22R/24 Pro paths;
+ * select the Huion dynamic, Parblo A610 Pro, XP-Pen Star G640 Rev A,
+ * Deco 01/01 V2, Deco L/LW, Deco Pro S/SW/MW, and Artist 22R/24 Pro paths;
  * CONFIG_HID_UCLOGIC_ALL_DEVICES restores every upstream match.
  */
 #if IS_ENABLED(CONFIG_HID_UCLOGIC_ALL_DEVICES)
@@ -620,9 +620,10 @@ static const struct hid_device_id uclogic_devices[] = {
 				USB_DEVICE_ID_UGEE_TABLET_RAINBOW_CV720) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_G540) },
+#endif
+	/* The wired Star G640 Rev A reuses the active v1 pen path. */
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_G640) },
-#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,
 				USB_DEVICE_ID_UGEE_XPPEN_TABLET_DECO01) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_UGEE,

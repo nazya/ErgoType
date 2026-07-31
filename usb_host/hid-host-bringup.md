@@ -93,6 +93,18 @@ OUT-before-string-100 ordering. Production logging does not expose the numeric
 Artist 24 ABS_X result, so the exact fragmented-X value remains source-audited.
 Future lifecycle changes must remeasure the observed 36-word margin.
 
+The exact Star G640 Rev A extension selects XP-Pen `28bd:0094` without
+enabling the remaining UC-Logic table. It retains pinned interfaces 0/2 as
+invalid and uses interface 1's raw string-100, generated v1 Pen descriptor,
+and inverted-proximity path. Its focused host/emulator pair passed on
+2026-08-01: the first string request was canceled by disconnect, then one full
+Pen generation and one same-PID reconnect published and removed cleanly.
+Both complete removal snapshots repeated `60744/54464/9`; all 13 snapshots had
+`oom=0`; the minimum lifecycle watermark was 85 words; and terminal
+`f1, f2, f3, f10` arrived without `f12`, host `ERR`, or `HID_REPORT_SKIP`.
+The fixture is protocol-equivalent rather than a retail capture, and numeric
+X/Y values are not exposed by production logging.
+
 The Wacom checkpoint additionally links complete pinned Wacom sources. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES

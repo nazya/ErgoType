@@ -934,6 +934,20 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   and report 859 words. The 91-byte report descriptor is protocol-equivalent,
   not a retail capture; Touch, Touch Ring, and `ABS_WHEEL` remain outside the
   verdict.
+- 2026-08-01: exact XP-Pen Star G640 Rev A `28bd:0094` was exercised with host
+  UF2 SHA256
+  `f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b`
+  and emulator commit `4e020e2`, UF2 SHA256
+  `e0752af65e13a55e8032e1d1d4eb66216a6a688ff65b76d1f51d9dcd05ceb385`.
+  The first raw string-100 request was canceled by device disconnect before
+  completion; the next two generations each rebuilt and published the Pen
+  input, exercised inverted proximity, and removed cleanly. Both complete
+  removal snapshots were `60744/54464/9`; all 13 snapshots reported `oom=0`;
+  and `f1, f2, f3, f10` completed without `f12`, host `ERR`, or
+  `HID_REPORT_SKIP`. Minimum watermarks were TinyUSB 265, KeyD 658, async 389,
+  work 346, timer 348, lifecycle 85, and report 854 words. The fixture is
+  protocol-equivalent rather than a retail capture; exact numeric X/Y values
+  are not visible in production logging.
 
 ## Current Driver Boundary
 
@@ -972,8 +986,9 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   pinned synchronous timer-delete-before-transport-stop lifetime. The
   Touch-ID-named IDs are keyboard-only in this scope.
 - The selected UC-Logic table now also includes exact Deco 01 original
-  `28bd:0042`, Parblo A610 Pro `28bd:1903`, Artist 22R Pro `28bd:091b`, and
-  Artist 24 Pro `28bd:092d`. They reuse pinned string/request/input paths
+  `28bd:0042`, Parblo A610 Pro `28bd:1903`, Artist 22R Pro `28bd:091b`, Artist
+  24 Pro `28bd:092d`, and Star G640 Rev A `28bd:0094`. They reuse pinned
+  string/request/input paths
   without a new transport primitive or mutable static state. Their focused
   matrices passed at the retained `64/675` parser policy. Pad keys and Dials
   reach Linux input; unsupported tablet semantics remain visible at the

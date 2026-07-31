@@ -63,6 +63,10 @@ The active implementation now has these properties:
   applicable mode/LED request paths and completed with 29 balanced input
   lifetimes, `oom=0`, and no host `ERR`; it added no asynchronous-request
   primitive and did not extend the asynchronous-cancellation verdict.
+  The later focused XP-Pen G640 fixture did extend the control-cancellation
+  verdict: it disconnected from the device-side string-100 callback before
+  the raw descriptor request completed, returned to the pre-probe heap
+  plateau, and then completed two fresh string-100/input generations.
   Promotion-before-callback, simultaneous synchronous cancel,
   callback self-requeue, queue destruction, and tick wrap remain statically
   audited generic branches rather than hardware-covered claims.

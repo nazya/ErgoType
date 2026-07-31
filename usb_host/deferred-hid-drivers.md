@@ -418,6 +418,19 @@ source-audited rather than hardware-observed. The final 512-word sizing run
 left 36 words free; this measured margin must be rechecked if the lifecycle
 call graph or build configuration changes.
 
+The exact Star G640 Rev A extension selects only wired XP-Pen `28bd:0094`.
+It keeps the pinned three-interface topology: interfaces 0 and 2 are rejected,
+while interface 1 reads raw string 100, generates the v1 Pen descriptor, and
+applies inverted proximity. No compatibility primitive, wrapper, battery,
+work item, timer, or mutable driver state was added. The focused fixture
+disconnected during the first string-100 request, then completed one full Pen
+generation and one same-PID reconnect. Both complete removals returned to
+`free/largest/blocks=60744/54464/9`; all 13 heap snapshots had `oom=0`; the
+minimum lifecycle watermark was 85 words; and terminal `f1, f2, f3, f10`
+arrived without `f12`, `HID_REPORT_SKIP`, or host `ERR`. Its parameter string
+and reports are protocol-equivalent rather than a retail capture; exact
+numeric X/Y values remain outside the production-log verdict.
+
 ## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`

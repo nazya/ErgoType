@@ -30,6 +30,8 @@ initialization, Pen/Pad input, cancellation, reconnect, and teardown fixture.
 The focused UC-Logic expansion selects only Deco 01 original `28bd:0042` and
 Parblo A610 Pro `28bd:1903`; their exact-ID table-gate change passed its
 two-profile input, request, reconnect, and teardown fixture.
+The subsequent Star G640 Rev A `28bd:0094` row passed focused raw string-100
+cancellation, generated-Pen input, same-PID reconnect, and teardown coverage.
 The separate Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
@@ -277,6 +279,21 @@ heap snapshots reported `oom=0`, and each terminal Cintiq removal returned to
 `free/largest/blocks=60752/48520/9`. The 91-byte report descriptor is
 protocol-equivalent because no retail `0304` capture is available; Touch,
 Touch Ring, and `ABS_WHEEL` are not part of this verdict.
+
+The focused Star G640 Rev A host
+`f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b`
+and emulator commit `4e020e2`, image
+`e0752af65e13a55e8032e1d1d4eb66216a6a688ff65b76d1f51d9dcd05ceb385`,
+completed one canceled and two complete `28bd:0094` generations. The first
+generation disconnected from the string-100 callback before control-transfer
+completion and returned to the same pre-probe heap plateau. The next two
+generations each read a fresh string 100, published and removed one Pen input,
+and exercised the pinned inverted-proximity rewrite. Both complete removals
+returned to `free/largest/blocks=60744/54464/9`; all 13 heap snapshots reported
+`oom=0`; and `f1, f2, f3, f10` completed without `f12`, host `ERR`, or
+`HID_REPORT_SKIP`. The three-interface fixture and parameter/report data are
+protocol-equivalent, not a byte-exact retail capture; production logging does
+not expose exact numeric X/Y values.
 
 ## Deferred P2 Boundaries
 
@@ -1221,6 +1238,11 @@ contains a hypothetical NULL check that no current caller can exercise.
   remains unchanged and left 36 words free in the complete matrix. No wrapper,
   duplicate state, request type, work item, timer, resource-budget, or
   return-value change was added.
+- The Star G640 Rev A extension moves only the exact pinned `28bd:0094` row
+  outside the all-devices gate. It retains the upstream interface-1 v1
+  string-100/generated-descriptor path, invalid interfaces 0 and 2, inverted
+  proximity, raw-event handling, cleanup, and return values. No port glue,
+  wrapper, request type, allocation branch, or mutable state was added.
 - Pinned Artist initialization returns `-EINVAL` on each non-Pen interface.
   The reduced synchronous device model retains only `-ENOMEM` while trying
   registered drivers and returns `-ENODEV` when none binds, so the reachable
@@ -1584,6 +1606,15 @@ Current checkpoint audit:
   exchanges, Pen input, all nine Pad buttons, same-PID reconnect, and 21
   `oom=0` snapshots. The protocol-equivalent descriptor does not establish
   retail descriptor identity, Touch, Touch Ring, or `ABS_WHEEL`
+- audited exact XP-Pen Star G640 Rev A `28bd:0094` against the pinned
+  UC-Logic v1 call graph. Host
+  `f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b`
+  and emulator commit `4e020e2` completed callback-time string-100
+  cancellation, two fresh generated-Pen generations, same-PID reconnect, six
+  observed topology/cancel `HID_IGNORED` warnings, and 13 `oom=0` snapshots.
+  Both complete removals returned to `60744/54464/9`; the fixture is
+  protocol-equivalent and does not establish byte-exact retail descriptors or
+  production-log-visible numeric X/Y values
 - confirmed no periodic mutex/readiness polling remains in host/vkbd glue
 - audited every remaining task wait: workqueue/timer/transport/vkbd loops sleep
   on a mutex, queue, or task notification and recheck a durable predicate. The

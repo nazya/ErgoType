@@ -432,6 +432,7 @@ claims for unrelated drivers.
 | 2026-08-01 | focused UC-Logic failed-probe fixture | three reached `hid_hw_start()` failures after combined-descriptor generation repeat the same cleanup plateau, then one normal Parblo generation publishes and removes Mouse/Pen/Pad; all 25 snapshots have `oom=0`, with no host `ERR`; `hid_parse()` remains source-audited only |
 | 2026-08-01 | Artist `device/uclogic-artist` (`287acbf`), host `34aeccba…`, emulator `7173d5f1…` | Artist 22R full input plus reconnect smoke and Artist 24 input complete six balanced Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, and terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; exact Artist 24 reconstructed ABS_X is not visible in production logging |
 | 2026-08-01 | Cintiq 13HD `device/wacom-cintiq-13hd` (`160a0ac`), host `ec47bd67…`, emulator `1f7bb41c…` | three `056a:0304` generations complete pre-deadline cancellation, two exact Feature report 2 mode exchanges, Pen input, all nine Pad buttons, same-PID reconnect, six balanced Pen/Pad lifetimes, 21 `oom=0` snapshots, and terminal `f1, f2, f3, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; the descriptor is protocol-equivalent and does not prove Touch Ring or `ABS_WHEEL` |
+| 2026-08-01 | Star G640 Rev A `device/uclogic-star-g640` (`4e020e2`), host `f0822c02…`, emulator `e0752af6…` | one callback-time string-100 cancellation followed by a full Pen generation and same-PID reconnect completes `f1, f2, f3, f10`; two Pen lifetimes balance, both complete removals repeat `60744/54464/9`, all 13 snapshots have `oom=0`, and no `f12`, `HID_REPORT_SKIP`, or host `ERR` appears; parameters/reports are protocol-equivalent and numeric X/Y values are not production-log-visible |
 
 ## Recorded Emulator Branches
 
@@ -501,6 +502,8 @@ Recorded emulator branches:
   Pro UGEE-v2 string/request/input paths, including same-PID reconnect.
 - `device/uclogic-artist`: focused Artist 22R/24 Pro OUT-before-string
   initialization, Pen/Pad/Dial layouts, and same-PID 22R reconnect.
+- `device/uclogic-star-g640`: focused three-interface G640 Rev A raw
+  string-100 cancellation, generated Pen input, and same-PID reconnect.
 - `device/wacom-cintiq-13hd`: focused `056a:0304` delayed mode exchange,
   pre-deadline cancellation, Pen/nine-button Pad input, and same-PID reconnect.
 - `device/primax-keyboard`: raw event rewrite and re-entry into the HID parser.
@@ -591,6 +594,8 @@ runs on 2026-07-31. Wacom's historical exact
 separate AES/receiver artifact are hardware-verified; its focused external
 wired Intuos artifact passed all eleven selected IDs using the documented
 family captures, and the focused Cintiq 13HD artifact passed exact `0304`.
+UC-Logic Star G640 Rev A `28bd:0094` also passed its focused string-cancel,
+generated-Pen, and reconnect artifact.
 Exact power-snapshot
 values, elapsed AES expiry, receiver children outside selected profile
 `056a:0027`, and Remote coverage remain separate.
@@ -609,7 +614,8 @@ haptic/Trackpad, Microsoft, Apple, exact Wacom, and temporary-capacity
 Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
 Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
 Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
-`056a:0304` flows, active Logitech `c532`, and Lenovo
+`056a:0304` flows, UC-Logic Star G640 Rev A `28bd:0094`, active Logitech
+`c532`, and Lenovo
 `6009/6047`. The active allowlist is covered except for the Holtek mouse
 driver-specific hardware result. Memory-gated `c52f/c534/60ee` have logic
 coverage at temporary `64/256`, not RP2040 support at retained `64/675`.
@@ -1298,6 +1304,43 @@ the callback is running, generic promotion-window cancellation, simultaneous
 cancelers, callback self-requeue, delayed queue destruction, tick-wrap, or the
 paired `056a:0333/0335` topology to the existing common-layer verdicts.
 
+### XP-Pen Star G640 Rev A coverage
+
+The focused fixture is commit `4e020e2` on branch
+`device/uclogic-star-g640`. It exposes three HID interfaces: pinned UC-Logic
+rejects interfaces 0 and 2, while interface 1 requests raw string descriptor
+100, generates its v1 Pen descriptor, and applies inverted proximity. No
+retail descriptor or parameter capture is available, so the topology,
+12-byte parameter string, and reports are protocol-equivalent.
+
+The exact hardware-test artifacts are:
+
+```text
+host UF2 SHA-256       f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b
+host text/data/bss     605472 / 788 / 245408 B
+emulator UF2 SHA-256   e0752af65e13a55e8032e1d1d4eb66216a6a688ff65b76d1f51d9dcd05ceb385
+emulator text/data/bss 48196 / 0 / 252360 B
+hardware verdict       passed 2026-08-01 for the scope below
+```
+
+The first generation wakes a higher-priority test task from the ordinary
+string-descriptor callback and disconnects through TinyUSB's public API before
+the control transfer completes. After the detached interval, `f2` proves that
+the host canceled and unwound that synchronous request. A full generation then
+sends Pen hover, tip/move, and leave reports; a same-PID reconnect requests a
+fresh string 100 and repeats hover/leave. Terminal markers are
+`f1, f2, f3, f10`; `f12` plus a phase letter reports failure.
+
+The hardware log contained six `HID_IGNORED` warnings across the canceled and
+two complete three-interface generations. The two complete generations each
+published and removed one `28bd:0094` Pen input, and both removals returned to
+`free/largest/blocks=60744/54464/9`. All 13 heap snapshots reported `oom=0`;
+minimum-ever free heap was 47,592 B. Minimum task watermarks were TinyUSB 265,
+KeyD 658, async 389, work 346, timer 348, lifecycle 85, and report 854 words.
+No `f12`, host `ERR`, or `HID_REPORT_SKIP` appeared. Tool/tip/pressure
+diagnostics are the existing downstream KeyD boundary. Production logging
+does not expose exact numeric X/Y values.
+
 ### Wired Wacom CTL-472 coverage
 
 The hardware-verified 32-reconnect revision of branch
@@ -1789,6 +1832,19 @@ and emulator CDC lines under each item.
     lifecycle watermark was 218 words
   - the protocol-equivalent descriptor is not a retail capture; Touch, Touch
     Ring, `ABS_WHEEL`, and paired `056a:0333/0335` remain outside this verdict
+- [x] XP-Pen Star G640 Rev A `28bd:0094`
+  - exact host
+    `f0822c0280511ca61c231083d082a9e93d418d1fe066e31e082430c697b4741b`
+    and emulator branch `device/uclogic-star-g640`, commit `4e020e2`, image
+    `e0752af65e13a55e8032e1d1d4eb66216a6a688ff65b76d1f51d9dcd05ceb385`
+  - require callback-time string-100 cancellation, a full generated-Pen
+    generation, same-PID reconnect, `f1, f2, f3, f10`, and no `f12`, host
+    `ERR`, `HID_REPORT_SKIP`, or OOM
+  - verdict: passed 2026-08-01; two Pen lifetimes balanced, both complete
+    removals returned to `60744/54464/9`, all 13 snapshots had `oom=0`, and
+    the minimum lifecycle watermark was 85 words
+  - topology, parameters, and reports are protocol-equivalent rather than a
+    retail capture; exact numeric X/Y values are not production-log-visible
 - [x] production-clean direct HID++ post-test cleanup
   `a79e4385cec2987571226273951b492276e0275f495ebdc598bce2d8bba8498b`
   with emulator
