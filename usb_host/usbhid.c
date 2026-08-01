@@ -4278,11 +4278,12 @@ static int usbhid_parse(struct hid_device *hid)
 	}
 
 	/*
-	 * The captured 0x0374 descriptor, 0x03a6/0x03ce/0x03ed main tablet
-	 * interfaces, and 0x03cb/0x03ec Pen/Touch interfaces contain repeated
-	 * VARIABLE Feature blobs which their pinned Wacom callers never access as
-	 * parsed fields. Keep report IDs and wire sizes without materializing the
-	 * blobs. Uncaptured auxiliary interfaces do not inherit this contract.
+	 * The captured 0x0374 descriptor, 0x03a6/0x03ce/0x03ed/0x03f5/0x03f7/
+	 * 0x03f9 main tablet interfaces, and 0x03cb/0x03ec Pen/Touch interfaces
+	 * contain repeated VARIABLE Feature blobs which their pinned Wacom callers
+	 * never access as parsed fields. Keep report IDs and wire sizes without
+	 * materializing the blobs. Uncaptured auxiliary interfaces do not inherit
+	 * this contract.
 	 */
 	if (hid->vendor == 0x056a &&
 	    (hid->product == 0x0374 ||
@@ -4297,6 +4298,9 @@ static int usbhid_parse(struct hid_device *hid)
 	      (interface->desc.bInterfaceNumber == 0 ||
 	       interface->desc.bInterfaceNumber == 3)) ||
 	     (hid->product == 0x03ed &&
+	      interface->desc.bInterfaceNumber == 0) ||
+	     ((hid->product == 0x03f5 || hid->product == 0x03f7 ||
+	       hid->product == 0x03f9) &&
 	      interface->desc.bInterfaceNumber == 0))) {
 		quirks |= HID_QUIRK_SKIP_REPEATED_FEATURES;
 		hid->quirks |= HID_QUIRK_SKIP_REPEATED_FEATURES;

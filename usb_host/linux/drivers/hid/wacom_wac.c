@@ -5201,6 +5201,17 @@ const struct hid_device_id wacom_ids[] = {
 	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
 		     USB_VENDOR_ID_WACOM, 0x03ed),
 	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	// Stage exact captured wired 0x03f5/0x03f7/0x03f9 main interfaces
+	// through the disabled upstream wildcard; uncaptured auxiliaries may reject.
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03f5),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03f7),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03f9),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
 	// The exact wired 0x5048 profile reaches the upstream generic AES path.
 	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
 		     USB_VENDOR_ID_WACOM, 0x5048),
