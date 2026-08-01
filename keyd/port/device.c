@@ -41,6 +41,11 @@ static uint8_t resolve_device_capabilities(const struct port_input_dev *port_dev
 	const unsigned long *mask = port_dev->keybit;
 	uint8_t capabilities = 0;
 	int has_brightness_key;
+	bool accelerometer =
+		port_dev->propbit[INPUT_PROP_ACCELEROMETER /
+				  (sizeof(unsigned long) * 8)] &
+		(1ul << (INPUT_PROP_ACCELEROMETER %
+			 (sizeof(unsigned long) * 8)));
 
 	// if (ioctl(fd, EVIOCGBIT(EV_KEY, (BTN_LEFT/32+1)*4), mask) < 0) {
 	// 	perror("ioctl: ev_key");
@@ -71,8 +76,9 @@ static uint8_t resolve_device_capabilities(const struct port_input_dev *port_dev
 	for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(REL_CNT); i++)
 		*has_rel |= port_dev->relbit[i] != 0;
 	*has_abs = 0;
-	for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(ABS_CNT); i++)
-		*has_abs |= port_dev->absbit[i] != 0;
+	if (!accelerometer)
+		for (unsigned int i = 0; i < INPUT_BITS_TO_LONGS(ABS_CNT); i++)
+			*has_abs |= port_dev->absbit[i] != 0;
 
 	if (*num_keys)
 		capabilities |= CAP_KEY;
@@ -244,6 +250,9 @@ struct device_event *device_read_event(struct device *dev)
 		}
 		break;
 	case EV_ABS:
+		/* Accelerometer axes belong to the HID proxy, not KeyD pointer motion. */
+		if (!(dev->capabilities & CAP_MOUSE_ABS))
+			return NULL;
 		switch (ev.code) {
 		case ABS_X:
 			devev.type = DEV_MOUSE_MOVE_ABS;

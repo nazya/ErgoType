@@ -23,11 +23,13 @@ enum hid_proxy_inflight_kind {
 	HID_PROXY_INFLIGHT_STYLUS_NEUTRAL,
 	HID_PROXY_INFLIGHT_PAD_FRAME,
 	HID_PROXY_INFLIGHT_PAD_NEUTRAL,
+	HID_PROXY_INFLIGHT_SENSOR_FRAME,
 };
 
 enum hid_proxy_source_kind {
 	HID_PROXY_SOURCE_STYLUS = 0,
 	HID_PROXY_SOURCE_PAD,
+	HID_PROXY_SOURCE_SENSOR,
 };
 
 enum hid_proxy_source_flags {
@@ -49,6 +51,22 @@ enum hid_proxy_pad_frame_flags {
 	HID_PROXY_PAD_FRAME_TERMINAL = 1u << 1,
 	HID_PROXY_PAD_FRAME_COALESCED = 1u << 2,
 	HID_PROXY_PAD_FRAME_REL_SATURATED = 1u << 3,
+};
+
+enum hid_proxy_sensor_source_flags {
+	HID_PROXY_SENSOR_SOURCE_PRESENT = 1u << 0,
+};
+
+enum hid_proxy_sensor_frame_flags {
+	HID_PROXY_SENSOR_FRAME_RESYNC = 1u << 0,
+	HID_PROXY_SENSOR_FRAME_COALESCED = 1u << 1,
+};
+
+enum hid_proxy_sensor_axis_index {
+	HID_PROXY_SENSOR_AXIS_X = 0,
+	HID_PROXY_SENSOR_AXIS_Y,
+	HID_PROXY_SENSOR_AXIS_Z,
+	HID_PROXY_SENSOR_AXIS_COUNT,
 };
 
 enum hid_proxy_pad_abs_index {
@@ -186,6 +204,26 @@ struct hid_proxy_pad_report {
 	__le32 relative[HID_PROXY_PAD_REL_COUNT];
 } __packed;
 
+struct hid_proxy_sensor_source_report {
+	u8 version;
+	u8 source_index;
+	u8 flags;
+	u8 supported_axes;
+	__le32 source_id;
+	__le16 vendor;
+	__le16 product;
+	__le32 minimum[HID_PROXY_SENSOR_AXIS_COUNT];
+	__le32 maximum[HID_PROXY_SENSOR_AXIS_COUNT];
+	__le32 resolution[HID_PROXY_SENSOR_AXIS_COUNT];
+} __packed;
+
+struct hid_proxy_sensor_report {
+	u8 source_index;
+	u8 flags;
+	__le32 frame_sequence;
+	__le32 value[HID_PROXY_SENSOR_AXIS_COUNT];
+} __packed;
+
 struct hid_proxy_touch_report {
 	u8 switches;
 	__le32 contact_id;
@@ -223,6 +261,8 @@ static_assert(sizeof(struct hid_proxy_stylus_report) == 26);
 static_assert(sizeof(struct hid_proxy_source_report) == 29);
 static_assert(sizeof(struct hid_proxy_pad_source_report) == 50);
 static_assert(sizeof(struct hid_proxy_pad_report) == 59);
+static_assert(sizeof(struct hid_proxy_sensor_source_report) == 48);
+static_assert(sizeof(struct hid_proxy_sensor_report) == 18);
 static_assert(sizeof(struct hid_proxy_touch_report) == 45);
 static_assert(sizeof(struct hid_proxy_touch_source_report) == 15);
 
@@ -281,6 +321,15 @@ struct hid_proxy_pad_state {
 	struct hid_proxy_pad_report frames[HID_PROXY_FRAME_QUEUE_DEPTH];
 };
 
+struct hid_proxy_sensor_state {
+	bool source_pending;
+	bool frame_dirty;
+	u8 supported_axes;
+	u32 next_frame_sequence;
+	struct hid_proxy_axis axis[HID_PROXY_SENSOR_AXIS_COUNT];
+	struct hid_proxy_sensor_report frames[HID_PROXY_FRAME_QUEUE_DEPTH];
+};
+
 struct hid_proxy_source {
 	bool active;
 	bool retiring;
@@ -297,6 +346,7 @@ struct hid_proxy_source {
 	union {
 		struct hid_proxy_stylus_state stylus;
 		struct hid_proxy_pad_state pad;
+		struct hid_proxy_sensor_state sensor;
 	};
 };
 
@@ -388,6 +438,7 @@ struct hid_proxy_touch_inflight {
 struct hid_proxy_runtime {
 	SemaphoreHandle_t mutex;
 	struct input_handler handler;
+	struct input_handler sensor_handler;
 	struct input_handler touch_handler;
 	struct list_head sources;
 	struct list_head released;
@@ -400,6 +451,8 @@ struct hid_proxy_runtime {
 	struct hid_proxy_source_report last_source;
 	struct hid_proxy_pad_source_report last_pad_source;
 	struct hid_proxy_pad_report last_pad_frame;
+	struct hid_proxy_sensor_source_report last_sensor_source;
+	struct hid_proxy_sensor_report last_sensor_frame;
 	struct hid_proxy_touch_report last_touch_direct;
 	struct hid_proxy_touch_report last_touch_indirect;
 	struct hid_proxy_touch_source_report last_touch_source;
@@ -445,6 +498,12 @@ static const u16 hid_proxy_pad_switch_codes[] = {
 	SW_MUTE_DEVICE,
 };
 
+static const u16 hid_proxy_sensor_abs_codes[] = {
+	ABS_X,
+	ABS_Y,
+	ABS_Z,
+};
+
 static_assert(ARRAY_SIZE(hid_proxy_pad_button_codes) == 32);
 static_assert(ARRAY_SIZE(hid_proxy_pad_abs_codes) ==
 	      HID_PROXY_PAD_ABS_COUNT);
@@ -452,6 +511,8 @@ static_assert(ARRAY_SIZE(hid_proxy_pad_rel_codes) ==
 	      HID_PROXY_PAD_REL_COUNT);
 static_assert(ARRAY_SIZE(hid_proxy_pad_switch_codes) ==
 	      HID_PROXY_PAD_SWITCH_COUNT);
+static_assert(ARRAY_SIZE(hid_proxy_sensor_abs_codes) ==
+	      HID_PROXY_SENSOR_AXIS_COUNT);
 
 static bool hid_proxy_is_tool_code(unsigned int code)
 {
@@ -828,6 +889,96 @@ static bool hid_proxy_pad_queue_frame_locked(struct hid_proxy_source *source,
 
 	pad->frames[index] = report;
 	hid_proxy_pad_clear_pending(pad);
+
+	return warn;
+}
+
+static void hid_proxy_sensor_seed(struct hid_proxy_source *source,
+				  const struct input_dev *dev)
+{
+	struct hid_proxy_sensor_state *sensor = &source->sensor;
+
+	memset(sensor, 0, sizeof(*sensor));
+	source->vendor = dev->id.vendor;
+	source->product = dev->id.product;
+	source->source_id = dev->port_proxy_id;
+	sensor->next_frame_sequence = 1;
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_sensor_abs_codes); i++) {
+		if (!test_bit(hid_proxy_sensor_abs_codes[i], dev->absbit))
+			continue;
+		sensor->supported_axes |= 1u << i;
+		hid_proxy_axis_seed(&sensor->axis[i], dev,
+				    hid_proxy_sensor_abs_codes[i]);
+	}
+	sensor->frame_dirty = true;
+}
+
+static struct hid_proxy_sensor_source_report
+hid_proxy_sensor_source_report(const struct hid_proxy_source *source,
+			       bool present)
+{
+	const struct hid_proxy_sensor_state *sensor = &source->sensor;
+	struct hid_proxy_sensor_source_report report = {
+		.version = 1,
+		.source_index = source->source_index,
+		.flags = present ? HID_PROXY_SENSOR_SOURCE_PRESENT : 0,
+		.supported_axes = sensor->supported_axes,
+		.source_id = cpu_to_le32(source->source_id),
+		.vendor = cpu_to_le16(source->vendor),
+		.product = cpu_to_le16(source->product),
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(sensor->axis); i++) {
+		report.minimum[i] = cpu_to_le32(sensor->axis[i].minimum);
+		report.maximum[i] = cpu_to_le32(sensor->axis[i].maximum);
+		report.resolution[i] = cpu_to_le32(sensor->axis[i].resolution);
+	}
+
+	return report;
+}
+
+static struct hid_proxy_sensor_report
+hid_proxy_sensor_report(const struct hid_proxy_source *source, u8 flags)
+{
+	const struct hid_proxy_sensor_state *sensor = &source->sensor;
+	struct hid_proxy_sensor_report report = {
+		.source_index = source->source_index,
+		.flags = flags,
+		.frame_sequence = cpu_to_le32(sensor->next_frame_sequence),
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(sensor->axis); i++)
+		report.value[i] = cpu_to_le32(sensor->axis[i].value);
+
+	return report;
+}
+
+static bool hid_proxy_sensor_queue_frame_locked(struct hid_proxy_source *source,
+						 u8 flags)
+{
+	struct hid_proxy_sensor_state *sensor = &source->sensor;
+	struct hid_proxy_sensor_report report =
+		hid_proxy_sensor_report(source, flags);
+	bool warn = false;
+	u8 index;
+
+	sensor->next_frame_sequence++;
+	if (source->frame_count == HID_PROXY_FRAME_QUEUE_DEPTH) {
+		index = (source->frame_head + source->frame_count - 1) %
+			HID_PROXY_FRAME_QUEUE_DEPTH;
+		report.flags |= HID_PROXY_SENSOR_FRAME_COALESCED;
+		if (!source->drop_reported) {
+			source->drop_reported = true;
+			warn = true;
+		}
+	} else {
+		index = (source->frame_head + source->frame_count) %
+			HID_PROXY_FRAME_QUEUE_DEPTH;
+		source->frame_count++;
+	}
+
+	sensor->frames[index] = report;
+	sensor->frame_dirty = false;
 
 	return warn;
 }
@@ -1217,7 +1368,7 @@ static bool hid_proxy_match(struct input_handler *handler,
 		return true;
 	if (pad_switch)
 		return true;
-	if (dev->mt || test_bit(INPUT_PROP_ACCELEROMETER, dev->propbit))
+	if (dev->mt)
 		return false;
 	if (test_bit(BTN_TOOL_FINGER, dev->keybit) ||
 	    test_bit(BTN_TOOL_MOUSE, dev->keybit) ||
@@ -1245,6 +1396,18 @@ static bool hid_proxy_match(struct input_handler *handler,
 		test_bit(ABS_Y, dev->absbit) &&
 		(test_bit(BTN_FORWARD, dev->keybit) ||
 		 test_bit(BTN_BACK, dev->keybit));
+}
+
+static bool hid_proxy_sensor_match(struct input_handler *handler,
+				   struct input_dev *dev)
+{
+	(void)handler;
+
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_sensor_abs_codes); i++)
+		if (test_bit(hid_proxy_sensor_abs_codes[i], dev->absbit))
+			return true;
+
+	return false;
 }
 
 static bool hid_proxy_touch_match(struct input_handler *handler,
@@ -1443,8 +1606,10 @@ static void hid_proxy_reset_frames_locked(struct hid_proxy_source *source)
 	source->drop_reported = false;
 	if (source->kind == HID_PROXY_SOURCE_STYLUS)
 		source->stylus.source_dirty = false;
-	else
+	else if (source->kind == HID_PROXY_SOURCE_PAD)
 		hid_proxy_pad_clear_pending(&source->pad);
+	else
+		source->sensor.frame_dirty = false;
 }
 
 static bool hid_proxy_queue_frame_locked(struct hid_proxy_source *source,
@@ -1512,8 +1677,11 @@ static int hid_proxy_connect(struct input_handler *handler,
 
 	(void)id;
 
-	proxy_handle->source.kind = hid_proxy_is_stylus_device(dev) ?
-		HID_PROXY_SOURCE_STYLUS : HID_PROXY_SOURCE_PAD;
+	if (handler == &runtime->sensor_handler)
+		proxy_handle->source.kind = HID_PROXY_SOURCE_SENSOR;
+	else
+		proxy_handle->source.kind = hid_proxy_is_stylus_device(dev) ?
+			HID_PROXY_SOURCE_STYLUS : HID_PROXY_SOURCE_PAD;
 	xSemaphoreTake(runtime->mutex, portMAX_DELAY);
 	index = hid_proxy_claim_index_locked(runtime);
 	if (index >= 0) {
@@ -1720,12 +1888,50 @@ static unsigned int hid_proxy_pad_events(struct input_handle *handle,
 	return count;
 }
 
+static unsigned int hid_proxy_sensor_events(struct input_handle *handle,
+				    struct input_value *vals,
+				    unsigned int count)
+{
+	struct hid_proxy_handle *proxy_handle = handle->private;
+	struct hid_proxy_runtime *runtime = handle->handler->private;
+	struct hid_proxy_source *source = &proxy_handle->source;
+	struct hid_proxy_sensor_state *sensor = &source->sensor;
+	bool warn = false;
+
+	xSemaphoreTake(runtime->mutex, portMAX_DELAY);
+	for (struct input_value *event = vals; event != vals + count; event++) {
+		if (event->type == EV_ABS) {
+			int index = hid_proxy_code_index(hid_proxy_sensor_abs_codes,
+				ARRAY_SIZE(hid_proxy_sensor_abs_codes), event->code);
+
+			if (index >= 0) {
+				sensor->axis[index].value = event->value;
+				sensor->frame_dirty = true;
+			}
+		} else if (event->type == EV_SYN && event->code == SYN_REPORT &&
+			   sensor->frame_dirty) {
+			if (source->active && runtime->mounted)
+				warn |= hid_proxy_sensor_queue_frame_locked(source, 0);
+			else
+				sensor->frame_dirty = false;
+		}
+	}
+	xSemaphoreGive(runtime->mutex);
+
+	if (warn)
+		async_msg("WARN: HID_PROXY_SENSOR_DROP");
+
+	return count;
+}
+
 static unsigned int hid_proxy_events(struct input_handle *handle,
 				     struct input_value *vals,
 				     unsigned int count)
 {
 	struct hid_proxy_handle *proxy_handle = handle->private;
 
+	if (proxy_handle->source.kind == HID_PROXY_SOURCE_SENSOR)
+		return hid_proxy_sensor_events(handle, vals, count);
 	if (proxy_handle->source.kind == HID_PROXY_SOURCE_PAD)
 		return hid_proxy_pad_events(handle, vals, count);
 
@@ -1754,7 +1960,8 @@ static void hid_proxy_disconnect(struct input_handle *handle)
 	hid_proxy_reset_frames_locked(source);
 	if (runtime->mounted && (source->published || present_inflight)) {
 		source->retiring = true;
-		source->terminal_pending = true;
+		source->terminal_pending =
+			source->kind != HID_PROXY_SOURCE_SENSOR;
 	} else {
 		list_del(&proxy_handle->runtime_node);
 		release = true;
@@ -1788,6 +1995,23 @@ static const struct input_device_id hid_proxy_ids[] = {
 	{ }
 };
 
+static const struct input_device_id hid_proxy_sensor_ids[] = {
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_BUS |
+			 INPUT_DEVICE_ID_MATCH_EVBIT |
+			 INPUT_DEVICE_ID_MATCH_PROPBIT,
+		.bustype = BUS_USB,
+		.evbit = {
+			[BIT_WORD(EV_ABS)] = BIT_MASK(EV_ABS),
+		},
+		.propbit = {
+			[BIT_WORD(INPUT_PROP_ACCELEROMETER)] =
+				BIT_MASK(INPUT_PROP_ACCELEROMETER),
+		},
+	},
+	{ }
+};
+
 int hid_proxy_runtime_init(void)
 {
 	struct hid_proxy_runtime *runtime;
@@ -1814,6 +2038,13 @@ int hid_proxy_runtime_init(void)
 	runtime->handler.disconnect = hid_proxy_disconnect;
 	runtime->handler.name = "hid-proxy-stylus";
 	runtime->handler.id_table = hid_proxy_ids;
+	runtime->sensor_handler.private = runtime;
+	runtime->sensor_handler.events = hid_proxy_events;
+	runtime->sensor_handler.match = hid_proxy_sensor_match;
+	runtime->sensor_handler.connect = hid_proxy_connect;
+	runtime->sensor_handler.disconnect = hid_proxy_disconnect;
+	runtime->sensor_handler.name = "hid-proxy-sensor";
+	runtime->sensor_handler.id_table = hid_proxy_sensor_ids;
 	runtime->touch_handler.private = runtime;
 	runtime->touch_handler.events = hid_proxy_touch_events;
 	runtime->touch_handler.match = hid_proxy_touch_match;
@@ -1823,6 +2054,7 @@ int hid_proxy_runtime_init(void)
 	runtime->touch_handler.id_table = hid_proxy_touch_ids;
 	runtime->last_source.version = 2;
 	runtime->last_pad_source.version = 1;
+	runtime->last_sensor_source.version = 1;
 	runtime->last_touch_source.version = 1;
 	hid_proxy = runtime;
 
@@ -1835,6 +2067,7 @@ void hid_proxy_input_init(void)
 		return;
 
 	(void)input_register_handler(&hid_proxy->handler);
+	(void)input_register_handler(&hid_proxy->sensor_handler);
 	(void)input_register_handler(&hid_proxy->touch_handler);
 }
 
@@ -1850,6 +2083,11 @@ static void hid_proxy_reset_reports_locked(struct hid_proxy_runtime *runtime)
 	runtime->last_pad_source.version = 1;
 	memset(&runtime->last_pad_frame, 0,
 	       sizeof(runtime->last_pad_frame));
+	memset(&runtime->last_sensor_source, 0,
+	       sizeof(runtime->last_sensor_source));
+	runtime->last_sensor_source.version = 1;
+	memset(&runtime->last_sensor_frame, 0,
+	       sizeof(runtime->last_sensor_frame));
 	memset(&runtime->touch_inflight, 0, sizeof(runtime->touch_inflight));
 	memset(&runtime->last_touch_direct, 0,
 	       sizeof(runtime->last_touch_direct));
@@ -1924,6 +2162,8 @@ static void hid_proxy_activate_handle_locked(struct input_handle *handle)
 	hid_proxy_reset_frames_locked(source);
 	if (source->kind == HID_PROXY_SOURCE_PAD)
 		hid_proxy_pad_seed(source, dev);
+	else if (source->kind == HID_PROXY_SOURCE_SENSOR)
+		hid_proxy_sensor_seed(source, dev);
 	else
 		hid_proxy_source_seed(source, dev);
 	xSemaphoreGive(hid_proxy->mutex);
@@ -1943,6 +2183,9 @@ static void hid_proxy_activate_handle_locked(struct input_handle *handle)
 		if (source->kind == HID_PROXY_SOURCE_PAD) {
 			source->pad.source_pending = true;
 			(void)hid_proxy_pad_queue_frame_locked(source, 0);
+		} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+			source->sensor.source_pending = true;
+			(void)hid_proxy_sensor_queue_frame_locked(source, 0);
 		} else {
 			(void)hid_proxy_queue_frame_locked(source, true);
 		}
@@ -1971,7 +2214,15 @@ void hid_proxy_activate_input(struct input_dev *dev)
 			continue;
 
 		hid_proxy_activate_handle(handle);
-		return;
+		break;
+	}
+
+	list_for_each_entry(handle, &hid_proxy->sensor_handler.h_list, h_node) {
+		if (handle->dev != dev)
+			continue;
+
+		hid_proxy_activate_handle(handle);
+		break;
 	}
 }
 
@@ -2010,6 +2261,15 @@ void hid_proxy_activate_hid(struct hid_device *hid)
 		return;
 
 	list_for_each_entry(handle, &hid_proxy->handler.h_list, h_node) {
+		struct input_dev *dev = handle->dev;
+
+		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
+			continue;
+
+		hid_proxy_activate_handle(handle);
+	}
+
+	list_for_each_entry(handle, &hid_proxy->sensor_handler.h_list, h_node) {
 		struct input_dev *dev = handle->dev;
 
 		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
@@ -2072,7 +2332,8 @@ void hid_proxy_tud_mount(void)
 
 		if (source->retiring) {
 			if (source->published) {
-				source->terminal_pending = true;
+				source->terminal_pending =
+					source->kind != HID_PROXY_SOURCE_SENSOR;
 			} else {
 				list_del(&proxy_handle->runtime_node);
 				list_add_tail(&proxy_handle->runtime_node,
@@ -2091,6 +2352,10 @@ void hid_proxy_tud_mount(void)
 				source->pad.frame_dirty = true;
 				(void)hid_proxy_pad_queue_frame_locked(source,
 					resync ? HID_PROXY_PAD_FRAME_RESYNC : 0);
+			} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+				source->sensor.source_pending = true;
+				(void)hid_proxy_sensor_queue_frame_locked(source,
+					resync ? HID_PROXY_SENSOR_FRAME_RESYNC : 0);
 			} else {
 				(void)hid_proxy_queue_frame_locked(source, true);
 			}
@@ -2150,6 +2415,8 @@ void hid_proxy_tud_umount(void)
 		if (source->kind == HID_PROXY_SOURCE_PAD) {
 			source->pad.source_pending = false;
 			source->pad.published_buttons = 0;
+		} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+			source->sensor.source_pending = false;
 		}
 		hid_proxy_reset_frames_locked(source);
 	}
@@ -2218,6 +2485,15 @@ static bool hid_proxy_prepare_report_locked(struct hid_proxy_runtime *runtime)
 					inflight->length = sizeof(report);
 					memcpy(inflight->data, &report,
 					       sizeof(report));
+				} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+					struct hid_proxy_sensor_source_report report =
+						hid_proxy_sensor_source_report(source,
+								       false);
+
+					inflight->report_id = REPORT_ID_SENSOR_SOURCE;
+					inflight->length = sizeof(report);
+					memcpy(inflight->data, &report,
+					       sizeof(report));
 				} else {
 					struct hid_proxy_source_report report =
 						hid_proxy_source_report(source, false);
@@ -2238,6 +2514,16 @@ static bool hid_proxy_prepare_report_locked(struct hid_proxy_runtime *runtime)
 			inflight->report_id = REPORT_ID_PAD_SOURCE;
 			inflight->length = sizeof(report);
 			memcpy(inflight->data, &report, sizeof(report));
+		} else if (source->active &&
+			   source->kind == HID_PROXY_SOURCE_SENSOR &&
+			   (!source->published || source->sensor.source_pending)) {
+			struct hid_proxy_sensor_source_report report =
+				hid_proxy_sensor_source_report(source, true);
+
+			inflight->kind = HID_PROXY_INFLIGHT_SOURCE_PRESENT;
+			inflight->report_id = REPORT_ID_SENSOR_SOURCE;
+			inflight->length = sizeof(report);
+			memcpy(inflight->data, &report, sizeof(report));
 		} else if (source->active && source->frame_count) {
 			if (source->kind == HID_PROXY_SOURCE_PAD) {
 				struct hid_proxy_pad_report *report =
@@ -2245,6 +2531,14 @@ static bool hid_proxy_prepare_report_locked(struct hid_proxy_runtime *runtime)
 
 				inflight->kind = HID_PROXY_INFLIGHT_PAD_FRAME;
 				inflight->report_id = REPORT_ID_PAD_FRAME;
+				inflight->length = sizeof(*report);
+				memcpy(inflight->data, report, sizeof(*report));
+			} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+				struct hid_proxy_sensor_report *report =
+					&source->sensor.frames[source->frame_head];
+
+				inflight->kind = HID_PROXY_INFLIGHT_SENSOR_FRAME;
+				inflight->report_id = REPORT_ID_SENSOR_FRAME;
 				inflight->length = sizeof(*report);
 				memcpy(inflight->data, report, sizeof(*report));
 			} else {
@@ -2656,6 +2950,10 @@ void hid_proxy_tud_report_complete(uint8_t instance, bool success)
 			memcpy(&hid_proxy->last_pad_source, inflight->data,
 			       sizeof(hid_proxy->last_pad_source));
 			source->pad.source_pending = false;
+		} else if (source->kind == HID_PROXY_SOURCE_SENSOR) {
+			memcpy(&hid_proxy->last_sensor_source, inflight->data,
+			       sizeof(hid_proxy->last_sensor_source));
+			source->sensor.source_pending = false;
 		} else {
 			memcpy(&hid_proxy->last_source, inflight->data,
 			       sizeof(hid_proxy->last_source));
@@ -2671,6 +2969,9 @@ void hid_proxy_tud_report_complete(uint8_t instance, bool success)
 		if (source->kind == HID_PROXY_SOURCE_PAD)
 			memcpy(&hid_proxy->last_pad_source, inflight->data,
 			       sizeof(hid_proxy->last_pad_source));
+		else if (source->kind == HID_PROXY_SOURCE_SENSOR)
+			memcpy(&hid_proxy->last_sensor_source, inflight->data,
+			       sizeof(hid_proxy->last_sensor_source));
 		else
 			memcpy(&hid_proxy->last_source, inflight->data,
 			       sizeof(hid_proxy->last_source));
@@ -2687,6 +2988,16 @@ void hid_proxy_tud_report_complete(uint8_t instance, bool success)
 			source->pad.next_frame_sequence++;
 			source->terminal_pending = false;
 		} else if (source->frame_count) {
+			source->frame_head = (source->frame_head + 1) %
+				HID_PROXY_FRAME_QUEUE_DEPTH;
+			source->frame_count--;
+			if (!source->frame_count)
+				source->drop_reported = false;
+		}
+	} else if (inflight->kind == HID_PROXY_INFLIGHT_SENSOR_FRAME) {
+		memcpy(&hid_proxy->last_sensor_frame, inflight->data,
+		       sizeof(hid_proxy->last_sensor_frame));
+		if (source->frame_count) {
 			source->frame_head = (source->frame_head + 1) %
 				HID_PROXY_FRAME_QUEUE_DEPTH;
 			source->frame_count--;
@@ -2754,6 +3065,14 @@ uint16_t hid_proxy_tud_get_report(uint8_t instance, uint8_t report_id,
 		case REPORT_ID_PAD_FRAME:
 			report = &hid_proxy->last_pad_frame;
 			length = sizeof(hid_proxy->last_pad_frame);
+			break;
+		case REPORT_ID_SENSOR_SOURCE:
+			report = &hid_proxy->last_sensor_source;
+			length = sizeof(hid_proxy->last_sensor_source);
+			break;
+		case REPORT_ID_SENSOR_FRAME:
+			report = &hid_proxy->last_sensor_frame;
+			length = sizeof(hid_proxy->last_sensor_frame);
 			break;
 		default:
 			xSemaphoreGive(hid_proxy->mutex);

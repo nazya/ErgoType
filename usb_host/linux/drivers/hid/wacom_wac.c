@@ -5139,7 +5139,10 @@ const struct hid_device_id wacom_ids[] = {
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x325) },
 	{ USB_DEVICE_WACOM(0x326) },
+#endif
+	// The wired Cintiq 27QHD uses the active Pen/Pad and sensor proxy paths.
 	{ USB_DEVICE_WACOM(0x32A) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x32B) },
 	{ USB_DEVICE_WACOM(0x32C) },
 	{ USB_DEVICE_WACOM(0x32F) },
