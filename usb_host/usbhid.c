@@ -4278,14 +4278,16 @@ static int usbhid_parse(struct hid_device *hid)
 	}
 
 	/*
-	 * The captured 0x0374 descriptor, 0x03ce main tablet interface, and 0x03cb
-	 * Pen/Touch interfaces contain repeated VARIABLE Feature blobs which their
-	 * pinned Wacom callers never access as parsed fields. Keep report IDs and
-	 * wire sizes without materializing the blobs. Uncaptured auxiliary
-	 * interfaces do not inherit this contract.
+	 * The captured 0x0374 descriptor, 0x03a6/0x03ce main tablet interfaces,
+	 * and 0x03cb Pen/Touch interfaces contain repeated VARIABLE Feature blobs
+	 * which their pinned Wacom callers never access as parsed fields. Keep
+	 * report IDs and wire sizes without materializing the blobs. Uncaptured
+	 * auxiliary interfaces do not inherit this contract.
 	 */
 	if (hid->vendor == 0x056a &&
 	    (hid->product == 0x0374 ||
+	     (hid->product == 0x03a6 &&
+	      interface->desc.bInterfaceNumber == 0) ||
 	     (hid->product == 0x03ce &&
 	      interface->desc.bInterfaceNumber == 0) ||
 	     (hid->product == 0x03cb &&
@@ -4297,13 +4299,17 @@ static int usbhid_parse(struct hid_device *hid)
 	}
 
 	/*
-	 * Captured 0x03cb Pen/Touch also carry repeated VARIABLE Input blobs on
-	 * vendor usages which the pinned HID_GENERIC Wacom path never maps. Keep
-	 * their report IDs, wire sizes and raw ingress without parsed fields.
+	 * Captured 0x03a6 Pen and 0x03cb Pen/Touch also carry repeated VARIABLE
+	 * Input blobs on vendor usages which the pinned HID_GENERIC Wacom path
+	 * never maps. Keep their report IDs, wire sizes and raw ingress without
+	 * parsed fields.
 	 */
-	if (hid->vendor == 0x056a && hid->product == 0x03cb &&
-	    (interface->desc.bInterfaceNumber == 0 ||
-	     interface->desc.bInterfaceNumber == 4)) {
+	if (hid->vendor == 0x056a &&
+	    ((hid->product == 0x03a6 &&
+	      interface->desc.bInterfaceNumber == 0) ||
+	     (hid->product == 0x03cb &&
+	      (interface->desc.bInterfaceNumber == 0 ||
+	       interface->desc.bInterfaceNumber == 4)))) {
 		quirks |= HID_QUIRK_SKIP_REPEATED_INPUTS;
 		hid->quirks |= HID_QUIRK_SKIP_REPEATED_INPUTS;
 		transport_quirks |= HID_QUIRK_SKIP_REPEATED_INPUTS;
