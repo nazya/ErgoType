@@ -355,6 +355,10 @@
 // BIT(24) is unused upstream. Exact audited devices may retain a repeated
 // VARIABLE Feature's wire layout without materializing its opaque field.
 #define HID_QUIRK_SKIP_REPEATED_FEATURES	BIT(24)
+// BIT(25) is unused upstream. Exact audited devices may retain a repeated
+// VARIABLE Input's wire layout and raw ingress without materializing its
+// opaque field.
+#define HID_QUIRK_SKIP_REPEATED_INPUTS		BIT(25)
 #define HID_QUIRK_FULLSPEED_INTERVAL		BIT(28)
 #define HID_QUIRK_NO_INIT_REPORTS		BIT(29)
 #define HID_QUIRK_NO_IGNORE			BIT(30)
@@ -482,7 +486,10 @@ struct hid_report {
 	unsigned int id;				/* id of this report */
 	enum hid_report_type type;			/* report type */
 	unsigned int application;			/* application usage for this report */
-	struct hid_field *field[HID_MAX_FIELDS];	/* fields of the report */
+	// struct hid_field *field[HID_MAX_FIELDS];	/* fields of the report */
+	// Fieldless reports still carry their ID and wire size. Allocate this
+	// bounded pointer table only when the parser retains the first field.
+	struct hid_field **field;			/* fields of the report */
 	struct hid_field_entry *field_entries;		/* allocated memory of input field_entry */
 	unsigned maxfield;				/* maximum valid field index */
 	unsigned size;					/* size of the report (bits) */

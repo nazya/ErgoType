@@ -167,6 +167,18 @@ static struct hid_field *hid_register_field(struct hid_report *report,
 		return NULL;
 	}
 
+	// Upstream embeds HID_MAX_FIELDS pointers in every report. The firmware
+	// keeps fieldless report IDs and wire sizes, so allocate the same bounded
+	// table only when the parser retains a real field.
+	if (!report->field) {
+		report->field = kcalloc(HID_MAX_FIELDS,
+					 sizeof(*report->field), GFP_KERNEL);
+		if (!report->field) {
+			async_msg("ERR: HID_FIELD_NOMEM");
+			return NULL;
+		}
+	}
+
 	// field = kvzalloc((sizeof(struct hid_field) +
 	// 		  usages * sizeof(struct hid_usage) +
 	// 		  3 * usages * sizeof(unsigned int)), GFP_KERNEL);
@@ -422,11 +434,19 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	unsigned int i;
 	unsigned int application;
 	bool skip_repeated_feature;
+	bool skip_repeated_input;
 
 	application = hid_lookup_collection(parser, HID_COLLECTION_APPLICATION);
 	skip_repeated_feature =
 		(parser->device->quirks & HID_QUIRK_SKIP_REPEATED_FEATURES) &&
 		report_type == HID_FEATURE_REPORT &&
+		(flags & (HID_MAIN_ITEM_CONSTANT | HID_MAIN_ITEM_VARIABLE)) ==
+			HID_MAIN_ITEM_VARIABLE &&
+		parser->local.usage_index &&
+		parser->global.report_count > parser->local.usage_index;
+	skip_repeated_input =
+		(parser->device->quirks & HID_QUIRK_SKIP_REPEATED_INPUTS) &&
+		report_type == HID_INPUT_REPORT &&
 		(flags & (HID_MAIN_ITEM_CONSTANT | HID_MAIN_ITEM_VARIABLE)) ==
 			HID_MAIN_ITEM_VARIABLE &&
 		parser->local.usage_index &&
@@ -479,7 +499,9 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 
 	if (!parser->local.usage_index) /* Ignore padding fields */
 		return 0;
-	if (skip_repeated_feature)
+	// Exact audited opaque Input reports keep the same report ID, size and raw
+	// ingress while avoiding callbacks unused by their bound driver.
+	if (skip_repeated_feature || skip_repeated_input)
 		return 0;
 
 	usages = max_t(unsigned, parser->local.usage_index,
@@ -899,6 +921,9 @@ static void hid_free_report(struct hid_report *report)
 
 	for (n = 0; n < report->maxfield; n++)
 		kvfree(report->field[n]);
+	// Upstream's field table is embedded in struct hid_report.
+	// The firmware owns the lazy table for the same report lifetime.
+	kfree(report->field);
 	kfree(report);
 }
 
