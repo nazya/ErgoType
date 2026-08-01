@@ -32,7 +32,7 @@ typedef struct hid_compat_wait_queue {
 	volatile int cancel_status;
 	struct hid_compat_wait_queue *transport_next;
 } wait_queue_head_t;
-/* Firmware ktime_t is modulo-2^32 milliseconds; wrap ordering is not retained. */
+/* Firmware ktime_t is modulo-2^32 ms; ktime_after spans stay below 2^31 ms. */
 typedef uint32_t ktime_t;
 typedef long loff_t;
 
@@ -1959,7 +1959,7 @@ static inline ktime_t ktime_add_ms(ktime_t kt, unsigned int ms)
 
 static inline bool ktime_after(ktime_t a, ktime_t b)
 {
-	return a > b;
+	return (int32_t)(b - a) < 0;
 }
 
 static inline char *devm_kasprintf(struct device *dev, gfp_t flags, const char *fmt, ...)
