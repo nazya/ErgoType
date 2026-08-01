@@ -305,6 +305,161 @@ static uint8_t const desc_hid_report_webhid[] =
     HID_COLLECTION_END,
 };
 
+static uint8_t const desc_hid_report_touch[] =
+{
+    /*
+     * Keep Contact Identifier on its own HID interface: downstream Linux
+     * classifies a whole interface as multitouch, including sibling reports.
+     */
+    HID_USAGE_PAGE(0x0d),
+    HID_USAGE(0x05),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(REPORT_ID_TOUCH_INDIRECT)
+        HID_USAGE(0x22),
+        HID_COLLECTION(HID_COLLECTION_LOGICAL),
+            HID_USAGE(0x42),
+            HID_USAGE(0x32),
+            HID_USAGE(0x47),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX(1),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(3),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(5),
+            HID_INPUT(HID_CONSTANT),
+
+            HID_USAGE(0x51),
+            HID_LOGICAL_MAX_N(UINT32_MAX, 3),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_X),
+            HID_USAGE(HID_USAGE_DESKTOP_Y),
+            HID_LOGICAL_MAX_N(INT32_MAX, 3),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x30),
+            HID_USAGE(0x48),
+            HID_USAGE(0x49),
+            HID_LOGICAL_MAX_N(UINT16_MAX, 2),
+            HID_REPORT_SIZE(16),
+            HID_REPORT_COUNT(3),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_COLLECTION_END,
+
+        HID_USAGE(0x54),
+        HID_LOGICAL_MAX_N(HID_PROXY_TOUCH_MAX_CONTACTS, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(1),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+        HID_USAGE_PAGE(HID_USAGE_PAGE_BUTTON),
+        HID_USAGE_MIN(1),
+        HID_USAGE_MAX(5),
+        HID_LOGICAL_MAX(1),
+        HID_REPORT_SIZE(1),
+        HID_REPORT_COUNT(5),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_REPORT_COUNT(3),
+        HID_INPUT(HID_CONSTANT),
+
+        HID_USAGE_PAGE_N(0xFF00, 2),
+        HID_USAGE(0x30),
+        HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(24),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+        HID_USAGE_PAGE(0x0d),
+        HID_REPORT_ID(REPORT_ID_TOUCH_INDIRECT_MAX)
+        HID_USAGE(0x55),
+        HID_LOGICAL_MAX_N(HID_PROXY_TOUCH_MAX_CONTACTS, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(1),
+        HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_COLLECTION_END,
+
+    HID_USAGE_PAGE(0x0d),
+    HID_USAGE(0x04),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(REPORT_ID_TOUCH_DIRECT)
+        HID_USAGE(0x22),
+        HID_COLLECTION(HID_COLLECTION_LOGICAL),
+            HID_USAGE(0x42),
+            HID_USAGE(0x32),
+            HID_USAGE(0x47),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX(1),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(3),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(5),
+            HID_INPUT(HID_CONSTANT),
+
+            HID_USAGE(0x51),
+            HID_LOGICAL_MAX_N(UINT32_MAX, 3),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_X),
+            HID_USAGE(HID_USAGE_DESKTOP_Y),
+            HID_LOGICAL_MAX_N(INT32_MAX, 3),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x30),
+            HID_USAGE(0x48),
+            HID_USAGE(0x49),
+            HID_LOGICAL_MAX_N(UINT16_MAX, 2),
+            HID_REPORT_SIZE(16),
+            HID_REPORT_COUNT(3),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_COLLECTION_END,
+
+        HID_USAGE(0x54),
+        HID_LOGICAL_MAX_N(HID_PROXY_TOUCH_MAX_CONTACTS, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(1),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+        HID_USAGE_PAGE_N(0xFF00, 2),
+        HID_USAGE(0x30),
+        HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(25),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+        HID_USAGE_PAGE(0x0d),
+        HID_REPORT_ID(REPORT_ID_TOUCH_DIRECT_MAX)
+        HID_USAGE(0x55),
+        HID_LOGICAL_MAX_N(HID_PROXY_TOUCH_MAX_CONTACTS, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(1),
+        HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_COLLECTION_END,
+
+    HID_USAGE_PAGE_N(0xFF00, 2),
+    HID_USAGE(0x31),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(REPORT_ID_TOUCH_SOURCE)
+        HID_USAGE(0x32),
+        HID_LOGICAL_MIN(0),
+        HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+        HID_REPORT_SIZE(8),
+        HID_REPORT_COUNT(15),
+        HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+    HID_COLLECTION_END,
+};
+
 //--------------------------------------------------------------------+
 // String Descriptors
 //--------------------------------------------------------------------+
@@ -355,6 +510,7 @@ enum
     ITF_NKRO_KEYBOARD,
     ITF_NKRO_MOUSE,
     ITF_NKRO_WEBHID,
+    ITF_NKRO_TOUCH,
     ITF_NKRO_TOTAL,
 };
 
@@ -372,10 +528,11 @@ enum
 #define EP_HID_IN        0x83
 #define EP_HID_MOUSE_IN  0x84
 #define EP_HID_WEBHID_IN 0x85
+#define EP_HID_TOUCH_IN  0x86
 #define EP_MSC_OUT       0x03
 #define EP_MSC_IN        0x83
 
-#define CONFIG_TOTAL_LEN_HID_CDC_NKRO (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
+#define CONFIG_TOTAL_LEN_HID_CDC_NKRO (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
 #define CONFIG_TOTAL_LEN_HID_CDC_BOOT_KB_MOUSE (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN)
 #define CONFIG_TOTAL_LEN_CDC_MSC (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MSC_DESC_LEN)
 
@@ -394,6 +551,7 @@ static uint8_t const desc_configuration_hid_cdc_nkro[] =
     TUD_HID_DESCRIPTOR(ITF_NKRO_KEYBOARD, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_nkro), EP_HID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_MOUSE, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_mouse_16), EP_HID_MOUSE_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
     TUD_HID_DESCRIPTOR(ITF_NKRO_WEBHID, STRID_WEBHID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_webhid), EP_HID_WEBHID_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
+    TUD_HID_DESCRIPTOR(ITF_NKRO_TOUCH, STRID_HID_IF, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report_touch), EP_HID_TOUCH_IN, CFG_TUD_HID_EP_BUFSIZE, USB_HID_POLL_INTERVAL_MS),
 };
 
 static uint8_t const desc_configuration_cdc_msc[] =
@@ -465,6 +623,9 @@ uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance)
 
     if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE && instance == HID_WEBHID_INSTANCE)
         return desc_hid_report_webhid;
+
+    if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE && instance == HID_TOUCH_INSTANCE)
+        return desc_hid_report_touch;
 
     if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE)
         return (instance == HID_KEYBOARD_INSTANCE) ? desc_hid_report_nkro : desc_hid_report_mouse_16;

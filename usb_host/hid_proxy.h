@@ -13,6 +13,7 @@ void hid_proxy_activate_hid(struct hid_device *hid);
 void hid_proxy_tud_mount(void);
 void hid_proxy_tud_umount(void);
 void hid_proxy_tud_poll(void);
-void hid_proxy_tud_report_complete(bool success);
-uint16_t hid_proxy_tud_get_report(uint8_t report_id, uint8_t *buffer,
+void hid_proxy_tud_report_complete(uint8_t instance, bool success);
+uint16_t hid_proxy_tud_get_report(uint8_t instance, uint8_t report_id,
+				  uint8_t report_type, uint8_t *buffer,
 				  uint16_t reqlen);

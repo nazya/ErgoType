@@ -16,8 +16,8 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_
 
     if (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE)
         vkbd_hid_notify_recheck();
-    if (instance == HID_WEBHID_INSTANCE)
-        hid_proxy_tud_report_complete(true);
+    if (instance == HID_WEBHID_INSTANCE || instance == HID_TOUCH_INSTANCE)
+        hid_proxy_tud_report_complete(instance, true);
 }
 
 // Invoked when an IN REPORT transfer completes unsuccessfully.
@@ -30,8 +30,9 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
     if (report_type == HID_REPORT_TYPE_INPUT &&
         (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE))
         vkbd_hid_notify_recheck();
-    if (report_type == HID_REPORT_TYPE_INPUT && instance == HID_WEBHID_INSTANCE)
-        hid_proxy_tud_report_complete(false);
+    if (report_type == HID_REPORT_TYPE_INPUT &&
+        (instance == HID_WEBHID_INSTANCE || instance == HID_TOUCH_INSTANCE))
+        hid_proxy_tud_report_complete(instance, false);
 }
 
 // Invoked when received GET_REPORT control request
@@ -40,9 +41,14 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 {
     if (webhid_is_instance(instance)) {
         if (report_type == HID_REPORT_TYPE_INPUT)
-            return hid_proxy_tud_get_report(report_id, buffer, reqlen);
+            return hid_proxy_tud_get_report(instance, report_id, report_type,
+                                            buffer, reqlen);
         return webhid_get_report(report_id, report_type, buffer, reqlen);
     }
+
+    if (instance == HID_TOUCH_INSTANCE)
+        return hid_proxy_tud_get_report(instance, report_id, report_type,
+                                        buffer, reqlen);
 
     return 0;
 }
