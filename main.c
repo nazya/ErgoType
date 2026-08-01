@@ -28,6 +28,7 @@
 #include "log.h"
 #include "usb_host/usbhid.h"
 #include "usb_host/usbhid_report.h"
+#include "usb_host/hid_proxy.h"
 
 // #define TUD_STACK_SIZE 16384 // flash_fat_write requires 4096 bytes
 #define TUD_STACK_SIZE 4096 // flash_fat_write requires 4096 bytes
@@ -205,6 +206,14 @@ static void app_task(void *pvParameters)
     mode_resolution_t mode_resolution = resolve_mode(&config, base_mode, nr_pressed);
     mode = mode_resolution.mode;
 
+    /* Keep proxy state on the FreeRTOS heap; main-bank BSS has no room for it. */
+    bool hid_proxy_init_failed = false;
+    if (mode == HID && hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE &&
+        hid_proxy_runtime_init() < 0) {
+        hid_output_profile = HID_OUTPUT_PROFILE_BOOT_KB_MOUSE;
+        hid_proxy_init_failed = true;
+    }
+
     fatfs_mutex = xSemaphoreCreateMutex();
 
     if (mode == HID) {
@@ -226,6 +235,8 @@ static void app_task(void *pvParameters)
         xTaskCreateAffinitySet(tusb_device_task, NULL, TUD_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     }
+    if (hid_proxy_init_failed)
+        async_msg("ERR: HID_PROXY_INIT_FAIL");
     dbg("startup keys: count=%u key=%u", nr_pressed, startup_key);
 
     // Print mode/config diagnostics (buffered until CDC is actually opened by the host).

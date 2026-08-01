@@ -8,6 +8,7 @@
 #include "stdio_tusb_cdc.h"
 #include "evdev.h"
 #include "hid_async.h"
+#include "hid_proxy.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -88,6 +89,8 @@ void tusb_host_task(void *pvParameters)
     ret = evdev_init();
     if (ret)
         async_msg("ERR: HID_EVDEV_FAIL");
+
+	hid_proxy_input_init();
 
     /*
      * Upstream Linux runs module/initcall registration before HID devices bind.

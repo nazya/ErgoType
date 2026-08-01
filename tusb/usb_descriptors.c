@@ -33,7 +33,7 @@ static tusb_desc_device_t const desc_device_hid_cdc_boot_kb_mouse =
     USB_DEVICE_DESCRIPTOR(USB_PID_HID);
 
 static tusb_desc_device_t const desc_device_hid_cdc_nkro =
-    USB_DEVICE_DESCRIPTOR(USB_PID_HID_NKRO);
+    USB_DEVICE_DESCRIPTOR(USB_PID_HID_NKRO_PROXY);
 
 static tusb_desc_device_t const desc_device_cdc_msc =
     USB_DEVICE_DESCRIPTOR(USB_PID_CDC_MSC);
@@ -141,9 +141,163 @@ static uint8_t const desc_hid_report_nkro[] =
 
 static uint8_t const desc_hid_report_webhid[] =
 {
+    /*
+     * Firmware proxy: one indirect and one direct standard Pen collection
+     * share the existing WebHID interrupt endpoint. Their fixed proxy ranges
+     * are the stable ABI, not retail tablet physical dimensions.
+     */
+    HID_USAGE_PAGE(0x0d),
+    HID_USAGE(0x01),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(REPORT_ID_STYLUS_INDIRECT)
+        HID_USAGE(0x20),
+        HID_COLLECTION(HID_COLLECTION_PHYSICAL),
+            HID_USAGE(0x42),
+            HID_USAGE(0x32),
+            HID_USAGE(0x44),
+            HID_USAGE(0x3c),
+            HID_USAGE(0x45),
+            HID_USAGE(0x5a),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX(1),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(6),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_CONSTANT),
+
+            HID_USAGE(0x38),
+            HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+            HID_REPORT_SIZE(8),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_X),
+            HID_USAGE(HID_USAGE_DESKTOP_Y),
+            HID_LOGICAL_MAX_N(INT32_MAX, 3),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x30),
+            HID_LOGICAL_MAX_N(UINT16_MAX, 2),
+            HID_REPORT_SIZE(16),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_Z),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x3d),
+            HID_USAGE(0x3e),
+            HID_LOGICAL_MIN_N(-9000, 2),
+            HID_LOGICAL_MAX_N(9000, 2),
+            HID_PHYSICAL_MIN(-90),
+            HID_PHYSICAL_MAX(90),
+            HID_UNIT_EXPONENT(0),
+            HID_UNIT(0x14),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE(0x5b),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX_N(UINT32_MAX, 3),
+            HID_PHYSICAL_MIN(0),
+            HID_PHYSICAL_MAX(0),
+            HID_UNIT_EXPONENT(0),
+            HID_UNIT(0),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_COLLECTION_END,
+    HID_COLLECTION_END,
+
+    HID_USAGE_PAGE(0x0d),
+    HID_USAGE(0x02),
+    HID_COLLECTION(HID_COLLECTION_APPLICATION),
+        HID_REPORT_ID(REPORT_ID_STYLUS_DIRECT)
+        HID_USAGE(0x20),
+        HID_COLLECTION(HID_COLLECTION_PHYSICAL),
+            HID_USAGE(0x42),
+            HID_USAGE(0x32),
+            HID_USAGE(0x44),
+            HID_USAGE(0x3c),
+            HID_USAGE(0x45),
+            HID_USAGE(0x5a),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX(1),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(6),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+            HID_REPORT_SIZE(1),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_CONSTANT),
+
+            HID_USAGE(0x38),
+            HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+            HID_REPORT_SIZE(8),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_X),
+            HID_USAGE(HID_USAGE_DESKTOP_Y),
+            HID_LOGICAL_MAX_N(INT32_MAX, 3),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x30),
+            HID_LOGICAL_MAX_N(UINT16_MAX, 2),
+            HID_REPORT_SIZE(16),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(HID_USAGE_PAGE_DESKTOP),
+            HID_USAGE(HID_USAGE_DESKTOP_Z),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE_PAGE(0x0d),
+            HID_USAGE(0x3d),
+            HID_USAGE(0x3e),
+            HID_LOGICAL_MIN_N(-9000, 2),
+            HID_LOGICAL_MAX_N(9000, 2),
+            HID_PHYSICAL_MIN(-90),
+            HID_PHYSICAL_MAX(90),
+            HID_UNIT_EXPONENT(0),
+            HID_UNIT(0x14),
+            HID_REPORT_COUNT(2),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+
+            HID_USAGE(0x5b),
+            HID_LOGICAL_MIN(0),
+            HID_LOGICAL_MAX_N(UINT32_MAX, 3),
+            HID_PHYSICAL_MIN(0),
+            HID_PHYSICAL_MAX(0),
+            HID_UNIT_EXPONENT(0),
+            HID_UNIT(0),
+            HID_REPORT_SIZE(32),
+            HID_REPORT_COUNT(1),
+            HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
+        HID_COLLECTION_END,
+    HID_COLLECTION_END,
+
     HID_USAGE_PAGE_N(0xFF00, 2),
     HID_USAGE(0x20),
     HID_COLLECTION(HID_COLLECTION_APPLICATION),
+    HID_REPORT_ID(REPORT_ID_STYLUS_SOURCE)
+    HID_USAGE(0x21),
+    HID_LOGICAL_MIN(0),
+    HID_LOGICAL_MAX_N(UINT8_MAX, 2),
+    HID_REPORT_SIZE(8),
+    HID_REPORT_COUNT(17),
+    HID_INPUT(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),
     HID_REPORT_ID(REPORT_ID_WEBHID_CONFIG)
     HID_REPORT_SIZE(8),
     HID_REPORT_COUNT(WEBHID_REPORT_SIZE),

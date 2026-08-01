@@ -1,6 +1,7 @@
 #include "tusb.h"
 #include "usb_descriptors.h"
 #include "usb_webhid.h"
+#include "usb_host/hid_proxy.h"
 #include "ui/ui.h"
 
 extern uint8_t mode;
@@ -20,6 +21,7 @@ void tud_mount_cb(void)
 {
     /* Bus reset/configuration change aborts any prior feature transaction. */
     webhid_reset();
+    hid_proxy_tud_mount();
     ui_led_set_pattern(0, 0, true);
     vkbd_hid_notify_recheck();
 }
@@ -28,6 +30,7 @@ void tud_mount_cb(void)
 void tud_umount_cb(void)
 {
     webhid_reset();
+    hid_proxy_tud_umount();
     ui_led_set_pattern(0, LED_PATTERN_FAST, true);
     // watchdog_reboot(0, 0, 0); does not work here
 }

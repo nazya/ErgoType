@@ -4,6 +4,7 @@
 
 #include "jconfig.h"
 #include "usb_descriptors.h"
+#include "usb_host/hid_proxy.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -35,8 +36,11 @@ void tusb_device_task(void *pvParameters)
     }
 
     while (1) {
-        // Wait for USB events (or a deferred "kick" from stdio_tusb_cdc_write()).
-        tud_task();
+        // A finite wait lets the device owner service proxy state without
+        // enqueueing work into TinyUSB's private event queue.
+        tud_task_ext(USB_HID_POLL_INTERVAL_MS, false);
         stdio_tusb_cdc_poll();
+        // The device task is the sole owner of proxy interrupt-IN submission.
+        hid_proxy_tud_poll();
     }
 }

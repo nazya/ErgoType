@@ -715,6 +715,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
         # Split devmon/FreeRTOS half of the Linux-shaped evdev adapter.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/evdev_client.c
+        # Firmware-only Linux input to TinyUSB device proxy boundary.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_proxy.c
         # Linux-derived HID/input sources and explicitly marked registry glue
         # below follow upstream-porting-rules.md.
         # hid-core owns the upstream-shaped reduced HIDRAW lifecycle calls.

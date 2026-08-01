@@ -11,6 +11,7 @@
 // Firmware post-probe activation groups handles by their owning HID device.
 #include "linux/include/linux/hid.h"
 #include "evdev.h"
+#include "hid_proxy.h"
 #include "stdio_tusb_cdc.h"
 
 struct evdev {
@@ -305,6 +306,13 @@ void evdev_activate_hid(struct hid_device *hid)
 		if (error)
 			async_msg("ERR: EVDEV_CLIENT_NOMEM");
 	}
+
+	/*
+	 * Linux opens each handler from its userspace client. Firmware has no file
+	 * open edge, so activate the proxy after sibling queues exist and before
+	 * the first evdev open can start the shared interrupt-IN transport.
+	 */
+	hid_proxy_activate_hid(hid);
 
 	// error = evdev_open_device(evdev);
 	// Firmware auto-opens one client for every matching input_dev. Open only

@@ -2,6 +2,7 @@
 
 #include "devmon.h"
 #include "ui/ui.h"
+#include "usb_host/hid_proxy.h"
 #include "usb_descriptors.h"
 #include "usb_webhid.h"
 
@@ -15,6 +16,8 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_
 
     if (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE)
         vkbd_hid_notify_recheck();
+    if (instance == HID_WEBHID_INSTANCE)
+        hid_proxy_tud_report_complete(true);
 }
 
 // Invoked when an IN REPORT transfer completes unsuccessfully.
@@ -27,14 +30,19 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
     if (report_type == HID_REPORT_TYPE_INPUT &&
         (instance == HID_KEYBOARD_INSTANCE || instance == HID_MOUSE_INSTANCE))
         vkbd_hid_notify_recheck();
+    if (report_type == HID_REPORT_TYPE_INPUT && instance == HID_WEBHID_INSTANCE)
+        hid_proxy_tud_report_complete(false);
 }
 
 // Invoked when received GET_REPORT control request
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
                                uint8_t* buffer, uint16_t reqlen)
 {
-    if (webhid_is_instance(instance))
+    if (webhid_is_instance(instance)) {
+        if (report_type == HID_REPORT_TYPE_INPUT)
+            return hid_proxy_tud_get_report(report_id, buffer, reqlen);
         return webhid_get_report(report_id, report_type, buffer, reqlen);
+    }
 
     return 0;
 }

@@ -13,6 +13,9 @@ enum mode {
 enum report_id {
     REPORT_ID_KEYBOARD = 1,
     REPORT_ID_CONSUMER = 2,
+    REPORT_ID_STYLUS_INDIRECT = 3,
+    REPORT_ID_STYLUS_DIRECT = 4,
+    REPORT_ID_STYLUS_SOURCE = 5,
     REPORT_ID_WEBHID_CONFIG = 100,
 };
 
@@ -39,7 +42,7 @@ extern uint8_t hid_output_profile;
 #define USB_VID 0xCafe
 #define USB_PID_HID 0x1001
 #define USB_PID_CDC_MSC 0x1002
-#define USB_PID_HID_NKRO 0x1003
+#define USB_PID_HID_NKRO_PROXY 0x1004
 
 // USB spec release reported by the device (bcdUSB).
 #define USB_BCD 0x0200
