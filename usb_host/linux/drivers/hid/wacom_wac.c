@@ -1060,7 +1060,8 @@ static int wacom_intuos_irq(struct wacom_wac *wacom)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// Exact USB 056a:0331 makes the upstream Remote report path reachable.
 static int wacom_remote_irq(struct wacom_wac *wacom_wac, size_t len)
 {
 	unsigned char *data = wacom_wac->data;
@@ -1070,7 +1071,7 @@ static int wacom_remote_irq(struct wacom_wac *wacom_wac, size_t len)
 	int bat_charging, bat_percent, touch_ring_mode;
 	__u32 serial;
 	int i, index = -1;
-	unsigned long flags;
+	// unsigned long flags;
 
 	if (data[0] != WACOM_REPORT_REMOTE) {
 		hid_dbg(wacom->hdev, "%s: received unknown report #%d",
@@ -1081,7 +1082,10 @@ static int wacom_remote_irq(struct wacom_wac *wacom_wac, size_t len)
 	serial = data[3] + (data[4] << 8) + (data[5] << 16);
 	wacom_wac->id[0] = PAD_DEVICE_ID;
 
-	spin_lock_irqsave(&remote->remote_lock, flags);
+	// spin_lock_irqsave(&remote->remote_lock, flags);
+	// Firmware parses reports in task context, so the Remote PI mutex replaces
+	// the upstream IRQ-side spinlock over the same child lifetime region.
+	mutex_lock(&remote->remote_lock);
 
 	for (i = 0; i < WACOM_MAX_REMOTES; i++) {
 		if (remote->remotes[i].serial == serial) {
@@ -1147,7 +1151,8 @@ static int wacom_remote_irq(struct wacom_wac *wacom_wac, size_t len)
 				bat_charging, 1, bat_charging);
 
 out:
-	spin_unlock_irqrestore(&remote->remote_lock, flags);
+	// spin_unlock_irqrestore(&remote->remote_lock, flags);
+	mutex_unlock(&remote->remote_lock);
 	return 0;
 }
 
@@ -1157,7 +1162,7 @@ static void wacom_remote_status_irq(struct wacom_wac *wacom_wac, size_t len)
 	unsigned char *data = wacom_wac->data;
 	struct wacom_remote *remote = wacom->remote;
 	struct wacom_remote_work_data remote_data;
-	unsigned long flags;
+	// unsigned long flags;
 	int i, ret;
 
 	if (data[0] != WACOM_REPORT_DEVICE_LIST)
@@ -1172,20 +1177,24 @@ static void wacom_remote_status_irq(struct wacom_wac *wacom_wac, size_t len)
 		remote_data.remote[i].serial = serial;
 	}
 
-	spin_lock_irqsave(&remote->remote_lock, flags);
+	// spin_lock_irqsave(&remote->remote_lock, flags);
+	// Firmware report ingress and lifecycle work are both task callbacks.
+	mutex_lock(&remote->remote_lock);
 
 	ret = kfifo_in(&remote->remote_fifo, &remote_data, sizeof(remote_data));
 	if (ret != sizeof(remote_data)) {
-		spin_unlock_irqrestore(&remote->remote_lock, flags);
+		// spin_unlock_irqrestore(&remote->remote_lock, flags);
+		mutex_unlock(&remote->remote_lock);
 		hid_err(wacom->hdev, "Can't queue Remote status event.\n");
 		return;
 	}
 
-	spin_unlock_irqrestore(&remote->remote_lock, flags);
+	// spin_unlock_irqrestore(&remote->remote_lock, flags);
+	mutex_unlock(&remote->remote_lock);
 
 	wacom_schedule_work(wacom_wac, WACOM_WORKER_REMOTE);
 }
-#endif
+// #endif
 
 static int int_dist(int x1, int y1, int x2, int y2)
 {
@@ -3559,7 +3568,8 @@ void wacom_wac_irq(struct wacom_wac *wacom_wac, size_t len)
 		sync = wacom_wireless_irq(wacom_wac, len);
 		break;
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// Exact USB 056a:0331 reaches this pinned Remote dispatch branch.
 	case REMOTE:
 		sync = false;
 		if (wacom_wac->data[0] == WACOM_REPORT_DEVICE_LIST)
@@ -3567,7 +3577,7 @@ void wacom_wac_irq(struct wacom_wac *wacom_wac, size_t len)
 		else
 			sync = wacom_remote_irq(wacom_wac, len);
 		break;
-#endif
+	// #endif
 
 	default:
 		sync = false;
@@ -5133,7 +5143,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x32B) },
 	{ USB_DEVICE_WACOM(0x32C) },
 	{ USB_DEVICE_WACOM(0x32F) },
+#endif
+	// The USB ExpressKey Remote receiver uses the upstream dynamic Remote path.
 	{ USB_DEVICE_WACOM(0x331) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x333) },
 	{ USB_DEVICE_WACOM(0x335) },
 	{ USB_DEVICE_WACOM(0x336) },

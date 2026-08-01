@@ -32,5 +32,6 @@ int evdev_client_erase_ff(struct evdev_client *client, int effect_id);
 int evdev_write(struct evdev *evdev, const struct port_input_event *events, size_t count);
 int evdev_upload_ff(struct evdev *evdev, struct ff_effect *effect, struct file *file);
 int evdev_erase_ff(struct evdev *evdev, int effect_id, struct file *file);
+void evdev_activate_input(struct input_dev *dev);
 void evdev_activate_hid(struct hid_device *hid);
 int evdev_init(void);

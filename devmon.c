@@ -7,6 +7,7 @@
 
 QueueSetHandle_t devmon_event_set;
 QueueSetHandle_t power_supply_event_set;
+static uint32_t power_supply_member_count;
 
 int devmon_init(void)
 {
@@ -52,7 +53,36 @@ int devmon_add_device(const struct port_input_dev *port_dev)
 	return 0;
 }
 
-void devmon_add_power_supply(QueueHandle_t event_queue)
+int devmon_add_power_supply(QueueHandle_t event_queue)
 {
+	uint32_t count = __atomic_load_n(&power_supply_member_count,
+					 __ATOMIC_ACQUIRE);
+
+	/*
+	 * Queue sets do not reject an empty member when their notification queue
+	 * is already fully reserved. Admit members explicitly so any later first
+	 * write still has exactly one notification slot.
+	 */
+	for (;;) {
+		if (count == PORT_POWER_SUPPLY_MAX)
+			return -ENOSPC;
+		if (__atomic_compare_exchange_n(&power_supply_member_count,
+						&count, count + 1u, false,
+						__ATOMIC_ACQ_REL,
+						__ATOMIC_ACQUIRE))
+			break;
+	}
+
+	/* power_supply_register() supplies one newly created empty queue. */
 	(void)xQueueAddToSet(event_queue, power_supply_event_set);
+	return 0;
+}
+
+void devmon_remove_power_supply(QueueHandle_t event_queue)
+{
+	/* The UI owns the empty member after consuming its terminal snapshot. */
+	(void)xQueueRemoveFromSet(event_queue, power_supply_event_set);
+	vQueueDelete(event_queue);
+	(void)__atomic_sub_fetch(&power_supply_member_count, 1u,
+				 __ATOMIC_RELEASE);
 }

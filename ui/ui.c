@@ -425,8 +425,7 @@ static void ui_draw_power_supply_events(void)
 
         /* TODO: Use the received snapshot to update the power-supply UI. */
         if (event.event_type == PORT_POWER_SUPPLY_REMOVED) {
-            (void)xQueueRemoveFromSet(event_queue, power_supply_event_set);
-            vQueueDelete(event_queue);
+            devmon_remove_power_supply(event_queue);
         }
     }
 }
