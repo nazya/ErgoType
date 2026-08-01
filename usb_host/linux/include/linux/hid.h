@@ -41,8 +41,10 @@
 #define HID_MAX_FIELDS 64
 // #define HID_MAX_USAGES 12288
 // KeyD discards generic Consumer events above usage 0x02A2. Limit parser usage
-// arrays to 675 entries; HID_MAX_USAGES also bounds Report Count.
+// arrays to 675 entries. Exact audited opaque fields retain Linux's separate
+// wire Report Count bound without materializing those values.
 #define HID_MAX_USAGES 675
+#define HID_MAX_REPORT_COUNT 12288
 #define HID_DEFAULT_NUM_COLLECTIONS 16
 // #define HID_COLLECTION_STACK_SIZE 4
 // Port grows the parser collection stack in larger chunks; open_collection() still grows on demand.
@@ -350,6 +352,9 @@
 #define HID_QUIRK_NOINVERT			BIT(21)
 #define HID_QUIRK_IGNORE_SPECIAL_DRIVER		BIT(22)
 #define HID_QUIRK_POWER_ON_AFTER_BACKLIGHT	BIT(23)
+// BIT(24) is unused upstream. Exact audited devices may retain a repeated
+// VARIABLE Feature's wire layout without materializing its opaque field.
+#define HID_QUIRK_SKIP_REPEATED_FEATURES	BIT(24)
 #define HID_QUIRK_FULLSPEED_INTERVAL		BIT(28)
 #define HID_QUIRK_NO_INIT_REPORTS		BIT(29)
 #define HID_QUIRK_NO_IGNORE			BIT(30)

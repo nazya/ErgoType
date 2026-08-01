@@ -5175,6 +5175,10 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x5000) },
 	{ USB_DEVICE_WACOM(0x5002) },
 #endif
+	// Stage the exact wired 0x0374 through the disabled upstream USB wildcard.
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x0374),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
 	// The exact wired 0x5048 profile reaches the upstream generic AES path.
 	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
 		     USB_VENDOR_ID_WACOM, 0x5048),

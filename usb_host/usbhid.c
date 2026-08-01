@@ -4277,6 +4277,17 @@ static int usbhid_parse(struct hid_device *hid)
 		transport_quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
 	}
 
+	/*
+	 * The captured 0x0374 descriptor contains repeated VARIABLE Feature
+	 * blobs which its pinned Wacom caller never accesses as parsed fields.
+	 * Keep their report IDs and wire sizes without materializing the blobs.
+	 */
+	if (hid->vendor == 0x056a && hid->product == 0x0374) {
+		quirks |= HID_QUIRK_SKIP_REPEATED_FEATURES;
+		hid->quirks |= HID_QUIRK_SKIP_REPEATED_FEATURES;
+		transport_quirks |= HID_QUIRK_SKIP_REPEATED_FEATURES;
+	}
+
 	/* Many keyboards and mice don't like to be polled for reports,
 	 * so we will always set the HID_QUIRK_NOGET flag for them. */
 	// if (interface->desc.bInterfaceSubClass == USB_INTERFACE_SUBCLASS_BOOT) {

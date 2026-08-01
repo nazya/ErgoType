@@ -421,8 +421,27 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	unsigned int offset;
 	unsigned int i;
 	unsigned int application;
+	bool skip_repeated_feature;
 
 	application = hid_lookup_collection(parser, HID_COLLECTION_APPLICATION);
+	skip_repeated_feature =
+		(parser->device->quirks & HID_QUIRK_SKIP_REPEATED_FEATURES) &&
+		report_type == HID_FEATURE_REPORT &&
+		(flags & (HID_MAIN_ITEM_CONSTANT | HID_MAIN_ITEM_VARIABLE)) ==
+			HID_MAIN_ITEM_VARIABLE &&
+		parser->local.usage_index &&
+		parser->global.report_count > parser->local.usage_index;
+
+	/*
+	 * HID_MAX_USAGES remains the materialized-field limit. Only an exact
+	 * audited opaque Feature may use the separate wire Report Count limit.
+	 */
+	if (parser->global.report_count > HID_MAX_USAGES &&
+	    !skip_repeated_feature) {
+		hid_err(parser->device, "invalid report_count %d\n",
+			parser->global.report_count);
+		return -1;
+	}
 
 	report = hid_register_report(parser->device, report_type,
 				     parser->global.report_id, application);
@@ -459,6 +478,8 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	}
 
 	if (!parser->local.usage_index) /* Ignore padding fields */
+		return 0;
+	if (skip_repeated_feature)
 		return 0;
 
 	usages = max_t(unsigned, parser->local.usage_index,
@@ -626,7 +647,13 @@ static int hid_parser_global(struct hid_parser *parser, struct hid_item *item)
 
 	case HID_GLOBAL_ITEM_TAG_REPORT_COUNT:
 		parser->global.report_count = item_udata(item);
-		if (parser->global.report_count > HID_MAX_USAGES) {
+		// if (parser->global.report_count > HID_MAX_USAGES) {
+		// Exact audited opaque Features use a separate wire-count bound;
+		// hid_add_field() still rejects every nonqualifying main item.
+		if (parser->global.report_count > HID_MAX_USAGES &&
+		    (!(parser->device->quirks &
+		       HID_QUIRK_SKIP_REPEATED_FEATURES) ||
+		     parser->global.report_count > HID_MAX_REPORT_COUNT)) {
 			hid_err(parser->device, "invalid report_count %d\n",
 					parser->global.report_count);
 			return -1;
