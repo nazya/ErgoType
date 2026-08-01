@@ -5193,6 +5193,18 @@ const struct hid_device_id wacom_ids[] = {
 	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
 		     USB_VENDOR_ID_WACOM, 0x03a6),
 	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	// Stage exact captured wired 0x03c0/0x03c4/0x03d0 Pen/Pad and Touch
+	// interfaces through the disabled upstream wildcard; empty auxiliaries may
+	// reject.
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03c0),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03c4),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
+	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
+		     USB_VENDOR_ID_WACOM, 0x03d0),
+	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
 	// Stage exact captured wired 0x03ec Pen/Touch and 0x03ed Pen interfaces
 	// through the disabled upstream wildcard; uncaptured auxiliaries may reject.
 	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,

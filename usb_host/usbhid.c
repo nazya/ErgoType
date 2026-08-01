@@ -4279,11 +4279,11 @@ static int usbhid_parse(struct hid_device *hid)
 
 	/*
 	 * The captured 0x0374 descriptor, 0x03a6/0x03ce/0x03ed/0x03f5/0x03f7/
-	 * 0x03f9 main tablet interfaces, and 0x03cb/0x03ec/0x03f0 Pen/Touch
-	 * interfaces contain repeated VARIABLE Feature blobs which their pinned
-	 * Wacom callers never access as parsed fields. Keep report IDs and wire
-	 * sizes without materializing the blobs. Uncaptured auxiliary interfaces do
-	 * not inherit this contract.
+	 * 0x03f9 main tablet interfaces, and 0x03c0/0x03c4/0x03cb/0x03d0/
+	 * 0x03ec/0x03f0 Pen/Touch interfaces contain repeated VARIABLE Feature
+	 * blobs which their pinned Wacom callers never access as parsed fields.
+	 * Keep report IDs and wire sizes without materializing the blobs. Uncaptured
+	 * auxiliary interfaces do not inherit this contract.
 	 */
 	if (hid->vendor == 0x056a &&
 	    (hid->product == 0x0374 ||
@@ -4291,6 +4291,10 @@ static int usbhid_parse(struct hid_device *hid)
 	      interface->desc.bInterfaceNumber == 0) ||
 	     (hid->product == 0x03ce &&
 	      interface->desc.bInterfaceNumber == 0) ||
+	     ((hid->product == 0x03c0 || hid->product == 0x03c4 ||
+	       hid->product == 0x03d0) &&
+	      (interface->desc.bInterfaceNumber == 0 ||
+	       interface->desc.bInterfaceNumber == 4)) ||
 	     (hid->product == 0x03cb &&
 	      (interface->desc.bInterfaceNumber == 0 ||
 	       interface->desc.bInterfaceNumber == 4)) ||
@@ -4311,14 +4315,18 @@ static int usbhid_parse(struct hid_device *hid)
 	}
 
 	/*
-	 * Captured 0x03a6 Pen and 0x03cb/0x03ec/0x03f0 Pen/Touch also carry
-	 * repeated VARIABLE Input blobs on vendor usages which the pinned
-	 * HID_GENERIC Wacom path never maps. Keep their report IDs, wire sizes and
-	 * raw ingress without parsed fields.
+	 * Captured 0x03a6 Pen and 0x03c0/0x03c4/0x03cb/0x03d0/0x03ec/0x03f0
+	 * Pen/Touch also carry repeated VARIABLE Input blobs on vendor usages which
+	 * the pinned HID_GENERIC Wacom path never maps. Keep their report IDs, wire
+	 * sizes and raw ingress without parsed fields.
 	 */
 	if (hid->vendor == 0x056a &&
 	    ((hid->product == 0x03a6 &&
 	      interface->desc.bInterfaceNumber == 0) ||
+	     ((hid->product == 0x03c0 || hid->product == 0x03c4 ||
+	       hid->product == 0x03d0) &&
+	      (interface->desc.bInterfaceNumber == 0 ||
+	       interface->desc.bInterfaceNumber == 4)) ||
 	     (hid->product == 0x03cb &&
 	      (interface->desc.bInterfaceNumber == 0 ||
 	       interface->desc.bInterfaceNumber == 4)) ||
