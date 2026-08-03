@@ -50,6 +50,10 @@
 #define configMINIMAL_STACK_SIZE                ( configSTACK_DEPTH_TYPE ) 384
 #define configUSE_16_BIT_TICKS                  0
 
+/* Test-only branch: cross the real 32-bit scheduler tick wrap after 12 s. */
+#define HID_WORKQUEUE_DIAGNOSTIC                1
+#define configINITIAL_TICK_COUNT                ( ( TickType_t ) ( UINT32_MAX - 12000u ) )
+
 #define configIDLE_SHOULD_YIELD                 1
 
 /* Synchronization Related */

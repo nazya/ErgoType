@@ -707,6 +707,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_async.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_transport_sync.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_workqueue_diagnostic.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_devres.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_kfifo.c
