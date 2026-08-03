@@ -9,8 +9,8 @@
 #include <linux/input-event-codes.h>
 
 #define MAX_DEVICES 8
-#define PORT_POWER_SUPPLY_MAX 4
-#define POWER_SUPPLY_EVENT_SET_LEN PORT_POWER_SUPPLY_MAX
+/* Bound all live and retiring length-one power-supply QueueSet members. */
+#define PORT_POWER_SUPPLY_MAX 8
 #define DEVICE_EVENT_QUEUE_LEN 16
 /*
  * Standard hid-input MT buffering uses 60 values plus two input-core framing
@@ -146,4 +146,5 @@ extern QueueSetHandle_t devmon_event_set;
 extern QueueSetHandle_t power_supply_event_set;
 int devmon_init(void);
 int devmon_add_device(const struct port_input_dev *port_dev);
-void devmon_add_power_supply(QueueHandle_t event_queue);
+int devmon_add_power_supply(QueueHandle_t event_queue);
+void devmon_remove_power_supply(QueueHandle_t event_queue);

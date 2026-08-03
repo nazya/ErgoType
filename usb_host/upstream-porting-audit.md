@@ -130,18 +130,19 @@ extra-input regression remains pending.
 
 ## Current USB Wacom Contract Result
 
-The active allowlist contains 19 USB Wacom products: PTH-650 `056a:0027`,
+The active allowlist contains 20 USB Wacom products: PTH-650 `056a:0027`,
 PTK-450 `056a:0029`, receiver `056a:0084`, CTH-470 `056a:00de`, CTL-472
 `056a:037a`, CTL-672 `056a:037b`, Yoga 260 AES `056a:5048`, external wired
 Intuos `056a:0302/0303/030e/0323`, Intuos Pro `056a:0314/0315/0317`, Intuos 2
-`056a:033b/033c/033d/033e`, and wired Cintiq 13HD `056a:0304`. It reaches the
+`056a:033b/033c/033d/033e`, wired Cintiq 13HD `056a:0304`, and ExpressKey
+Remote `056a:0331`. It reaches the
 pinned Pen/Pad/Touch,
 ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES battery,
 idle-proximity timer, and receiver pair/unpair plus dynamic sibling-rebind
 paths applicable to those exact profiles. Receiver lookup can select any child
 PID already in this table; hardware receiver coverage is limited to child
-`056a:0027`. Bluetooth, ExpressKey Remote, bootloader, I2C, PCI, and product
-IDs outside the 19-entry table remain outside this checkpoint.
+`056a:0027`. Bluetooth, bootloader, I2C, PCI, and product IDs outside the
+20-entry table remain outside this checkpoint.
 
 Exact `056a:0084` and `056a:5048` descriptors plus the captured
 `056a:0317` PTH-851 family descriptor contain large VARIABLE Feature reports
@@ -204,6 +205,23 @@ checked `kfifo_in()` result, `GFP_ATOMIC` flush allocation, and
 `__free(kfree)` buffer lifetime. The compatibility layer already provides the
 linked record-FIFO, allocation, scoped-cleanup, and reduced warning contracts.
 No local queue state or wrapper was added.
+
+Exact USB ExpressKey Remote `056a:0331` now reaches the pinned Remote runtime
+without enabling the broad cross-bus Wacom gate. The unavailable Linux
+mode/unpair sysfs declarations remain compile-gated at their original source
+region, while the active initialization, FIFO, work, input, battery, and
+teardown functions preserve their upstream order. Report ingress and lifecycle
+work are task callbacks in this port, so the upstream spinlock regions use one
+heap-backed PI mutex. Remote work runs on the existing lifecycle owner because
+it creates and releases input, devres, and power objects.
+
+Each late serial-keyed input uses port glue to prepare, open, and publish its
+automatic evdev client after `input_register_device()`. The report-visible
+serial and registered state are published under the Remote mutex before input
+can be consumed or released. Firmware's modulo-u32 millisecond clock uses the
+existing battery-connected state to distinguish a valid activity timestamp of
+zero; unsigned elapsed subtraction remains wrap-safe for the bounded 21-second
+Remote expiry interval.
 
 The CTH descriptor contains two padding-only reports whose ordering pass has
 zero fields. Pinned `hid_report_process_ordering()` consequently calls
@@ -298,6 +316,21 @@ insert/flush code. The current public USB transport also gives the callback no
 demonstrated way to deliver a report larger than the allocated report buffer. The
 empty/oversized guard, checked insertion, atomic allocation, and scoped cleanup
 therefore remain source-audited limitations, not inferred hardware coverage.
+
+The exact ExpressKey Remote host
+`c08d4d9fe58f3861137a0671fb83416c2152db3ad5b50ccedf150d295a69cc17`
+and emulator
+`4ce52ae65cb1f280c5f19079f534c898c7652e1138ff6b184869e8e4e4bf9909`
+completed `f1, f2, f3, f4, f10` with no `f12`, host `ERR`/`WARN`, OOM, or
+stale child. The log contained 26 matching Remote Pad additions/removals with a
+five-child peak. Functional replacement, duplicate-slot and five-slot paths,
+the real 22-second expiry interval, immediate and burst disconnect pressure,
+and final reconnect all completed. Four alert-attached snapshots were exactly
+48,288 bytes free and three alert removals were exactly 60,712 bytes free;
+minimum-ever free heap was 27,744 bytes. Every task watermark remained
+nonzero. Exact power-snapshot values/order, a host-observable queued-versus-
+running instant, FIFO-full, and the ninth power-supply admission remain outside
+this verdict.
 
 The focused external wired Intuos host
 `1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed`
@@ -404,7 +437,9 @@ support:
   that cleanup through recovered heap plateaus, but task/timer startup failure
   was not injected and the host startup path does not establish a separate
   power-consumer readiness contract. Exact snapshot fields also remain
-  unverified without a production consumer.
+  unverified without a production consumer. The explicit eight-member
+  admission bound prevents FreeRTOS QueueSet over-reservation, but its ninth-
+  member failure branch remains source-audited.
 - Runtime dynamic quirks, public input grab, second input clients, generic
   Linux logging, `mod_delayed_work()`, and `INIT_DEFERRABLE_WORK()` remain
   compile-gated or dormant. Ordinary delayed work is active for Wacom
@@ -530,7 +565,7 @@ sources so their enablement contract remains visible.
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
-| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 19-ID USB allowlist: base `056a:0027/0029/0084/00de/037a/037b/5048` plus external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver battery, timer, and receiver rebind paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, Remote, bootloader, I2C, PCI, and all other product IDs remain gated; the driver descriptor is immutable. |
+| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 20-ID USB allowlist: base `056a:0027/0029/0084/00de/037a/037b/5048`, ExpressKey Remote `0331`, and external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver/Remote battery, timer, receiver rebind, and dynamic Remote paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and all other product IDs remain gated; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. `usbhid.c` scopes explicit-feature-usage compaction to Wacom `056a:0084/0314/0315/0317/5048`; HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
 
@@ -701,7 +736,13 @@ it contains no callback, logging, allocation, or wait.
   QueueSet consumed by the UI task, not to the ordinary devmon/KeyD path. The
   UI currently discards `ADDED`/`CHANGED` values and
   removes the queue after terminal `REMOVED`; presentation is deliberately
-  deferred. Generic HID battery strength is active through the same reduced
+  deferred. The fixed QueueSet admits at most eight live or retiring members;
+  a ninth registration returns `-ENOSPC` and emits
+  `ERR: POWER_SUPPLY_LIMIT` instead of over-reserving FreeRTOS's notification
+  queue. HID++ keeps a failed registration result local, frees its unpublished
+  property copy, and publishes `battery->ps` only after success, so concurrent
+  battery users never observe an `ERR_PTR` and a later receiver-child event may
+  retry. Generic HID battery strength is active through the same reduced
   power-supply boundary; HID++ sysfs, FF, broad vendor-key classes, Bluetooth,
   and legacy 27 MHz matching remain compiled out of reach. M705/M560 wheel
   handling, T650 WTP raw XY, K400, K750 solar,

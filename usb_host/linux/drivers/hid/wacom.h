@@ -146,7 +146,11 @@ struct wacom_battery {
 };
 
 struct wacom_remote {
-	spinlock_t remote_lock;
+	// spinlock_t remote_lock;
+	// Firmware report and lifecycle callbacks run in task context. A blocking
+	// PI mutex preserves the upstream critical regions without dropping a
+	// report when the lifecycle task owns the lock.
+	struct mutex remote_lock;
 	struct kfifo remote_fifo;
 	struct kobject *remote_dir;
 	struct {
@@ -207,7 +211,9 @@ static inline void wacom_schedule_work(struct wacom_wac *wacom_wac,
 			schedule_work(&wacom->battery_work);
 		break;
 	case WACOM_WORKER_REMOTE:
-		schedule_work(&wacom->remote_work);
+		// schedule_work(&wacom->remote_work);
+		// Remote pair/unpair mutates input and battery devres on lifecycle.
+		usbhid_lifecycle_schedule_work(&wacom->remote_work);
 		break;
 	case WACOM_WORKER_MODE_CHANGE:
 		schedule_work(&wacom->mode_change_work);

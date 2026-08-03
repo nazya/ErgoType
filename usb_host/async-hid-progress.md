@@ -435,7 +435,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   seven hardware-tested base IDs `056a:0027/0029/0084/00de/037a/037b/5048`
   plus external wired Intuos `0302/0303/030e/0323`, Intuos 2
   `033b/033c/033d/033e`, Intuos Pro `0314/0315/0317`, and wired Cintiq 13HD
-  `0304`. The active upstream paths retain Pen/Pad/Touch parsing,
+  `0304`, plus ExpressKey Remote `0331`. The active upstream paths retain Pen/Pad/Touch parsing,
   ExpressKeys, Touch Ring, LED control, pen-touch arbitration, ordinary/AES
   battery, delayed initialization, idle proximity, and receiver
   pair/unpair/re-pair with dynamic sibling rebind. Rebind clears the
@@ -447,7 +447,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   `oom=0`, and terminal `f15, f10`. Its family captures verify exact-ID
   selection and reused parser-family/mode/input smoke, but are not byte-exact
   retail descriptors for every model. Bluetooth,
-  ExpressKey Remote, bootloader, I2C, PCI, and every other product ID remain
+  bootloader, I2C, PCI, and every other product ID remain
   gated. Receiver lookup can resolve any child PID already in the selected
   table; hardware receiver coverage is still limited to child `056a:0027`.
   The focused `0304` fixture also passed delayed mode exchange, Pen and
@@ -980,6 +980,21 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   work 346, timer 348, lifecycle 85, and report 854 words. The fixture is
   protocol-equivalent rather than a retail capture; exact numeric X/Y values
   are not visible in production logging.
+- 2026-08-03: exact USB ExpressKey Remote `056a:0331` was exercised with host
+  UF2 SHA256
+  `c08d4d9fe58f3861137a0671fb83416c2152db3ad5b50ccedf150d295a69cc17`
+  and emulator UF2 SHA256
+  `4ce52ae65cb1f280c5f19079f534c898c7652e1138ff6b184869e8e4e4bf9909`.
+  The focused sequence completed `f1, f2, f3, f4, f10` with 26 balanced
+  dynamic Remote Pad lifetimes and a five-child peak. It covered serial
+  duplicate/move/replacement, 18 button bits, ring/mode input, five slots,
+  22-second expiry timing, FIFO/self-requeue pressure, immediate and burst
+  disconnects, and final reconnect. All 63 heap snapshots had `oom=0`;
+  minimum-ever free heap was 27,744 bytes, the four alert-attached plateaus
+  were 48,288 bytes, and the three alert-removal plateaus were 60,712 bytes.
+  Minimum watermarks were TinyUSB 265, KeyD 658, async 389, work 293, timer
+  348, lifecycle 180, and report 850 words. Exact power-snapshot ordering,
+  FIFO-full, and an exact host work state remain outside the verdict.
 
 ## Current Driver Boundary
 
@@ -1001,7 +1016,9 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   a reduced `power_supply` boundary through one coalescing length-one value
   queue per supply. The queues belong to a separate devmon power QueueSet; the
   UI task reads and currently ignores detached `ADDED`/`CHANGED` snapshots,
-  then removes the personal queue after terminal `REMOVED`. Power events do
+  then removes the personal queue after terminal `REMOVED`. The QueueSet has
+  eight explicitly admitted members; a ninth registration returns `-ENOSPC`
+  and logs `ERR: POWER_SUPPLY_LIMIT`. Power events do
   not enter KeyD or the ordinary devmon queue, and UI presentation is deferred.
 - The Microsoft stage selects USB
   `045e:0048/009d/00b4/00db/00dc/00e3/00f9/0713/071d/0730/0732/0750/076c/

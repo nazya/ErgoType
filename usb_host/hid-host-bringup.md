@@ -190,7 +190,7 @@ fixture deterministically covers initial sibling work while pending but cannot
 externally hold the short pre-PID callback after workqueue promotion or during
 execution. Receiver lookup can select any child PID in the current exact-ID
 table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
-ExpressKey Remote, bootloader, I2C, PCI, and product IDs outside that table
+bootloader, I2C, PCI, and product IDs outside that table
 remain excluded.
 
 A focused receiver lifecycle pair passed on 2026-08-03. Its first phase used a
@@ -207,6 +207,18 @@ without `f12`, a host `ERR`, an input-drop marker, or OOM; all logical-unpair
 snapshots stabilized at 40,216 B after the first 16-byte difference. The
 shared cleanup label's other post-start callers and the ToolSerial FIFO
 hardening remain source-audited rather than hardware-injected.
+
+Exact USB ExpressKey Remote `056a:0331` subsequently passed its focused
+hardware run. The pinned Remote path dynamically created and removed 26 Pad
+inputs with a peak of five live serial slots, exercised all 18 upstream button
+bits, ring/mode reports, replacement and duplicate-slot transitions, the real
+22-second battery-expiry interval, FIFO/work pressure, physical disconnect,
+and reconnect. Marker order was `f1, f2, f3, f4, f10`; no `f12`, host
+`ERR`/`WARN`, OOM, or stale child appeared. Four alert-attached heap snapshots
+were exactly 48,288 bytes free and three alert removals were exactly 60,712
+bytes free. Exact power values/order, FIFO-full, and an exact queued/running
+work instant remain outside the observable verdict. Linux Remote mode/unpair
+sysfs is not implemented.
 
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID

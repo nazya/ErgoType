@@ -51,6 +51,13 @@ The active implementation now has these properties:
   callback before devres can release its owner.
   Ordinary and AES battery callbacks use nonblocking parser-lock retry because
   firmware power-supply unregister frees directly.
+  Exact USB ExpressKey Remote `056a:0331` uses the same ordinary-work contract
+  on the lifecycle owner for serial-keyed input, battery, and devres mutation.
+  Its report-side FIFO critical region uses one PI mutex, and synchronous
+  removal cancels the work before the Remote resource graph is released. The
+  focused hardware run exercised FIFO/self-requeue pressure, immediate and
+  burst physical disconnects, and clean reconnect; a public device cannot
+  identify the exact queued-versus-running instant.
   Across the seven then-active USB IDs, separate wired and AES/receiver
   hardware runs collectively covered disconnect before a delayed deadline,
   held mode/LED/rebind callbacks, active-touch teardown, pair/unpair/re-pair,
@@ -378,6 +385,10 @@ After resolution multiplier works:
      detached-snapshot boundary documented in the current-status notes
    - the old enablement blocker was GET_REPORT continuation support; the
      current async-backed request path has since removed that blocker
+   - the reduced devmon QueueSet admits eight live or retiring supply queues;
+     the ninth registration returns `-ENOSPC` with
+     `ERR: POWER_SUPPLY_LIMIT` rather than silently over-reserving the fixed
+     FreeRTOS notification queue
 
 ## Nonblocking Rules
 

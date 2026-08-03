@@ -1965,11 +1965,20 @@ DEVICE_EKR_ATTR_GROUP(1);
 DEVICE_EKR_ATTR_GROUP(2);
 DEVICE_EKR_ATTR_GROUP(3);
 DEVICE_EKR_ATTR_GROUP(4);
+// Upstream closes this CONFIG_HID_WACOM_ALL_DEVICES gate after
+// wacom_remote_work(). Firmware keeps only the unavailable Linux sysfs
+// declarations gated; exact USB 056a:0331 retains the runtime below.
+#endif
 
 static int wacom_remote_create_attr_group(struct wacom *wacom, __u32 serial,
 					  int index)
 {
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	int error = 0;
+#else
+	// int error = 0;
+	// Firmware has no Remote sysfs registration below, so no result is stored.
+#endif
 	struct wacom_remote *remote = wacom->remote;
 
 	remote->remotes[index].group.name = devm_kasprintf(&wacom->hdev->dev,
@@ -1978,6 +1987,7 @@ static int wacom_remote_create_attr_group(struct wacom *wacom, __u32 serial,
 	if (!remote->remotes[index].group.name)
 		return -ENOMEM;
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	error = __wacom_devm_sysfs_create_group(wacom, remote->remote_dir,
 						&remote->remotes[index].group);
 	if (error) {
@@ -1986,10 +1996,17 @@ static int wacom_remote_create_attr_group(struct wacom *wacom, __u32 serial,
 			"cannot create sysfs group err: %d\n", error);
 		return error;
 	}
+#else
+	// error = __wacom_devm_sysfs_create_group(wacom, remote->remote_dir,
+	// 					&remote->remotes[index].group);
+	// Firmware has no Wacom Remote sysfs hierarchy. Keep the decimal serial
+	// allocation above because upstream also uses group.name as input->uniq.
+#endif
 
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 static int wacom_cmd_unpair_remote(struct wacom *wacom, unsigned char selector)
 {
 	const size_t buf_size = 2;
@@ -2045,6 +2062,7 @@ static const struct attribute *remote_unpair_attrs[] = {
 	&unpair_remote_attr.attr,
 	NULL
 };
+#endif
 
 static void wacom_remotes_destroy(void *data)
 {
@@ -2054,8 +2072,15 @@ static void wacom_remotes_destroy(void *data)
 	if (!remote)
 		return;
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	kobject_put(remote->remote_dir);
+#else
+	// kobject_put(remote->remote_dir);
+	// Firmware does not create the Linux Wacom Remote kobject hierarchy.
+#endif
 	kfifo_free(&remote->remote_fifo);
+	// Firmware's spinlock replacement owns a heap-backed mutex resource.
+	mutex_destroy(&remote->remote_lock);
 	wacom->remote = NULL;
 }
 
@@ -2075,16 +2100,23 @@ static int wacom_initialize_remotes(struct wacom *wacom)
 
 	wacom->remote = remote;
 
-	spin_lock_init(&remote->remote_lock);
+	// spin_lock_init(&remote->remote_lock);
+	// The port replacement is heap-backed and can fail, unlike Linux's
+	// embedded spinlock.
+	mutex_init(&remote->remote_lock);
+	if (!mutex_initialized(&remote->remote_lock))
+		return -ENOMEM;
 
 	error = kfifo_alloc(&remote->remote_fifo,
 			5 * sizeof(struct wacom_remote_work_data),
 			GFP_KERNEL);
 	if (error) {
 		hid_err(wacom->hdev, "failed allocating remote_fifo\n");
+		mutex_destroy(&remote->remote_lock);
 		return -ENOMEM;
 	}
 
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	remote->remotes[0].group = remote0_serial_group;
 	remote->remotes[1].group = remote1_serial_group;
 	remote->remotes[2].group = remote2_serial_group;
@@ -2095,6 +2127,7 @@ static int wacom_initialize_remotes(struct wacom *wacom)
 						    &wacom->hdev->dev.kobj);
 	if (!remote->remote_dir) {
 		kfifo_free(&remote->remote_fifo);
+		mutex_destroy(&remote->remote_lock);
 		return -ENOMEM;
 	}
 
@@ -2105,8 +2138,21 @@ static int wacom_initialize_remotes(struct wacom *wacom)
 			"cannot create sysfs group err: %d\n", error);
 		kfifo_free(&remote->remote_fifo);
 		kobject_put(remote->remote_dir);
+		mutex_destroy(&remote->remote_lock);
 		return error;
 	}
+#else
+	// remote->remotes[0].group = remote0_serial_group;
+	// remote->remotes[1].group = remote1_serial_group;
+	// remote->remotes[2].group = remote2_serial_group;
+	// remote->remotes[3].group = remote3_serial_group;
+	// remote->remotes[4].group = remote4_serial_group;
+	// remote->remote_dir = kobject_create_and_add("wacom_remote",
+	// 						    &wacom->hdev->dev.kobj);
+	// error = sysfs_create_files(remote->remote_dir, remote_unpair_attrs);
+	// Firmware retains Remote input and battery lifetime but has no sysfs
+	// remote_mode or unpair_remote control surface.
+#endif
 
 	for (i = 0; i < WACOM_MAX_REMOTES; i++) {
 		wacom->led.groups[i].select = WACOM_STATUS_UNKNOWN;
@@ -2120,7 +2166,6 @@ static int wacom_initialize_remotes(struct wacom *wacom)
 
 	return 0;
 }
-#endif
 
 static struct input_dev *wacom_allocate_input(struct wacom *wacom)
 {
@@ -2535,16 +2580,19 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 		if (error)
 			goto fail_hw_stop;
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+		// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+		// The exact USB 056a:0331 row reaches the upstream Remote path
+		// without enabling the broad cross-bus Wacom configuration.
 		error = wacom_initialize_remotes(wacom);
 		if (error)
 			goto fail_hw_stop;
-#else
+		// #else
 		// error = wacom_initialize_remotes(wacom);
-		// The USB-only allowlist does not include ExpressKey Remote.
+		// Exact USB Remote keeps this upstream call active while the broad
+		// cross-bus configuration remains disabled.
 		// if (error)
 		// 	goto fail_hw_stop;
-#endif
+		// #endif
 	}
 
 	if (!wireless) {
@@ -2748,7 +2796,8 @@ unlock:
 	return;
 }
 
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// Exact USB 056a:0331 makes the upstream Remote lifecycle reachable.
 static void wacom_remote_destroy_battery(struct wacom *wacom, int index)
 {
 	struct wacom_remote *remote = wacom->remote;
@@ -2758,22 +2807,35 @@ static void wacom_remote_destroy_battery(struct wacom *wacom, int index)
 				     &remote->remotes[index].battery.bat_desc);
 		remote->remotes[index].battery.battery = NULL;
 		remote->remotes[index].active_time = 0;
+		// Firmware uses bat_connected as the valid-timestamp bit because a
+		// modulo-u32 millisecond tick of zero is a real activity time.
+		remote->remotes[index].battery.bat_connected = 0;
 	}
 }
 
 static void wacom_remote_destroy_one(struct wacom *wacom, unsigned int index)
 {
 	struct wacom_remote *remote = wacom->remote;
-	u32 serial = remote->remotes[index].serial;
+	// u32 serial = remote->remotes[index].serial;
+	// Firmware reads the report-visible serial under the Remote mutex.
+	u32 serial;
 	int i;
-	unsigned long flags;
+	// unsigned long flags;
+
+	mutex_lock(&remote->remote_lock);
+	serial = remote->remotes[index].serial;
+	mutex_unlock(&remote->remote_lock);
 
 	for (i = 0; i < WACOM_MAX_REMOTES; i++) {
+		// if (remote->remotes[i].serial == serial) {
+		// Firmware publishes serial state through the same mutex used by
+		// the report-side reader.
+		mutex_lock(&remote->remote_lock);
 		if (remote->remotes[i].serial == serial) {
-
-			spin_lock_irqsave(&remote->remote_lock, flags);
+			// spin_lock_irqsave(&remote->remote_lock, flags);
 			remote->remotes[i].registered = false;
-			spin_unlock_irqrestore(&remote->remote_lock, flags);
+			// spin_unlock_irqrestore(&remote->remote_lock, flags);
+			mutex_unlock(&remote->remote_lock);
 
 			wacom_remote_destroy_battery(wacom, i);
 
@@ -2781,9 +2843,17 @@ static void wacom_remote_destroy_one(struct wacom *wacom, unsigned int index)
 				devres_release_group(&wacom->hdev->dev,
 						     &remote->remotes[i]);
 
+			mutex_lock(&remote->remote_lock);
 			remote->remotes[i].serial = 0;
 			remote->remotes[i].group.name = NULL;
 			wacom->led.groups[i].select = WACOM_STATUS_UNKNOWN;
+			// A reused serial slot must not inherit a prior Remote activity
+			// sample when no battery object had been registered.
+			remote->remotes[i].active_time = 0;
+			remote->remotes[i].battery.bat_connected = 0;
+			mutex_unlock(&remote->remote_lock);
+		} else {
+			mutex_unlock(&remote->remote_lock);
 		}
 	}
 }
@@ -2804,7 +2874,10 @@ static int wacom_remote_create_one(struct wacom *wacom, u32 serial,
 	}
 
 	if (k < WACOM_MAX_REMOTES) {
+		// Firmware publishes serial to the report task under remote_lock.
+		mutex_lock(&remote->remote_lock);
 		remote->remotes[index].serial = serial;
+		mutex_unlock(&remote->remote_lock);
 		return 0;
 	}
 
@@ -2833,7 +2906,10 @@ static int wacom_remote_create_one(struct wacom *wacom, u32 serial,
 	if (error)
 		goto fail;
 
+	// Firmware publishes serial to the report task under remote_lock.
+	mutex_lock(&remote->remote_lock);
 	remote->remotes[index].serial = serial;
+	mutex_unlock(&remote->remote_lock);
 
 	error = input_register_device(remote->remotes[index].input);
 	if (error)
@@ -2845,14 +2921,24 @@ static int wacom_remote_create_one(struct wacom *wacom, u32 serial,
 	if (error)
 		goto fail;
 
-	remote->remotes[index].registered = true;
-
+	// remote->remotes[index].registered = true;
+	// Firmware must prepare/open/publish its automatic evdev client before a
+	// report can enter the late child.
 	devres_close_group(dev, &remote->remotes[index]);
+	// Linux attaches its evdev handler synchronously in input_register_device().
+	// Firmware exposes this late child only after its LED/devres graph is final.
+	evdev_activate_input(remote->remotes[index].input);
+	mutex_lock(&remote->remote_lock);
+	remote->remotes[index].registered = true;
+	mutex_unlock(&remote->remote_lock);
 	return 0;
 
 fail:
 	devres_release_group(dev, &remote->remotes[index]);
+	// Firmware withdraws the report-visible serial under the same mutex.
+	mutex_lock(&remote->remote_lock);
 	remote->remotes[index].serial = 0;
+	mutex_unlock(&remote->remote_lock);
 	return error;
 }
 
@@ -2867,7 +2953,10 @@ static int wacom_remote_attach_battery(struct wacom *wacom, int index)
 	if (remote->remotes[index].battery.battery)
 		return 0;
 
-	if (!remote->remotes[index].active_time)
+	// if (!remote->remotes[index].active_time)
+	// Firmware tick zero is valid; the report's existing connected state is
+	// the equivalent activity-valid predicate.
+	if (!remote->remotes[index].battery.bat_connected)
 		return 0;
 
 	if (wacom->led.groups[index].select == WACOM_STATUS_UNKNOWN)
@@ -2885,14 +2974,18 @@ static void wacom_remote_work(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, remote_work);
 	struct wacom_remote *remote = wacom->remote;
-	ktime_t kt = ktime_get();
+	// ktime_t kt = ktime_get();
+	// Firmware samples its unsigned clock while excluding a newer input report.
 	struct wacom_remote_work_data remote_work_data;
-	unsigned long flags;
+	// unsigned long flags;
 	unsigned int count;
 	u32 work_serial;
 	int i;
 
-	spin_lock_irqsave(&remote->remote_lock, flags);
+	// spin_lock_irqsave(&remote->remote_lock, flags);
+	// Report ingress and lifecycle work are tasks in this port. Retain the
+	// upstream FIFO critical region with the Remote PI mutex.
+	mutex_lock(&remote->remote_lock);
 
 	count = kfifo_out(&remote->remote_fifo, &remote_work_data,
 			  sizeof(remote_work_data));
@@ -2900,39 +2993,65 @@ static void wacom_remote_work(struct work_struct *work)
 	if (count != sizeof(remote_work_data)) {
 		hid_err(wacom->hdev,
 			"workitem triggered without status available\n");
-		spin_unlock_irqrestore(&remote->remote_lock, flags);
+		// spin_unlock_irqrestore(&remote->remote_lock, flags);
+		mutex_unlock(&remote->remote_lock);
 		return;
 	}
 
 	if (!kfifo_is_empty(&remote->remote_fifo))
 		wacom_schedule_work(&wacom->wacom_wac, WACOM_WORKER_REMOTE);
 
-	spin_unlock_irqrestore(&remote->remote_lock, flags);
+	// spin_unlock_irqrestore(&remote->remote_lock, flags);
+	mutex_unlock(&remote->remote_lock);
 
 	for (i = 0; i < WACOM_MAX_REMOTES; i++) {
+		u32 current_serial;
+
 		work_serial = remote_work_data.remote[i].serial;
 		if (work_serial) {
+			ktime_t kt;
 
-			if (kt - remote->remotes[i].active_time > WACOM_REMOTE_BATTERY_TIMEOUT
-			    && remote->remotes[i].active_time != 0)
+			mutex_lock(&remote->remote_lock);
+			kt = ktime_get();
+
+			// if (kt - remote->remotes[i].active_time >
+			//     WACOM_REMOTE_BATTERY_TIMEOUT &&
+			//     remote->remotes[i].active_time != 0)
+			// Firmware ktime_t is modulo-u32 milliseconds. Unsigned elapsed
+			// remains wrap-safe for this bounded 21-second interval, while
+			// bat_connected keeps tick zero distinguishable from no activity.
+			if ((ktime_t)(kt - remote->remotes[i].active_time) >
+			    (ktime_t)(WACOM_REMOTE_BATTERY_TIMEOUT / 1000000ll) &&
+			    remote->remotes[i].battery.bat_connected)
 				wacom_remote_destroy_battery(wacom, i);
 
 			if (remote->remotes[i].serial == work_serial) {
 				wacom_remote_attach_battery(wacom, i);
+				mutex_unlock(&remote->remote_lock);
 				continue;
 			}
+			current_serial = remote->remotes[i].serial;
+			mutex_unlock(&remote->remote_lock);
 
-			if (remote->remotes[i].serial)
+			// if (remote->remotes[i].serial)
+			// Firmware uses the mutex-protected snapshot taken above.
+			if (current_serial)
 				wacom_remote_destroy_one(wacom, i);
 
 			wacom_remote_create_one(wacom, work_serial, i);
 
-		} else if (remote->remotes[i].serial) {
-			wacom_remote_destroy_one(wacom, i);
+		// } else if (remote->remotes[i].serial) {
+		} else {
+			mutex_lock(&remote->remote_lock);
+			current_serial = remote->remotes[i].serial;
+			mutex_unlock(&remote->remote_lock);
+			// Firmware tests the mutex-protected snapshot outside the lock.
+			if (current_serial)
+				wacom_remote_destroy_one(wacom, i);
 		}
 	}
 }
-#endif
+// #endif
 
 static void wacom_mode_change_work(struct work_struct *work)
 {
@@ -3035,10 +3154,10 @@ static int wacom_probe(struct hid_device *hdev,
 	INIT_DELAYED_WORK(&wacom->aes_battery_work, wacom_aes_battery_handler);
 	INIT_WORK(&wacom->wireless_work, wacom_wireless_work);
 	INIT_WORK(&wacom->battery_work, wacom_battery_work);
-	// INIT_WORK(&wacom->remote_work, wacom_remote_work);
+	INIT_WORK(&wacom->remote_work, wacom_remote_work);
 	// INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
 	timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
-	// Remote and mode-change callbacks remain outside the USB allowlist.
+	// Mode-change callbacks remain outside the exact USB allowlist.
 
 	/* ask for the report descriptor to be loaded by HID */
 	error = hid_parse(hdev);
@@ -3091,9 +3210,11 @@ static void wacom_remove(struct hid_device *hdev)
 	else
 		cancel_work_sync(&wacom->battery_work);
 	// cancel_work_sync(&wacom->remote_work);
+	// Remote input/devres mutations run on this firmware lifecycle owner.
+	usbhid_lifecycle_cancel_work(&wacom->remote_work);
 	// cancel_work_sync(&wacom->mode_change_work);
 	timer_delete_sync(&wacom->idleprox_timer);
-	// Remote and mode-change work are not initialized by the active USB profiles.
+	// Mode-change work is not initialized by the active USB profiles.
 	if (hdev->bus == BUS_BLUETOOTH)
 		device_remove_file(&hdev->dev, &dev_attr_speed);
 

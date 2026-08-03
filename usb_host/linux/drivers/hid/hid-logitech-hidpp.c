@@ -4226,18 +4226,27 @@ static int hidpp_initialize_battery(struct hidpp_device *hidpp)
 	desc->type = POWER_SUPPLY_TYPE_BATTERY;
 	desc->use_for_apm = 0;
 
-	battery->ps = devm_power_supply_register(&hidpp->hid_dev->dev,
-						 &battery->desc,
-						 &cfg);
-	if (IS_ERR(battery->ps)) {
-		ret = PTR_ERR(battery->ps);
+	// battery->ps = devm_power_supply_register(&hidpp->hid_dev->dev,
+	// 					 &battery->desc,
+	// 					 &cfg);
+	// Firmware HID++ reports run concurrently and treat every non-NULL ps as
+	// publishable, so an ERR_PTR must remain private to this initialization.
+	struct power_supply *ps =
+		devm_power_supply_register(&hidpp->hid_dev->dev,
+					   &battery->desc, &cfg);
+	// if (IS_ERR(battery->ps))
+	// 	return PTR_ERR(battery->ps);
+	// Firmware cannot publish Linux ERR_PTR through concurrent battery users.
+	if (IS_ERR(ps)) {
+		ret = PTR_ERR(ps);
 		/*
-		 * The upstream connect worker treats non-NULL as registered.
-		 * Firmware preserves that predicate after an allocation failure.
+		 * A later receiver-child connect event can retry. Direct USB runs this
+		 * work once. In both cases release the unpublished property copy now.
 		 */
-		battery->ps = NULL;
+		devm_kfree(&hidpp->hid_dev->dev, battery_props);
 		return ret;
 	}
+	battery->ps = ps;
 
 	power_supply_powers(battery->ps, &hidpp->hid_dev->dev);
 

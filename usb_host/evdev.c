@@ -241,6 +241,50 @@ static struct input_handler evdev_handler = {
 	.id_table	= evdev_ids,
 };
 
+/*
+ * Upstream Linux has no equivalent: evdev becomes externally usable through
+ * a later file open. Firmware auto-opens clients after probe, so a dynamic
+ * input_dev needs the same prepare/open/publish sequence at its creation site.
+ */
+void evdev_activate_input(struct input_dev *dev)
+{
+	struct input_handle *handle;
+	struct evdev *evdev;
+	struct evdev_client *client;
+	int error;
+
+	list_for_each_entry(handle, &evdev_handler.h_list, h_node) {
+		if (handle->dev != dev)
+			continue;
+
+		evdev = handle->private;
+		error = evdev_prepare_input_device(dev, evdev, &evdev->client);
+		if (error) {
+			async_msg("ERR: EVDEV_CLIENT_NOMEM");
+			return;
+		}
+
+		error = input_open_device(handle);
+		if (error) {
+			async_msg("ERR: EVDEV_OPEN_FAIL");
+			client = evdev->client;
+			evdev->client = NULL;
+			evdev_unregister_device(client, handle);
+			return;
+		}
+
+		error = evdev_publish_input_device(dev, evdev->client);
+		if (!error)
+			return;
+
+		async_msg("ERR: EVDEV_PUBLISH_FAIL");
+		client = evdev->client;
+		evdev->client = NULL;
+		evdev_unregister_device(client, handle);
+		return;
+	}
+}
+
 void evdev_activate_hid(struct hid_device *hid)
 {
 	struct input_handle *handle;

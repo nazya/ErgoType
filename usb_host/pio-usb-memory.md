@@ -841,6 +841,40 @@ does not add FIFO peak memory evidence: child `0027` has no
 callback larger than its allocated report buffer. The empty/oversized FIFO
 hardening therefore remains source-audited.
 
+#### Wacom ExpressKey Remote verified stage
+
+Exact USB Remote `056a:0331`, dynamic late evdev activation, lifecycle-owned
+Remote work, its PI mutex, and the explicit eight-member power QueueSet produce:
+
+```text
+host text/data/bss             608920 / 788 / 245412 B
+host __bss_end__               0x2003feec
+host main-bank headroom        276 B to 0x20040000
+host UF2 SHA-256               c08d4d9fe58f3861137a0671fb83416c2152db3ad5b50ccedf150d295a69cc17
+emulator text/data/bss         50196 / 0 / 251820 B
+emulator UF2 SHA-256           4ce52ae65cb1f280c5f19079f534c898c7652e1138ff6b184869e8e4e4bf9909
+hardware verdict               passed 2026-08-03 for the qualified scope below
+```
+
+The stage adds 3,416 bytes of text relative to the hook-free focused receiver
+production build and no data or BSS. Static main-bank headroom remains 276
+bytes. Runtime allocations include the Remote object and FIFO, one mutex,
+serial-keyed input/devres graphs, and up to five reduced power-supply queues.
+
+The focused run produced 26 balanced Remote Pad lifetimes with a peak of five.
+All 63 heap snapshots reported `oom=0`; minimum-ever free heap was 27,744 B.
+All four alert-attached snapshots were 48,288 B free, and all three completed
+alert removals were 60,712 B free. The expiry and clean single-child removals
+both reached 50,776 B free with the same largest block and block count. Minimum
+remaining stack watermarks were TinyUSB 265, KeyD 658, async 389, work 293,
+timer 348, lifecycle 180, and report 850 words.
+
+This result covers all five serial slots, replacement, duplicate/moved slots,
+Remote input, expiry timing, FIFO/self-requeue pressure, immediate and burst
+disconnects, reclamation, and reconnect. It does not establish exact power
+snapshot values/order, FIFO-full, a specific queued/running work instant, or
+the ninth power-supply admission. Linux Remote mode/unpair sysfs is absent.
+
 #### External wired Wacom Intuos verified stage
 
 Selecting eleven external wired Intuos/Intuos Pro/Intuos 2 IDs and enabling

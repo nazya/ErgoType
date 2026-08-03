@@ -1648,6 +1648,67 @@ callback report larger than the allocated transport buffer. The new empty and
 oversized ToolSerial FIFO guards therefore remain source-audited rather than
 hardware-covered by this run.
 
+### Wacom ExpressKey Remote coverage
+
+Branch `device/wacom-expresskey-remote` uses one protocol-equivalent 47-byte
+vendor report descriptor for exact USB Remote `056a:0331`, plus the existing
+`cafe:10ff` alert keyboard. It uses public TinyUSB descriptor, HID report,
+completion, mount/unmount, and D+ reconnect APIs; emulator CDC is not an
+oracle. The exact hardware artifacts were:
+
+```text
+host text/data/bss       608920 / 788 / 245412 B
+host __bss_end__         0x2003feec
+host main-bank headroom  276 B to 0x20040000
+host UF2 SHA-256         c08d4d9fe58f3861137a0671fb83416c2152db3ad5b50ccedf150d295a69cc17
+emulator text/data/bss   50196 / 0 / 251820 B
+emulator UF2 SHA-256     4ce52ae65cb1f280c5f19079f534c898c7652e1138ff6b184869e8e4e4bf9909
+hardware verdict         passed 2026-08-03 for the qualified scope below
+```
+
+Every physical Remote phase sent an all-zero device-list report and waited
+900 ms after its acknowledgement before stateful reports. The sequence covered
+duplicate and moved serials, direct replacement, one/two/five slots, all 18
+upstream button bits, ring positions and modes, capacity/charging changes,
+all-five input followed by battery-attach status, five consecutive status
+snapshots, balanced logical teardown, a real 22-second expiry interval,
+immediate-status disconnect, burst-status disconnect, and a final clean
+reconnect. The post-mount delay avoided the observed current-host probe race;
+it is not a host-side `driver_ready` handshake.
+
+Marker order was `f1, f2, f3, f4, f10`, with no `f12` or phase-failure key.
+The log contained 26 Remote Pad additions and 26 removals, with no sixth or
+stale child and a peak of five live children. By phase, the functional/FIFO
+sequence produced 20 balanced lifetimes, expiry one, immediate disconnect
+zero, burst disconnect four, and clean reconnect one. The zero-child immediate
+case and four-child burst are valid cancellation outcomes; the fixture creates
+pressure but cannot identify the exact host queued/running instant.
+
+Buttons 1--10 produced represented `f13`--`f22` events. Buttons 11--18
+produced the expected two diagnostics each for evdev codes
+`0x126/0x127/0x130..0x135`. The accepted Remote reports also produced the
+current downstream diagnostics for `ABS_WHEEL`, `ABS_MISC`, and
+`EV_MSC/MSC_SERIAL`. These are the existing KeyD boundary, not host failures.
+No host `ERR`, `WARN`, report/FIFO/lifecycle/work failure, input drop, or OOM
+appeared.
+
+All 63 heap snapshots reported `oom=0`; minimum-ever free heap was 27,744 B.
+All four alert-attached snapshots were 48,288 B free, and all three completed
+alert removals were 60,712 B free. The expiry and clean single-child removals
+both returned to 50,776 B free with the same largest block and block count.
+Minimum remaining stack watermarks were TinyUSB 265, KeyD 658, async 389,
+work 293, timer 348, lifecycle 180, and report 850 words. The final alert
+remains attached.
+
+Production logging does not expose exact detached power-supply values,
+registration order, serial-slot identity, or mode values. Device-side report
+completion cannot prove the exact host work state. The Remote FIFO rounds to
+space for six work records while the burst sends five, so FIFO-full is not
+covered. Simultaneous cancellation, host tick rollover, workqueue destruction,
+and the ninth power-supply admission likewise remain outside this fixture.
+Linux Remote mode/unpair sysfs, Bluetooth, and a byte-exact retail report
+descriptor are not claimed.
+
 ### External wired Wacom Intuos coverage
 
 The focused `device/wacom-wired-matrix` artifact selects eleven external wired

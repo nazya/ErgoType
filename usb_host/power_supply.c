@@ -139,6 +139,7 @@ struct power_supply *power_supply_register(
 {
 	struct port_power_supply *port;
 	struct power_supply *psy;
+	int ret;
 
 	port = kzalloc_obj(struct port_power_supply);
 	if (!port)
@@ -149,7 +150,12 @@ struct power_supply *power_supply_register(
 		kfree(port);
 		return ERR_PTR(-ENOMEM);
 	}
-	devmon_add_power_supply(port->event_queue);
+	ret = devmon_add_power_supply(port->event_queue);
+	if (ret) {
+		vQueueDelete(port->event_queue);
+		kfree(port);
+		return ERR_PTR(ret);
+	}
 	psy = &port->psy;
 	psy->desc = desc;
 	psy->parent = parent;

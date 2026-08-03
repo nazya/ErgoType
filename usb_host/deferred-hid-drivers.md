@@ -562,9 +562,9 @@ uses `input_dev->id` and leaves Wacom's opaque `struct wacom *` driver data
 untouched. The separate Rapoo managed extra-input regression remains pending.
 
 All other Wacom product IDs remain behind
-`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, ExpressKey Remote, bootloader, I2C,
-PCI, Linux LED/sysfs presentation, and product IDs outside the 19-entry USB
-table remain excluded. Receiver lookup can select any child PID already in
+`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, bootloader, I2C, PCI, Linux
+LED/sysfs presentation, Remote mode/unpair sysfs, and product IDs outside the
+20-entry USB table remain excluded. Receiver lookup can select any child PID already in
 that table; only child `056a:0027` is covered by the receiver hardware verdict.
 The focused Intuos matrix verifies mode and Pen/Pad smoke for all eleven
 selected PIDs, Pro LED initialization for `0314/0315/0317`, and Finger smoke
@@ -576,6 +576,17 @@ host work enqueue and detached values remain unobserved. This matrix does not
 add pending/running-work cancellation, same-PID reconnect, Touch Ring
 semantics, explicit arbitration, or receiver-child `033b` coverage to the
 older `0084 -> 0027` receiver verdict.
+
+Exact USB ExpressKey Remote `056a:0331` is active through the pinned dynamic
+five-child runtime. Firmware replaces the report/worker spinlock regions with
+one PI mutex, runs Remote work on the lifecycle owner, and activates each late
+evdev child after its input/devres graph is complete. The focused fixture
+covered pair/unpair/replacement, all five slots, all 18 upstream button bits,
+ring/mode input, the real 21-second battery-expiry interval, FIFO/work
+pressure, physical disconnect, and reconnect. Its 26 Remote Pad additions had
+26 removals and a peak of five; `oom=0`, heap plateaus, and all task watermarks
+were stable. Exact power snapshots, FIFO-full, the ninth power-member failure,
+and Linux mode/unpair presentation remain outside the verdict.
 
 The focused `056a:0304` fixture completed three physical generations and six
 balanced Pen/Pad lifetimes. Its device-side oracle accepted cancellation before
