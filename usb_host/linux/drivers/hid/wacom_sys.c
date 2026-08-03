@@ -2396,12 +2396,25 @@ static void wacom_update_name(struct wacom *wacom, const char *suffix)
 		"%s%s Pad", name, suffix);
 }
 
+// Firmware receiver rebind retains the monitor's shared object while replacing
+// child devres; Linux's device lifetime does not need this explicit retirement.
+static void wacom_clear_shared_touch_input(struct wacom *wacom)
+{
+	struct wacom_wac *wacom_wac = &wacom->wacom_wac;
+
+	if (wacom_wac->shared && wacom_wac->touch_input &&
+	    wacom_wac->shared->touch_input == wacom_wac->touch_input)
+		wacom_wac->shared->touch_input = NULL;
+}
+
 static void wacom_release_resources(struct wacom *wacom)
 {
 	struct hid_device *hdev = wacom->hdev;
 
 	if (!wacom->resources)
 		return;
+
+	wacom_clear_shared_touch_input(wacom);
 
 	devres_release_group(&hdev->dev, wacom);
 
@@ -2412,8 +2425,18 @@ static void wacom_release_resources(struct wacom *wacom)
 	wacom->wacom_wac.pad_input = NULL;
 }
 
-static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
+// static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
+// Firmware receiver rebind must fence shared input publication against reports.
+static void wacom_set_shared_values(struct wacom_wac *wacom_wac, bool wireless)
 {
+	struct wacom_hdev_data *data = NULL;
+
+	if (wireless) {
+		data = container_of(wacom_wac->shared, struct wacom_hdev_data,
+				    shared);
+		down(&data->dev->driver_input_lock);
+	}
+
 	if (wacom_wac->features.device_type & WACOM_DEVICETYPE_TOUCH) {
 		wacom_wac->shared->type = wacom_wac->features.type;
 		wacom_wac->shared->touch_input = wacom_wac->touch_input;
@@ -2436,6 +2459,9 @@ static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
 		input_set_capability(wacom_wac->shared->touch_input, EV_SW,
 				     SW_MUTE_DEVICE);
 	}
+
+	if (wireless)
+		up(&data->dev->driver_input_lock);
 }
 
 static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
@@ -2530,13 +2556,19 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 	}
 
 	error = wacom_register_inputs(wacom);
-	if (error)
-		goto fail;
+	if (error) {
+		// goto fail;
+		// Firmware synchronously rejects a failed probe; unwind the HID start.
+		goto fail_quirks;
+	}
 
 	if (wacom->wacom_wac.features.device_type & WACOM_DEVICETYPE_PAD) {
 		error = wacom_initialize_leds(wacom);
-		if (error)
-			goto fail;
+		if (error) {
+			// goto fail;
+			// Firmware synchronously rejects a failed probe; unwind the HID start.
+			goto fail_quirks;
+		}
 
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 		error = wacom_initialize_remotes(wacom);
@@ -2570,7 +2602,9 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 		}
 	}
 
-	wacom_set_shared_values(wacom_wac);
+	// wacom_set_shared_values(wacom_wac);
+	// Firmware passes receiver rebuild state for shared input publication.
+	wacom_set_shared_values(wacom_wac, wireless);
 	devres_close_group(&hdev->dev, wacom);
 
 	return 0;
@@ -2654,6 +2688,16 @@ static void wacom_wireless_work(struct work_struct *work)
 	down(&hdev1->driver_input_lock);
 	down(&hdev2->driver_input_lock);
 
+	/* The monitor remains open while both child graphs are replaced. Fence its
+	 * reader and clear state owned by the old child generation.
+	 */
+	down(&wacom->hdev->driver_input_lock);
+	wacom_clear_shared_touch_input(wacom1);
+	wacom_clear_shared_touch_input(wacom2);
+	wacom_wac->shared->stylus_in_proximity = false;
+	wacom_wac->shared->touch_down = false;
+	up(&wacom->hdev->driver_input_lock);
+
 	wacom_release_resources(wacom1);
 	wacom_release_resources(wacom2);
 
@@ -2706,8 +2750,13 @@ static void wacom_wireless_work(struct work_struct *work)
 			wacom_wac2->pid = pid;
 			hid_hw_stop(hdev2);
 			error = wacom_parse_and_register(wacom2, true);
-			if (error)
+			// if (error)
+			// 	goto fail;
+			// Firmware must also stop the successfully rebuilt stylus sibling.
+			if (error) {
+				hid_hw_stop(hdev1);
 				goto fail;
+			}
 		}
 
 		if (strscpy(wacom_wac->name, wacom_wac1->name,
@@ -2729,6 +2778,13 @@ static void wacom_wireless_work(struct work_struct *work)
 	goto unlock;
 
 fail:
+	/* A successful first child may have published a new touch input before the
+	 * second child failed. Detach it from the running monitor before release.
+	 */
+	down(&wacom->hdev->driver_input_lock);
+	wacom_clear_shared_touch_input(wacom1);
+	wacom_clear_shared_touch_input(wacom2);
+	up(&wacom->hdev->driver_input_lock);
 	wacom_release_resources(wacom1);
 	wacom_release_resources(wacom2);
 
