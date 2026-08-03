@@ -5,10 +5,14 @@
 #include <stdint.h>
 
 struct hid_device;
+struct input_dev;
 
 int hid_proxy_runtime_init(void);
 void hid_proxy_input_init(void);
 void hid_proxy_activate_hid(struct hid_device *hid);
+void hid_proxy_activate_input(struct input_dev *dev);
+void hid_proxy_reconcile_input_capabilities_locked(struct input_dev *dev,
+						   bool activate);
 
 void hid_proxy_tud_mount(void);
 void hid_proxy_tud_umount(void);

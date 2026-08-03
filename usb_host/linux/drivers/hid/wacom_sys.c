@@ -8,6 +8,7 @@
 #include <linux/input/mt.h>
 // Upstream input registration publishes evdev synchronously.
 #include "usb_host/evdev.h"
+#include "usb_host/hid_proxy.h"
 
 #define WAC_MSG_RETRIES		5
 #define WAC_CMD_RETRIES		10
@@ -2468,20 +2469,43 @@ static void wacom_release_resources(struct wacom *wacom)
 }
 
 // static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
-// Firmware receiver rebind must fence shared input publication against reports.
+// Firmware receiver rebind activates both rebuilt siblings after both parses.
 static void wacom_set_shared_values(struct wacom_wac *wacom_wac, bool wireless)
 {
 	struct wacom_hdev_data *data = NULL;
+	struct input_dev *touch_input = wacom_wac->shared->touch_input;
+	struct wacom *touch_owner = NULL;
+	bool publish_touch = wacom_wac->features.device_type &
+		WACOM_DEVICETYPE_TOUCH;
+	bool lock_touch_owner;
 
+	if (publish_touch)
+		touch_input = wacom_wac->touch_input;
+
+	lock_touch_owner = !wireless && touch_input &&
+		touch_input != wacom_wac->touch_input;
+	if (lock_touch_owner) {
+		/* Firmware auto-opens a previously probed touch sibling before this
+		 * late upstream shared-state update. Match report lock ordering before
+		 * taking port_event_mutex below.
+		 */
+		touch_owner = input_get_drvdata(touch_input);
+		down(&touch_owner->hdev->driver_input_lock);
+	}
+
+	/* Receiver rebind already owns both child locks. Briefly fence the monitor
+	 * reader without holding its lock across stop, control I/O, or the rebuild.
+	 */
 	if (wireless) {
 		data = container_of(wacom_wac->shared, struct wacom_hdev_data,
 				    shared);
 		down(&data->dev->driver_input_lock);
 	}
 
-	if (wacom_wac->features.device_type & WACOM_DEVICETYPE_TOUCH) {
+	if (publish_touch) {
 		wacom_wac->shared->type = wacom_wac->features.type;
-		wacom_wac->shared->touch_input = wacom_wac->touch_input;
+		// wacom_wac->shared->touch_input = wacom_wac->touch_input;
+		// Firmware publishes this pointer after late capability reconciliation.
 	}
 
 	if (wacom_wac->has_mute_touch_switch) {
@@ -2495,15 +2519,37 @@ static void wacom_set_shared_values(struct wacom_wac *wacom_wac, bool wireless)
 			wacom_wac->shared->is_touch_on = true;
 	}
 
-	if (wacom_wac->shared->has_mute_touch_switch &&
-	    wacom_wac->shared->touch_input) {
-		set_bit(EV_SW, wacom_wac->shared->touch_input->evbit);
-		input_set_capability(wacom_wac->shared->touch_input, EV_SW,
+	if (wacom_wac->shared->has_mute_touch_switch && touch_input) {
+		/* Firmware may already deliver reports for a probed sibling input;
+		 * serialize this late upstream capability with that event path.
+		 */
+		mutex_lock(&touch_input->port_event_mutex);
+		set_bit(EV_SW, touch_input->evbit);
+		input_set_capability(touch_input, EV_SW,
 				     SW_MUTE_DEVICE);
+		/* Firmware handlers attach at registration, before this upstream
+		 * sibling capability is known; reconcile only the port proxy here.
+		 * A different input belongs to an already-probed sibling whose normal
+		 * activation point has passed; this interface uses the normal path.
+		 */
+		hid_proxy_reconcile_input_capabilities_locked(
+			touch_input,
+			!wireless && touch_input != wacom_wac->touch_input);
+		/* Upstream publishes immediately. Firmware publishes last so an active
+		 * sibling cannot report the switch before capability and proxy exist.
+		 */
+		if (publish_touch)
+			wacom_wac->shared->touch_input = touch_input;
+		mutex_unlock(&touch_input->port_event_mutex);
+	} else if (publish_touch) {
+		wacom_wac->shared->touch_input = touch_input;
 	}
 
 	if (wireless)
 		up(&data->dev->driver_input_lock);
+
+	if (lock_touch_owner)
+		up(&touch_owner->hdev->driver_input_lock);
 }
 
 static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
@@ -2651,7 +2697,7 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 	}
 
 	// wacom_set_shared_values(wacom_wac);
-	// Firmware passes receiver rebuild state for shared input publication.
+	// Firmware passes the receiver rebuild phase for deferred input activation.
 	wacom_set_shared_values(wacom_wac, wireless);
 	devres_close_group(&hdev->dev, wacom);
 

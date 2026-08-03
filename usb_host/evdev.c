@@ -246,6 +246,8 @@ static struct input_handler evdev_handler = {
  * Upstream Linux has no equivalent: evdev becomes externally usable through
  * a later file open. Firmware auto-opens clients after probe, so a dynamic
  * input_dev needs the same prepare/open/publish sequence at its creation site.
+ * The independent HID proxy opens after private evdev preparation, including
+ * paths where optional evdev preparation fails or no evdev handle was made.
  */
 void evdev_activate_input(struct input_dev *dev)
 {
@@ -262,9 +264,11 @@ void evdev_activate_input(struct input_dev *dev)
 		error = evdev_prepare_input_device(dev, evdev, &evdev->client);
 		if (error) {
 			async_msg("ERR: EVDEV_CLIENT_NOMEM");
+			hid_proxy_activate_input(dev);
 			return;
 		}
 
+		hid_proxy_activate_input(dev);
 		error = input_open_device(handle);
 		if (error) {
 			async_msg("ERR: EVDEV_OPEN_FAIL");
@@ -284,6 +288,8 @@ void evdev_activate_input(struct input_dev *dev)
 		evdev_unregister_device(client, handle);
 		return;
 	}
+
+	hid_proxy_activate_input(dev);
 }
 
 void evdev_activate_hid(struct hid_device *hid)

@@ -21,6 +21,13 @@ enum hid_proxy_inflight_kind {
 	HID_PROXY_INFLIGHT_SOURCE_REMOVED,
 	HID_PROXY_INFLIGHT_STYLUS_FRAME,
 	HID_PROXY_INFLIGHT_STYLUS_NEUTRAL,
+	HID_PROXY_INFLIGHT_PAD_FRAME,
+	HID_PROXY_INFLIGHT_PAD_NEUTRAL,
+};
+
+enum hid_proxy_source_kind {
+	HID_PROXY_SOURCE_STYLUS = 0,
+	HID_PROXY_SOURCE_PAD,
 };
 
 enum hid_proxy_source_flags {
@@ -28,6 +35,41 @@ enum hid_proxy_source_flags {
 	HID_PROXY_SOURCE_STYLUS3 = 1u << 1,
 	HID_PROXY_SOURCE_DIRECT = 1u << 2,
 	HID_PROXY_SOURCE_TILT_NORMALIZED = 1u << 3,
+	HID_PROXY_SOURCE_ROTATION = 1u << 4,
+};
+
+enum hid_proxy_pad_source_flags {
+	HID_PROXY_PAD_SOURCE_PRESENT = 1u << 0,
+	HID_PROXY_PAD_SOURCE_ABS_MISC = 1u << 1,
+	HID_PROXY_PAD_SOURCE_MSC_SERIAL = 1u << 2,
+};
+
+enum hid_proxy_pad_frame_flags {
+	HID_PROXY_PAD_FRAME_RESYNC = 1u << 0,
+	HID_PROXY_PAD_FRAME_TERMINAL = 1u << 1,
+	HID_PROXY_PAD_FRAME_COALESCED = 1u << 2,
+	HID_PROXY_PAD_FRAME_REL_SATURATED = 1u << 3,
+};
+
+enum hid_proxy_pad_abs_index {
+	HID_PROXY_PAD_ABS_WHEEL = 0,
+	HID_PROXY_PAD_ABS_THROTTLE,
+	HID_PROXY_PAD_ABS_RX,
+	HID_PROXY_PAD_ABS_RY,
+	HID_PROXY_PAD_ABS_COUNT,
+};
+
+enum hid_proxy_pad_rel_index {
+	HID_PROXY_PAD_REL_WHEEL = 0,
+	HID_PROXY_PAD_REL_HWHEEL,
+	HID_PROXY_PAD_REL_WHEEL_HI_RES,
+	HID_PROXY_PAD_REL_HWHEEL_HI_RES,
+	HID_PROXY_PAD_REL_COUNT,
+};
+
+enum hid_proxy_pad_switch_index {
+	HID_PROXY_PAD_SWITCH_MUTE_DEVICE = 0,
+	HID_PROXY_PAD_SWITCH_COUNT,
 };
 
 enum hid_proxy_stylus_switches {
@@ -98,6 +140,7 @@ struct hid_proxy_stylus_report {
 	__le16 tilt_x;
 	__le16 tilt_y;
 	__le32 serial;
+	__le32 rotation;
 } __packed;
 
 struct hid_proxy_source_report {
@@ -109,6 +152,38 @@ struct hid_proxy_source_report {
 	__le16 product;
 	__le16 tool_code;
 	__le32 tool_id;
+	__le32 rotation_minimum;
+	__le32 rotation_maximum;
+	__le32 rotation_resolution;
+} __packed;
+
+struct hid_proxy_pad_source_report {
+	u8 version;
+	u8 source_index;
+	u8 flags;
+	u8 supported_abs;
+	u8 supported_rel;
+	u8 supported_switches;
+	__le32 source_id;
+	__le16 vendor;
+	__le16 product;
+	__le32 supported_buttons;
+	__le32 abs_minimum[HID_PROXY_PAD_ABS_COUNT];
+	__le32 abs_maximum[HID_PROXY_PAD_ABS_COUNT];
+} __packed;
+
+struct hid_proxy_pad_report {
+	u8 source_index;
+	u8 flags;
+	u8 switches;
+	__le32 frame_sequence;
+	__le32 pressed;
+	__le32 released;
+	__le32 buttons;
+	__le32 active_id;
+	__le32 serial;
+	__le32 absolute[HID_PROXY_PAD_ABS_COUNT];
+	__le32 relative[HID_PROXY_PAD_REL_COUNT];
 } __packed;
 
 struct hid_proxy_touch_report {
@@ -144,8 +219,10 @@ struct hid_proxy_touch_source_report {
 	__le16 slot_count;
 } __packed;
 
-static_assert(sizeof(struct hid_proxy_stylus_report) == 22);
-static_assert(sizeof(struct hid_proxy_source_report) == 17);
+static_assert(sizeof(struct hid_proxy_stylus_report) == 26);
+static_assert(sizeof(struct hid_proxy_source_report) == 29);
+static_assert(sizeof(struct hid_proxy_pad_source_report) == 50);
+static_assert(sizeof(struct hid_proxy_pad_report) == 59);
 static_assert(sizeof(struct hid_proxy_touch_report) == 45);
 static_assert(sizeof(struct hid_proxy_touch_source_report) == 15);
 
@@ -162,26 +239,16 @@ struct hid_proxy_frame {
 	bool source_pending;
 };
 
-struct hid_proxy_source {
-	bool active;
-	bool retiring;
-	bool published;
+struct hid_proxy_stylus_state {
 	bool source_dirty;
-	bool terminal_pending;
-	bool drop_reported;
 	bool direct;
 	bool touch;
 	bool barrel;
 	bool secondary_barrel;
 	bool stylus3;
-	u8 transducer_index;
-	u8 frame_head;
-	u8 frame_count;
-	u16 vendor;
-	u16 product;
+	bool rotation_supported;
 	u16 tool_code;
 	u32 tool_id;
-	u32 source_id;
 	u32 serial;
 	struct hid_proxy_axis x;
 	struct hid_proxy_axis y;
@@ -189,7 +256,48 @@ struct hid_proxy_source {
 	struct hid_proxy_axis distance;
 	struct hid_proxy_axis tilt_x;
 	struct hid_proxy_axis tilt_y;
+	struct hid_proxy_axis rotation;
 	struct hid_proxy_frame frames[HID_PROXY_FRAME_QUEUE_DEPTH];
+};
+
+struct hid_proxy_pad_state {
+	bool source_pending;
+	bool frame_dirty;
+	u8 source_flags;
+	u8 supported_abs;
+	u8 supported_rel;
+	u8 supported_switches;
+	u8 switches;
+	u32 supported_buttons;
+	u32 buttons;
+	u32 pending_pressed;
+	u32 pending_released;
+	u32 published_buttons;
+	u32 next_frame_sequence;
+	s32 active_id;
+	s32 serial;
+	struct hid_proxy_axis absolute[HID_PROXY_PAD_ABS_COUNT];
+	s64 relative[HID_PROXY_PAD_REL_COUNT];
+	struct hid_proxy_pad_report frames[HID_PROXY_FRAME_QUEUE_DEPTH];
+};
+
+struct hid_proxy_source {
+	bool active;
+	bool retiring;
+	bool published;
+	bool terminal_pending;
+	bool drop_reported;
+	u8 kind;
+	u8 source_index;
+	u8 frame_head;
+	u8 frame_count;
+	u16 vendor;
+	u16 product;
+	u32 source_id;
+	union {
+		struct hid_proxy_stylus_state stylus;
+		struct hid_proxy_pad_state pad;
+	};
 };
 
 struct hid_proxy_handle {
@@ -264,7 +372,7 @@ struct hid_proxy_inflight {
 	u8 report_id;
 	u8 length;
 	struct hid_proxy_source *source;
-	u8 data[sizeof(struct hid_proxy_stylus_report)];
+	u8 data[sizeof(struct hid_proxy_pad_report)];
 };
 
 struct hid_proxy_touch_inflight {
@@ -290,6 +398,8 @@ struct hid_proxy_runtime {
 	struct hid_proxy_stylus_report last_direct;
 	struct hid_proxy_stylus_report last_indirect;
 	struct hid_proxy_source_report last_source;
+	struct hid_proxy_pad_source_report last_pad_source;
+	struct hid_proxy_pad_report last_pad_frame;
 	struct hid_proxy_touch_report last_touch_direct;
 	struct hid_proxy_touch_report last_touch_indirect;
 	struct hid_proxy_touch_source_report last_touch_source;
@@ -309,6 +419,40 @@ static const u16 hid_proxy_tool_codes[] = {
 	BTN_TOOL_LENS,
 };
 
+static const u16 hid_proxy_pad_button_codes[] = {
+	BTN_0, BTN_1, BTN_2, BTN_3, BTN_4, BTN_5, BTN_6, BTN_7, BTN_8, BTN_9,
+	BTN_A, BTN_B, BTN_C, BTN_X, BTN_Y, BTN_Z, BTN_BASE, BTN_BASE2,
+	BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA, BTN_FORWARD,
+	BTN_BACK, KEY_PROG1, KEY_PROG2, KEY_PROG3, KEY_BUTTONCONFIG,
+	KEY_ONSCREEN_KEYBOARD, KEY_CONTROLPANEL, KEY_INFO,
+};
+
+static const u16 hid_proxy_pad_abs_codes[] = {
+	ABS_WHEEL,
+	ABS_THROTTLE,
+	ABS_RX,
+	ABS_RY,
+};
+
+static const u16 hid_proxy_pad_rel_codes[] = {
+	REL_WHEEL,
+	REL_HWHEEL,
+	REL_WHEEL_HI_RES,
+	REL_HWHEEL_HI_RES,
+};
+
+static const u16 hid_proxy_pad_switch_codes[] = {
+	SW_MUTE_DEVICE,
+};
+
+static_assert(ARRAY_SIZE(hid_proxy_pad_button_codes) == 32);
+static_assert(ARRAY_SIZE(hid_proxy_pad_abs_codes) ==
+	      HID_PROXY_PAD_ABS_COUNT);
+static_assert(ARRAY_SIZE(hid_proxy_pad_rel_codes) ==
+	      HID_PROXY_PAD_REL_COUNT);
+static_assert(ARRAY_SIZE(hid_proxy_pad_switch_codes) ==
+	      HID_PROXY_PAD_SWITCH_COUNT);
+
 static bool hid_proxy_is_tool_code(unsigned int code)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_tool_codes); i++)
@@ -316,6 +460,15 @@ static bool hid_proxy_is_tool_code(unsigned int code)
 			return true;
 
 	return false;
+}
+
+static bool hid_proxy_is_stylus_device(const struct input_dev *dev)
+{
+	return test_bit(BTN_TOOL_PEN, dev->keybit) ||
+		test_bit(BTN_TOOL_RUBBER, dev->keybit) ||
+		test_bit(BTN_TOOL_BRUSH, dev->keybit) ||
+		test_bit(BTN_TOOL_PENCIL, dev->keybit) ||
+		test_bit(BTN_TOOL_AIRBRUSH, dev->keybit);
 }
 
 static void hid_proxy_axis_seed(struct hid_proxy_axis *axis,
@@ -335,28 +488,36 @@ static void hid_proxy_axis_seed(struct hid_proxy_axis *axis,
 static void hid_proxy_source_seed(struct hid_proxy_source *source,
 				  const struct input_dev *dev)
 {
-	source->direct = test_bit(INPUT_PROP_DIRECT, dev->propbit);
+	struct hid_proxy_stylus_state *stylus = &source->stylus;
+
+	stylus->direct = test_bit(INPUT_PROP_DIRECT, dev->propbit);
 	source->vendor = dev->id.vendor;
 	source->product = dev->id.product;
 	source->source_id = dev->port_proxy_id;
-	source->touch = test_bit(BTN_TOUCH, dev->key);
-	source->barrel = test_bit(BTN_STYLUS, dev->key);
-	source->secondary_barrel = test_bit(BTN_STYLUS2, dev->key);
-	source->stylus3 = test_bit(BTN_STYLUS3, dev->key);
-	source->tool_code = 0;
+	stylus->touch = test_bit(BTN_TOUCH, dev->key);
+	stylus->barrel = test_bit(BTN_STYLUS, dev->key);
+	stylus->secondary_barrel = test_bit(BTN_STYLUS2, dev->key);
+	stylus->stylus3 = test_bit(BTN_STYLUS3, dev->key);
+	stylus->tool_code = 0;
 	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_tool_codes); i++)
 		if (test_bit(hid_proxy_tool_codes[i], dev->key)) {
-			source->tool_code = hid_proxy_tool_codes[i];
+			stylus->tool_code = hid_proxy_tool_codes[i];
 			break;
 		}
 
-	hid_proxy_axis_seed(&source->x, dev, ABS_X);
-	hid_proxy_axis_seed(&source->y, dev, ABS_Y);
-	hid_proxy_axis_seed(&source->pressure, dev, ABS_PRESSURE);
-	hid_proxy_axis_seed(&source->distance, dev, ABS_DISTANCE);
-	hid_proxy_axis_seed(&source->tilt_x, dev, ABS_TILT_X);
-	hid_proxy_axis_seed(&source->tilt_y, dev, ABS_TILT_Y);
-	source->tool_id = test_bit(ABS_MISC, dev->absbit) ?
+	hid_proxy_axis_seed(&stylus->x, dev, ABS_X);
+	hid_proxy_axis_seed(&stylus->y, dev, ABS_Y);
+	hid_proxy_axis_seed(&stylus->pressure, dev, ABS_PRESSURE);
+	hid_proxy_axis_seed(&stylus->distance, dev, ABS_DISTANCE);
+	hid_proxy_axis_seed(&stylus->tilt_x, dev, ABS_TILT_X);
+	hid_proxy_axis_seed(&stylus->tilt_y, dev, ABS_TILT_Y);
+	stylus->rotation_supported = test_bit(ABS_Z, dev->absbit) &&
+		!test_bit(INPUT_PROP_ACCELEROMETER, dev->propbit);
+	if (stylus->rotation_supported)
+		hid_proxy_axis_seed(&stylus->rotation, dev, ABS_Z);
+	else
+		memset(&stylus->rotation, 0, sizeof(stylus->rotation));
+	stylus->tool_id = test_bit(ABS_MISC, dev->absbit) ?
 		(u32)dev->absinfo[ABS_MISC].value : 0;
 }
 
@@ -406,35 +567,37 @@ static s16 hid_proxy_scale_tilt(const struct hid_proxy_axis *axis)
 static struct hid_proxy_stylus_report
 hid_proxy_stylus_report(const struct hid_proxy_source *source, bool neutral)
 {
-	bool rubber = source->tool_code == BTN_TOOL_RUBBER;
-	bool in_range = source->tool_code != 0;
+	const struct hid_proxy_stylus_state *stylus = &source->stylus;
+	bool rubber = stylus->tool_code == BTN_TOOL_RUBBER;
+	bool in_range = stylus->tool_code != 0;
 	u8 switches = 0;
 
-	if (source->touch && !rubber)
+	if (stylus->touch && !rubber)
 		switches |= HID_PROXY_STYLUS_TIP;
 	if (in_range)
 		switches |= HID_PROXY_STYLUS_IN_RANGE;
-	if (source->barrel)
+	if (stylus->barrel)
 		switches |= HID_PROXY_STYLUS_BARREL;
 	if (rubber)
 		switches |= HID_PROXY_STYLUS_INVERT;
-	if (source->touch && rubber)
+	if (stylus->touch && rubber)
 		switches |= HID_PROXY_STYLUS_ERASER;
-	if (source->secondary_barrel)
+	if (stylus->secondary_barrel)
 		switches |= HID_PROXY_STYLUS_SECONDARY_BARREL;
 
 	struct hid_proxy_stylus_report report = {
 		.switches = switches,
-		.transducer_index = source->transducer_index,
-		.x = cpu_to_le32(hid_proxy_scale_unsigned(&source->x, INT32_MAX)),
-		.y = cpu_to_le32(hid_proxy_scale_unsigned(&source->y, INT32_MAX)),
-		.pressure = cpu_to_le16((u16)hid_proxy_scale_unsigned(&source->pressure,
+		.transducer_index = source->source_index,
+		.x = cpu_to_le32(hid_proxy_scale_unsigned(&stylus->x, INT32_MAX)),
+		.y = cpu_to_le32(hid_proxy_scale_unsigned(&stylus->y, INT32_MAX)),
+		.pressure = cpu_to_le16((u16)hid_proxy_scale_unsigned(&stylus->pressure,
 								 UINT16_MAX)),
-		.distance = cpu_to_le16((u16)hid_proxy_scale_unsigned(&source->distance,
+		.distance = cpu_to_le16((u16)hid_proxy_scale_unsigned(&stylus->distance,
 								 UINT16_MAX)),
-		.tilt_x = cpu_to_le16((u16)hid_proxy_scale_tilt(&source->tilt_x)),
-		.tilt_y = cpu_to_le16((u16)hid_proxy_scale_tilt(&source->tilt_y)),
-		.serial = cpu_to_le32(source->serial),
+		.tilt_x = cpu_to_le16((u16)hid_proxy_scale_tilt(&stylus->tilt_x)),
+		.tilt_y = cpu_to_le16((u16)hid_proxy_scale_tilt(&stylus->tilt_y)),
+		.serial = cpu_to_le32(stylus->serial),
+		.rotation = cpu_to_le32(stylus->rotation.value),
 	};
 	if (neutral) {
 		report.switches = 0;
@@ -442,6 +605,7 @@ hid_proxy_stylus_report(const struct hid_proxy_source *source, bool neutral)
 		report.distance = 0;
 		report.tilt_x = 0;
 		report.tilt_y = 0;
+		report.rotation = 0;
 	}
 
 	return report;
@@ -450,32 +614,222 @@ hid_proxy_stylus_report(const struct hid_proxy_source *source, bool neutral)
 static struct hid_proxy_source_report
 hid_proxy_source_report(const struct hid_proxy_source *source, bool present)
 {
+	const struct hid_proxy_stylus_state *stylus = &source->stylus;
 	u8 flags = 0;
 
 	if (present)
 		flags |= HID_PROXY_SOURCE_PRESENT;
-	if (present && source->stylus3)
+	if (present && stylus->stylus3)
 		flags |= HID_PROXY_SOURCE_STYLUS3;
-	if (source->direct)
+	if (stylus->direct)
 		flags |= HID_PROXY_SOURCE_DIRECT;
-	if ((source->tilt_x.maximum > source->tilt_x.minimum &&
-	     source->tilt_x.resolution <= 0) ||
-	    (source->tilt_y.maximum > source->tilt_y.minimum &&
-	     source->tilt_y.resolution <= 0))
+	if ((stylus->tilt_x.maximum > stylus->tilt_x.minimum &&
+	     stylus->tilt_x.resolution <= 0) ||
+	    (stylus->tilt_y.maximum > stylus->tilt_y.minimum &&
+	     stylus->tilt_y.resolution <= 0))
 		flags |= HID_PROXY_SOURCE_TILT_NORMALIZED;
+	if (stylus->rotation_supported)
+		flags |= HID_PROXY_SOURCE_ROTATION;
 
 	struct hid_proxy_source_report report = {
-		.version = 1,
-		.transducer_index = source->transducer_index,
+		.version = 2,
+		.transducer_index = source->source_index,
 		.flags = flags,
 		.source_id = cpu_to_le32(source->source_id),
 		.vendor = cpu_to_le16(source->vendor),
 		.product = cpu_to_le16(source->product),
-		.tool_code = cpu_to_le16(source->tool_code),
-		.tool_id = cpu_to_le32(source->tool_id),
+		.tool_code = cpu_to_le16(stylus->tool_code),
+		.tool_id = cpu_to_le32(stylus->tool_id),
+		.rotation_minimum = cpu_to_le32(stylus->rotation.minimum),
+		.rotation_maximum = cpu_to_le32(stylus->rotation.maximum),
+		.rotation_resolution = cpu_to_le32(stylus->rotation.resolution),
 	};
 
 	return report;
+}
+
+static int hid_proxy_code_index(const u16 *codes, size_t count,
+				unsigned int code)
+{
+	for (size_t i = 0; i < count; i++)
+		if (codes[i] == code)
+			return i;
+
+	return -1;
+}
+
+static void hid_proxy_pad_seed(struct hid_proxy_source *source,
+			       const struct input_dev *dev)
+{
+	struct hid_proxy_pad_state *pad = &source->pad;
+
+	memset(pad, 0, sizeof(*pad));
+	source->vendor = dev->id.vendor;
+	source->product = dev->id.product;
+	source->source_id = dev->port_proxy_id;
+	pad->next_frame_sequence = 1;
+
+	if (test_bit(ABS_MISC, dev->absbit)) {
+		pad->source_flags |= HID_PROXY_PAD_SOURCE_ABS_MISC;
+		pad->active_id = dev->absinfo[ABS_MISC].value;
+	}
+	if (test_bit(MSC_SERIAL, dev->mscbit))
+		pad->source_flags |= HID_PROXY_PAD_SOURCE_MSC_SERIAL;
+
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_pad_button_codes); i++) {
+		u32 bit = 1u << i;
+
+		if (!test_bit(hid_proxy_pad_button_codes[i], dev->keybit))
+			continue;
+		pad->supported_buttons |= bit;
+		if (test_bit(hid_proxy_pad_button_codes[i], dev->key))
+			pad->buttons |= bit;
+	}
+	pad->pending_pressed = pad->buttons;
+
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_pad_abs_codes); i++) {
+		if (!test_bit(hid_proxy_pad_abs_codes[i], dev->absbit))
+			continue;
+		pad->supported_abs |= 1u << i;
+		hid_proxy_axis_seed(&pad->absolute[i], dev,
+				    hid_proxy_pad_abs_codes[i]);
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_pad_rel_codes); i++)
+		if (test_bit(hid_proxy_pad_rel_codes[i], dev->relbit))
+			pad->supported_rel |= 1u << i;
+	for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_pad_switch_codes); i++) {
+		u8 bit = 1u << i;
+
+		if (!test_bit(hid_proxy_pad_switch_codes[i], dev->swbit))
+			continue;
+		pad->supported_switches |= bit;
+		if (test_bit(hid_proxy_pad_switch_codes[i], dev->sw))
+			pad->switches |= bit;
+	}
+
+	pad->frame_dirty = true;
+}
+
+static struct hid_proxy_pad_source_report
+hid_proxy_pad_source_report(const struct hid_proxy_source *source,
+			    bool present)
+{
+	const struct hid_proxy_pad_state *pad = &source->pad;
+	u8 flags = pad->source_flags;
+
+	if (present)
+		flags |= HID_PROXY_PAD_SOURCE_PRESENT;
+
+	struct hid_proxy_pad_source_report report = {
+		.version = 1,
+		.source_index = source->source_index,
+		.flags = flags,
+		.supported_abs = pad->supported_abs,
+		.supported_rel = pad->supported_rel,
+		.supported_switches = pad->supported_switches,
+		.source_id = cpu_to_le32(source->source_id),
+		.vendor = cpu_to_le16(source->vendor),
+		.product = cpu_to_le16(source->product),
+		.supported_buttons = cpu_to_le32(pad->supported_buttons),
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(pad->absolute); i++) {
+		report.abs_minimum[i] =
+			cpu_to_le32(pad->absolute[i].minimum);
+		report.abs_maximum[i] =
+			cpu_to_le32(pad->absolute[i].maximum);
+	}
+
+	return report;
+}
+
+static s32 hid_proxy_pad_relative_value(s64 value, u8 *flags)
+{
+	if (value < INT32_MIN || value > INT32_MAX)
+		*flags |= HID_PROXY_PAD_FRAME_REL_SATURATED;
+
+	return clamp(value, (s64)INT32_MIN, (s64)INT32_MAX);
+}
+
+static struct hid_proxy_pad_report
+hid_proxy_pad_report(const struct hid_proxy_source *source, u8 flags)
+{
+	const struct hid_proxy_pad_state *pad = &source->pad;
+	struct hid_proxy_pad_report report = {
+		.source_index = source->source_index,
+		.flags = flags,
+		.switches = pad->switches,
+		.frame_sequence = cpu_to_le32(pad->next_frame_sequence),
+		.pressed = cpu_to_le32(pad->pending_pressed),
+		.released = cpu_to_le32(pad->pending_released),
+		.buttons = cpu_to_le32(pad->buttons),
+		.active_id = cpu_to_le32(pad->active_id),
+		.serial = cpu_to_le32(pad->serial),
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(pad->absolute); i++)
+		report.absolute[i] = cpu_to_le32(pad->absolute[i].value);
+	for (size_t i = 0; i < ARRAY_SIZE(pad->relative); i++)
+		report.relative[i] = cpu_to_le32(
+			hid_proxy_pad_relative_value(pad->relative[i],
+						     &report.flags));
+
+	return report;
+}
+
+static void hid_proxy_pad_clear_pending(struct hid_proxy_pad_state *pad)
+{
+	pad->pending_pressed = 0;
+	pad->pending_released = 0;
+	memset(pad->relative, 0, sizeof(pad->relative));
+	pad->frame_dirty = false;
+}
+
+static bool hid_proxy_pad_queue_frame_locked(struct hid_proxy_source *source,
+					      u8 flags)
+{
+	struct hid_proxy_pad_state *pad = &source->pad;
+	struct hid_proxy_pad_report report = hid_proxy_pad_report(source, flags);
+	bool warn = false;
+	u8 index;
+
+	pad->next_frame_sequence++;
+	if (source->frame_count == HID_PROXY_FRAME_QUEUE_DEPTH) {
+		struct hid_proxy_pad_report *old;
+
+		index = (source->frame_head + source->frame_count - 1) %
+			HID_PROXY_FRAME_QUEUE_DEPTH;
+		old = &pad->frames[index];
+		report.pressed = cpu_to_le32((u32)report.pressed |
+					     (u32)old->pressed);
+		report.released = cpu_to_le32((u32)report.released |
+					      (u32)old->released);
+		report.flags |= HID_PROXY_PAD_FRAME_COALESCED;
+		for (size_t i = 0; i < ARRAY_SIZE(pad->relative); i++) {
+			s64 total = (s32)old->relative[i];
+
+			total += (s32)report.relative[i];
+
+			report.relative[i] = cpu_to_le32(
+				hid_proxy_pad_relative_value(total,
+							     &report.flags));
+		}
+		if (old->flags & HID_PROXY_PAD_FRAME_REL_SATURATED)
+			report.flags |= HID_PROXY_PAD_FRAME_REL_SATURATED;
+		if (!source->drop_reported) {
+			source->drop_reported = true;
+			warn = true;
+		}
+	} else {
+		index = (source->frame_head + source->frame_count) %
+			HID_PROXY_FRAME_QUEUE_DEPTH;
+		source->frame_count++;
+	}
+
+	pad->frames[index] = report;
+	hid_proxy_pad_clear_pending(pad);
+
+	return warn;
 }
 
 static u32 hid_proxy_touch_scale_unsigned(const struct input_dev *dev,
@@ -855,13 +1209,42 @@ hid_proxy_touch_contact_report(const struct hid_proxy_runtime *runtime,
 static bool hid_proxy_match(struct input_handler *handler,
 			    struct input_dev *dev)
 {
+	bool pad_switch = test_bit(SW_MUTE_DEVICE, dev->swbit);
+
 	(void)handler;
 
-	return test_bit(BTN_TOOL_PEN, dev->keybit) ||
-		test_bit(BTN_TOOL_RUBBER, dev->keybit) ||
-		test_bit(BTN_TOOL_BRUSH, dev->keybit) ||
-		test_bit(BTN_TOOL_PENCIL, dev->keybit) ||
-		test_bit(BTN_TOOL_AIRBRUSH, dev->keybit);
+	if (hid_proxy_is_stylus_device(dev))
+		return true;
+	if (pad_switch)
+		return true;
+	if (dev->mt || test_bit(INPUT_PROP_ACCELEROMETER, dev->propbit))
+		return false;
+	if (test_bit(BTN_TOOL_FINGER, dev->keybit) ||
+	    test_bit(BTN_TOOL_MOUSE, dev->keybit) ||
+	    test_bit(BTN_TOOL_LENS, dev->keybit) ||
+	    test_bit(BTN_TOOL_QUINTTAP, dev->keybit) ||
+	    test_bit(BTN_TOOL_DOUBLETAP, dev->keybit) ||
+	    test_bit(BTN_TOOL_TRIPLETAP, dev->keybit) ||
+	    test_bit(BTN_TOOL_QUADTAP, dev->keybit))
+		return false;
+
+	for (size_t i = 0; i < 10; i++)
+		if (test_bit(hid_proxy_pad_button_codes[i], dev->keybit))
+			return true;
+	if (test_bit(BTN_STYLUS, dev->keybit)) {
+		for (size_t i = 25;
+		     i < ARRAY_SIZE(hid_proxy_pad_button_codes); i++)
+			if (test_bit(hid_proxy_pad_button_codes[i], dev->keybit))
+				return true;
+		for (size_t i = 0; i < ARRAY_SIZE(hid_proxy_pad_abs_codes); i++)
+			if (test_bit(hid_proxy_pad_abs_codes[i], dev->absbit))
+				return true;
+	}
+
+	return test_bit(ABS_X, dev->absbit) &&
+		test_bit(ABS_Y, dev->absbit) &&
+		(test_bit(BTN_FORWARD, dev->keybit) ||
+		 test_bit(BTN_BACK, dev->keybit));
 }
 
 static bool hid_proxy_touch_match(struct input_handler *handler,
@@ -1057,21 +1440,25 @@ static void hid_proxy_reset_frames_locked(struct hid_proxy_source *source)
 {
 	source->frame_head = 0;
 	source->frame_count = 0;
-	source->source_dirty = false;
 	source->drop_reported = false;
+	if (source->kind == HID_PROXY_SOURCE_STYLUS)
+		source->stylus.source_dirty = false;
+	else
+		hid_proxy_pad_clear_pending(&source->pad);
 }
 
 static bool hid_proxy_queue_frame_locked(struct hid_proxy_source *source,
 					 bool force_source)
 {
-	bool source_pending = force_source || source->source_dirty;
+	struct hid_proxy_stylus_state *stylus = &source->stylus;
+	bool source_pending = force_source || stylus->source_dirty;
 	bool warn = false;
 	u8 index;
 
 	if (source->frame_count == HID_PROXY_FRAME_QUEUE_DEPTH) {
 		index = (source->frame_head + source->frame_count - 1) %
 			HID_PROXY_FRAME_QUEUE_DEPTH;
-		source_pending |= source->frames[index].source_pending;
+		source_pending |= stylus->frames[index].source_pending;
 		if (!source->drop_reported) {
 			source->drop_reported = true;
 			warn = true;
@@ -1082,10 +1469,10 @@ static bool hid_proxy_queue_frame_locked(struct hid_proxy_source *source,
 		source->frame_count++;
 	}
 
-	source->frames[index].stylus = hid_proxy_stylus_report(source, false);
-	source->frames[index].source = hid_proxy_source_report(source, true);
-	source->frames[index].source_pending = source_pending;
-	source->source_dirty = false;
+	stylus->frames[index].stylus = hid_proxy_stylus_report(source, false);
+	stylus->frames[index].source = hid_proxy_source_report(source, true);
+	stylus->frames[index].source_pending = source_pending;
+	stylus->source_dirty = false;
 
 	return warn;
 }
@@ -1097,7 +1484,7 @@ static int hid_proxy_claim_index_locked(struct hid_proxy_runtime *runtime)
 		bool used = false;
 
 		list_for_each_entry(proxy_handle, &runtime->sources, runtime_node) {
-			if (proxy_handle->source.transducer_index == index) {
+			if (proxy_handle->source.source_index == index) {
 				used = true;
 				break;
 			}
@@ -1117,18 +1504,20 @@ static int hid_proxy_connect(struct input_handler *handler,
 	struct hid_proxy_handle *proxy_handle;
 	int index;
 
-	(void)id;
-
 	proxy_handle = kzalloc_obj(struct hid_proxy_handle);
 	if (!proxy_handle) {
 		async_msg("ERR: HID_PROXY_CONNECT_NOMEM");
 		return -ENOMEM;
 	}
 
+	(void)id;
+
+	proxy_handle->source.kind = hid_proxy_is_stylus_device(dev) ?
+		HID_PROXY_SOURCE_STYLUS : HID_PROXY_SOURCE_PAD;
 	xSemaphoreTake(runtime->mutex, portMAX_DELAY);
 	index = hid_proxy_claim_index_locked(runtime);
 	if (index >= 0) {
-		proxy_handle->source.transducer_index = index;
+		proxy_handle->source.source_index = index;
 		list_add_tail(&proxy_handle->runtime_node, &runtime->sources);
 	}
 	xSemaphoreGive(runtime->mutex);
@@ -1148,13 +1537,14 @@ static int hid_proxy_connect(struct input_handler *handler,
 	return 0;
 }
 
-static unsigned int hid_proxy_events(struct input_handle *handle,
-				     struct input_value *vals,
-				     unsigned int count)
+static unsigned int hid_proxy_stylus_events(struct input_handle *handle,
+				    struct input_value *vals,
+				    unsigned int count)
 {
 	struct hid_proxy_handle *proxy_handle = handle->private;
 	struct hid_proxy_runtime *runtime = handle->handler->private;
 	struct hid_proxy_source *source = &proxy_handle->source;
+	struct hid_proxy_stylus_state *stylus = &source->stylus;
 	struct input_value *event;
 	bool warn = false;
 
@@ -1163,62 +1553,66 @@ static unsigned int hid_proxy_events(struct input_handle *handle,
 		switch (event->type) {
 		case EV_KEY:
 			if (hid_proxy_is_tool_code(event->code)) {
-				u16 tool_code = source->tool_code;
+				u16 tool_code = stylus->tool_code;
 
 				if (event->value)
 					tool_code = event->code;
 				else if (tool_code == event->code)
 					tool_code = 0;
-				if (tool_code != source->tool_code) {
-					source->tool_code = tool_code;
-					source->source_dirty = true;
+				if (tool_code != stylus->tool_code) {
+					stylus->tool_code = tool_code;
+					stylus->source_dirty = true;
 				}
 			} else if (event->code == BTN_TOUCH) {
-				source->touch = event->value;
+				stylus->touch = event->value;
 			} else if (event->code == BTN_STYLUS) {
-				source->barrel = event->value;
+				stylus->barrel = event->value;
 			} else if (event->code == BTN_STYLUS2) {
-				source->secondary_barrel = event->value;
+				stylus->secondary_barrel = event->value;
 			} else if (event->code == BTN_STYLUS3) {
 				bool stylus3 = event->value;
 
-				if (stylus3 != source->stylus3) {
-					source->stylus3 = stylus3;
-					source->source_dirty = true;
+				if (stylus3 != stylus->stylus3) {
+					stylus->stylus3 = stylus3;
+					stylus->source_dirty = true;
 				}
 			}
 			break;
 		case EV_ABS:
 			switch (event->code) {
 			case ABS_X:
-				source->x.value = event->value;
+				stylus->x.value = event->value;
 				break;
 			case ABS_Y:
-				source->y.value = event->value;
+				stylus->y.value = event->value;
 				break;
 			case ABS_PRESSURE:
-				source->pressure.value = event->value;
+				stylus->pressure.value = event->value;
 				break;
 			case ABS_DISTANCE:
-				source->distance.value = event->value;
+				stylus->distance.value = event->value;
 				break;
 			case ABS_TILT_X:
-				source->tilt_x.value = event->value;
+				stylus->tilt_x.value = event->value;
 				break;
 			case ABS_TILT_Y:
-				source->tilt_y.value = event->value;
+				stylus->tilt_y.value = event->value;
+				break;
+			case ABS_Z:
+				if (stylus->rotation_supported)
+					stylus->rotation.value = event->value;
 				break;
 			case ABS_MISC:
-				if (source->tool_id != (u32)event->value) {
-					source->tool_id = (u32)event->value;
-					source->source_dirty = true;
+				if (stylus->tool_id != (u32)event->value) {
+					stylus->tool_id = (u32)event->value;
+					stylus->source_dirty = true;
 				}
 				break;
 			}
 			break;
 		case EV_MSC:
 			if (event->code == MSC_SERIAL)
-				source->serial = (u32)event->value;
+				stylus->serial = (u32)event->value;
 			break;
 		case EV_SYN:
 			if (event->code == SYN_REPORT && source->active &&
@@ -1235,6 +1629,107 @@ static unsigned int hid_proxy_events(struct input_handle *handle,
 
 	/* Observe stylus values without removing unrepresented events from evdev. */
 	return count;
+}
+
+static unsigned int hid_proxy_pad_events(struct input_handle *handle,
+				 struct input_value *vals,
+				 unsigned int count)
+{
+	struct hid_proxy_handle *proxy_handle = handle->private;
+	struct hid_proxy_runtime *runtime = handle->handler->private;
+	struct hid_proxy_source *source = &proxy_handle->source;
+	struct hid_proxy_pad_state *pad = &source->pad;
+	bool warn = false;
+
+	xSemaphoreTake(runtime->mutex, portMAX_DELAY);
+	for (struct input_value *event = vals; event != vals + count; event++) {
+		int index;
+
+		switch (event->type) {
+		case EV_KEY:
+			index = hid_proxy_code_index(hid_proxy_pad_button_codes,
+				ARRAY_SIZE(hid_proxy_pad_button_codes), event->code);
+			if (index >= 0) {
+				u32 bit = 1u << index;
+				bool pressed = event->value != 0;
+
+				if (pressed && !(pad->buttons & bit)) {
+					pad->buttons |= bit;
+					pad->pending_pressed |= bit;
+					pad->frame_dirty = true;
+				} else if (!pressed && (pad->buttons & bit)) {
+					pad->buttons &= ~bit;
+					pad->pending_released |= bit;
+					pad->frame_dirty = true;
+				}
+			}
+			break;
+		case EV_ABS:
+			index = hid_proxy_code_index(hid_proxy_pad_abs_codes,
+				ARRAY_SIZE(hid_proxy_pad_abs_codes), event->code);
+			if (index >= 0) {
+				pad->absolute[index].value = event->value;
+				pad->frame_dirty = true;
+			} else if (event->code == ABS_MISC) {
+				pad->active_id = event->value;
+				pad->frame_dirty = true;
+			}
+			break;
+		case EV_REL:
+			index = hid_proxy_code_index(hid_proxy_pad_rel_codes,
+				ARRAY_SIZE(hid_proxy_pad_rel_codes), event->code);
+			if (index >= 0) {
+				pad->relative[index] += event->value;
+				pad->frame_dirty = true;
+			}
+			break;
+		case EV_MSC:
+			if (event->code == MSC_SERIAL) {
+				pad->serial = event->value;
+				pad->frame_dirty = true;
+			}
+			break;
+		case EV_SW:
+			index = hid_proxy_code_index(hid_proxy_pad_switch_codes,
+				ARRAY_SIZE(hid_proxy_pad_switch_codes), event->code);
+			if (index >= 0) {
+				u8 bit = 1u << index;
+
+				if (event->value)
+					pad->switches |= bit;
+				else
+					pad->switches &= ~bit;
+				pad->frame_dirty = true;
+			}
+			break;
+		case EV_SYN:
+			if (event->code != SYN_REPORT || !pad->frame_dirty)
+				break;
+			if (source->active && runtime->mounted)
+				warn |= hid_proxy_pad_queue_frame_locked(source, 0);
+			else
+				hid_proxy_pad_clear_pending(pad);
+			break;
+		}
+	}
+	xSemaphoreGive(runtime->mutex);
+
+	if (warn)
+		async_msg("WARN: HID_PROXY_PAD_DROP");
+
+	return count;
+}
+
+static unsigned int hid_proxy_events(struct input_handle *handle,
+				     struct input_value *vals,
+				     unsigned int count)
+{
+	struct hid_proxy_handle *proxy_handle = handle->private;
+
+	if (proxy_handle->source.kind == HID_PROXY_SOURCE_PAD)
+		return hid_proxy_pad_events(handle, vals, count);
+
+	return hid_proxy_stylus_events(handle, vals, count);
 }
 
 static void hid_proxy_disconnect(struct input_handle *handle)
@@ -1286,6 +1781,10 @@ static const struct input_device_id hid_proxy_ids[] = {
 					       BIT_MASK(ABS_PRESSURE),
 		},
 	},
+	{
+		.flags = INPUT_DEVICE_ID_MATCH_BUS,
+		.bustype = BUS_USB,
+	},
 	{ }
 };
 
@@ -1322,7 +1821,8 @@ int hid_proxy_runtime_init(void)
 	runtime->touch_handler.disconnect = hid_proxy_touch_disconnect;
 	runtime->touch_handler.name = "hid-proxy-touch";
 	runtime->touch_handler.id_table = hid_proxy_touch_ids;
-	runtime->last_source.version = 1;
+	runtime->last_source.version = 2;
+	runtime->last_pad_source.version = 1;
 	runtime->last_touch_source.version = 1;
 	hid_proxy = runtime;
 
@@ -1344,7 +1844,12 @@ static void hid_proxy_reset_reports_locked(struct hid_proxy_runtime *runtime)
 	memset(&runtime->last_direct, 0, sizeof(runtime->last_direct));
 	memset(&runtime->last_indirect, 0, sizeof(runtime->last_indirect));
 	memset(&runtime->last_source, 0, sizeof(runtime->last_source));
-	runtime->last_source.version = 1;
+	runtime->last_source.version = 2;
+	memset(&runtime->last_pad_source, 0,
+	       sizeof(runtime->last_pad_source));
+	runtime->last_pad_source.version = 1;
+	memset(&runtime->last_pad_frame, 0,
+	       sizeof(runtime->last_pad_frame));
 	memset(&runtime->touch_inflight, 0, sizeof(runtime->touch_inflight));
 	memset(&runtime->last_touch_direct, 0,
 	       sizeof(runtime->last_touch_direct));
@@ -1405,6 +1910,98 @@ static void hid_proxy_touch_reconcile_remount_locked(
 	}
 }
 
+static void hid_proxy_activate_handle_locked(struct input_handle *handle)
+{
+	struct hid_proxy_handle *proxy_handle = handle->private;
+	struct hid_proxy_source *source = &proxy_handle->source;
+	struct input_dev *dev = handle->dev;
+	int error;
+
+	if (handle->open)
+		return;
+
+	xSemaphoreTake(hid_proxy->mutex, portMAX_DELAY);
+	hid_proxy_reset_frames_locked(source);
+	if (source->kind == HID_PROXY_SOURCE_PAD)
+		hid_proxy_pad_seed(source, dev);
+	else
+		hid_proxy_source_seed(source, dev);
+	xSemaphoreGive(hid_proxy->mutex);
+
+	/* The proxy owns input independently of the optional evdev client. */
+	error = input_open_device(handle);
+	if (error) {
+		async_msg("ERR: HID_PROXY_OPEN_FAIL");
+		return;
+	}
+
+	xSemaphoreTake(hid_proxy->mutex, portMAX_DELAY);
+	source->active = true;
+	source->retiring = false;
+	source->terminal_pending = false;
+	if (hid_proxy->mounted) {
+		if (source->kind == HID_PROXY_SOURCE_PAD) {
+			source->pad.source_pending = true;
+			(void)hid_proxy_pad_queue_frame_locked(source, 0);
+		} else {
+			(void)hid_proxy_queue_frame_locked(source, true);
+		}
+	}
+	xSemaphoreGive(hid_proxy->mutex);
+}
+
+static void hid_proxy_activate_handle(struct input_handle *handle)
+{
+	struct input_dev *dev = handle->dev;
+
+	mutex_lock(&dev->port_event_mutex);
+	hid_proxy_activate_handle_locked(handle);
+	mutex_unlock(&dev->port_event_mutex);
+}
+
+void hid_proxy_activate_input(struct input_dev *dev)
+{
+	struct input_handle *handle;
+
+	if (!hid_proxy)
+		return;
+
+	list_for_each_entry(handle, &hid_proxy->handler.h_list, h_node) {
+		if (handle->dev != dev)
+			continue;
+
+		hid_proxy_activate_handle(handle);
+		return;
+	}
+}
+
+void hid_proxy_reconcile_input_capabilities_locked(struct input_dev *dev,
+						   bool activate)
+{
+	struct input_handler *handler;
+	struct input_handle *handle;
+
+	if (!hid_proxy)
+		return;
+
+	handler = &hid_proxy->handler;
+	list_for_each_entry(handle, &handler->h_list, h_node) {
+		if (handle->dev != dev)
+			continue;
+		if (activate)
+			hid_proxy_activate_handle_locked(handle);
+		return;
+	}
+
+	if (hid_proxy_connect(handler, dev, &hid_proxy_ids[1]))
+		return;
+
+	/* Lifecycle is the sole list mutator; connect appended this handle. */
+	handle = list_last_entry(&handler->h_list, struct input_handle, h_node);
+	if (activate)
+		hid_proxy_activate_handle_locked(handle);
+}
+
 void hid_proxy_activate_hid(struct hid_device *hid)
 {
 	struct input_handle *handle;
@@ -1413,36 +2010,12 @@ void hid_proxy_activate_hid(struct hid_device *hid)
 		return;
 
 	list_for_each_entry(handle, &hid_proxy->handler.h_list, h_node) {
-		struct hid_proxy_handle *proxy_handle = handle->private;
 		struct input_dev *dev = handle->dev;
-		struct hid_proxy_source *source = &proxy_handle->source;
-		int error;
 
 		if (input_get_drvdata(dev) != hid && dev->dev.parent != &hid->dev)
 			continue;
-		if (handle->open)
-			continue;
 
-		xSemaphoreTake(hid_proxy->mutex, portMAX_DELAY);
-		hid_proxy_source_seed(source, dev);
-		xSemaphoreGive(hid_proxy->mutex);
-
-		/* The proxy owns input independently of the optional evdev client. */
-		error = input_open_device(handle);
-		if (error) {
-			async_msg("ERR: HID_PROXY_OPEN_FAIL");
-			continue;
-		}
-
-		xSemaphoreTake(hid_proxy->mutex, portMAX_DELAY);
-		source->active = true;
-		source->retiring = false;
-		source->terminal_pending = false;
-		hid_proxy_reset_frames_locked(source);
-		if (hid_proxy->mounted) {
-			(void)hid_proxy_queue_frame_locked(source, true);
-		}
-		xSemaphoreGive(hid_proxy->mutex);
+		hid_proxy_activate_handle(handle);
 	}
 
 	list_for_each_entry(handle, &hid_proxy->touch_handler.h_list, h_node) {
@@ -1508,8 +2081,19 @@ void hid_proxy_tud_mount(void)
 			continue;
 		}
 		if (source->active) {
+			bool resync = remount && source->published;
+
 			hid_proxy_reset_frames_locked(source);
-			(void)hid_proxy_queue_frame_locked(source, true);
+			if (source->kind == HID_PROXY_SOURCE_PAD) {
+				source->pad.source_pending = true;
+				source->pad.pending_pressed = resync ? 0 :
+					source->pad.buttons;
+				source->pad.frame_dirty = true;
+				(void)hid_proxy_pad_queue_frame_locked(source,
+					resync ? HID_PROXY_PAD_FRAME_RESYNC : 0);
+			} else {
+				(void)hid_proxy_queue_frame_locked(source, true);
+			}
 		}
 	}
 	list_for_each_entry_safe(touch_source, touch_next,
@@ -1563,6 +2147,10 @@ void hid_proxy_tud_umount(void)
 		}
 		source->published = false;
 		source->terminal_pending = false;
+		if (source->kind == HID_PROXY_SOURCE_PAD) {
+			source->pad.source_pending = false;
+			source->pad.published_buttons = 0;
+		}
 		hid_proxy_reset_frames_locked(source);
 	}
 	list_for_each_entry_safe(touch_source, touch_next,
@@ -1589,42 +2177,99 @@ static bool hid_proxy_prepare_report_locked(struct hid_proxy_runtime *runtime)
 
 		if (source->retiring) {
 			if (source->terminal_pending) {
-				struct hid_proxy_stylus_report report =
-					hid_proxy_stylus_report(source, true);
+				if (source->kind == HID_PROXY_SOURCE_PAD) {
+					struct hid_proxy_pad_report report = {
+						.source_index = source->source_index,
+						.flags = HID_PROXY_PAD_FRAME_TERMINAL,
+						.frame_sequence = cpu_to_le32(
+							source->pad.next_frame_sequence),
+						.released = cpu_to_le32(
+							source->pad.published_buttons),
+					};
 
-				inflight->kind = HID_PROXY_INFLIGHT_STYLUS_NEUTRAL;
-				inflight->report_id = source->direct ?
-					REPORT_ID_STYLUS_DIRECT :
-					REPORT_ID_STYLUS_INDIRECT;
-				inflight->length = sizeof(report);
-				memcpy(inflight->data, &report, sizeof(report));
+					inflight->kind =
+						HID_PROXY_INFLIGHT_PAD_NEUTRAL;
+					inflight->report_id = REPORT_ID_PAD_FRAME;
+					inflight->length = sizeof(report);
+					memcpy(inflight->data, &report,
+					       sizeof(report));
+				} else {
+					struct hid_proxy_stylus_report report =
+						hid_proxy_stylus_report(source, true);
+
+					inflight->kind =
+						HID_PROXY_INFLIGHT_STYLUS_NEUTRAL;
+					inflight->report_id = source->stylus.direct ?
+						REPORT_ID_STYLUS_DIRECT :
+						REPORT_ID_STYLUS_INDIRECT;
+					inflight->length = sizeof(report);
+					memcpy(inflight->data, &report,
+					       sizeof(report));
+				}
 			} else {
-				struct hid_proxy_source_report report =
-					hid_proxy_source_report(source, false);
+				inflight->kind =
+					HID_PROXY_INFLIGHT_SOURCE_REMOVED;
+				if (source->kind == HID_PROXY_SOURCE_PAD) {
+					struct hid_proxy_pad_source_report report =
+						hid_proxy_pad_source_report(source,
+								    false);
 
-				inflight->kind = HID_PROXY_INFLIGHT_SOURCE_REMOVED;
-				inflight->report_id = REPORT_ID_STYLUS_SOURCE;
-				inflight->length = sizeof(report);
-				memcpy(inflight->data, &report, sizeof(report));
+					inflight->report_id = REPORT_ID_PAD_SOURCE;
+					inflight->length = sizeof(report);
+					memcpy(inflight->data, &report,
+					       sizeof(report));
+				} else {
+					struct hid_proxy_source_report report =
+						hid_proxy_source_report(source, false);
+
+					inflight->report_id = REPORT_ID_STYLUS_SOURCE;
+					inflight->length = sizeof(report);
+					memcpy(inflight->data, &report,
+					       sizeof(report));
+				}
 			}
-		} else if (source->active && source->frame_count) {
-			struct hid_proxy_frame *frame =
-				&source->frames[source->frame_head];
+		} else if (source->active &&
+			   source->kind == HID_PROXY_SOURCE_PAD &&
+			   (!source->published || source->pad.source_pending)) {
+			struct hid_proxy_pad_source_report report =
+				hid_proxy_pad_source_report(source, true);
 
-			if (!source->published || frame->source_pending) {
-				inflight->kind = HID_PROXY_INFLIGHT_SOURCE_PRESENT;
-				inflight->report_id = REPORT_ID_STYLUS_SOURCE;
-				inflight->length = sizeof(frame->source);
-				memcpy(inflight->data, &frame->source,
-				       sizeof(frame->source));
+			inflight->kind = HID_PROXY_INFLIGHT_SOURCE_PRESENT;
+			inflight->report_id = REPORT_ID_PAD_SOURCE;
+			inflight->length = sizeof(report);
+			memcpy(inflight->data, &report, sizeof(report));
+		} else if (source->active && source->frame_count) {
+			if (source->kind == HID_PROXY_SOURCE_PAD) {
+				struct hid_proxy_pad_report *report =
+					&source->pad.frames[source->frame_head];
+
+				inflight->kind = HID_PROXY_INFLIGHT_PAD_FRAME;
+				inflight->report_id = REPORT_ID_PAD_FRAME;
+				inflight->length = sizeof(*report);
+				memcpy(inflight->data, report, sizeof(*report));
 			} else {
-				inflight->kind = HID_PROXY_INFLIGHT_STYLUS_FRAME;
-				inflight->report_id = source->direct ?
-					REPORT_ID_STYLUS_DIRECT :
-					REPORT_ID_STYLUS_INDIRECT;
-				inflight->length = sizeof(frame->stylus);
-				memcpy(inflight->data, &frame->stylus,
-				       sizeof(frame->stylus));
+				struct hid_proxy_frame *frame =
+					&source->stylus.frames[source->frame_head];
+
+				if (!source->published || frame->source_pending) {
+					inflight->kind =
+						HID_PROXY_INFLIGHT_SOURCE_PRESENT;
+					inflight->report_id =
+						REPORT_ID_STYLUS_SOURCE;
+					inflight->length = sizeof(frame->source);
+					memcpy(inflight->data, &frame->source,
+					       sizeof(frame->source));
+				} else {
+					inflight->kind =
+						HID_PROXY_INFLIGHT_STYLUS_FRAME;
+					inflight->report_id =
+						source->stylus.direct ?
+						REPORT_ID_STYLUS_DIRECT :
+						REPORT_ID_STYLUS_INDIRECT;
+					inflight->length = sizeof(frame->stylus);
+					memcpy(inflight->data, &frame->stylus,
+					       sizeof(frame->stylus));
+				}
 			}
 		} else {
 			continue;
@@ -2007,19 +2652,47 @@ void hid_proxy_tud_report_complete(uint8_t instance, bool success)
 	}
 
 	if (inflight->kind == HID_PROXY_INFLIGHT_SOURCE_PRESENT) {
-		memcpy(&hid_proxy->last_source, inflight->data,
-		       sizeof(hid_proxy->last_source));
+		if (source->kind == HID_PROXY_SOURCE_PAD) {
+			memcpy(&hid_proxy->last_pad_source, inflight->data,
+			       sizeof(hid_proxy->last_pad_source));
+			source->pad.source_pending = false;
+		} else {
+			memcpy(&hid_proxy->last_source, inflight->data,
+			       sizeof(hid_proxy->last_source));
+			if (!source->retiring)
+				source->stylus.frames[source->frame_head]
+					.source_pending = false;
+		}
 		source->published = true;
-		if (!source->retiring)
-			source->frames[source->frame_head].source_pending = false;
 	} else if (inflight->kind == HID_PROXY_INFLIGHT_SOURCE_REMOVED) {
 		struct hid_proxy_handle *proxy_handle =
 			container_of(source, struct hid_proxy_handle, source);
 
-		memcpy(&hid_proxy->last_source, inflight->data,
-		       sizeof(hid_proxy->last_source));
+		if (source->kind == HID_PROXY_SOURCE_PAD)
+			memcpy(&hid_proxy->last_pad_source, inflight->data,
+			       sizeof(hid_proxy->last_pad_source));
+		else
+			memcpy(&hid_proxy->last_source, inflight->data,
+			       sizeof(hid_proxy->last_source));
+		source->published = false;
 		list_del(&proxy_handle->runtime_node);
 		list_add_tail(&proxy_handle->runtime_node, &hid_proxy->released);
+	} else if (inflight->kind == HID_PROXY_INFLIGHT_PAD_FRAME ||
+		   inflight->kind == HID_PROXY_INFLIGHT_PAD_NEUTRAL) {
+		memcpy(&hid_proxy->last_pad_frame, inflight->data,
+		       sizeof(hid_proxy->last_pad_frame));
+		source->pad.published_buttons =
+			(u32)hid_proxy->last_pad_frame.buttons;
+		if (inflight->kind == HID_PROXY_INFLIGHT_PAD_NEUTRAL) {
+			source->pad.next_frame_sequence++;
+			source->terminal_pending = false;
+		} else if (source->frame_count) {
+			source->frame_head = (source->frame_head + 1) %
+				HID_PROXY_FRAME_QUEUE_DEPTH;
+			source->frame_count--;
+			if (!source->frame_count)
+				source->drop_reported = false;
+		}
 	} else {
 		if (inflight->report_id == REPORT_ID_STYLUS_DIRECT)
 			memcpy(&hid_proxy->last_direct, inflight->data,
@@ -2060,32 +2733,51 @@ uint16_t hid_proxy_tud_get_report(uint8_t instance, uint8_t report_id,
 		return 0;
 
 	xSemaphoreTake(hid_proxy->mutex, portMAX_DELAY);
-	switch (report_id) {
-	case REPORT_ID_STYLUS_DIRECT:
-		report = &hid_proxy->last_direct;
-		length = sizeof(hid_proxy->last_direct);
-		break;
-	case REPORT_ID_STYLUS_INDIRECT:
-		report = &hid_proxy->last_indirect;
-		length = sizeof(hid_proxy->last_indirect);
-		break;
-	case REPORT_ID_STYLUS_SOURCE:
-		report = &hid_proxy->last_source;
-		length = sizeof(hid_proxy->last_source);
-		break;
-	case REPORT_ID_TOUCH_DIRECT:
-		report = &hid_proxy->last_touch_direct;
-		length = sizeof(hid_proxy->last_touch_direct);
-		break;
-	case REPORT_ID_TOUCH_INDIRECT:
-		report = &hid_proxy->last_touch_indirect;
-		length = sizeof(hid_proxy->last_touch_indirect);
-		break;
-	case REPORT_ID_TOUCH_SOURCE:
-		report = &hid_proxy->last_touch_source;
-		length = sizeof(hid_proxy->last_touch_source);
-		break;
-	default:
+	if (instance == HID_WEBHID_INSTANCE) {
+		switch (report_id) {
+		case REPORT_ID_STYLUS_DIRECT:
+			report = &hid_proxy->last_direct;
+			length = sizeof(hid_proxy->last_direct);
+			break;
+		case REPORT_ID_STYLUS_INDIRECT:
+			report = &hid_proxy->last_indirect;
+			length = sizeof(hid_proxy->last_indirect);
+			break;
+		case REPORT_ID_STYLUS_SOURCE:
+			report = &hid_proxy->last_source;
+			length = sizeof(hid_proxy->last_source);
+			break;
+		case REPORT_ID_PAD_SOURCE:
+			report = &hid_proxy->last_pad_source;
+			length = sizeof(hid_proxy->last_pad_source);
+			break;
+		case REPORT_ID_PAD_FRAME:
+			report = &hid_proxy->last_pad_frame;
+			length = sizeof(hid_proxy->last_pad_frame);
+			break;
+		default:
+			xSemaphoreGive(hid_proxy->mutex);
+			return 0;
+		}
+	} else if (instance == HID_TOUCH_INSTANCE) {
+		switch (report_id) {
+		case REPORT_ID_TOUCH_DIRECT:
+			report = &hid_proxy->last_touch_direct;
+			length = sizeof(hid_proxy->last_touch_direct);
+			break;
+		case REPORT_ID_TOUCH_INDIRECT:
+			report = &hid_proxy->last_touch_indirect;
+			length = sizeof(hid_proxy->last_touch_indirect);
+			break;
+		case REPORT_ID_TOUCH_SOURCE:
+			report = &hid_proxy->last_touch_source;
+			length = sizeof(hid_proxy->last_touch_source);
+			break;
+		default:
+			xSemaphoreGive(hid_proxy->mutex);
+			return 0;
+		}
+	} else {
 		xSemaphoreGive(hid_proxy->mutex);
 		return 0;
 	}
