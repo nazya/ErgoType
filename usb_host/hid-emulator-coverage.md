@@ -433,6 +433,7 @@ claims for unrelated drivers.
 | 2026-08-01 | Artist `device/uclogic-artist` (`287acbf`), host `34aeccba…`, emulator `7173d5f1…` | Artist 22R full input plus reconnect smoke and Artist 24 input complete six balanced Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, and terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; exact Artist 24 reconstructed ABS_X is not visible in production logging |
 | 2026-08-01 | Cintiq 13HD `device/wacom-cintiq-13hd` (`160a0ac`), host `ec47bd67…`, emulator `1f7bb41c…` | three `056a:0304` generations complete pre-deadline cancellation, two exact Feature report 2 mode exchanges, Pen input, all nine Pad buttons, same-PID reconnect, six balanced Pen/Pad lifetimes, 21 `oom=0` snapshots, and terminal `f1, f2, f3, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; the descriptor is protocol-equivalent and does not prove Touch Ring or `ABS_WHEEL` |
 | 2026-08-01 | Star G640 Rev A `device/uclogic-star-g640` (`4e020e2`), host `f0822c02…`, emulator `e0752af6…` | one callback-time string-100 cancellation followed by a full Pen generation and same-PID reconnect completes `f1, f2, f3, f10`; two Pen lifetimes balance, both complete removals repeat `60744/54464/9`, all 13 snapshots have `oom=0`, and no `f12`, `HID_REPORT_SKIP`, or host `ERR` appears; parameters/reports are protocol-equivalent and numeric X/Y values are not production-log-visible |
+| 2026-08-03 | focused `device/wacom-receiver-lifecycle`, test host `068194df…`, emulator `e0710149…` | `f13, f14, f10` completes without a failure marker, host `ERR`, timeout, input drop, or OOM; test-only `033c` proves both child stop paths after the second-child post-start error, and exactly three `0027` generations produce real Finger then Pen events across two logical rebinds, proving both shared arbitration fields are reset |
 
 ## Recorded Emulator Branches
 
@@ -1592,6 +1593,61 @@ Bluetooth, ExpressKey Remote, bootloader, I2C, PCI, receiver children outside
 the selected `0027` profile, and all other Wacom IDs remain outside this
 fixture.
 
+### Focused Wacom receiver lifecycle coverage
+
+Branch `device/wacom-receiver-lifecycle` uses the existing exact
+`056a:0084` three-interface receiver descriptors and a host-log-only marker
+oracle. It does not repeat AES, wired Intuos, Cintiq, or the earlier receiver
+cancellation matrix. The exact hardware-test artifacts were:
+
+```text
+test-only host UF2 SHA-256 068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce
+emulator UF2 SHA-256       e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289
+hardware verdict           passed 2026-08-03 for the focused scope below
+production host UF2        c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c
+```
+
+The first phase reported receiver child PID `033c`. The test-only host mode
+forced the touch child through its existing `fail_hw_stop` path immediately
+after successful input registration and made the first child poll. The
+fixture then observed no interface-1 completion during its bounded window.
+Marker `f13` therefore proves both the second child's local `hid_hw_stop()`
+and the receiver worker's outer `hid_hw_stop(hdev1)` before common unwind.
+The temporary host mode was removed before the production rebuild above; that
+production UF2 was not the hardware-test image.
+
+The second phase used exactly three dynamic `056a:0027 (WL)` generations. It
+left Pen proximity set in the first generation, logically unpaired, and
+delivered active and release Finger frames in the second generation. It then
+left touch-down set, logically unpaired again, and delivered active Pen
+coordinates/tip plus Pen out in the third generation. The real Finger and Pen
+events show that `stylus_in_proximity` and `touch_down` were each reset across
+their independent logical rebind. Normal final unpair completed before the
+fixture changed physical identity and emitted `f14`, then `f10`.
+
+The marker order was `f13, f14, f10`, with no `f12`, phase key `p`/`r`/`m`,
+host `ERR`, timeout, or input-drop marker. All heap snapshots reported
+`oom=0`; minimum-ever free heap was 26,088 B. Logical-unpair snapshots were
+40,232, 40,216, and 40,216 B free. The first and final alert-attached
+snapshots were both 48,312 B. The capture ends with the final alert attached,
+so it does not establish a final detached heap plateau. Minimum remaining
+stack watermarks were TinyUSB 265, KeyD 658, async 389, work 207, timer 348,
+lifecycle 210, and report 863 words.
+
+The two `HID_REPORT_SET_Q` / `HID_REPORT_SET_OK` pairs belong to the two alert
+keyboard attachments. Wacom receiver LED exchanges use synchronous
+`hid_hw_raw_request()` and are validated by the emulator callback state
+machine, so those asynchronous markers are not claimed as receiver-control
+evidence.
+
+Three `EVDEV_BATCH_CAP` warnings are the existing bounded Linux-to-KeyD
+boundary, one for each Finger generation; the one-contact frames produced no
+recorded input drop. Receiver child `0027` does not set
+`WACOM_QUIRK_TOOLSERIAL`, and the public USB fixture cannot deliver a Wacom
+callback report larger than the allocated transport buffer. The new empty and
+oversized ToolSerial FIFO guards therefore remain source-audited rather than
+hardware-covered by this run.
+
 ### External wired Wacom Intuos coverage
 
 The focused `device/wacom-wired-matrix` artifact selects eleven external wired
@@ -1797,6 +1853,24 @@ and emulator CDC lines under each item.
     all 47 heap snapshots; exact power values/order, real 30-minute AES expiry,
     post-promotion/running original pre-PID callback, and other receiver child
     profiles remain outside the verdict
+- [x] focused Wacom receiver post-start cleanup and arbitration reset
+  - exact test-only host
+    `068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce`
+    and emulator
+    `e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289`
+  - require `f13, f14, f10`, no `f12`, `p`/`r`/`m`, host `ERR`, timeout,
+    input-drop marker, or OOM
+  - require the test-only `033c` phase to stop both children after the second
+    child fails post-start, followed by exactly three `0027` generations with
+    active Finger then Pen events across two logical rebinds
+  - verdict: passed 2026-08-03; logical-unpair free heap was
+    `40232, 40216, 40216`, minimum-ever heap was 26,088 B, and all task
+    watermarks remained nonzero
+  - production host
+    `c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c`
+    was rebuilt after removing the test mode; it was not the flashed test host
+  - ToolSerial FIFO hardening remains source-audited because `0027` does not
+    reach that quirk and public USB input cannot exceed its allocated buffer
 - [x] external wired Wacom Intuos matrix
   - exact host
     `1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed`

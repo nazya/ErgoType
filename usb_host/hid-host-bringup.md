@@ -193,6 +193,21 @@ table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
 ExpressKey Remote, bootloader, I2C, PCI, and product IDs outside that table
 remain excluded.
 
+A focused receiver lifecycle pair passed on 2026-08-03. Its first phase used a
+temporary compile-gated host hook to fail only the `033c` Touch child after
+successful input registration while keeping the first child polling. Marker
+`f13` followed 500 ms with no first-child IN completion, covering both the
+second child's `fail_hw_stop` path and the receiver unwind's explicit
+`hid_hw_stop(hdev1)`. The hook was then removed and the production host was
+rebuilt. The second phase used two logical `0027` rebinds: active Finger input
+after a generation left Pen proximity set, then active Pen input after the
+next generation left Touch down. Its real Finger and Pen events cover both
+cross-generation arbitration resets. The fixture completed `f13, f14, f10`
+without `f12`, a host `ERR`, an input-drop marker, or OOM; all logical-unpair
+snapshots stabilized at 40,216 B after the first 16-byte difference. The
+shared cleanup label's other post-start callers and the ToolSerial FIFO
+hardening remain source-audited rather than hardware-injected.
+
 Earlier bring-up firmware, before the current heap/static-RAM reductions,
 reported roughly 43-48 KiB of free FreeRTOS heap before attaching a heavy HID
 device. That range is historical, not the expected value for the current

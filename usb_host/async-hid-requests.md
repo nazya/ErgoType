@@ -67,6 +67,11 @@ The active implementation now has these properties:
   verdict: it disconnected from the device-side string-100 callback before
   the raw descriptor request completed, returned to the pre-probe heap
   plateau, and then completed two fresh string-100/input generations.
+  The 2026-08-03 focused receiver fixture forced the second dynamic child to
+  fail after input registration and verified that neither child retained live
+  polling, then used two logical rebinds to verify both shared arbitration
+  resets. This exercised existing stop/work ownership and added no transport
+  primitive; the temporary fault hook was removed after the run.
   Promotion-before-callback, simultaneous synchronous cancel,
   callback self-requeue, queue destruction, and tick wrap remain statically
   audited generic branches rather than hardware-covered claims.

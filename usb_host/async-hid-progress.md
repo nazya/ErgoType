@@ -520,6 +520,38 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-08-03: the focused Wacom receiver lifecycle checkpoint used test-only
+  host UF2 SHA256
+  `068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce`
+  and emulator UF2 SHA256
+  `e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289`.
+  The host-log marker order was `f13, f14, f10`, with no `f12`, phase key
+  `p`/`r`/`m`, host `ERR`, timeout, input drop, or OOM. In the first phase a
+  temporary compile-gated hook forced receiver child `033c` Touch through the
+  existing `fail_hw_stop` after successful input registration, while the first
+  child had active polling. The missing interface-1 completion before `f13`
+  proves both the second child's local stop and the receiver worker's outer
+  `hid_hw_stop(hdev1)` before common unwind.
+  The second phase created exactly three dynamic `056a:0027 (WL)`
+  Pen/Pad/Finger generations. Active Finger input after a Pen-proximity
+  generation and the first logical rebind proves `stylus_in_proximity` reset;
+  active Pen input after a touch-down generation and the second logical rebind
+  proves `touch_down` reset. All nine dynamic input additions had matching
+  removals. Three `EVDEV_BATCH_CAP` warnings, one per Finger generation, were
+  the expected bounded Linux-to-KeyD boundary and did not produce a recorded
+  input drop.
+  All heap snapshots reported `oom=0`; minimum-ever free heap was 26,088 B.
+  Logical-unpair snapshots were 40,232, 40,216, and 40,216 B free, while the
+  first and final alert-attached snapshots were both 48,312 B. The log ends
+  with the final alert attached and does not establish a final detached
+  plateau. Minimum task watermarks were TinyUSB 265, KeyD 658, async 389,
+  work 207, timer 348, lifecycle 210, and report 863 words.
+  The temporary hook was removed and production host UF2
+  `c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c`
+  was rebuilt; that image was not the flashed test host. Receiver `0027` lacks
+  `WACOM_QUIRK_TOOLSERIAL`, and the public USB transport cannot make the Wacom
+  callback exceed its allocated report buffer, so the new empty/oversized FIFO
+  guards remain source-audited.
 - 2026-07-30: the AES/receiver Wacom checkpoint used exact host UF2 SHA256
   `8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8`
   and emulator UF2 SHA256

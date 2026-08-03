@@ -794,6 +794,53 @@ been queued. The selected receiver child `0027` is a protocol-equivalent active
 profile; captured child `033b` is selected by the later Intuos stage but was
 not exercised by this receiver artifact.
 
+#### Focused Wacom receiver lifecycle memory checkpoint
+
+The later focused receiver run used a temporary compile-gated host mode only
+to make the second-child post-start failure deterministic. Its exact artifacts
+and post-test production rebuild are:
+
+```text
+test-only host UF2 SHA-256    068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce
+emulator UF2 SHA-256          e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289
+hardware verdict              passed 2026-08-03; focused receiver lifecycle
+production host UF2 SHA-256   c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c
+production hardware verdict   not the flashed test image
+```
+
+The first phase forced child PID `033c` Touch through its existing
+`fail_hw_stop` after successful input registration and verified that the
+already polling first child was also stopped by the receiver worker's outer
+unwind. The second phase built and removed exactly three dynamic PID `0027`
+Pen/Pad/Finger generations across two logical unpairs and re-pairs. Real
+Finger input after stale Pen proximity and real Pen input after stale
+touch-down prove that both shared arbitration fields were reset between
+generations.
+
+Every heap snapshot reported `oom=0`; minimum-ever free heap was 26,088 B.
+The three logical-unpair snapshots were:
+
+```text
+generation 1 unpair free heap  40232 B
+generation 2 unpair free heap  40216 B
+generation 3 unpair free heap  40216 B
+first alert attached           48312 B
+final alert attached           48312 B
+```
+
+The 16-byte warm-up difference did not grow across the later two unpairs.
+The capture ends after terminal `f10` with the alert keyboard still attached,
+so it supplies no final detached plateau and must not be used as one. Minimum
+remaining stack watermarks were TinyUSB 265, KeyD 658, async 389, work 207,
+timer 348, lifecycle 210, and report 863 words.
+
+The three `EVDEV_BATCH_CAP` warnings are the expected bounded Linux-to-KeyD
+boundary, one per Finger generation; no input-drop marker appeared. This run
+does not add FIFO peak memory evidence: child `0027` has no
+`WACOM_QUIRK_TOOLSERIAL`, and the public USB transport cannot deliver a Wacom
+callback larger than its allocated report buffer. The empty/oversized FIFO
+hardening therefore remains source-audited.
+
 #### External wired Wacom Intuos verified stage
 
 Selecting eleven external wired Intuos/Intuos Pro/Intuos 2 IDs and enabling

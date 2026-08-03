@@ -434,7 +434,8 @@ numeric X/Y values remain outside the production-log verdict.
 ## Active USB Wacom Boundary
 
 The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
-implementation while keeping a narrow USB-only match table:
+implementation plus the scoped newer-upstream FIFO and post-start cleanup
+fixes, while keeping a narrow USB-only match table:
 
 - One by Wacom Small CTL-472 `056a:037a` and Medium CTL-672 `056a:037b` use
   the upstream `BAMBOO_PEN` parser, record FIFO, sibling shared data, and
@@ -495,11 +496,40 @@ If initial receiver-monitor probe queued `init_work` and a later
 callback before devres releases `struct wacom`. Reversible `usbhid_start()`
 checks physical disconnect both before and after buffer allocation, reopens
 the transport only for the same live interface generation, and preserves
-`-ENODEV`/`-ENOMEM`. The pinned late-error shape remains: input or LED
-registration failure after a successful restart releases the input resources
-but leaves transport started until the next rebind or disconnect, and an
-unchanged PID is not retried automatically. These error paths are
-source-audited, not hardware-injected.
+`-ENODEV`/`-ENOMEM`. The newer upstream failure shape routes every error after
+a successful `hid_hw_start()` through `hid_hw_stop()` before releasing devres.
+The focused receiver-lifecycle pair, temporary-hook host
+`068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce`
+and emulator
+`e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289`,
+forced the `033c` touch child through that common label after successful input
+registration. Its `f13` marker and absence of an interface-1 completion proved
+both the second child's local stop and the worker's additional stop of the
+already-started first child. The LED, Bamboo-rejection, and monitor-open callers
+share the exact upstream label but were not fault-injected independently;
+Remote remains compile-gated.
+
+Receiver rebind also clears `stylus_in_proximity` and `touch_down` while both
+child report parsers are fenced. Two independent `0027` logical rebinds left
+Pen proximity and then touch-down asserted across the old generation. Active
+Finger input after the first rebind and active Pen input after the second
+proved both resets before terminal `f14, f10`. Logical-unpair free heap
+stabilized at 40,216 bytes, minimum free heap was 26,088 bytes, every snapshot
+reported `oom=0`, and every task watermark remained nonzero. No cumulative
+child-graph retention, host `ERR`, or input-drop marker appeared.
+The temporary failure and polling hooks were then removed. The hook-free
+production rebuild is `text/data/bss=605504/788/245412`, UF2 SHA-256
+`c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c`;
+it was not flashed unchanged, so the runtime verdict belongs to the exact
+temporary-hook pair rather than being transferred to that production image.
+
+The same source update imports upstream's empty-FIFO guard, checked
+`kfifo_in()` result, `GFP_ATOMIC` flush allocation, and scoped temporary-buffer
+cleanup. Receiver child `0027` does not set `WACOM_QUIRK_TOOLSERIAL`, and the
+public USB transport cannot demonstrably deliver a callback report larger than
+the allocated report buffer through this fixture. Those ToolSerial branches
+therefore remain source-audited; ordinary receiver input is not presented as
+their hardware coverage.
 
 The wired five-profile artifact, later AES/receiver artifact, focused
 eleven-ID Intuos artifact, and focused Cintiq 13HD artifact are separate

@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-08-01
+Updated: 2026-08-03
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -12,8 +12,10 @@ contract in [`tinyusb-host-port.md`](tinyusb-host-port.md).
 
 Linux baseline: `../linux-upstream-hid` at
 `83f1454877cc292b88baf13c829c16ce6937d120`.
-Post-baseline upstream fix: multitouch active-slot bitmap commit
-`8813b0612275cc61fe9e6603d0ee019247ade6be`.
+Post-baseline upstream fixes are the multitouch active-slot bitmap commit
+`8813b0612275cc61fe9e6603d0ee019247ade6be` and the source-compared Wacom
+ToolSerial FIFO hardening plus post-`hid_hw_start()` failure routing described
+below.
 
 ## Result
 
@@ -181,11 +183,27 @@ If initial receiver-monitor probe queued `init_work` and its later
 callback before devres releases `struct wacom`. Reversible `usbhid_start()`
 checks physical disconnect before and after buffer allocation, opens the
 transport gate only for the same live interface generation, and preserves
-`-ENODEV`/`-ENOMEM`. The pinned late-error shape remains: input or LED
-registration failure after a successful restart releases the input resources
-but leaves transport started until the next rebind or disconnect, and an
-unchanged PID is not automatically retried. These error paths are
-source-audited, not hardware-injected.
+`-ENODEV`/`-ENOMEM`. The newer upstream Wacom failure shape routes
+`wacom_register_inputs()`, LED/Remote initialization, Bamboo rejection, and
+monitor `hid_hw_open()` errors after successful `hid_hw_start()` through one
+`fail_hw_stop` label. The port keeps that source shape. Its disabled Remote
+call and error branch remain adjacent, and the existing firmware cleanup below
+the label still synchronously cancels `init_work` before devres release.
+
+The firmware receiver worker has two additional lifetime operations which
+cannot move into generic glue without duplicating Wacom state. It clears
+`stylus_in_proximity` and `touch_down` while holding both child
+`driver_input_lock` objects before releasing either generation. If the second
+child fails, it stops the successfully started first child before the common
+resource unwind; the original upstream error branch remains commented beside
+that replacement. Neither operation changes the worker's `void` return
+contract or invents a new error value.
+
+The same source update imports current upstream's ToolSerial FIFO empty guard,
+checked `kfifo_in()` result, `GFP_ATOMIC` flush allocation, and
+`__free(kfree)` buffer lifetime. The compatibility layer already provides the
+linked record-FIFO, allocation, scoped-cleanup, and reduced warning contracts.
+No local queue state or wrapper was added.
 
 The CTH descriptor contains two padding-only reports whose ordering pass has
 zero fields. Pinned `hid_report_process_ordering()` consequently calls
@@ -242,6 +260,44 @@ device-side report acknowledgement cannot prove every pending battery-work
 enqueue. The AES fixture does not wait for the real 30-minute expiry. The short
 pre-PID receiver callback cannot be externally held after promotion or while
 running without a host hook or SWD.
+
+The focused receiver-lifecycle pair used temporary-hook host
+`068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce`
+and emulator
+`e071014954af3897bd5d3f73fb8dece373a918b4e88df9aea20b27e8acdac289`.
+For child `033c`, the test injected an error after successful touch input
+registration. Marker `f13`, no dynamic `033c` input publication, and no
+interface-1 completion during the bounded window prove the second child's
+`fail_hw_stop` and the worker's stop of the already-running first child. This
+representative post-start branch is hardware-injected; the other callers of
+the shared exact-upstream label are source-audited rather than separately
+fault-injected.
+
+A fresh receiver then performed three `0027` generations. The first left Pen
+proximity asserted before logical unpair; active Finger events after the next
+pair prove the stylus reset. That generation left touch-down asserted; active
+Pen coordinates/tip and Pen-out after the third pair prove the touch reset.
+The run completed `f14, f10` with no `f12`, host `ERR`, enumeration failure,
+input drop, or OOM. Logical-unpair free heap was `40232`, `40216`, then
+`40216` bytes, so the 16-byte allocator-order difference did not accumulate;
+the first phase's complete physical marker removal recovered to `60736` bytes.
+Minimum free heap was `26088` bytes. Lowest observed task watermarks were
+TinyUSB host `265`, KeyD `658`, async `389`, work `207`, timer `348`, lifecycle
+`210`, and report `863` words. The three `EVDEV_BATCH_CAP` warnings were the
+existing touch consumer boundary and had no `EVDEV_INPUT_DROP`.
+The captured log ends after terminal marker delivery rather than after removal
+of that final marker device, so it does not add an exact final physical-removal
+plateau claim.
+
+The temporary failure and forced-poll hooks were removed before the production
+rebuild. The hook-free image is `text/data/bss=605504/788/245412`, UF2 SHA-256
+`c9464030c8b061450825ae9c26dc2c1f6f6b08a929ee5c4307f6410638b5e06c`;
+it was not flashed unchanged. Receiver child `0027` does not set
+`WACOM_QUIRK_TOOLSERIAL`, so this fixture cannot reach the imported FIFO
+insert/flush code. The current public USB transport also gives the callback no
+demonstrated way to deliver a report larger than the allocated report buffer. The
+empty/oversized guard, checked insertion, atomic allocation, and scoped cleanup
+therefore remain source-audited limitations, not inferred hardware coverage.
 
 The focused external wired Intuos host
 `1bd3124acf0d3058bf798df8b59cc796aebc43cca09a36cf39ea4a96b8f94fed`
@@ -474,7 +530,7 @@ sources so their enablement contract remains visible.
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
-| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 19-ID USB allowlist: base `056a:0027/0029/0084/00de/037a/037b/5048` plus external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver battery, timer, and receiver rebind paths are active. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage. Bluetooth, Remote, bootloader, I2C, PCI, and all other product IDs remain gated; the driver descriptor is immutable. |
+| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 19-ID USB allowlist: base `056a:0027/0029/0084/00de/037a/037b/5048` plus external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver battery, timer, and receiver rebind paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, Remote, bootloader, I2C, PCI, and all other product IDs remain gated; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. `usbhid.c` scopes explicit-feature-usage compaction to Wacom `056a:0084/0314/0315/0317/5048`; HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
 
