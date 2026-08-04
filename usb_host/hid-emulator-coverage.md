@@ -427,13 +427,14 @@ claims for unrelated drivers.
 | 2026-07-29 | `device/wacom-wired-matrix`, exact no-PIO host `bdf6ab6c…` and 32-reconnect emulator `61440170…` | CTL-472 completes `f1, f2, f3, f4, f10` with no `f12`; exact mode SET/GET, Pen/eraser input, pre-deadline and held-callback disconnect, recovery, 36 Pen add/removes, 36 expected ghost-interface warnings, stable removal plateaus, nonzero task watermarks, and `oom=0` |
 | 2026-07-30 | expanded `device/wacom-wired-matrix`, host `4efcd108…`, emulator `037c8fe0…` | CTL-472, CTL-672, PTK-450, CTH-470, and PTH-650 complete `f1, f2, f5, f3, f6, f7, f8, f9, f11, f4, f10`; all 23 physical attachments publish and remove the expected 46 Wacom input nodes, all 115 heap snapshots have `oom=0`, and the one 256-byte immediate PTH teardown difference is reclaimed; production logging does not expose exact power-snapshot values or ordering |
 | 2026-07-30 | AES/receiver `device/wacom-wired-matrix`, host `8e07cbab…`, emulator `8dd6dd64…` | Yoga 260 AES and USB receiver phases complete without a failure marker or host `ERR`; four AES and four receiver attachments produce 20 balanced input lifetimes across control/input/battery, pair/unpair/re-pair, sibling-init cancellation, held rebind/teardown controls, physical disconnect, and recovery; all 47 heap snapshots have `oom=0` and nonzero task watermarks |
-| 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID |
+| 2026-07-31 | external wired Intuos `device/wacom-wired-matrix`, host `1bd3124a…`, emulator `93f034b6…` | eleven selected `INTUOSHT`, `INTUOSPS/PM/PL`, and `INTUOSHT2` PID profiles publish and remove 29 expected Pen/Pad/Finger nodes, then complete `f15, f10` without `f12` or host `ERR`; exact-ID Pro feature-usage compaction leaves enough heap for Finger, all 63 snapshots have `oom=0`, and family captures do not imply byte-exact retail descriptors for every PID; the run did not prove parsing or CTRL-head retirement for non-waiting `INTUOSHT2` GET 8 |
 | 2026-07-31 | Deco/Parblo `device/uclogic-deco-parblo` (`c843295`), host `a9ba49cf…`, emulator `373df86d…` | Deco 01 original and Parblo A610 Pro each complete an initial and same-PID reconnect generation; ten target input lifetimes balance, all 22 snapshots have `oom=0`, and terminal `f15, f10` arrives without `f12`, `HID_REPORT_SKIP`, or host `ERR` |
 | 2026-08-01 | focused UC-Logic failed-probe fixture | three reached `hid_hw_start()` failures after combined-descriptor generation repeat the same cleanup plateau, then one normal Parblo generation publishes and removes Mouse/Pen/Pad; all 25 snapshots have `oom=0`, with no host `ERR`; `hid_parse()` remains source-audited only |
 | 2026-08-01 | Artist `device/uclogic-artist` (`287acbf`), host `34aeccba…`, emulator `7173d5f1…` | Artist 22R full input plus reconnect smoke and Artist 24 input complete six balanced Pen/Pad lifetimes, six expected `HID_IGNORED`, 21 `oom=0` snapshots, and terminal `f15, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; exact Artist 24 reconstructed ABS_X is not visible in production logging |
 | 2026-08-01 | Cintiq 13HD `device/wacom-cintiq-13hd` (`160a0ac`), host `ec47bd67…`, emulator `1f7bb41c…` | three `056a:0304` generations complete pre-deadline cancellation, two exact Feature report 2 mode exchanges, Pen input, all nine Pad buttons, same-PID reconnect, six balanced Pen/Pad lifetimes, 21 `oom=0` snapshots, and terminal `f1, f2, f3, f10` without `f12`, `HID_REPORT_SKIP`, or host `ERR`; the descriptor is protocol-equivalent and does not prove Touch Ring or `ABS_WHEEL` |
 | 2026-08-01 | Star G640 Rev A `device/uclogic-star-g640` (`4e020e2`), host `f0822c02…`, emulator `e0752af6…` | one callback-time string-100 cancellation followed by a full Pen generation and same-PID reconnect completes `f1, f2, f3, f10`; two Pen lifetimes balance, both complete removals repeat `60744/54464/9`, all 13 snapshots have `oom=0`, and no `f12`, `HID_REPORT_SKIP`, or host `ERR` appears; parameters/reports are protocol-equivalent and numeric X/Y values are not production-log-visible |
 | 2026-08-03 | focused `device/wacom-receiver-lifecycle`, test host `068194df…`, emulator `e0710149…` | `f13, f14, f10` completes without a failure marker, host `ERR`, timeout, input drop, or OOM; test-only `033c` proves both child stop paths after the second-child post-start error, and exactly three `0027` generations produce real Finger then Pen events across two logical rebinds, proving both shared arbitration fields are reset |
+| 2026-08-04 | focused `device/wacom-wired-matrix`, production host `72a83e26…`, emulator `d675aee2…` | two unknown-tool `033b` packets force two Feature GET 8 callbacks before enter or disconnect; the second callback proves parsing/retirement of the first GET and CTRL progress, then balanced Pen/Pad removal and alert markers `f15, f10` complete without `f12`, host `ERR`, timeout, input drop, report-memory warning, or OOM |
 
 ## Recorded Emulator Branches
 
@@ -1777,6 +1778,55 @@ focused Wacom fixtures cover the cancellation, same-PID reconnect, ring, and
 arbitration paths; receiver `0084 -> 033b` and exact multitouch/max-contact
 oracles remain uncovered.
 
+The `INTUOSHT2` smoke had a further transport blind spot. It sent one general
+pen packet with no known tool ID and checked only that Feature GET_REPORT 8
+reached the emulator. It then sent an enter packet, which established a tool
+ID before the later general packet. No second GET was therefore required, and
+the subsequent disconnect could retire a first CTRL head left in `PARSING`.
+The historical result above remains valid for its stated identity, input,
+memory, and teardown scope, but it is not evidence that the first GET
+completion was parsed.
+
+### Wacom report-task GET completion coverage
+
+The focused `056a:033b` update to `device/wacom-wired-matrix` sends two
+unknown-tool general pen packets before any enter packet. It counts valid
+Feature GET_REPORT 8 callbacks and may switch to the `cafe:10ff` alert keyboard
+only after the second callback. Because the second request cannot reach the
+same HID's CTRL lane until the first completion has run through ordinary
+report-task parsing and released the head, host-log marker `f15` proves both
+the first completion and subsequent control progress. Terminal `f10` follows;
+`f12` plus `8` identifies the focused profile failure. Emulator CDC is not an
+oracle, and no host test-only mode is required for these markers at the
+retained parser limits. The fixture uses only public TinyUSB descriptors,
+report callbacks/submission, completion, and connect/disconnect; it does not
+inspect USB DPRAM, SETUP packets, or private TinyUSB state, and it does not
+suspend the TinyUSB task from a callback.
+
+The hardware oracle must include balanced adds/removes for
+`056a:033b Wacom Intuos S 2 Pen` and `Wacom Intuos S 2 Pad`, the one expected
+compatibility-interface `HID_IGNORED`, marker order `f15, f10`, `oom=0`, and no
+`f12`, host `ERR`, timeout, input-drop, control-queue, or report-memory warning.
+`HID_REPORT_SET_Q` / `HID_REPORT_SET_OK` around the alert keyboard are not
+Wacom GET evidence. Compilation alone would not establish runtime correctness.
+
+The first 2026-08-04 hardware attempt reached the gated Pen smoke and balanced
+`033b` Pen/Pad removal with `oom=0` and no host `ERR`, but the alert keyboard
+never reattached. That was an emulator reconnect error: `tud_disconnect()` on
+RP2040 removes the D+ pull-up without generating a local unmount callback, so
+the fixture's stale `usb_mounted` precondition returned before profile switch
+and `tud_connect()`. Its failure path hit the same guard and could not emit
+`f12, 8`. The precondition is removed, and the corrected emulator
+`d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020`
+subsequently completed the full oracle against production host
+`72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786`.
+The log contains both `033b` adds and removals, one `HID_IGNORED`, post-GET Pen
+smoke, alert `f15, f10`, nine `oom=0` snapshots, and nonzero task watermarks.
+It contains no `f12`, host `ERR`, timeout, input-drop, control-queue, or
+report-memory warning. This proves parsing and retirement of the first non-waiting
+GET completion and subsequent same-HID CTRL progress; it does not independently
+prove retirement of the final GET completion.
+
 ### Wacom Intuos S 0374 bounded-parser coverage
 
 The focused `device/wacom-intuos-s-0374` fixture combines the exact wired
@@ -2008,7 +2058,25 @@ and emulator CDC lines under each item.
     heap was 12,832 B, terminal removals returned to 60,736 B, and the Pro
     feature-usage optimization retained full report values and wire bytes;
     family captures do not establish byte-exact retail descriptors for every
-    selected PID, and exact power snapshots remain unobserved
+    selected PID, exact power snapshots remain unobserved, and the single
+    observed `INTUOSHT2` GET 8 did not prove completion parsing or CTRL-head
+    retirement
+- [x] focused Wacom report-task GET completion
+  - use `056a:033b`; send a second unknown-tool general packet before any enter
+    packet and require the second Feature GET_REPORT 8 callback before `f15`
+  - require balanced Pen/Pad lifetime, one compatibility `HID_IGNORED`, then
+    `f15, f10`, with no `f12` plus `8`, host `ERR`, timeout, input drop, OOM,
+    control-queue warning, or report-memory warning
+  - emulator CDC is not an oracle; compilation is not a runtime verdict
+  - exact production host
+    `72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786`
+    and corrected emulator
+    `d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020`
+    completed `f15, f10`
+  - host log
+    `5ab29033e2f9c4b440fbe5bcac3f5b75ab34034e71882c3a3e83ec9015631534`
+    contained nine `oom=0` snapshots; minimum-ever free heap was 18,024 B,
+    and no failure or host transport warning appeared
 - [x] wired Wacom Cintiq 13HD `056a:0304`
   - exact host
     `ec47bd6725c1b2b49f7ded92fc220a7fb5d2408ee8a479dd76a6aeaa612546a5`

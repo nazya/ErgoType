@@ -225,15 +225,18 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   TinyUSB address epoch while blocked; lifecycle checks the captured cache
   generation again before publishing any descriptor or string field, so
   detach/reuse cannot retarget a retry.
-- `hid_hw_request()` now matches the upstream queue-and-return contract.
-  Ordinary GET_REPORT completion enters the report queue. A probe-owned GET
-  instead publishes its existing request buffer through the interface-local
-  `owned_control_input` slot, and the waiting lifecycle task consumes it under
-  the `driver_input_lock` it already owns. In both cases `hid_hw_wait()` drains
-  through the end of parsing, so callers cannot observe a transport-complete/
-  parser-pending false idle. It now registers the existing per-interface wait
-  head before testing those durable predicates; owner publication or the final
-  I/O release supplies a task wake instead of one-tick polling. After producer
+- `hid_hw_request()` now matches the upstream queue-and-return contract. Every
+  successful GET_REPORT is parsed independently of whether its caller invokes
+  `hid_hw_wait()`. Ordinary completion, including a request queued by
+  report-task `raw_event`, enters the report queue. Only a GET queued by the
+  lifecycle task while it owns `driver_input_lock` publishes its existing
+  request buffer through the interface-local `owned_control_input` slot. That
+  lifecycle task can consume it under the lock it already owns. In both cases
+  `hid_hw_wait()` only waits through the end of parsing and FIFO drain, so a
+  caller which does wait cannot observe a transport-complete/parser-pending
+  false idle. It registers the existing per-interface wait head before testing
+  those durable predicates; owner publication or the final I/O release supplies
+  a task wake instead of one-tick polling. After producer
   stop and exact-HID async cancel, teardown reuses that wait head for one
   `usb_kill_urb()`-shaped predicate: aggregate I/O is idle, no async slot retains
   the HID, and direct interrupt-IN has no owner, deferred host pass, or pending
@@ -275,10 +278,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   task sleeps until a generic admission notification or the preserved absolute
   eight-second local deadline, then rechecks the same state and predicate.
 - The report executor reserves space for all four queued async requests plus
-  the active ordinary control request. Probe-owned GETs do not occupy that
-  queue; their current upstream caller issues one request and immediately waits
-  for its direct per-interface completion. Interrupt-IN close is reconciled in
-  the TinyUSB owner: an immediate one-shot continuation in TinyUSB's own FIFO
+  the active ordinary control request. Lifecycle-owned GETs do not occupy that
+  queue. An inner `hid_hw_wait()` can consume their direct per-interface
+  completion while the lifecycle task retains `driver_input_lock`; otherwise
+  the outer activation fence consumes it after probe releases the lock.
+  Interrupt-IN close is reconciled in the TinyUSB owner: an immediate one-shot
+  continuation in TinyUSB's own FIFO
   fences a raced completion before reopen may arm a new receive. EP0 retirement
   now uses the same single host-owned transaction as enumeration. Raw abort
   success completes immediately; a lost race snapshots and drains only the
@@ -909,6 +914,37 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   transfers for `0302`, `0314`, and `033b` completed on the emulator side;
   host parser/work enqueue and detached power-snapshot values remain
   unobserved.
+- 2026-08-04: a source audit found that the external Intuos fixture did not
+  cover the non-waiting GET queued by `INTUOSHT2` `raw_event`. Its first
+  unknown-tool general packet reached the emulator's Feature report 8 callback,
+  but the fixture stored only a boolean, then sent an enter packet which gave
+  Wacom a known tool ID. The later general packet therefore queued no second
+  GET, and disconnect could retire a first request whose completion had never
+  been parsed. The transport now assigns `parser_owner` only to the lifecycle
+  task; a report-task GET returns to the ordinary control-report queue. A
+  focused `056a:033b` fixture therefore sends a second unknown-tool packet
+  before any enter packet, requires a second Feature report 8 callback, and
+  only then emits `f15, f10`.
+  The first hardware attempt used host
+  `72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786`
+  and emulator
+  `fb49f90a3bb283d1808c6ce5bf4d3f8f4d19f8cd7c6e8e7c164d282da129f355`.
+  It published Pen/Pad, reached the gated Pen smoke, removed both devices with
+  `oom=0`, and then produced no alert profile. The emulator incorrectly
+  required its callback-owned `usb_mounted` flag to clear after
+  `tud_disconnect()`, but RP2040 software detach only removes the pull-up and
+  does not generate a local unmount callback. The same guard also suppressed
+  the failure markers. That attempt is not recorded as a complete hardware
+  pass. After removing the guard, the corrected fixture
+  `d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020`
+  completed on the same host: the two `033b` input lifetimes balanced, exactly
+  one compatibility interface produced `HID_IGNORED`, post-GET Pen smoke ran,
+  and the alert keyboard emitted `f15, f10`. All nine heap snapshots had
+  `oom=0`; minimum-ever free heap was 18,024 B, and minimum task watermarks
+  were TinyUSB 265, KeyD 658, async 389, work 217, timer 348, lifecycle 218,
+  and report 857 words. No `f12`, host `ERR`, timeout, input-drop,
+  control-queue, or report-memory warning appeared. This is the focused hardware pass
+  for non-waiting report-task GET parsing and subsequent CTRL-lane progress.
 - 2026-07-31: the focused Deco 01 original / Parblo A610 Pro matrix used host
   UF2 SHA256
   `a9ba49cf53d0ce0ba44679d85b11bca301809094cb7705c1721f8e93a12cbd71`

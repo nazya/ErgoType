@@ -923,7 +923,10 @@ family captures are not byte-exact retail descriptors for every selected PID.
 Representative battery reports are injected only for `0302`, `0314`, and
 `033b`. Only emulator-side interrupt-IN completion is established; host
 parser/work enqueue and exact detached power-snapshot values remain
-unobserved.
+unobserved. A later source audit also found that the single observed
+`INTUOSHT2` Feature GET 8 proved only arrival at the emulator callback. The
+fixture sent an enter packet before its next general packet, so it did not
+prove completion parsing or CTRL-head retirement.
 
 #### Wacom Intuos S 0374 bounded-parser checkpoint
 
@@ -977,6 +980,52 @@ Removing the temporary host instrumentation reduces text by 1,072 bytes from
 the capped test image and leaves data, BSS, `__bss_end__`, and the 276-byte
 main-bank headroom unchanged. The optimization targets persistent per-device
 heap instead of trading away parser compatibility globally.
+
+#### Wacom INTUOSHT2 report-task GET checkpoint
+
+The focused `056a:033b` transport checkpoint assigns the direct
+`parser_owner` only to the lifecycle task while that task owns
+`driver_input_lock`. A GET queued by report-task `raw_event` instead returns to
+the ordinary control-report queue. The emulator sends two unknown-tool packets
+before any enter packet and requires the second Feature GET 8 callback before
+it can emit `f15`:
+
+```text
+host HID_MAX_USAGES            675
+host text/data/bss             609048 / 788 / 245412 B
+host __bss_end__               0x2003feec
+host main-bank headroom        276 B to 0x20040000
+host UF2 SHA-256               72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786
+emulator text/data/bss         62088 / 0 / 254460 B
+emulator UF2 SHA-256           d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020
+host log SHA-256               5ab29033e2f9c4b440fbe5bcac3f5b75ab34034e71882c3a3e83ec9015631534
+hardware verdict               passed 2026-08-04 main host log
+```
+
+The second request cannot reach the same CTRL lane until the first completion
+has been parsed and its head released. The expected host-log markers are
+`f15, f10`; `f12` followed by `8` is the focused failure signature. This uses
+the production parser limit and no host test-only mode. The two successful
+standard builds do not establish runtime correctness.
+
+The first attempt used emulator
+`fb49f90a3bb283d1808c6ce5bf4d3f8f4d19f8cd7c6e8e7c164d282da129f355`.
+It reached Pen/Pad removal with `oom=0`, then stopped because the fixture
+incorrectly expected software `tud_disconnect()` to produce a local RP2040
+unmount callback. The stale `usb_mounted` guard prevented both success and
+failure marker reconnects. Removing that guard produced the artifact above;
+the earlier incomplete log is not a terminal hardware verdict.
+
+The corrected artifact completed the required production-host run. The log
+contained both `056a:033b` Pen/Pad additions and removals, one expected
+`HID_IGNORED`, post-GET Pen smoke, `cafe:10ff`, and terminal `f15, f10`, with no
+`f12` or host `ERR`. All nine heap snapshots reported `oom=0`; minimum-ever
+free heap was 18,024 B. After Pen removal free heap was 47,840 B, after Pad
+removal 60,728 B, and after the alert keyboard attached 48,288 B. Minimum task
+watermarks were TinyUSB 265, KeyD 658, async 389, work 217, timer 348,
+lifecycle 218, and report 857 words. The marker proves parsing/retirement of
+the first non-waiting GET and progress to the second request; it does not prove
+retirement of that final GET independently.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
@@ -1347,7 +1396,7 @@ Removing the former four-entry input queue returns a 176-byte heap_4 block and
 one 4-byte `.bss` handle; growing the old 20-byte slots adds 48 B to scratch X.
 Net live RAM occupancy falls by 132 B and one persistent heap allocation. The
 ordinary-control queue remains a 232-byte block (five 28-byte events plus its
-queue object). Probe-owned GET completion bypasses that queue through a per-
+queue object). Lifecycle-owned GET completion bypasses that queue through a per-
 interface pointer into the existing request buffer. Removing the still earlier
 global handoff saved 36 B of `.bss`, and shrinking the control event saved 24 B
 of persistent queue heap. Its temporary GET header is 16 B instead of 12 B and

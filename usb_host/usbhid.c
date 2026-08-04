@@ -5230,7 +5230,7 @@ static int usbhid_control_input_parse(struct hid_device *hid,
 		hid, type, input->data, input->bufsize, input->len, 0);
 }
 
-/* Consume only the completion published for this recorded parser task. */
+/* Consume only the completion published for this lifecycle parser task. */
 static bool usbhid_control_input_process_owned(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
@@ -5258,7 +5258,7 @@ static bool usbhid_control_input_process_owned(struct hid_device *hid)
 
 /*
  * A timed-out hid_hw_wait() must not leave a later GET completion addressed to
- * a stack/lifecycle task which no longer consumes it. Teardown abandons every
+ * a lifecycle task which no longer consumes it. Teardown abandons every
  * owner; an ordinary waiter abandons only requests tagged with itself. If the
  * completion won the exact deadline race, return the already-published input
  * so its current owner can finish it before leaving the wait path.
@@ -5378,9 +5378,22 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	request->reqtype = (u8)reqtype;
 	request->lane = (u8)lane;
 	request->state = USBHID_REPORT_REQUEST_QUEUED;
-	if (reqtype == HID_REQ_GET_REPORT &&
-	    sema_owned_by_current(&hid->driver_input_lock))
-		request->parser_owner = xTaskGetCurrentTaskHandle();
+	if (reqtype == HID_REQ_GET_REPORT) {
+		TaskHandle_t task = xTaskGetCurrentTaskHandle();
+		TaskHandle_t lifecycle_task = atomic_load_explicit(
+			&usbhid_lifecycle_task_handle, memory_order_acquire);
+
+		/*
+		 * Upstream hid_ctrl() parses every successful GET in completion context.
+		 * This port needs a direct consumer only for a probe GET issued by the
+		 * lifecycle task while it owns driver_input_lock. A report-task raw_event
+		 * GET must instead enter the ordinary control-report queue after the
+		 * current interrupt INPUT releases that lock.
+		 */
+		if (task == lifecycle_task &&
+		    sema_owned_by_task(&hid->driver_input_lock, task))
+			request->parser_owner = task;
+	}
 	if (reqtype == HID_REQ_SET_REPORT) {
 		/*
 		 * usbhid->ctrl[usbhid->ctrlhead].raw_report =

@@ -1614,9 +1614,9 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 	hid_transport_unlock();
 
 	/*
-	 * The ordinary HID GET completion budget has five queue slots. Probe-owned
-	 * GETs bypass them, so their lifecycle parser cannot block interrupt-IN or
-	 * its host fence while driver_input_lock remains held.
+	 * The ordinary HID GET completion budget has five queue slots. GETs owned
+	 * by the lifecycle task bypass them, so their parser cannot block
+	 * interrupt-IN or its host fence while driver_input_lock remains held.
 	 */
 	if (xQueueSendToBack(usbhid_control_report_queue, &event, 0) != pdPASS)
 		return -EBUSY;

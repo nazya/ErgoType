@@ -18,13 +18,16 @@ The active implementation now has these properties:
   report/async/I/O ownership, and destroys the HID object. Interrupt completion
   likewise publishes transfer metadata only; boot/report parser policy belongs
   to the report task.
-- `hid_hw_request()` queues work and `hid_hw_wait()` waits through control
-  parsing, matching the upstream caller contract without blocking TinyUSB.
-  Ordinary GET completion is report-task-owned; a GET queued while probe owns
-  `driver_input_lock` is returned directly to that lifecycle owner. An inner
-  `hid_hw_wait()` consumes it while retaining the lock, whereas the outer
-  activation fence can consume it after probe releases the lock; glue selects
-  the matching parser entry. The existing interface wait head receives
+- `hid_hw_request()` queues work, and every successful GET is parsed whether or
+  not its caller later invokes `hid_hw_wait()`, matching upstream `hid_ctrl()`.
+  Ordinary completion, including a GET queued by the report task from
+  `raw_event`, returns to the report queue. Only a GET queued by the lifecycle
+  task while it owns `driver_input_lock` records that task as `parser_owner`
+  and returns through the interface-local direct slot. An inner
+  `hid_hw_wait()` can consume that completion while retaining the lock, whereas
+  the outer activation fence can consume it after probe releases the lock;
+  glue selects the matching parser entry. `hid_hw_wait()` only waits for
+  control parsing and FIFO drain. The existing interface wait head receives
   completion edges while `io_pending` remains the durable predicate, so this
   wait does not poll or allocate another synchronization object.
 - Raw GET/SET and interrupt output keep their synchronous ll-driver contracts

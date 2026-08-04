@@ -366,9 +366,18 @@ raw GET/SET use the generic device-level EP0 lane; an interface owner tag makes
 stop/cancel wake the task immediately. HID report requests and generic control
 messages share same-device EP0 ordering; completed GET_REPORT parser storage no
 longer blocks unrelated physical EP0 work. Caller tasks may wait for the Linux
-ll-driver contract, but TinyUSB callbacks never wait for request completion or
-run the Linux continuation. A CTRL/interrupt-OUT head rejected before physical
-submission remains `PARKED`, like upstream after its RUNNING bit is cleared;
+ll-driver contract, but that wait is not what causes a successful GET to be
+parsed. Ordinary completion, including a GET queued by report-task `raw_event`,
+returns to the report queue. Only the lifecycle task can be recorded as the
+direct parser owner while it holds `driver_input_lock`; this keeps probe-time
+feature parsing off the half-built device's report lane. TinyUSB callbacks
+never wait for request completion or run the Linux continuation. The focused
+`056a:033b` hardware run required the second Feature GET 8 callback
+before enter or disconnect and completed `f15, f10`, confirming parse and
+retirement of the first completion and subsequent same-HID CTRL progress
+through this ordinary report-task route. A
+CTRL/interrupt-OUT head rejected before physical submission remains `PARKED`,
+like upstream after its RUNNING bit is cleared;
 the next same-lane enqueue restarts it in FIFO order without polling. Ordinary
 `hid_hw_wait()` excludes that stopped lane, clears any stale GET parser owner,
 and can therefore finish while teardown remains responsible for freeing the
@@ -873,7 +882,7 @@ wrote into adjacent `mt_device` state on RP2040.
 | `DBG: HID_RESET_OK` | Old transport state retired and a fresh same-topology TinyUSB mount completed. |
 | `ERR: HID_RESET_FAIL` | Coordinated teardown/reset/re-enumeration exhausted its bounded phase or hub retry deadline. |
 | `ERR: HID_ASYNC_CANCEL_FAIL` | Pending async HID requests could not be cancelled during detach. |
-| `ERR: HID_CTRL_DISPATCH_FAIL` | A completed control GET could not be published to its ordinary report queue or direct probe owner. |
+| `ERR: HID_CTRL_DISPATCH_FAIL` | A completed control GET could not be published to its ordinary report queue or direct lifecycle owner. |
 | `ERR: HID_XFER_TO` | A request which reached TinyUSB exceeded its active wire timeout. Synchronous generic USB messages retain their caller-supplied timeout from accepted queueing; asynchronous `hid_hw_request()` reports wait on the exact EP0/endpoint-idle event and have no firmware-only pre-wire timeout, matching the upstream URB queue. |
 | `ERR: HID_DEV_DESC_XFER` / `HID_DEV_DESC_SHORT` / `HID_DEV_DESC_TYPE` | One full device-descriptor refetch attempt failed, returned fewer than 18 bytes, or returned the wrong descriptor type. The first three retain the pending HID and retry after 100 ms; the fourth terminates that preprobe. |
 | `ERR: HID_EP0_CALLBACK_LOST` | Exact host cancellation reported that it invoked the terminal callback, but the retained async slot did not observe it. |

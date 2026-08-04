@@ -930,16 +930,23 @@ contains a hypothetical NULL check that no current caller can exercise.
 - `driver_input_lock` serializes input parsing with remove. Async cancel drops
   queued reports and waits any dequeued parser/completion through its last HID
   access before destruction.
-- Upstream `hid_ctrl()` parses a completed control URB in its callback. This
-  port sends ordinary GET completion to the report task, but a GET queued while
-  probe owns `driver_input_lock` publishes its request buffer directly to that
-  interface's lifecycle owner. An inner `hid_hw_wait()` consumes it with the
-  lock retained; the outer activation fence can consume it after probe releases
-  the lock, and glue selects the matching parser entry. This avoids a
-  firmware-only queue handoff without opening interrupt input on a half-built
-  device. The existing per-interface wait head carries the corresponding
-  upstream-style wake edge; the broader firmware `io_pending` lease remains
-  the durable predicate, so `hid_hw_wait()` no longer needs one-tick polling.
+- Upstream `hid_ctrl()` parses every successful control GET in its callback;
+  parsing does not depend on the caller invoking `hid_hw_wait()`. This port
+  sends ordinary completion to the report task, including a GET queued by that
+  task from `raw_event`. Only when the lifecycle task queues a GET while it
+  owns `driver_input_lock` does the request record a `parser_owner` and publish
+  its buffer directly to that lifecycle owner. An inner `hid_hw_wait()` can
+  consume it with the lock retained; the outer activation fence can consume it
+  after probe releases the lock, and glue selects the matching parser entry.
+  This avoids a firmware-only queue handoff without opening interrupt input on
+  a half-built device. The existing per-interface wait head carries the
+  corresponding upstream-style wake edge; the broader firmware `io_pending`
+  lease remains the durable predicate. `hid_hw_wait()` only observes parser and
+  FIFO drain and no longer needs one-tick polling.
+  The focused `056a:033b` hardware run with two unknown-tool packets reached
+  the second Feature GET 8 callback before enter or disconnect and completed
+  `f15, f10`, confirming first-completion parse/retirement and subsequent CTRL
+  progress without a firmware-only wait in the Wacom driver.
   After producer stop, teardown cancels by exact HID owner and uses the same
   wait head for a composite `usb_kill_urb()` predicate: no aggregate I/O, async
   slot, interrupt-IN owner, deferred host pass, or physical-detach fence

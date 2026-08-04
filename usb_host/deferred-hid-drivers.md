@@ -465,6 +465,22 @@ fixes, while keeping a narrow USB-only match table:
   artifact. Therefore `0084 -> 0027` is protocol-path coverage, not a captured
   pairing.
 
+`INTUOSHT2` can receive a general pen packet before it knows the tool ID. Its
+upstream `raw_event` path then queues Feature GET_REPORT 8 and deliberately does
+not call `hid_hw_wait()`: Linux `hid_ctrl()` still parses that completion. The
+firmware therefore treats a GET queued by the report task as ordinary
+control-report work; only the lifecycle task can become the direct
+`parser_owner`. The 2026-07-31 eleven-ID fixture proved that its first GET 8
+reached the emulator, but not that the completion was parsed or that the CTRL
+head advanced: an enter packet established the tool ID before the next general
+packet, and disconnect could clean up a stranded head. The focused `056a:033b`
+fixture now requires two GET 8 callbacks before any enter or disconnect. Host
+`72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786`
+and emulator
+`d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020`
+completed that hardware run with balanced Pen/Pad removal, terminal
+`f15, f10`, `oom=0`, and no host `ERR` or failure marker.
+
 The compatibility layer provides selective nested devres groups, power-of-two
 byte/record kfifo storage, the common delayed-work deadline list, the timer
 bridge, and reduced LED and power-supply glue. No new task was added. Firmware
@@ -571,6 +587,8 @@ selected PIDs, Pro LED initialization for `0314/0315/0317`, and Finger smoke
 for seven touch-capable profiles, with 29 balanced input lifetimes, `oom=0`,
 and terminal success. It uses family captures rather than byte-exact retail
 descriptors for every PID.
+That historical verdict does not include report-task parsing or CTRL-head
+retirement for the non-waiting `INTUOSHT2` Feature GET 8 described above.
 Representative `0302/0314/033b` battery IN completions are device-side only;
 host work enqueue and detached values remain unobserved. This matrix does not
 add pending/running-work cancellation, same-PID reconnect, Touch Ring
