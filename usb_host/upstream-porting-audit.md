@@ -130,28 +130,33 @@ extra-input regression remains pending.
 
 ## Current USB Wacom Contract Result
 
-The active allowlist contains 20 USB Wacom products: PTH-650 `056a:0027`,
+The active allowlist contains 21 USB Wacom products: PTH-650 `056a:0027`,
 PTK-450 `056a:0029`, receiver `056a:0084`, CTH-470 `056a:00de`, CTL-472
-`056a:037a`, CTL-672 `056a:037b`, Yoga 260 AES `056a:5048`, external wired
-Intuos `056a:0302/0303/030e/0323`, Intuos Pro `056a:0314/0315/0317`, Intuos 2
+`056a:037a`, CTL-672 `056a:037b`, the Intuos S bounded-parser checkpoint
+`056a:0374`, Yoga 260 AES `056a:5048`, external wired Intuos
+`056a:0302/0303/030e/0323`, Intuos Pro `056a:0314/0315/0317`, Intuos 2
 `056a:033b/033c/033d/033e`, wired Cintiq 13HD `056a:0304`, and ExpressKey
-Remote `056a:0331`. It reaches the
-pinned Pen/Pad/Touch,
-ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES battery,
+Remote `056a:0331`. The previously hardware-qualified 20-ID scope reaches the
+pinned Pen/Pad/Touch, ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES
+battery,
 idle-proximity timer, and receiver pair/unpair plus dynamic sibling-rebind
 paths applicable to those exact profiles. Receiver lookup can select any child
 PID already in this table; hardware receiver coverage is limited to child
 `056a:0027`. Bluetooth, bootloader, I2C, PCI, and product IDs outside the
-20-entry table remain outside this checkpoint.
+21-entry table remain outside this checkpoint. The `056a:0374` fixture passed
+its parser, Pen/Pad, control, teardown, and reconnect sequence on 2026-08-04 at
+the temporary `HID_MAX_USAGES=64`; that verdict does not qualify omitted values
+or the post-test production image at the default 675.
 
-Exact `056a:0084` and `056a:5048` descriptors plus the captured
+Exact `056a:0084`, `056a:0374`, and `056a:5048` descriptors plus the captured
 `056a:0317` PTH-851 family descriptor contain large VARIABLE Feature reports
 whose one vendor usage Linux repeats to the report count. The port quirk
-retains every report value and wire byte but materializes callbacks only for
-explicitly declared usages, matching the linked Wacom consumers without
-allocating hundreds of duplicate usage entries. The quirk is limited to
-`056a:0084/0314/0315/0317/5048`; it is a firmware memory optimization, not an
-upstream Linux bugfix. On the captured `0317` descriptor, reused by the
+materializes callbacks only for explicitly declared usages, matching the
+linked Wacom consumers without allocating hundreds of duplicate usage
+entries; wire sizes remain complete, while the separate retained-table policy
+may also cap cached values as documented below for `0374`. The quirk is limited
+to `056a:0084/0314/0315/0317/0374/5048`; it is a firmware memory optimization,
+not an upstream Linux bugfix. On the captured `0317` descriptor, reused by the
 `0314/0315` emulator profiles, it removes 626 duplicate usage/priority pairs,
 about 20 KiB. This count is not a claim about separately captured retail
 `0314/0315` descriptors.
@@ -565,9 +570,9 @@ sources so their enablement contract remains visible.
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
-| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 20-ID USB allowlist: base `056a:0027/0029/0084/00de/037a/037b/5048`, ExpressKey Remote `0331`, and external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver/Remote battery, timer, receiver rebind, and dynamic Remote paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and all other product IDs remain gated; the driver descriptor is immutable. |
+| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 21-ID USB allowlist: the hardware-qualified base `056a:0027/0029/0084/00de/037a/037b/5048`, ExpressKey Remote `0331`, and external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`, plus the `0374` bounded-parser checkpoint qualified at temporary limit 64; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver/Remote battery, timer, receiver rebind, and dynamic Remote paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and all other product IDs remain gated; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
-| `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. `usbhid.c` scopes explicit-feature-usage compaction to Wacom `056a:0084/0314/0315/0317/5048`; HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
+| `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. `usbhid.c` scopes explicit-feature-usage compaction to Wacom `056a:0084/0314/0315/0317/0374/5048`; HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
 
 The exact scalar timestamp replacements now retain Linux's `ktime_set()`,
 `ktime_compare()`, and `ktime_get()` lines. The managed-input path restores the
@@ -1118,6 +1123,25 @@ contains a hypothetical NULL check that no current caller can exercise.
 
 ## Open Semantic Boundaries
 
+- The `056a:0374` parser checkpoint was hardware-tested at 64 and deliberately
+  differs from Linux when a field declares more than `HID_MAX_USAGES` values.
+  The full declared count remains represented in `report->size` up to the fixed
+  `HID_MAX_REPORT_COUNT=12288` wire ceiling, while `field->report_count` and
+  its cached `value`/`new_value` arrays retain only the first
+  `HID_MAX_USAGES=64` values in the qualified temporary test build.
+  Non-padding INPUT ARRAY fields above that retention limit are rejected
+  because omitting physical slots would change key-state semantics; other
+  fields retain a bounded prefix. A structured
+  `hid_hw_request(..., HID_REQ_SET_REPORT)` would make `hid_output_report()`
+  zero-fill the omitted Output/Feature tail, so every future driver or exact
+  device with an oversized writable report must audit that call path. A raw
+  request with a complete caller-owned buffer is unaffected. The current
+  `0374` call graph never writes its oversized `0xd9` Feature report and sends
+  its small mode report through the raw Wacom helper. Complete retained-value
+  coverage for this descriptor requires `HID_MAX_USAGES >= 1280` and more heap
+  than the wider-cap RP2040 diagnostic run provided. The production default
+  remains 675. The 2026-08-04 hardware result qualifies the capped test image
+  only, not the omitted tail or the post-test production UF2.
 - Linux `usbhid` keeps a 256-entry control FIFO per interface (effective ring
   capacity 255, explicitly sized for devices with more than 100 reports) and a
   64-entry interrupt-OUT FIFO (capacity 63). The port now preserves those two
@@ -1550,12 +1574,14 @@ contains a hypothetical NULL check that no current caller can exercise.
   implementation is unchanged by this checkpoint.
 - The KeyD queue adapter is firmware glue; no pinned upstream-KeyD comparison
   is claimed.
-- `hid_register_field()` retains upstream's single-allocation layout and full
-  usage/priority tables. The adjacent port replacement sizes `value` and
-  `new_value` by physical `report_count` only for INPUT ARRAY fields; those
-  runtime paths index report slots, while selector-to-usage translation still
-  keeps all usages. The original signature, allocation, pointer arithmetic,
-  and call remain commented beside the RP2040 memory-bounded replacement.
+- `hid_register_field()` retains upstream's single-allocation layout while the
+  adjacent port replacement sizes mapping/priority and cached-value regions
+  independently. Both are bounded by `HID_MAX_USAGES`: INPUT ARRAY fields keep
+  every accepted physical slot while their selector mappings may be longer;
+  scoped compact Features may retain fewer mappings than cached values. The
+  complete declared wire width remains in `report->size`. The original
+  signature, allocation, pointer arithmetic, and call remain commented beside
+  the RP2040 memory-bounded replacement.
 - Parser allocation failure is no longer converted into a missing field and a
   partially bound HID graph. The adjacent port path preserves upstream's
   `HID_MAX_FIELDS` truncation but propagates real `-ENOMEM` through the reduced

@@ -40,9 +40,13 @@
 // upstream reserves 256 entries.
 #define HID_MAX_FIELDS 64
 // #define HID_MAX_USAGES 12288
-// KeyD discards generic Consumer events above usage 0x02A2. Limit parser usage
-// arrays to 675 entries; HID_MAX_USAGES also bounds Report Count.
+// KeyD discards generic Consumer events above usage 0x02A2. Bound every parsed
+// field table to 675 entries by default while accepting Linux's separate wire
+// count limit. A target may override this single retained-table limit.
+#ifndef HID_MAX_USAGES
 #define HID_MAX_USAGES 675
+#endif
+#define HID_MAX_REPORT_COUNT 12288
 #define HID_DEFAULT_NUM_COLLECTIONS 16
 // #define HID_COLLECTION_STACK_SIZE 4
 // Port grows the parser collection stack in larger chunks; open_collection() still grows on demand.
@@ -339,8 +343,9 @@
 #define HID_QUIRK_X_INVERT			BIT(12)
 #define HID_QUIRK_Y_INVERT			BIT(13)
 #define HID_QUIRK_IGNORE_MOUSE			BIT(14)
-// BIT(15) is unused upstream. Firmware can retain only explicitly declared
-// usages for proven driver-owned VARIABLE feature reports.
+// BIT(15) is unused upstream. Firmware retains only explicitly declared usage
+// entries for proven driver-owned VARIABLE feature reports; value storage
+// remains bounded by HID_MAX_USAGES.
 #define HID_QUIRK_EXPLICIT_FEATURE_USAGES	BIT(15)
 #define HID_QUIRK_SKIP_OUTPUT_REPORTS		BIT(16)
 #define HID_QUIRK_SKIP_OUTPUT_REPORT_ID		BIT(17)
@@ -441,6 +446,8 @@ struct hid_field {
 	unsigned  flags;		/* main-item flags (i.e. volatile,array,constant) */
 	unsigned  report_offset;	/* bit offset in the report */
 	unsigned  report_size;		/* size of this field in the report */
+	/* Firmware retains only the bounded value prefix; report->size preserves
+	 * the complete declared wire width. */
 	unsigned  report_count;		/* number of this field in the report */
 	unsigned  report_type;		/* (input,output,feature) */
 	__s32    *value;		/* last known value(s) */

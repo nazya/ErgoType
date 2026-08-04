@@ -549,10 +549,23 @@ descriptors determine their contents at runtime. A static generated mapping or
 sparse range representation would require a larger departure from the Linux
 parser.
 
-## The 675-Usage Limit
+## The Retained-Usage Limit
 
-`HID_MAX_USAGES` is currently 675. It is a per-field entry capacity, not a
-global table and not a universal maximum numeric usage ID.
+`HID_MAX_USAGES` defaults to 675. It is a per-field entry capacity, not a
+global table and not a universal maximum numeric usage ID. The `056a:0374`
+parser fixture hardware-tested the same single parameter at 64 on 2026-08-04
+so that exact RP2040 image used smaller bounded tables. The resulting verdict
+does not transfer to the post-test production image at the default 675. Every
+boundary below follows the configured value; the concrete 675 examples
+describe the production policy.
+
+Complete retained-value coverage for `056a:0374` requires
+`HID_MAX_USAGES >= 1280` because Feature report `0xd9` declares 1,280 values,
+plus enough heap for the enlarged per-field caches. The exact fixture passed
+at 64, while an earlier instrumented RP2040 run at 675 reached
+`ERR: HID_PROBE_NOMEM` and `oom=3`. More host memory is therefore required
+before qualifying the complete retained-value graph; the rebuilt production
+image at default 675 has no hardware verdict.
 
 For the relevant Consumer arrays whose minimum is zero, 675 entries retain
 selectors `0x000..0x2a2`. `0x2a2` is the highest Consumer usage that currently
@@ -562,17 +575,33 @@ consume RAM without producing usable output.
 
 Important boundary behavior:
 
-- a wider `Usage Minimum..Usage Maximum` range keeps its first 675 entries;
-- a nonzero range therefore keeps `minimum..minimum+674`;
+- a wider `Usage Minimum..Usage Maximum` range keeps its first
+  `HID_MAX_USAGES` entries;
+- a nonzero range therefore keeps
+  `minimum..minimum+HID_MAX_USAGES-1`;
 - an individual Usage ID may numerically exceed `0x2a2`; the cap counts entries;
-- a 676th separate Usage item or `Report Count > 675` is a parse error;
+- a separate Usage item after the table reaches `HID_MAX_USAGES` remains a
+  parse error;
+- the full wire `Report Count` is accepted through the fixed
+  `HID_MAX_REPORT_COUNT=12288`, while retained usage/value tables are bounded
+  by the single tunable `HID_MAX_USAGES` limit;
+- a non-padding INPUT ARRAY with more than `HID_MAX_USAGES` physical slots is
+  rejected; other fields retain their first `HID_MAX_USAGES` values while
+  `report->size` preserves their complete wire layout;
 - an array selector outside the retained entries produces no input event and
   emits `WARN: HID_USAGE_CAP_DROP` when the new selector appears.
 
-The cap should only be raised after the downstream KeyD mapping is expanded
-and the resulting per-field RAM cost is measured. At the current limit, one
-maximal field plus live parser-local arrays is about 33 KiB before allocator
-overhead and the rest of the HID device state.
+This retained-value policy differs from Linux for fields above the cap. Do not
+use structured `hid_hw_request(..., HID_REQ_SET_REPORT)` for a capped
+Output/Feature field: `hid_output_report()` clears the full wire buffer and
+would transmit zeros for the omitted tail. Raw requests remain safe when their
+caller supplies the complete buffer. When enabling a new exact device, audit
+every oversized writable report and every structured SET caller together.
+
+The default cap should only be raised after the downstream KeyD mapping is
+expanded and the resulting per-field RAM cost is measured. At the default
+limit, one maximal field plus live parser-local arrays is about 33 KiB before
+allocator overhead and the rest of the HID device state.
 
 ## Current RP2040 DJ/HID++ Memory Boundary
 

@@ -1777,6 +1777,64 @@ focused Wacom fixtures cover the cancellation, same-PID reconnect, ring, and
 arbitration paths; receiver `0084 -> 033b` and exact multitouch/max-contact
 oracles remain uncovered.
 
+### Wacom Intuos S 0374 bounded-parser coverage
+
+The focused `device/wacom-intuos-s-0374` fixture combines the exact wired
+Intuos S identity `056a:0374` with six synthetic `cafe:1101..1106` descriptors
+that isolate the changed usage-range, retained-table, INPUT ARRAY, and report
+count boundaries. Emulator CDC was not used as an oracle. The exact artifacts
+and audited host log are:
+
+```text
+test host UF2 SHA-256  73998e8b7ab0e3c6bdd14380431e1783a98454e0039d0893c885962e036b3741
+host text/data/bss     610104 / 788 / 245412 B
+emulator UF2 SHA-256   fc198ea6d6fa61854c4a4319d77b3e5fd9b99748a58d04b348ca9eceedac3cb4
+emulator text/data/bss 51828 / 0 / 255636 B
+host log SHA-256       f8bec4c75fcda71539261935b9bf75ea0e1856d4e5536c1f878a746814cfc706
+HID_MAX_USAGES         64
+hardware verdict       passed 2026-08-04 for the capped scope below
+```
+
+The automatic sequence reached `f1, f2, f3, f4, f5, f6, 1, 2, 3, 4, 5`
+without the failure key `0` or repeated phase letters. All three `056a:0374`
+generations produced `WACOM_D9_BOUNDS_OK`, balanced Pen and Pad add/remove
+lifetimes, four offset reads, and the test-only `0xd9` read. The first
+generation then exercised disconnect before the mode callback and sent no
+input reports. The two later generations completed mode SET/GET and their
+intended Pen, Pad, and Battery sequences. The full input phase produced
+`f13..f16`; the reconnect smoke produced the second `f13`.
+
+The parser oracle appeared in exact order and count: usage edges once,
+descending range twice, exact-full zero endpoint twice, oversized INPUT ARRAY
+once, accepted Report Count 12,288 once, and rejected Report Count 12,289
+twice. The four rejected profiles produced exactly four `HID_IGNORED`
+warnings. There was no `HID_USAGE_CAP_DROP`, host `ERR`, allocation failure,
+or unexpected warning.
+
+All 35 heap snapshots reported `oom=0`. Minimum-ever free heap was 12,944 B;
+minimum sampled free heap was 13,464 B, and the smallest sampled largest block
+was 13,304 B. All ten alert-attached snapshots were 54,432 B free, and all nine
+completed alert removals were 60,712 B free. Minimum remaining task watermarks
+were TinyUSB 265, KeyD 658, async 389, work 217, timer 348, lifecycle 190, and
+report 860 words. The terminal alert remains attached.
+
+This verdict qualifies only the retained prefix in the exact test image.
+Complete retained-value coverage for `056a:0374` requires
+`HID_MAX_USAGES >= 1280` because Feature report `0xd9` declares 1,280 values,
+plus enough heap for the enlarged per-field caches. An earlier instrumented
+run at 675 produced `ERR: HID_PROBE_NOMEM`, `oom=3`, and a 1,608-byte
+minimum-ever counter, so more host memory is required before qualifying the
+complete retained-value graph. That wider-cap run is diagnostic evidence, not
+a verdict for the post-test production image.
+
+The temporary host instrumentation and cap-64 override were removed after the
+passing run. The rebuilt production host is
+`8fc810a6114ea4453712e02097e991aaef7b36a323828628bce57da2865c468f`
+at the default 675; it was not hardware-tested and is not compatible with the
+fixture's D9/parser-marker oracle. Exact Battery values, exact internal work
+state, synchronous-cancel timing, tick rollover, values beyond the first 64,
+and complete Linux-equivalent usage mappings remain outside this verdict.
+
 Heavier FF drivers should stay deferred for now:
 
 - `hid-sony.c`

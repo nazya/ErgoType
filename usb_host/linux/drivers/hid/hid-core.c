@@ -154,8 +154,9 @@ EXPORT_SYMBOL_GPL(hid_register_report);
  */
 
 // static struct hid_field *hid_register_field(struct hid_report *report, unsigned usages)
-// RP2040 input arrays keep one value per physical report slot rather than per
-// selector while retaining the complete upstream usage and priority tables.
+// Firmware sizes mapping and cached-value regions independently. INPUT ARRAY
+// values follow physical slots, while scoped compact Features may retain fewer
+// mappings than values.
 static struct hid_field *hid_register_field(struct hid_report *report,
 					   unsigned usages,
 					   unsigned value_count)
@@ -170,7 +171,7 @@ static struct hid_field *hid_register_field(struct hid_report *report,
 	// field = kvzalloc((sizeof(struct hid_field) +
 	// 		  usages * sizeof(struct hid_usage) +
 	// 		  3 * usages * sizeof(unsigned int)), GFP_KERNEL);
-	// Input-array values are report slots; selector metadata still uses usages.
+	// Mapping/priority metadata follows usages; cached values follow value_count.
 	field = kvzalloc((sizeof(struct hid_field) +
 			  usages * sizeof(struct hid_usage) +
 			  (usages + 2 * value_count) * sizeof(unsigned int)),
@@ -188,8 +189,9 @@ static struct hid_field *hid_register_field(struct hid_report *report,
 	field->value = (s32 *)(field->usage + usages);
 	// field->new_value = (s32 *)(field->value + usages);
 	// field->usages_priorities = (s32 *)(field->new_value + usages);
-	// Only INPUT ARRAY fields pass value_count < usages; their runtime value
-	// paths index value/new_value by report_count, never by selector index.
+	// INPUT ARRAY fields can have fewer physical values than selector mappings;
+	// compact Features can have fewer mappings than retained values. Runtime
+	// paths use maxusage and report_count for their respective regions.
 	field->new_value = (s32 *)(field->value + value_count);
 	field->usages_priorities = (s32 *)(field->new_value + value_count);
 	field->report = report;
@@ -461,23 +463,39 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	if (!parser->local.usage_index) /* Ignore padding fields */
 		return 0;
 
+	if (report_type == HID_INPUT_REPORT &&
+	    !(flags & HID_MAIN_ITEM_VARIABLE) &&
+	    parser->global.report_count > HID_MAX_USAGES) {
+		// Firmware cannot omit physical ARRAY slots without changing selector
+		// and key-state semantics, so reject instead of retaining a prefix.
+		hid_err(parser->device,
+			"input array report_count %u exceeds limit %u\n",
+			parser->global.report_count, HID_MAX_USAGES);
+		return -1;
+	}
+
+	// usages = max_t(unsigned, parser->local.usage_index,
+	// 			 parser->global.report_count);
+	// report->size keeps the full wire count; parsed tables are RAM-bounded.
 	usages = max_t(unsigned, parser->local.usage_index,
-				 parser->global.report_count);
+			 min_t(unsigned, parser->global.report_count,
+			       HID_MAX_USAGES));
 
 	// field = hid_register_field(report, usages);
-	// INPUT ARRAY fields store report_count physical values while preserving
-	// every selector in usage[] for value-to-usage translation.
+	// INPUT ARRAY fields store every physical value; oversized arrays were
+	// rejected above while the selector table remains bounded.
 	value_count = report_type == HID_INPUT_REPORT &&
 		      !(flags & HID_MAIN_ITEM_VARIABLE) ?
 		      parser->global.report_count : usages;
-	// The port quirk preserves every explicit usage and every report value,
-	// but does not materialize Linux's repeated last usage for feature fields
-	// whose bound driver does not consume those duplicate callbacks.
+	// The port quirk retains explicitly declared usage mappings instead of
+	// Linux's repeated mapping tail. Value storage follows HID_MAX_USAGES; the
+	// scoped drivers do not consume the omitted mappings or values.
 	if (report_type == HID_FEATURE_REPORT &&
 	    (flags & HID_MAIN_ITEM_VARIABLE) &&
 	    (parser->device->quirks & HID_QUIRK_EXPLICIT_FEATURE_USAGES)) {
 		usages = parser->local.usage_index;
-		value_count = parser->global.report_count;
+		value_count = min_t(unsigned, parser->global.report_count,
+				    HID_MAX_USAGES);
 	}
 	field = hid_register_field(report, usages, value_count);
 	// if (!field)
@@ -508,7 +526,12 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	field->report_offset = offset;
 	field->report_type = report_type;
 	field->report_size = parser->global.report_size;
-	field->report_count = parser->global.report_count;
+	// field->report_count = parser->global.report_count;
+	// report->size keeps the full wire layout; parsed values are capped.
+	// Structured SET_REPORT would zero-fill omitted Output/Feature values;
+	// capped fields must use a caller-owned complete raw buffer if written.
+	field->report_count = min_t(unsigned, parser->global.report_count,
+				    HID_MAX_USAGES);
 	field->logical_minimum = parser->global.logical_minimum;
 	field->logical_maximum = parser->global.logical_maximum;
 	field->physical_minimum = parser->global.physical_minimum;
@@ -626,7 +649,9 @@ static int hid_parser_global(struct hid_parser *parser, struct hid_item *item)
 
 	case HID_GLOBAL_ITEM_TAG_REPORT_COUNT:
 		parser->global.report_count = item_udata(item);
-		if (parser->global.report_count > HID_MAX_USAGES) {
+		// if (parser->global.report_count > HID_MAX_USAGES) {
+		// Firmware accepts Linux's wire limit and caps parsed field storage.
+		if (parser->global.report_count > HID_MAX_REPORT_COUNT) {
 			hid_err(parser->device, "invalid report_count %d\n",
 					parser->global.report_count);
 			return -1;
@@ -713,8 +738,23 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 			return 0;
 		}
 
+		if (data < parser->local.usage_minimum) {
+			// Reject before upstream's unsigned subtraction can underflow.
+			hid_err(parser->device,
+				"usage maximum is less than minimum\n");
+			return -1;
+		}
+
 		count = data - parser->local.usage_minimum;
-		if (count + parser->local.usage_index >= HID_MAX_USAGES) {
+		if (parser->local.usage_index >= HID_MAX_USAGES) {
+			// Guard the bounded subtraction below when the table is full.
+			hid_err(parser->device,
+				"no more usage index available\n");
+			return -1;
+		}
+		// if (count + parser->local.usage_index >= HID_MAX_USAGES) {
+		// Firmware avoids overflow in the unsigned capacity calculation.
+		if (count >= HID_MAX_USAGES - parser->local.usage_index) {
 			/*
 			 * We do not warn if the name is not set, we are
 			 * actually pre-scanning the device.
@@ -725,11 +765,12 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 			// dev_name() is a fixed buffer in this port; parsing runs before dev_set_name().
 			data = HID_MAX_USAGES - parser->local.usage_index +
 				parser->local.usage_minimum - 1;
-			if (data <= 0) {
-				hid_err(parser->device,
-					"no more usage index available\n");
-				return -1;
-			}
+			// The full-table case was rejected above; endpoint 0 is valid.
+			// if (data <= 0) {
+			// 	hid_err(parser->device,
+			// 		"no more usage index available\n");
+			// 	return -1;
+			// }
 		}
 
 		/*
@@ -748,12 +789,15 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 		// 		return -1;
 		// 	}
 		// Dynamic local usage storage can fail with -ENOMEM; preserve it.
-		for (n = parser->local.usage_minimum; n <= data; n++) {
+		// Break before increment so a valid UINT_MAX endpoint cannot wrap.
+		for (n = parser->local.usage_minimum; ; n++) {
 			ret = hid_add_usage(parser, n, item->size);
 			if (ret) {
 				dbg_hid("hid_add_usage failed\n");
 				return ret;
 			}
+			if (n == data)
+				break;
 		}
 		return 0;
 
@@ -1867,7 +1911,7 @@ static void hid_input_var_field(struct hid_device *hid,
 	unsigned int n;
 
 	// for (n = 0; n < count; n++)
-	// Compact feature fields retain only their explicitly declared callbacks.
+	// Explicit-feature fields may retain fewer usage mappings than values.
 	for (n = 0; n < min(count, field->maxusage); n++)
 		hid_process_event(hid,
 				  field,

@@ -907,11 +907,6 @@ reports;
 its mode, LED, and proximity operations use separate small reports, and the
 normal feature-mapping pass iterates only `field->maxusage`.
 
-Relative to the preceding retained-policy host build, this exact-ID stage adds
-1,728 bytes of text and no data or BSS; `__bss_end__` and the 280-byte main-bank
-headroom are unchanged. The optimization targets persistent per-device heap
-instead of trading away parser compatibility globally.
-
 The distinguishing pre-compaction run left 10,688 B after Pro Pen and 10,560 B
 after Pad, then failed Finger probe with `oom=2` and a 976-byte minimum-ever
 counter. The verified image left 30,696 B after Pen, 30,568 B after Pad, and
@@ -929,6 +924,59 @@ Representative battery reports are injected only for `0302`, `0314`, and
 `033b`. Only emulator-side interrupt-IN completion is established; host
 parser/work enqueue and exact detached power-snapshot values remain
 unobserved.
+
+#### Wacom Intuos S 0374 bounded-parser checkpoint
+
+The later `056a:0374` checkpoint goes beyond the historical stage above: an
+oversized field retains only
+`min(declared_report_count, HID_MAX_USAGES)` cached values while
+`report->size` keeps the full wire layout. Its temporary test build set the
+single `HID_MAX_USAGES` parameter to 64, so Feature report `0xd9` retained 64
+of 1,280 values:
+
+```text
+host text/data/bss             610104 / 788 / 245412 B
+host __bss_end__               0x2003feec
+host main-bank headroom        276 B to 0x20040000
+host UF2 SHA-256               73998e8b7ab0e3c6bdd14380431e1783a98454e0039d0893c885962e036b3741
+emulator UF2 SHA-256           fc198ea6d6fa61854c4a4319d77b3e5fd9b99748a58d04b348ca9eceedac3cb4
+hardware verdict               passed 2026-08-04 at temporary limit 64
+minimum-ever free heap         12944 B
+minimum sampled free heap      13464 B
+oom                            0
+production text/data/bss       609032 / 788 / 245412 B
+production __bss_end__         0x2003feec
+production main-bank headroom  276 B to 0x20040000
+production host UF2 SHA-256    8fc810a6114ea4453712e02097e991aaef7b36a323828628bce57da2865c468f
+production hardware verdict    not hardware-tested
+```
+
+The run completed all three Wacom phases, three bounded `0xd9` GET paths, the
+six isolated parser descriptors, balanced Pen/Pad teardown, and terminal `5`.
+All 35 heap snapshots reported `oom=0`; the ten mounted-alert and nine
+removed-alert plateaus were stable. Minimum task watermarks were TUH 265, KeyD
+658, async 389, work 217, timer 348, lifecycle 190, and report 860 words.
+
+Complete retained-value coverage for `056a:0374` requires
+`HID_MAX_USAGES >= 1280` because Feature report `0xd9` declares 1,280 values,
+plus enough heap for the enlarged per-field caches. An earlier run of the
+instrumented fixture at 675 produced `ERR: HID_PROBE_NOMEM`, `oom=3`, and a
+1,608-byte minimum-ever counter. That is diagnostic evidence of insufficient
+heap for that wider-cap test image, not a hardware verdict for the rebuilt
+production UF2. More memory, such as a qualified larger-memory target or
+PSRAM-backed heap, is required before treating the complete retained-value
+graph as supported.
+
+The current Wacom call graph does not write report `0xd9`; a future structured
+SET would zero-fill the omitted tail, while a complete caller-owned raw request
+would not. The post-test production build restores the default limit 675, so
+the exact capped-image runtime verdict does not transfer to that image or
+qualify values beyond the first 64.
+
+Removing the temporary host instrumentation reduces text by 1,072 bytes from
+the capped test image and leaves data, BSS, `__bss_end__`, and the 276-byte
+main-bank headroom unchanged. The optimization targets persistent per-device
+heap instead of trading away parser compatibility globally.
 
 The optional linked Stadia experiment added `hid-google-stadiaff.c` and
 `ff-memless.c`, with their active event-lock scopes mapped to firmware
