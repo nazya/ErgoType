@@ -33,11 +33,19 @@ static int __check_hid_generic(struct device_driver *drv, void *data)
 	// struct hid_device keeps the matched driver pointer const in this port.
 	const struct hid_driver *hdrv = to_hid_driver(drv);
 	struct hid_device *hdev = data;
+	const struct hid_device_id *id;
 
 	if (hdrv == &hid_generic)
 		return 0;
 
-	return hid_match_device(hdev, hdrv) != NULL;
+	// return hid_match_device(hdev, hdrv) != NULL;
+	// Port-only gated IDs let a special driver preserve table precedence while
+	// explicitly leaving an unqualified device to hid-generic.
+	id = hid_match_device(hdev, hdrv);
+	if (!id)
+		return 0;
+
+	return !hdrv->match || hdrv->match(hdev, false);
 }
 
 static bool hid_generic_match(struct hid_device *hdev,

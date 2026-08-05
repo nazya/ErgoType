@@ -2119,7 +2119,10 @@ static void wacom_wac_pad_usage_mapping(struct hid_device *hdev,
 		/* do not overwrite previous data */
 		if (!wacom_wac->has_mode_change) {
 			wacom_wac->has_mode_change = true;
-			wacom_wac->is_direct_mode = true;
+			// wacom_wac->is_direct_mode = true;
+			// Mode reports and lifecycle rebuild run in different tasks.
+			__atomic_store_n(&wacom_wac->is_direct_mode, true,
+					 __ATOMIC_RELEASE);
 		}
 		features->device_type |= WACOM_DEVICETYPE_PAD;
 		break;
@@ -2268,8 +2271,13 @@ static void wacom_wac_pad_event(struct hid_device *hdev, struct hid_field *field
 		break;
 
 	case WACOM_HID_WD_MODE_CHANGE:
-		if (wacom_wac->is_direct_mode != value) {
-			wacom_wac->is_direct_mode = value;
+		// if (wacom_wac->is_direct_mode != value) {
+		if (__atomic_load_n(&wacom_wac->is_direct_mode,
+				    __ATOMIC_ACQUIRE) != value) {
+			// wacom_wac->is_direct_mode = value;
+			// Publish the parsed value before queueing lifecycle work.
+			__atomic_store_n(&wacom_wac->is_direct_mode, value,
+					 __ATOMIC_RELEASE);
 			wacom_schedule_work(&wacom->wacom_wac, WACOM_WORKER_MODE_CHANGE);
 		}
 		break;
@@ -4965,9 +4973,23 @@ static const struct wacom_features wacom_features_HID_ANY_ID =
 static const struct wacom_features wacom_features_0x94 =
 	{ "Wacom Bootloader", .type = BOOTLOADER };
 
-#define USB_DEVICE_WACOM(prod)						\
+// #define USB_DEVICE_WACOM(prod)					\
+// 	HID_DEVICE(BUS_USB, HID_GROUP_WACOM, USB_VENDOR_ID_WACOM, prod),\
+// 	.driver_data = (kernel_ulong_t)&wacom_features_##prod
+// Firmware keeps the upstream spelling for unqualified fixed rows. The broad
+// configuration restores their feature pointers; the normal build retains
+// only match-precedence barriers. Qualified rows are explicit below.
+#define USB_DEVICE_WACOM_QUALIFIED(prod)				\
 	HID_DEVICE(BUS_USB, HID_GROUP_WACOM, USB_VENDOR_ID_WACOM, prod),\
 	.driver_data = (kernel_ulong_t)&wacom_features_##prod
+
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+#define USB_DEVICE_WACOM(prod) USB_DEVICE_WACOM_QUALIFIED(prod)
+#else
+#define USB_DEVICE_WACOM(prod)					\
+	HID_DEVICE(BUS_USB, HID_GROUP_WACOM, USB_VENDOR_ID_WACOM, prod),\
+	.driver_data = 0
+#endif
 
 #define BT_DEVICE_WACOM(prod)						\
 	HID_DEVICE(BUS_BLUETOOTH, HID_GROUP_WACOM, USB_VENDOR_ID_WACOM, prod),\
@@ -4986,7 +5008,6 @@ static const struct wacom_features wacom_features_0x94 =
 	.driver_data = (kernel_ulong_t)&wacom_features_##prod
 
 const struct hid_device_id wacom_ids[] = {
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x00) },
 	{ USB_DEVICE_WACOM(0x03) },
 	{ USB_DEVICE_WACOM(0x10) },
@@ -5005,15 +5026,13 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x23) },
 	{ USB_DEVICE_WACOM(0x24) },
 	{ USB_DEVICE_WACOM(0x26) },
-#endif
+	// { USB_DEVICE_WACOM(0x27) },
 	// The wired PTH-650 exercises upstream USB battery publication.
-	{ USB_DEVICE_WACOM(0x27) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0x27) },
 	{ USB_DEVICE_WACOM(0x28) },
-#endif
+	// { USB_DEVICE_WACOM(0x29) },
 	// The wired PTK-450 exercises the upstream Pen, Pad, and Touch Ring path.
-	{ USB_DEVICE_WACOM(0x29) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0x29) },
 	{ USB_DEVICE_WACOM(0x2A) },
 	{ USB_DEVICE_WACOM(0x30) },
 	{ USB_DEVICE_WACOM(0x31) },
@@ -5045,11 +5064,12 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x69) },
 	{ USB_DEVICE_WACOM(0x6A) },
 	{ USB_DEVICE_WACOM(0x6B) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ BT_DEVICE_WACOM(0x81) },
 #endif
+	// { USB_DEVICE_WACOM(0x84) },
 	// The USB wireless receiver retains the upstream three-interface path.
-	{ USB_DEVICE_WACOM(0x84) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0x84) },
 	{ USB_DEVICE_WACOM(0x90) },
 	{ USB_DEVICE_WACOM(0x93) },
 	{ USB_DEVICE_WACOM(0x94) },
@@ -5068,7 +5088,9 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0xBA) },
 	{ USB_DEVICE_WACOM(0xBB) },
 	{ USB_DEVICE_WACOM(0xBC) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ BT_DEVICE_WACOM(0xBD) },
+#endif
 	{ USB_DEVICE_WACOM(0xC0) },
 	{ USB_DEVICE_WACOM(0xC2) },
 	{ USB_DEVICE_WACOM(0xC4) },
@@ -5089,10 +5111,9 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0xDA) },
 	{ USB_DEVICE_WACOM(0xDB) },
 	{ USB_DEVICE_WACOM(0xDD) },
-#endif
+	// { USB_DEVICE_WACOM(0xDE) },
 	// The wired CTH-470 exercises the upstream paired Pen/Touch/Pad path.
-	{ USB_DEVICE_WACOM(0xDE) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0xDE) },
 	{ USB_DEVICE_WACOM(0xDF) },
 	{ USB_DEVICE_WACOM(0xE2) },
 	{ USB_DEVICE_WACOM(0xE3) },
@@ -5116,79 +5137,84 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x12C) },
 	{ USB_DEVICE_WACOM(0x300) },
 	{ USB_DEVICE_WACOM(0x301) },
-#endif
+	// { USB_DEVICE_WACOM(0x302) },
+	// { USB_DEVICE_WACOM(0x303) },
 	// These external wired Intuos models use the already active upstream
 	// INTUOSHT, INTUOSHT2, and first-generation Intuos Pro paths.
-	{ USB_DEVICE_WACOM(0x302) },
-	{ USB_DEVICE_WACOM(0x303) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x302) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x303) },
+	// { USB_DEVICE_WACOM(0x304) },
 	// The wired Cintiq 13HD reuses the active Pen/Pad path.
-	{ USB_DEVICE_WACOM(0x304) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0x304) },
 	{ USB_DEVICE_WACOM(0x307) },
 	{ USB_DEVICE_WACOM(0x309) },
 	{ USB_DEVICE_WACOM(0x30A) },
 	{ USB_DEVICE_WACOM(0x30C) },
-#endif
-	{ USB_DEVICE_WACOM(0x30E) },
-	{ USB_DEVICE_WACOM(0x314) },
-	{ USB_DEVICE_WACOM(0x315) },
-	{ USB_DEVICE_WACOM(0x317) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// { USB_DEVICE_WACOM(0x30E) },
+	// { USB_DEVICE_WACOM(0x314) },
+	// { USB_DEVICE_WACOM(0x315) },
+	// { USB_DEVICE_WACOM(0x317) },
+	// These fixed wired profiles were qualified by their exact fixtures.
+	{ USB_DEVICE_WACOM_QUALIFIED(0x30E) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x314) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x315) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x317) },
 	{ USB_DEVICE_WACOM(0x318) },
 	{ USB_DEVICE_WACOM(0x319) },
-#endif
-	{ USB_DEVICE_WACOM(0x323) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// { USB_DEVICE_WACOM(0x323) },
+	// The fixed wired profile was qualified by its exact fixture.
+	{ USB_DEVICE_WACOM_QUALIFIED(0x323) },
 	{ USB_DEVICE_WACOM(0x325) },
 	{ USB_DEVICE_WACOM(0x326) },
 	{ USB_DEVICE_WACOM(0x32A) },
 	{ USB_DEVICE_WACOM(0x32B) },
 	{ USB_DEVICE_WACOM(0x32C) },
 	{ USB_DEVICE_WACOM(0x32F) },
-#endif
+	// { USB_DEVICE_WACOM(0x331) },
 	// The USB ExpressKey Remote receiver uses the upstream dynamic Remote path.
-	{ USB_DEVICE_WACOM(0x331) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	{ USB_DEVICE_WACOM_QUALIFIED(0x331) },
 	{ USB_DEVICE_WACOM(0x333) },
 	{ USB_DEVICE_WACOM(0x335) },
 	{ USB_DEVICE_WACOM(0x336) },
-#endif
-	{ USB_DEVICE_WACOM(0x33B) },
-	{ USB_DEVICE_WACOM(0x33C) },
-	{ USB_DEVICE_WACOM(0x33D) },
-	{ USB_DEVICE_WACOM(0x33E) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// { USB_DEVICE_WACOM(0x33B) },
+	// { USB_DEVICE_WACOM(0x33C) },
+	// { USB_DEVICE_WACOM(0x33D) },
+	// { USB_DEVICE_WACOM(0x33E) },
+	// These fixed wired profiles were qualified by their exact fixtures.
+	{ USB_DEVICE_WACOM_QUALIFIED(0x33B) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x33C) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x33D) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x33E) },
 	{ USB_DEVICE_WACOM(0x343) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ BT_DEVICE_WACOM(0x360) },
 	{ BT_DEVICE_WACOM(0x361) },
 	{ BT_DEVICE_WACOM(0x377) },
 	{ BT_DEVICE_WACOM(0x379) },
 #endif
+	// { USB_DEVICE_WACOM(0x37A) },
+	// { USB_DEVICE_WACOM(0x37B) },
 	// The wired One by Wacom Small and Medium share the BAMBOO_PEN contract.
-	{ USB_DEVICE_WACOM(0x37A) },
-	{ USB_DEVICE_WACOM(0x37B) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x37A) },
+	{ USB_DEVICE_WACOM_QUALIFIED(0x37B) },
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ BT_DEVICE_WACOM(0x393) },
 	{ BT_DEVICE_WACOM(0x3c6) },
 	{ BT_DEVICE_WACOM(0x3c8) },
 	{ BT_DEVICE_WACOM(0x3dd) },
+#endif
 	{ USB_DEVICE_WACOM(0x4001) },
 	{ USB_DEVICE_WACOM(0x4004) },
 	{ USB_DEVICE_WACOM(0x5000) },
 	{ USB_DEVICE_WACOM(0x5002) },
-#endif
-	// Stage the exact wired 0x0374 through the disabled upstream USB wildcard.
-	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
-		     USB_VENDOR_ID_WACOM, 0x0374),
-	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
-	// The exact wired 0x5048 profile reaches the upstream generic AES path.
-	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
-		     USB_VENDOR_ID_WACOM, 0x5048),
-	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_LENOVO(0x6004) },
+#endif
 
-	{ USB_DEVICE_WACOM(HID_ANY_ID) },
+	// { USB_DEVICE_WACOM(HID_ANY_ID) },
+	/* Firmware enables only the upstream wired USB descriptor wildcard. */
+	{ USB_DEVICE_WACOM_QUALIFIED(HID_ANY_ID) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ I2C_DEVICE_WACOM(HID_ANY_ID) },
 	{ PCI_DEVICE_WACOM(HID_ANY_ID) },
 	{ BT_DEVICE_WACOM(HID_ANY_ID) },

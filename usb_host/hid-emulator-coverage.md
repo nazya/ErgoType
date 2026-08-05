@@ -17,6 +17,43 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### Hardware-pending Wacom wildcard and mode-change fixtures
+
+The dirty emulator builds three independent UF2s: captured `056a:0350`
+Pen/Pad, captured `056a:0354` Touch, and a driver-selection matrix. They use
+only public TinyUSB device APIs. CDC is disabled, so the sole
+oracle is the main ErgoType host log; use host `log_level >= 1`. No hardware
+pass is claimed for these images yet.
+
+The matching matrix checks generic fallback for a fixed zero-data `0333` row,
+the final wildcard with unknown `7ffe`, qualified fixed rows `037a/033b/0084`,
+three-interface `033b`, two consecutive non-waiting Feature GET 8 requests, and
+receiver children classified as `GATED`, `UNKNOWN`, and `SELECTED`. The host
+must emit the corresponding `WACOM_MATCH_GENERIC_FALLBACK`,
+`WACOM_MATCH_WILDCARD`, `WACOM_MATCH_FIXED`, and `WACOM_RX_CHILD` markers.
+The test-only host coordinator reads phases 1--6 from the exact
+`MATCHING-MATRIX-1` alert Feature report and echoes each phase only after the
+preceding driver-ready/removal, parsed-input, Feature GET 8, interface-mask,
+and receiver-classification facts are complete. Its ordered input nonces are
+`71,72,73,74,81,82,83`; phase 6 is withheld on any mismatch.
+
+The two-Pico mode fixture covers Pen-first and Touch-first enumeration,
+direct/indirect/direct rebuilds, repeated-value coalescing, retained INPUT
+during the transport fence, injected Pen and Touch rebuild failures, sibling
+disconnect/reconnect, and physical recovery. Expected host markers include
+`WACOM_MODE_TEST_WAIT`, `WACOM_MODE_TEST_RUN`, `WACOM_MODE_BEGIN`,
+`WACOM_MODE_COALESCED`, both `WACOM_MODE_REBUILD_*_OK` and injected `*_FAIL`,
+`WACOM_MODE_PEERS`, and `WACOM_MODE_END`. Under `WACOM_MODE_CHANGE_TEST`, the
+host reads unnumbered two-byte `{phase, token}` Feature status from exact
+alerts `WACOM-0350-MODE-1` and `WACOM-0354-MODE-1`, then sends an equal-token
+GO only when the required host facts are visible. Pen nonces are
+`11,12,13,21,22,23,31,32,33,42,43`; Touch nonces are
+`14,15,24,25,34,35,36,41,44`. Final phase 6 requires both complete sequences,
+no mismatch, and a reused USB address observed in a strictly newer physical
+generation. A whole-hub restart resets the oracle when both new alerts report
+phase 1. No hardware pass is claimed until those terminal GO exchanges are
+captured.
+
 ### Hardware-verified Microsoft wired-USB fixture
 
 The compact `device/microsoft-usb` fixture is based on commit `c4e5361` plus
@@ -562,7 +599,7 @@ drivers are not counted here.
 | `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
 | `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
-| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, and receiver work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime |
+| workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, receiver, and lifecycle-owned mode-change work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime; mode change is hardware-pending |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
@@ -572,7 +609,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; seven base IDs plus external wired `056a:0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e` | historical CTL-472, expanded five-profile wired, separate AES/receiver, focused eleven-ID Intuos, and focused Cintiq 13HD artifacts passed on hardware; exact power values, elapsed AES expiry, receiver child profiles other than `0027`, byte-exact retail descriptors for every selected PID, Cintiq Touch pair `0333/0335`, and Remote remain outside the verdict |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, descriptor mode change, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; all 150 fixed USB rows remain ordered as 19 qualified profiles plus 131 generic-fallback barriers, followed by one wired wildcard; receiver children require a qualified exact row | historical CTL-472, wired, AES/receiver, Intuos, Cintiq 13HD, Remote, and focused GET-completion artifacts keep their exact-image verdicts; the new matching matrix and captured `0350/0354` mode-change pair are hardware-pending |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes

@@ -15,6 +15,12 @@ enum usbhid_report_open_state {
 	USBHID_REPORT_OPEN,
 };
 
+enum usbhid_report_rebuild_state {
+	USBHID_REPORT_REBUILD_IDLE,
+	USBHID_REPORT_REBUILD_DRAINING,
+	USBHID_REPORT_REBUILD_RESUME_PENDING,
+};
+
 /*
  * USB-specific HID struct, to be pointed to
  * from struct hid_device->driver_data
@@ -102,6 +108,8 @@ struct usbhid_device {
 	u8 report_owner;
 	u8 report_slot;
 	bool report_wanted;
+	/* Keep the enum byte-sized: one logical rebuild spans stop/start. */
+	u8 report_rebuild_state;
 	/* Keep the enum byte-sized: this object is allocated once per interface. */
 	u8 report_open_state;
 	bool report_host_pending;

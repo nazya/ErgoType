@@ -15,6 +15,25 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
+The dirty Wacom wildcard/mode-change test build is currently:
+
+```text
+text/data/bss                 625128 / 788 / 245532 B
+__bss_end__                   0x2003ff64
+main-bank headroom            156 B to 0x20040000
+HID_MAX_FIELDS/USAGES         64 / 675
+UF2 SHA-256                   2536504fe2a7fdb4fa08ffd27f9ed513a831c0a0cee6033dfbcaadfe8617c036
+hardware verdict              pending; WACOM_MODE_CHANGE_TEST is enabled
+```
+
+The 150 fixed Wacom rows and final USB wildcard are immutable table data.
+Runtime report-field allocation still follows the Linux model and has one
+retained-value capacity knob, `HID_MAX_USAGES`; no sparse replacement table or
+second limit was added. Exact explicit-Feature-usage compaction remains a
+descriptor-proven exception, including the captured `056a:03ce` signature.
+Mode-change state is shared per physical Wacom pair, but its real attached and
+rebuild heap plateaus have not yet been measured on hardware.
+
 The Microsoft wired-USB per-device-release checkpoint was:
 
 ```text

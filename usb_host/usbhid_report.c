@@ -498,7 +498,10 @@ static void usbhid_report_xfer_complete(tuh_xfer_t *xfer)
 		slot->actual_len = xfer->actual_len;
 		slot->xfer_result = (u8)xfer->result;
 		slot->opened_at_completion =
-			usbhid->report_open_state == USBHID_REPORT_OPEN;
+			usbhid->report_open_state == USBHID_REPORT_OPEN ||
+			(usbhid->report_open_state == USBHID_REPORT_RESUMING &&
+			 usbhid->report_rebuild_state ==
+				USBHID_REPORT_REBUILD_RESUME_PENDING);
 		usbhid->report_owner = USBHID_REPORT_QUEUED;
 		published = true;
 		break;
@@ -1551,6 +1554,99 @@ void usbhid_report_close(struct hid_device *hid)
 	hid_transport_unlock();
 }
 
+/*
+ * A logical driver rebuild must close interrupt-IN before it takes the parser
+ * lock, but unlike ordinary close it must parse a completion which already won
+ * the host abort race against the still-live input graph. Full hid_hw_stop()
+ * follows after the caller owns that lock.
+ *
+ * The usbhid lifecycle mutex serializes this waiter with open/close/start/stop.
+ */
+int usbhid_report_quiesce_rebuild(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid;
+	wait_queue_head_t *protocol_wait;
+	TaskHandle_t task;
+	bool close_idle;
+	bool rebuild_resume;
+	bool reset_pending;
+	bool defer = false;
+	int ret = 0;
+
+	if (!hid)
+		return -ENODEV;
+	usbhid = hid->driver_data;
+	task = xTaskGetCurrentTaskHandle();
+
+	hid_transport_lock();
+	if (usbhid->disconnect_queued || usbhid->transport_stopping) {
+		hid_transport_unlock();
+		return -ENODEV;
+	}
+
+	rebuild_resume =
+		usbhid->report_open_state == USBHID_REPORT_OPEN;
+	usbhid->report_rebuild_state = USBHID_REPORT_REBUILD_DRAINING;
+	usbhid->report_close_waiter = task;
+	usbhid->report_wanted = false;
+	/* Keep open_state/revision stable until the last accepted report parses. */
+	if (usbhid->report_owner == USBHID_REPORT_ARMED &&
+	    !usbhid->report_host_pending) {
+		usbhid->report_host_pending = true;
+		defer = true;
+	}
+	hid_transport_unlock();
+	usbhid_report_notify_task();
+	defer |= usbhid_report_cancel_recovery(hid);
+
+	if (defer)
+		usbh_defer_func(usbhid_report_reconcile_on_host, hid, false);
+
+	for (;;) {
+		int index;
+
+		hid_transport_lock();
+		close_idle = usbhid_report_close_idle_locked(hid);
+		index = usbhid->report_slot ? usbhid->report_slot - 1 : -1;
+		reset_pending = index >= 0 && index < CFG_TUH_HID &&
+			usbhid_report_rx_slots[index].owner == hid &&
+			usbhid_report_recovery[index] ==
+				USBHID_REPORT_RECOVERY_DEVICE_RESET &&
+			!usbhid->report_host_pending;
+		hid_transport_unlock();
+		if (close_idle || reset_pending)
+			break;
+		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	}
+
+	hid_transport_lock();
+	usbhid->report_close_waiter = NULL;
+	if (reset_pending) {
+		usbhid->report_rebuild_state = USBHID_REPORT_REBUILD_IDLE;
+		hid_transport_unlock();
+		return -EAGAIN;
+	}
+	usbhid->transport_stopping = true;
+	for (protocol_wait = usbhid->protocol_waits; protocol_wait;
+	     protocol_wait = protocol_wait->transport_next)
+		hid_compat_waitqueue_cancel(protocol_wait);
+	usbhid->report_open_state = USBHID_REPORT_CLOSED;
+	usbhid->report_revision++;
+	if (usbhid->disconnect_queued) {
+		usbhid->report_rebuild_state = USBHID_REPORT_REBUILD_IDLE;
+		ret = -ENODEV;
+	} else {
+		usbhid->report_rebuild_state =
+			rebuild_resume ? USBHID_REPORT_REBUILD_RESUME_PENDING :
+				USBHID_REPORT_REBUILD_IDLE;
+	}
+	if (usbhid_report_idle_locked(hid))
+		usbhid_wait_wake_locked(hid);
+	hid_transport_unlock();
+
+	return ret;
+}
+
 static bool usbhid_input_report_take(struct usbhid_input_report_event *event)
 {
 	bool found = false;
@@ -2197,7 +2293,10 @@ void usbhid_report_task(void *pvParameters)
 			event.generation == usbhid->generation;
 		status_current = completion_owned &&
 			event.revision == usbhid->report_revision &&
-			usbhid->report_wanted && !usbhid->transport_stopping;
+			!usbhid->transport_stopping &&
+			(usbhid->report_wanted ||
+			 usbhid->report_rebuild_state ==
+				USBHID_REPORT_REBUILD_DRAINING);
 		/*
 		 * Linux cannot deliver to an eventX fd before userspace opens it.
 		 * Firmware's first input_open_device() starts one HID endpoint shared

@@ -87,6 +87,79 @@ static _Atomic(TaskHandle_t) usbhid_lifecycle_task_handle;
 static struct work_struct *usbhid_lifecycle_work_head;
 static struct work_struct *usbhid_lifecycle_work_tail;
 
+#if defined(WACOM_MODE_CHANGE_TEST)
+#define USBHID_WACOM_TEST_WACOM_VID 0x056au
+#define USBHID_WACOM_TEST_ALERT_VID 0xcafeu
+#define USBHID_WACOM_TEST_ALERT_PID 0x10ffu
+#define USBHID_WACOM_TEST_MODE_PEN_PID 0x0350u
+#define USBHID_WACOM_TEST_MODE_TOUCH_PID 0x0354u
+#define USBHID_WACOM_TEST_MATRIX_WILDCARD_PID 0x7ffeu
+#define USBHID_WACOM_TEST_MATRIX_037A_PID 0x037au
+#define USBHID_WACOM_TEST_MATRIX_033B_PID 0x033bu
+#define USBHID_WACOM_TEST_MATRIX_GATED_PID 0x0333u
+#define USBHID_WACOM_TEST_MATRIX_RECEIVER_PID 0x0084u
+#define USBHID_WACOM_TEST_MATRIX_CHILD_PID 0x0027u
+#define USBHID_WACOM_TEST_ALERT_POLL_MS 50u
+
+enum usbhid_wacom_test_alert_id {
+	USBHID_WACOM_TEST_ALERT_MODE_PEN,
+	USBHID_WACOM_TEST_ALERT_MODE_TOUCH,
+	USBHID_WACOM_TEST_ALERT_MATRIX,
+	USBHID_WACOM_TEST_ALERT_COUNT,
+};
+
+enum usbhid_wacom_test_matrix_lifecycle {
+	USBHID_WACOM_TEST_7FFE_READY = 1u << 0,
+	USBHID_WACOM_TEST_7FFE_REMOVED = 1u << 1,
+	USBHID_WACOM_TEST_037A_READY = 1u << 2,
+	USBHID_WACOM_TEST_037A_REMOVED = 1u << 3,
+	USBHID_WACOM_TEST_033B_READY = 1u << 4,
+	USBHID_WACOM_TEST_033B_REMOVED = 1u << 5,
+	USBHID_WACOM_TEST_0333_READY = 1u << 6,
+	USBHID_WACOM_TEST_0333_REMOVED = 1u << 7,
+};
+
+struct usbhid_wacom_test_alert {
+	u32 status_generation;
+	u32 go_generation;
+	u8 phase;
+	bool status_valid;
+};
+
+struct usbhid_wacom_test_action {
+	struct hid_device *hid;
+	u32 generation;
+	u8 alert_id;
+	u8 phase;
+};
+
+struct usbhid_wacom_test_state {
+	struct work_struct work;
+	struct usbhid_wacom_test_alert alert[USBHID_WACOM_TEST_ALERT_COUNT];
+	TickType_t alert_poll_at[USBHID_WACOM_TEST_ALERT_COUNT];
+	u32 mode_phase_a_generation[2];
+	u32 mode_ready_count[2];
+	u32 mode_go_ready_baseline[2];
+	u32 mode_last_generation[2];
+	u8 mode_last_addr[2];
+	u8 mode_go_phase[2];
+	u8 mode_nonce_index[2];
+	u8 matrix_nonce_index;
+	u8 matrix_get8_count;
+	u8 matrix_receiver_classes;
+	u8 matrix_receiver_ready;
+	u8 matrix_receiver_removed;
+	u16 matrix_lifecycle;
+	u32 matrix_phase_a_generation;
+	u8 alert_poll_pending;
+	bool mode_address_reused;
+	bool mode_error;
+	bool matrix_error;
+};
+
+static struct usbhid_wacom_test_state usbhid_wacom_test;
+#endif
+
 struct usbhid_sync_request {
 	TaskHandle_t task;
 	size_t actual_len;
@@ -313,9 +386,23 @@ static void usbhid_transport_fault(enum usbhid_transport_fault fault);
 static void usbhid_backend_device_detach(uint8_t dev_addr);
 static bool usbhid_usb_device_has_published_hid(
 		const struct usbhid_usb_device *entry);
+static int usbhid_usb_control_msg(struct usb_device *dev, unsigned int pipe,
+		u8 request, u8 requesttype, u16 value, u16 index,
+		void *data, u16 size, int timeout, bool bind_hid_owner);
 static int usbhid_reset_process(void);
 static TickType_t usbhid_reset_wait_ticks(bool *active);
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
+static bool usbhid_lifecycle_generation_locked(
+		struct hid_device *hid, u32 *physical_generation);
+#if defined(WACOM_MODE_CHANGE_TEST)
+static void usbhid_wacom_test_work(struct work_struct *work);
+static void usbhid_wacom_test_note_ready(struct hid_device *hid);
+static void usbhid_wacom_test_note_removed(struct hid_device *hid);
+static void usbhid_wacom_test_control_note(struct hid_device *hid,
+		const struct usbhid_report_request *request, int status);
+static TickType_t usbhid_wacom_test_poll_wait_ticks(void);
+static void usbhid_wacom_test_poll_due(void);
+#endif
 
 static u32 usbhid_next_generation_locked(void)
 {
@@ -2766,12 +2853,749 @@ static TickType_t usbhid_lifecycle_wait_ticks(void)
 {
 	bool reset_active;
 	TickType_t reset_wait = usbhid_reset_wait_ticks(&reset_active);
+	TickType_t wait;
 
 	/* Preprobe is deliberately parked while reset owns the global EP0 gate. */
 	if (reset_active)
 		return reset_wait;
-	return usbhid_preprobe_wait_ticks();
+	wait = usbhid_preprobe_wait_ticks();
+#if defined(WACOM_MODE_CHANGE_TEST)
+	reset_wait = usbhid_wacom_test_poll_wait_ticks();
+	if (reset_wait < wait)
+		wait = reset_wait;
+#endif
+	return wait;
 }
+
+#if defined(WACOM_MODE_CHANGE_TEST)
+static const u8 usbhid_wacom_test_mode_pen_nonces[] = {
+	0x11, 0x12, 0x13, 0x21, 0x22, 0x23,
+	0x31, 0x32, 0x33, 0x42, 0x43,
+};
+static const u8 usbhid_wacom_test_mode_touch_nonces[] = {
+	0x14, 0x15, 0x24, 0x25, 0x34, 0x35, 0x36, 0x41, 0x44,
+};
+static const u8 usbhid_wacom_test_matrix_nonces[] = {
+	0x71, 0x72, 0x73, 0x74, 0x81, 0x82, 0x83,
+};
+
+static const char *usbhid_wacom_test_alert_serial(
+		enum usbhid_wacom_test_alert_id id)
+{
+	switch (id) {
+	case USBHID_WACOM_TEST_ALERT_MODE_PEN:
+		return "WACOM-0350-MODE-1";
+	case USBHID_WACOM_TEST_ALERT_MODE_TOUCH:
+		return "WACOM-0354-MODE-1";
+	case USBHID_WACOM_TEST_ALERT_MATRIX:
+		return "MATCHING-MATRIX-1";
+	default:
+		return "";
+	}
+}
+
+static void usbhid_wacom_test_log(const char *kind, unsigned int id,
+		unsigned int first, unsigned int second)
+{
+	char msg[80];
+
+	snprintf(msg, sizeof(msg), "%s i%u a%u b%u", kind, id, first, second);
+	_async_msg(msg);
+}
+
+static struct hid_device *usbhid_wacom_test_find_alert_locked(
+		enum usbhid_wacom_test_alert_id id, u32 *generation)
+{
+	const char *serial = usbhid_wacom_test_alert_serial(id);
+
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid = hid ? hid->driver_data : NULL;
+
+		if (usbhid && usbhid->driver_ready && !usbhid->disconnect_queued &&
+		    hid->vendor == USBHID_WACOM_TEST_ALERT_VID &&
+		    hid->product == USBHID_WACOM_TEST_ALERT_PID &&
+		    !strcmp(hid->uniq, serial)) {
+			*generation = usbhid->generation;
+			return hid;
+		}
+	}
+	return NULL;
+}
+
+static void usbhid_wacom_test_reset_mode_locked(u32 pen_generation,
+		u32 touch_generation)
+{
+	usbhid_wacom_test.alert_poll_pending &=
+		(u8)~((1u << USBHID_WACOM_TEST_ALERT_MODE_PEN) |
+		       (1u << USBHID_WACOM_TEST_ALERT_MODE_TOUCH));
+	usbhid_wacom_test.mode_phase_a_generation[0] = pen_generation;
+	usbhid_wacom_test.mode_phase_a_generation[1] = touch_generation;
+	memset(usbhid_wacom_test.mode_ready_count, 0,
+	       sizeof(usbhid_wacom_test.mode_ready_count));
+	memset(usbhid_wacom_test.mode_go_ready_baseline, 0,
+	       sizeof(usbhid_wacom_test.mode_go_ready_baseline));
+	memset(usbhid_wacom_test.mode_last_generation, 0,
+	       sizeof(usbhid_wacom_test.mode_last_generation));
+	memset(usbhid_wacom_test.mode_last_addr, 0,
+	       sizeof(usbhid_wacom_test.mode_last_addr));
+	memset(usbhid_wacom_test.mode_go_phase, 0,
+	       sizeof(usbhid_wacom_test.mode_go_phase));
+	memset(usbhid_wacom_test.mode_nonce_index, 0,
+	       sizeof(usbhid_wacom_test.mode_nonce_index));
+	usbhid_wacom_test.mode_address_reused = false;
+	usbhid_wacom_test.mode_error = false;
+}
+
+static void usbhid_wacom_test_reset_matrix_locked(u32 generation)
+{
+	usbhid_wacom_test.alert_poll_pending &=
+		(u8)~(1u << USBHID_WACOM_TEST_ALERT_MATRIX);
+	usbhid_wacom_test.matrix_phase_a_generation = generation;
+	usbhid_wacom_test.matrix_nonce_index = 0;
+	usbhid_wacom_test.matrix_get8_count = 0;
+	usbhid_wacom_test.matrix_receiver_classes = 0;
+	usbhid_wacom_test.matrix_receiver_ready = 0;
+	usbhid_wacom_test.matrix_receiver_removed = 0;
+	usbhid_wacom_test.matrix_lifecycle = 0;
+	usbhid_wacom_test.matrix_error = false;
+}
+
+static bool usbhid_wacom_test_status_locked(
+		enum usbhid_wacom_test_alert_id id, u8 phase);
+
+static void usbhid_wacom_test_maybe_reset_locked(void)
+{
+	struct usbhid_wacom_test_alert *pen =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MODE_PEN];
+	struct usbhid_wacom_test_alert *touch =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MODE_TOUCH];
+	struct usbhid_wacom_test_alert *matrix =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MATRIX];
+
+	if (usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 1) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 1) &&
+	    (pen->status_generation !=
+		usbhid_wacom_test.mode_phase_a_generation[0] ||
+	     touch->status_generation !=
+		usbhid_wacom_test.mode_phase_a_generation[1]))
+		usbhid_wacom_test_reset_mode_locked(pen->status_generation,
+					       touch->status_generation);
+
+	if (usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 1) &&
+	    matrix->status_generation !=
+		usbhid_wacom_test.matrix_phase_a_generation)
+		usbhid_wacom_test_reset_matrix_locked(matrix->status_generation);
+}
+
+static TickType_t usbhid_wacom_test_poll_wait_ticks(void)
+{
+	TickType_t now = xTaskGetTickCount();
+	TickType_t wait = portMAX_DELAY;
+
+	hid_transport_lock();
+	for (unsigned int id = 0; id < USBHID_WACOM_TEST_ALERT_COUNT; id++) {
+		TickType_t candidate;
+
+		if (!(usbhid_wacom_test.alert_poll_pending & (1u << id)))
+			continue;
+		if (usbhid_tick_reached(now,
+				usbhid_wacom_test.alert_poll_at[id])) {
+			wait = 0;
+			break;
+		}
+		candidate = usbhid_wacom_test.alert_poll_at[id] - now;
+		if (wait == portMAX_DELAY || candidate < wait)
+			wait = candidate;
+	}
+	hid_transport_unlock();
+	return wait;
+}
+
+static void usbhid_wacom_test_poll_due(void)
+{
+	TickType_t now = xTaskGetTickCount();
+	bool due = false;
+
+	hid_transport_lock();
+	for (unsigned int id = 0; id < USBHID_WACOM_TEST_ALERT_COUNT; id++) {
+		if ((usbhid_wacom_test.alert_poll_pending & (1u << id)) &&
+		    usbhid_tick_reached(now,
+				usbhid_wacom_test.alert_poll_at[id])) {
+			due = true;
+			break;
+		}
+	}
+	hid_transport_unlock();
+	if (due)
+		usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+static bool usbhid_wacom_test_status_locked(
+		enum usbhid_wacom_test_alert_id id, u8 phase)
+{
+	const struct usbhid_wacom_test_alert *alert =
+		&usbhid_wacom_test.alert[id];
+	u32 generation;
+
+	return usbhid_wacom_test_find_alert_locked(id, &generation) &&
+		alert->status_valid && alert->status_generation == generation &&
+		alert->phase == phase;
+}
+
+static bool usbhid_wacom_test_action_locked(
+		enum usbhid_wacom_test_alert_id id, u8 phase,
+		struct usbhid_wacom_test_action *action)
+{
+	struct usbhid_wacom_test_alert *alert = &usbhid_wacom_test.alert[id];
+	u32 generation;
+	struct hid_device *hid = usbhid_wacom_test_find_alert_locked(
+		id, &generation);
+
+	if (!hid || !alert->status_valid || alert->status_generation != generation ||
+	    alert->go_generation == generation || alert->phase != phase)
+		return false;
+	action->hid = hid;
+	action->generation = generation;
+	action->alert_id = (u8)id;
+	action->phase = phase;
+	return true;
+}
+
+static bool usbhid_wacom_test_choose_mode_locked(
+		struct usbhid_wacom_test_action *action)
+{
+	const struct usbhid_wacom_test_alert *pen =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MODE_PEN];
+	const struct usbhid_wacom_test_alert *touch =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MODE_TOUCH];
+
+	if (usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 1) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 1) &&
+	    pen->status_generation ==
+			usbhid_wacom_test.mode_phase_a_generation[0] &&
+	    touch->status_generation ==
+			usbhid_wacom_test.mode_phase_a_generation[1] &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 1, action))
+		return true;
+	if (usbhid_wacom_test.mode_go_phase[0] == 1 &&
+	    usbhid_wacom_test.mode_ready_count[0] >
+			usbhid_wacom_test.mode_go_ready_baseline[0] &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 1, action))
+		return true;
+
+	if (usbhid_wacom_test.mode_nonce_index[0] >= 3 &&
+	    usbhid_wacom_test.mode_nonce_index[1] >= 2 &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 2) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 2) &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 2, action))
+		return true;
+	if (usbhid_wacom_test.mode_go_phase[1] == 2 &&
+	    usbhid_wacom_test.mode_ready_count[1] >
+			usbhid_wacom_test.mode_go_ready_baseline[1] &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 2, action))
+		return true;
+
+	if (usbhid_wacom_test.mode_nonce_index[0] >= 6 &&
+	    usbhid_wacom_test.mode_nonce_index[1] >= 4 &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 3) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 3) &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 3, action))
+		return true;
+	if (usbhid_wacom_test.mode_go_phase[1] == 3 &&
+	    usbhid_wacom_test.mode_ready_count[1] >
+			usbhid_wacom_test.mode_go_ready_baseline[1] &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 3, action))
+		return true;
+
+	if (usbhid_wacom_test.mode_nonce_index[0] >= 9 &&
+	    usbhid_wacom_test.mode_nonce_index[1] >= 7 &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 4) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 4) &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 4, action))
+		return true;
+	if (usbhid_wacom_test.mode_go_phase[1] == 4 &&
+	    usbhid_wacom_test.mode_nonce_index[1] >= 8 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 4, action))
+		return true;
+	if (usbhid_wacom_test.mode_go_phase[0] == 4 &&
+	    usbhid_wacom_test.mode_nonce_index[0] >= 10 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 5, action))
+		return true;
+
+	if (!usbhid_wacom_test.mode_error &&
+	    usbhid_wacom_test.mode_address_reused &&
+	    usbhid_wacom_test.mode_nonce_index[0] ==
+			ARRAY_SIZE(usbhid_wacom_test_mode_pen_nonces) &&
+	    usbhid_wacom_test.mode_nonce_index[1] ==
+			ARRAY_SIZE(usbhid_wacom_test_mode_touch_nonces) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 6) &&
+	    usbhid_wacom_test_status_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 6) &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_PEN, 6, action))
+		return true;
+	if (!usbhid_wacom_test.mode_error &&
+	    usbhid_wacom_test.mode_address_reused &&
+	    usbhid_wacom_test.mode_nonce_index[0] ==
+			ARRAY_SIZE(usbhid_wacom_test_mode_pen_nonces) &&
+	    usbhid_wacom_test.mode_nonce_index[1] ==
+			ARRAY_SIZE(usbhid_wacom_test_mode_touch_nonces) &&
+	    usbhid_wacom_test.mode_go_phase[0] == 6 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MODE_TOUCH, 6, action))
+		return true;
+
+	return false;
+}
+
+static bool usbhid_wacom_test_choose_matrix_locked(
+		struct usbhid_wacom_test_action *action)
+{
+	const struct usbhid_wacom_test_alert *matrix =
+		&usbhid_wacom_test.alert[USBHID_WACOM_TEST_ALERT_MATRIX];
+
+	if (matrix->status_generation ==
+			usbhid_wacom_test.matrix_phase_a_generation &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 1, action))
+		return true;
+	if ((usbhid_wacom_test.matrix_lifecycle & 0x03u) == 0x03u &&
+	    usbhid_wacom_test.matrix_nonce_index >= 1 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 2, action))
+		return true;
+	if ((usbhid_wacom_test.matrix_lifecycle & 0x0cu) == 0x0cu &&
+	    usbhid_wacom_test.matrix_nonce_index >= 2 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 3, action))
+		return true;
+	if ((usbhid_wacom_test.matrix_lifecycle & 0x30u) == 0x30u &&
+	    usbhid_wacom_test.matrix_nonce_index >= 4 &&
+	    usbhid_wacom_test.matrix_get8_count == 2 &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 4, action))
+		return true;
+	if ((usbhid_wacom_test.matrix_lifecycle & 0xc0u) == 0xc0u &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 5, action))
+		return true;
+	if (!usbhid_wacom_test.matrix_error &&
+	    usbhid_wacom_test.matrix_nonce_index ==
+			ARRAY_SIZE(usbhid_wacom_test_matrix_nonces) &&
+	    usbhid_wacom_test.matrix_receiver_ready == 0x07u &&
+	    usbhid_wacom_test.matrix_receiver_removed == 0x07u &&
+	    usbhid_wacom_test.matrix_receiver_classes == 0x07u &&
+	    usbhid_wacom_test_action_locked(
+			USBHID_WACOM_TEST_ALERT_MATRIX, 6, action))
+		return true;
+
+	return false;
+}
+
+static bool usbhid_wacom_test_phase_valid(
+		enum usbhid_wacom_test_alert_id id, u8 phase)
+{
+	if (id == USBHID_WACOM_TEST_ALERT_MODE_PEN)
+		return (phase >= 1 && phase <= 4) || phase == 6;
+	return phase >= 1 && phase <= 6;
+}
+
+static void usbhid_wacom_test_work(struct work_struct *work)
+{
+	struct usbhid_wacom_test_action action = { 0 };
+	struct hid_device *hid = NULL;
+	enum usbhid_wacom_test_alert_id id = USBHID_WACOM_TEST_ALERT_COUNT;
+	u32 generation = 0;
+	u8 report[3] = { 0 };
+	TickType_t now;
+	int ret;
+
+	(void)work;
+	now = xTaskGetTickCount();
+	hid_transport_lock();
+	for (id = USBHID_WACOM_TEST_ALERT_MODE_PEN;
+	     id < USBHID_WACOM_TEST_ALERT_COUNT; id++) {
+		u8 poll_bit = (u8)(1u << id);
+
+		if (usbhid_wacom_test.alert_poll_pending & poll_bit) {
+			if (!usbhid_tick_reached(
+					now, usbhid_wacom_test.alert_poll_at[id]))
+				continue;
+			usbhid_wacom_test.alert_poll_pending &= (u8)~poll_bit;
+		}
+		hid = usbhid_wacom_test_find_alert_locked(id, &generation);
+		if (hid && usbhid_wacom_test.alert[id].status_generation !=
+				generation)
+			break;
+		hid = NULL;
+	}
+	hid_transport_unlock();
+
+	if (hid) {
+		bool waiting;
+		bool valid;
+
+		ret = hid_hw_raw_request(hid, 0, report, sizeof(report),
+					 HID_FEATURE_REPORT, HID_REQ_GET_REPORT);
+		waiting = ret == (int)sizeof(report) && report[0] == 0 &&
+			report[1] == 0 && report[2] == 0;
+		valid = ret == (int)sizeof(report) && report[0] == 0 &&
+			report[1] == report[2] &&
+			usbhid_wacom_test_phase_valid(id, report[1]);
+		hid_transport_lock();
+		if (waiting) {
+			usbhid_wacom_test.alert_poll_pending |= (u8)(1u << id);
+			usbhid_wacom_test.alert_poll_at[id] = xTaskGetTickCount() +
+				pdMS_TO_TICKS(USBHID_WACOM_TEST_ALERT_POLL_MS);
+		} else {
+			usbhid_wacom_test.alert[id].status_generation = generation;
+			usbhid_wacom_test.alert[id].phase = report[1];
+			usbhid_wacom_test.alert[id].status_valid = valid;
+			if (valid)
+				usbhid_wacom_test_maybe_reset_locked();
+			else if (id == USBHID_WACOM_TEST_ALERT_MATRIX)
+				usbhid_wacom_test.matrix_error = true;
+			else
+				usbhid_wacom_test.mode_error = true;
+		}
+		hid_transport_unlock();
+		if (!waiting)
+			usbhid_wacom_test_log(valid ? "WACOM_TEST_ALERT" :
+					       "WACOM_TEST_ALERT_BAD", id,
+					       report[1], report[2]);
+		usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+		return;
+	}
+
+	hid_transport_lock();
+	if (!usbhid_wacom_test_choose_mode_locked(&action))
+		(void)usbhid_wacom_test_choose_matrix_locked(&action);
+	hid_transport_unlock();
+	if (!action.hid)
+		return;
+
+	report[1] = action.phase;
+	report[2] = action.phase;
+	ret = hid_hw_raw_request(action.hid, 0, report, sizeof(report),
+				 HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
+	hid_transport_lock();
+	usbhid_wacom_test.alert[action.alert_id].go_generation =
+		action.generation;
+	if (ret == (int)sizeof(report)) {
+		if (action.alert_id != USBHID_WACOM_TEST_ALERT_MATRIX) {
+			usbhid_wacom_test.mode_go_phase[action.alert_id] =
+				action.phase;
+			usbhid_wacom_test.mode_go_ready_baseline[action.alert_id] =
+				usbhid_wacom_test.mode_ready_count[action.alert_id];
+		}
+	} else if (action.alert_id == USBHID_WACOM_TEST_ALERT_MATRIX) {
+		usbhid_wacom_test.matrix_error = true;
+	} else {
+		usbhid_wacom_test.mode_error = true;
+	}
+	hid_transport_unlock();
+	usbhid_wacom_test_log(ret == (int)sizeof(report) ? "WACOM_TEST_GO" :
+			       "WACOM_TEST_GO_BAD", action.alert_id,
+			       action.phase, ret == (int)sizeof(report));
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+static u16 usbhid_wacom_test_ready_bit(u16 product)
+{
+	switch (product) {
+	case USBHID_WACOM_TEST_MATRIX_WILDCARD_PID:
+		return USBHID_WACOM_TEST_7FFE_READY;
+	case USBHID_WACOM_TEST_MATRIX_037A_PID:
+		return USBHID_WACOM_TEST_037A_READY;
+	case USBHID_WACOM_TEST_MATRIX_033B_PID:
+		return USBHID_WACOM_TEST_033B_READY;
+	case USBHID_WACOM_TEST_MATRIX_GATED_PID:
+		return USBHID_WACOM_TEST_0333_READY;
+	default:
+		return 0;
+	}
+}
+
+static u16 usbhid_wacom_test_removed_bit(u16 product)
+{
+	switch (product) {
+	case USBHID_WACOM_TEST_MATRIX_WILDCARD_PID:
+		return USBHID_WACOM_TEST_7FFE_REMOVED;
+	case USBHID_WACOM_TEST_MATRIX_037A_PID:
+		return USBHID_WACOM_TEST_037A_REMOVED;
+	case USBHID_WACOM_TEST_MATRIX_033B_PID:
+		return USBHID_WACOM_TEST_033B_REMOVED;
+	case USBHID_WACOM_TEST_MATRIX_GATED_PID:
+		return USBHID_WACOM_TEST_0333_REMOVED;
+	default:
+		return 0;
+	}
+}
+
+static void usbhid_wacom_test_note_ready(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	const char *driver = hid->driver ? hid->driver->name : "";
+	u32 physical_generation = 0;
+	u16 lifecycle_bit = 0;
+	unsigned int role = 0;
+	bool driver_ok;
+	bool recognized = false;
+	bool reused = false;
+
+	if (hid->vendor == USBHID_WACOM_TEST_ALERT_VID &&
+	    hid->product == USBHID_WACOM_TEST_ALERT_PID) {
+		for (unsigned int id = 0; id < USBHID_WACOM_TEST_ALERT_COUNT;
+		     id++) {
+			if (!strcmp(hid->uniq, usbhid_wacom_test_alert_serial(id))) {
+				usbhid_lifecycle_schedule_work(
+					&usbhid_wacom_test.work);
+				break;
+			}
+		}
+		return;
+	}
+	if (hid->vendor != USBHID_WACOM_TEST_WACOM_VID)
+		return;
+	driver_ok = !strcmp(driver, "wacom");
+	hid_transport_lock();
+	if (hid->product == USBHID_WACOM_TEST_MODE_PEN_PID ||
+	    hid->product == USBHID_WACOM_TEST_MODE_TOUCH_PID) {
+		role = hid->product == USBHID_WACOM_TEST_MODE_TOUCH_PID;
+		recognized = true;
+		if (!driver_ok || !usbhid_lifecycle_generation_locked(
+				hid, &physical_generation)) {
+			usbhid_wacom_test.mode_error = true;
+		} else {
+			usbhid_wacom_test.mode_ready_count[role]++;
+			if (usbhid_wacom_test.mode_last_generation[role] &&
+			    usbhid_wacom_test.mode_last_addr[role] ==
+					usbhid->dev_addr &&
+			    physical_generation >
+					usbhid_wacom_test.mode_last_generation[role]) {
+				usbhid_wacom_test.mode_address_reused = true;
+				reused = true;
+			}
+			usbhid_wacom_test.mode_last_addr[role] = usbhid->dev_addr;
+			usbhid_wacom_test.mode_last_generation[role] =
+				physical_generation;
+		}
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_RECEIVER_PID) {
+		recognized = true;
+		if (!driver_ok || usbhid->ifnum < 0 || usbhid->ifnum > 2)
+			usbhid_wacom_test.matrix_error = true;
+		else
+			usbhid_wacom_test.matrix_receiver_ready |=
+				(u8)(1u << usbhid->ifnum);
+	} else {
+		lifecycle_bit = usbhid_wacom_test_ready_bit((u16)hid->product);
+		if (lifecycle_bit) {
+			bool expected_driver = hid->product ==
+				USBHID_WACOM_TEST_MATRIX_GATED_PID ?
+				!strcmp(driver, "hid-generic") : driver_ok;
+
+			recognized = true;
+			if (!expected_driver)
+				usbhid_wacom_test.matrix_error = true;
+			else
+				usbhid_wacom_test.matrix_lifecycle |= lifecycle_bit;
+		}
+	}
+	hid_transport_unlock();
+	if (!recognized)
+		return;
+	usbhid_wacom_test_log("WACOM_TEST_READY", hid->product,
+			       usbhid->dev_addr, usbhid->ifnum);
+	if (reused)
+		usbhid_wacom_test_log("WACOM_TEST_ADDR_REUSE", role,
+				       usbhid->dev_addr, physical_generation);
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+static void usbhid_wacom_test_note_removed(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	u16 lifecycle_bit;
+	bool recognized = false;
+
+	if (hid->vendor != USBHID_WACOM_TEST_WACOM_VID)
+		return;
+	hid_transport_lock();
+	if (hid->product == USBHID_WACOM_TEST_MATRIX_RECEIVER_PID) {
+		recognized = true;
+		if (usbhid->ifnum < 0 || usbhid->ifnum > 2)
+			usbhid_wacom_test.matrix_error = true;
+		else
+			usbhid_wacom_test.matrix_receiver_removed |=
+				(u8)(1u << usbhid->ifnum);
+	} else {
+		lifecycle_bit = usbhid_wacom_test_removed_bit((u16)hid->product);
+		if (lifecycle_bit) {
+			recognized = true;
+			usbhid_wacom_test.matrix_lifecycle |= lifecycle_bit;
+		}
+	}
+	hid_transport_unlock();
+	if (!recognized)
+		return;
+	usbhid_wacom_test_log("WACOM_TEST_REMOVED", hid->product,
+			       usbhid->dev_addr, usbhid->ifnum);
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+void usbhid_wacom_test_input_note(struct hid_device *hid,
+		unsigned int report_id, const uint8_t *data, size_t size)
+{
+	const u8 *expected = NULL;
+	u8 *index = NULL;
+	bool *error = NULL;
+	size_t expected_count = 0;
+	unsigned int stream = 0;
+	u8 nonce = 0;
+	u8 wanted;
+	bool matched;
+
+	if (hid->vendor != USBHID_WACOM_TEST_WACOM_VID)
+		return;
+	if (hid->product == USBHID_WACOM_TEST_MODE_PEN_PID &&
+	    report_id == 6 && size == 27 && data[1] == 0x20) {
+		nonce = data[2];
+		expected = usbhid_wacom_test_mode_pen_nonces;
+		expected_count = ARRAY_SIZE(usbhid_wacom_test_mode_pen_nonces);
+		index = &usbhid_wacom_test.mode_nonce_index[0];
+		error = &usbhid_wacom_test.mode_error;
+	} else if (hid->product == USBHID_WACOM_TEST_MODE_TOUCH_PID &&
+		   report_id == 12 && size == 50 && data[2] == 1) {
+		nonce = data[6];
+		expected = usbhid_wacom_test_mode_touch_nonces;
+		expected_count = ARRAY_SIZE(usbhid_wacom_test_mode_touch_nonces);
+		index = &usbhid_wacom_test.mode_nonce_index[1];
+		error = &usbhid_wacom_test.mode_error;
+		stream = 1;
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_WILDCARD_PID &&
+		   report_id == 6 && size > 2 && data[1] == 0x21) {
+		nonce = data[2];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_037A_PID &&
+		   report_id == 2 && size > 2 && data[1] == 0xe1) {
+		nonce = data[2];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_033B_PID &&
+		   report_id == 0x10 && size > 3 && data[1] == 1 && data[3]) {
+		nonce = data[3];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_033B_PID &&
+		   report_id == 2 && size > 4 && data[3] == 0x08) {
+		nonce = data[4];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_RECEIVER_PID &&
+		   report_id == 2 && size == 10 && data[1] == 0x01) {
+		nonce = data[3];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_RECEIVER_PID &&
+		   report_id == 3 && size > 4 && data[4] == 1) {
+		nonce = data[2];
+	} else if (hid->product == USBHID_WACOM_TEST_MATRIX_RECEIVER_PID &&
+		   report_id == 2 && size == 64 && data[3] == 0x80) {
+		nonce = data[4];
+	} else {
+		return;
+	}
+
+	if (!expected) {
+		expected = usbhid_wacom_test_matrix_nonces;
+		expected_count = ARRAY_SIZE(usbhid_wacom_test_matrix_nonces);
+		index = &usbhid_wacom_test.matrix_nonce_index;
+		error = &usbhid_wacom_test.matrix_error;
+		stream = 2;
+	}
+	hid_transport_lock();
+	wanted = *index < expected_count ? expected[*index] : 0;
+	matched = *index < expected_count && nonce == wanted;
+	if (matched)
+		(*index)++;
+	else
+		*error = true;
+	hid_transport_unlock();
+	usbhid_wacom_test_log(matched ? "WACOM_TEST_INPUT" :
+			       "WACOM_TEST_INPUT_BAD", stream, nonce, wanted);
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+static void usbhid_wacom_test_control_note(struct hid_device *hid,
+		const struct usbhid_report_request *request, int status)
+{
+	u8 count;
+
+	if (status < 0 ||
+	    hid->vendor != USBHID_WACOM_TEST_WACOM_VID ||
+	    hid->product != USBHID_WACOM_TEST_MATRIX_033B_PID ||
+	    request->reqtype != HID_REQ_GET_REPORT ||
+	    request->report->type != HID_FEATURE_REPORT ||
+	    request->report->id != 8)
+		return;
+	hid_transport_lock();
+	count = ++usbhid_wacom_test.matrix_get8_count;
+	if (count > 2)
+		usbhid_wacom_test.matrix_error = true;
+	hid_transport_unlock();
+	usbhid_wacom_test_log("WACOM_TEST_GET8", hid->product, count, status);
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+
+void usbhid_wacom_test_receiver_note(
+		uint16_t pid, enum usbhid_wacom_test_receiver_class classification)
+{
+	u8 expected_class;
+	u8 class_bit;
+	bool matched;
+
+	switch (pid) {
+	case USBHID_WACOM_TEST_MATRIX_GATED_PID:
+		expected_class = USBHID_WACOM_TEST_RX_GATED;
+		class_bit = 0x01u;
+		break;
+	case USBHID_WACOM_TEST_MATRIX_WILDCARD_PID:
+		expected_class = USBHID_WACOM_TEST_RX_UNKNOWN;
+		class_bit = 0x02u;
+		break;
+	case USBHID_WACOM_TEST_MATRIX_CHILD_PID:
+		expected_class = USBHID_WACOM_TEST_RX_SELECTED;
+		class_bit = 0x04u;
+		break;
+	default:
+		return;
+	}
+	matched = classification == expected_class;
+	hid_transport_lock();
+	if (matched)
+		usbhid_wacom_test.matrix_receiver_classes |= class_bit;
+	else
+		usbhid_wacom_test.matrix_error = true;
+	hid_transport_unlock();
+	usbhid_wacom_test_log(matched ? "WACOM_TEST_RX_CLASS" :
+			       "WACOM_TEST_RX_CLASS_BAD", pid,
+			       classification, expected_class);
+	usbhid_lifecycle_schedule_work(&usbhid_wacom_test.work);
+}
+#endif
 
 int usbhid_lifecycle_init(void)
 {
@@ -2790,6 +3614,10 @@ int usbhid_lifecycle_init(void)
 	usbhid_probes = usbhid_transport_pool->probes;
 	/* Publish only after both the pool and task-side PI serializer exist. */
 	usbhid_request_mutex = request_mutex;
+#if defined(WACOM_MODE_CHANGE_TEST)
+	memset(&usbhid_wacom_test, 0, sizeof(usbhid_wacom_test));
+	INIT_WORK(&usbhid_wacom_test.work, usbhid_wacom_test_work);
+#endif
 
 	return 0;
 }
@@ -2823,10 +3651,11 @@ void usbhid_lifecycle_schedule_work(struct work_struct *work)
 	usbhid_lifecycle_kick();
 }
 
-void usbhid_lifecycle_cancel_work(struct work_struct *work)
+bool usbhid_lifecycle_cancel_work(struct work_struct *work)
 {
 	struct work_struct *queued;
 	struct work_struct *previous = NULL;
+	bool cancelled = false;
 
 	hid_transport_lock();
 	for (queued = usbhid_lifecycle_work_head; queued;
@@ -2841,9 +3670,11 @@ void usbhid_lifecycle_cancel_work(struct work_struct *work)
 			usbhid_lifecycle_work_tail = previous;
 		work->next = NULL;
 		work->pending = 0;
+		cancelled = true;
 		break;
 	}
 	hid_transport_unlock();
+	return cancelled;
 }
 
 static bool usbhid_lifecycle_process_work(void)
@@ -3175,8 +4006,15 @@ void usbhid_lifecycle_task(void *pvParameters)
 			(void)usbhid_lifecycle_process_ready_probes();
 		}
 		usbhid_lifecycle_log_transport_faults();
-		/* One virtual-device work item, then recheck physical teardown/reset. */
-		if (usbhid_lifecycle_process_work())
+		/*
+		 * A reset owns the global EP0 gate. Do not enter blocking
+		 * virtual-device work until that lifecycle state has released it.
+		 */
+#if defined(WACOM_MODE_CHANGE_TEST)
+		if (!ret)
+			usbhid_wacom_test_poll_due();
+#endif
+		if (!ret && usbhid_lifecycle_process_work())
 			continue;
 
 		(void)xTaskNotifyWaitIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
@@ -3421,6 +4259,9 @@ static int usbhid_probe(struct usbhid_usb_device *usb_entry,
 	hid_transport_unlock();
 	if (ret < 0)
 		goto fail_bound;
+#if defined(WACOM_MODE_CHANGE_TEST)
+	usbhid_wacom_test_note_ready(hid);
+#endif
 
 	/*
 	 * Direct interrupt IN starts from usbhid_open()/usbhid_start() after the
@@ -3465,6 +4306,9 @@ static void usbhid_disconnect(struct usb_interface *intf)
 	if (hid_async_cancel_device(hid))
 		async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
 	usbhid_teardown_wait(hid);
+#if defined(WACOM_MODE_CHANGE_TEST)
+	usbhid_wacom_test_note_removed(hid);
+#endif
 	usbhid_remove_slot(hid);
 	hid_destroy_device(hid);
 	/* Linux embeds this mutex; the FreeRTOS compatibility object owns a queue. */
@@ -4003,6 +4847,7 @@ static int hid_get_class_descriptor(struct usb_device *dev, int ifnum,
 static int usbhid_open(struct hid_device *hid)
 {
 	struct usbhid_device *usbhid = hid->driver_data;
+	bool rebuild_resume = false;
 	int ret;
 
 	mutex_lock(&usbhid->mutex);
@@ -4014,6 +4859,8 @@ static int usbhid_open(struct hid_device *hid)
 	if (usbhid->transport_stopping) {
 		ret = -ENODEV;
 	} else {
+		rebuild_resume = usbhid->report_rebuild_state ==
+			USBHID_REPORT_REBUILD_RESUME_PENDING;
 		usbhid->report_open_state = hid->quirks & HID_QUIRK_ALWAYS_POLL ?
 			USBHID_REPORT_OPEN : USBHID_REPORT_RESUMING;
 		ret = 0;
@@ -4027,8 +4874,14 @@ static int usbhid_open(struct hid_device *hid)
 	 * device. Do the TinyUSB receive submit here, not from probe, so unbound
 	 * or ignored devices do not feed reports into hid_input_report().
 	 */
-	if (hid->quirks & HID_QUIRK_ALWAYS_POLL)
+	if (hid->quirks & HID_QUIRK_ALWAYS_POLL) {
+		if (rebuild_resume) {
+			hid_transport_lock();
+			usbhid->report_rebuild_state = USBHID_REPORT_REBUILD_IDLE;
+			hid_transport_unlock();
+		}
 		goto done;
+	}
 
 	// res = usb_autopm_get_interface(usbhid->intf);
 	// Firmware has no runtime-PM owner; the interface is already active here.
@@ -4048,7 +4901,6 @@ static int usbhid_open(struct hid_device *hid)
 		hid_transport_unlock();
 		goto done;
 	}
-
 	// usb_autopm_put_interface(usbhid->intf);
 	// No runtime-PM reference was acquired above.
 	/*
@@ -4066,8 +4918,12 @@ static int usbhid_open(struct hid_device *hid)
 	// clear_bit(HID_RESUME_RUNNING, &usbhid->iofl);
 	// Unplug/stop may have closed the interface while the lifecycle task slept.
 	hid_transport_lock();
-	if (usbhid->report_open_state == USBHID_REPORT_RESUMING)
+	if (usbhid->report_open_state == USBHID_REPORT_RESUMING) {
 		usbhid->report_open_state = USBHID_REPORT_OPEN;
+		if (rebuild_resume && usbhid->report_rebuild_state ==
+				USBHID_REPORT_REBUILD_RESUME_PENDING)
+			usbhid->report_rebuild_state = USBHID_REPORT_REBUILD_IDLE;
+	}
 	hid_transport_unlock();
 
 done:
@@ -4135,12 +4991,19 @@ static int usbhid_get_raw_report(struct hid_device *hid,
 		count--;
 		skipped_report_id = 1;
 	}
-	ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+	// ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+	// 	HID_REQ_GET_REPORT,
+	// 	USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+	// 	((report_type + 1) << 8) | report_number,
+	// 	interface->desc.bInterfaceNumber, buf, count,
+	// 	USB_CTRL_SET_TIMEOUT);
+	// The outer raw lease pins HID while physical EP0 survives reversible stop.
+	ret = usbhid_usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
 		HID_REQ_GET_REPORT,
 		USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
 		((report_type + 1) << 8) | report_number,
 		interface->desc.bInterfaceNumber, buf, count,
-		USB_CTRL_SET_TIMEOUT);
+		USB_CTRL_SET_TIMEOUT, false);
 
 	/* count also the report id */
 	if (ret > 0 && skipped_report_id)
@@ -4172,12 +5035,19 @@ static int usbhid_set_raw_report(struct hid_device *hid, unsigned int reportnum,
 		skipped_report_id = 1;
 	}
 
-	ret = usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
+	// ret = usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
+	// 		HID_REQ_SET_REPORT,
+	// 		USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+	// 		((rtype + 1) << 8) | reportnum,
+	// 		interface->desc.bInterfaceNumber, buf, count,
+	// 		USB_CTRL_SET_TIMEOUT);
+	// The outer raw lease pins HID while physical EP0 survives reversible stop.
+	ret = usbhid_usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
 			HID_REQ_SET_REPORT,
 			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
 			((rtype + 1) << 8) | reportnum,
 			interface->desc.bInterfaceNumber, buf, count,
-			USB_CTRL_SET_TIMEOUT);
+			USB_CTRL_SET_TIMEOUT, false);
 	/* count also the report id, if this was a numbered report. */
 	if (ret > 0 && skipped_report_id)
 		ret++;
@@ -4360,6 +5230,25 @@ static int usbhid_parse(struct hid_device *hid)
 		goto err;
 	}
 
+	/*
+	 * Match the captured 0x03ce descriptor itself, independently of its USB
+	 * interface number. The signature contains consecutive VARIABLE Feature
+	 * reports d9/da with one Usage and wire counts 2560/1028.
+	 */
+	static const u8 wacom_one_12_feature_signature[] = {
+		0x85, 0xd9, 0x09, 0x01, 0x96, 0x00, 0x0a, 0xb1, 0x02,
+		0x85, 0xda, 0x09, 0x01, 0x96, 0x04, 0x04, 0xb1, 0x02,
+	};
+	if (hid->vendor == 0x056a && hid->product == 0x03ce &&
+	    rsize == 1435 && ret == (int)rsize &&
+	    !memcmp(rdesc + 1317, wacom_one_12_feature_signature,
+		    sizeof(wacom_one_12_feature_signature))) {
+		quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		hid->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		transport_quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		async_msg("INFO: HID_03CE_RDESC_MATCH");
+	}
+
 	ret = hid_parse_report(hid, rdesc, rsize);
 	kfree(rdesc);
 	if (ret) {
@@ -4424,6 +5313,25 @@ static bool usbhid_io_get(struct hid_device *hid)
 
 	hid_transport_lock();
 	if (!usbhid->transport_stopping) {
+		usbhid->io_pending++;
+		acquired = true;
+	}
+	hid_transport_unlock();
+	return acquired;
+}
+
+/*
+ * Linux raw control requests remain available across reversible
+ * hid_hw_stop(). Firmware must reject only a physical disconnect here; the
+ * ordinary I/O admission above keeps report producers closed until start().
+ */
+static bool usbhid_raw_io_get(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	bool acquired = false;
+
+	hid_transport_lock();
+	if (!usbhid->disconnect_queued) {
 		usbhid->io_pending++;
 		acquired = true;
 	}
@@ -4562,6 +5470,91 @@ void usbhid_io_put(struct hid_device *hid)
 	// possible predicate transition. With no linked waiter this is a cheap no-op.
 	usbhid_wait_wake_locked(hid);
 	hid_transport_unlock();
+}
+
+/* Caller holds hid_transport_lock(). */
+static bool usbhid_lifecycle_generation_locked(
+		struct hid_device *hid, u32 *physical_generation)
+{
+	struct usbhid_device *usbhid = NULL;
+	struct usb_device *dev;
+
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		if (usbhid_devices[i] == hid) {
+			usbhid = hid->driver_data;
+			break;
+		}
+	}
+	if (!usbhid || usbhid->disconnect_queued)
+		return false;
+
+	dev = interface_to_usbdev(usbhid->intf);
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+
+		if (&entry->dev == dev && entry->valid && !entry->retiring) {
+			*physical_generation = entry->generation;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool usbhid_lifecycle_generation_snapshot(
+		struct hid_device *hid, uint32_t *physical_generation)
+{
+	bool valid;
+
+	hid_transport_lock();
+	valid = usbhid_lifecycle_generation_locked(hid, physical_generation);
+	hid_transport_unlock();
+	return valid;
+}
+
+bool usbhid_lifecycle_generation_current(
+		struct hid_device *hid, uint32_t physical_generation)
+{
+	u32 current_generation = 0;
+	bool valid;
+
+	hid_transport_lock();
+	valid = usbhid_lifecycle_generation_locked(hid, &current_generation) &&
+		current_generation == physical_generation;
+	hid_transport_unlock();
+	return valid;
+}
+
+/*
+ * Firmware-only first half of a reversible hid_hw_stop(). Keep hid_connect()
+ * and driver devres alive while the report task parses any completion which
+ * beat the host abort, then fence every transport owner before the Wacom
+ * worker takes driver_input_lock and mutates that graph.
+ */
+bool usbhid_lifecycle_quiesce_rebuild(
+		struct hid_device *hid, uint32_t physical_generation)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	bool generation_valid;
+	int ret;
+
+	mutex_lock(&usbhid->mutex);
+	generation_valid = usbhid_lifecycle_generation_current(
+		hid, physical_generation);
+	if (!generation_valid) {
+		mutex_unlock(&usbhid->mutex);
+		return false;
+	}
+
+	ret = usbhid_report_quiesce_rebuild(hid);
+	if (!ret) {
+		if (hid_async_cancel_device(hid))
+			async_msg("ERR: HID_ASYNC_CANCEL_FAIL");
+		usbhid_teardown_wait(hid);
+	}
+	generation_valid = !ret && usbhid_lifecycle_generation_current(
+		hid, physical_generation);
+	mutex_unlock(&usbhid->mutex);
+	return generation_valid;
 }
 
 /*
@@ -5040,6 +6033,9 @@ static void usbhid_control_report_done(struct hid_device *hid, void *context,
 
 	if (status < 0 && status != -ENODEV)
 		async_msg("ERR: HID_CTRL_PARSE_FAIL");
+#if defined(WACOM_MODE_CHANGE_TEST)
+	usbhid_wacom_test_control_note(hid, request, status);
+#endif
 	/*
 	 * TinyUSB adapter: the async executor retains this request slot across
 	 * Linux-shaped control completion until the parser consumer releases it.
@@ -5613,7 +6609,7 @@ static int usbhid_raw_request(struct hid_device *hid, unsigned char reportnum,
 {
 	int ret;
 
-	if (!usbhid_io_get(hid))
+	if (!usbhid_raw_io_get(hid))
 		return -ENODEV;
 
 	switch (reqtype) {
@@ -5671,9 +6667,9 @@ static int usbhid_idle(struct hid_device *hid, int report, int idle, int reqtype
 	return ret;
 }
 
-int usb_control_msg(struct usb_device *dev, unsigned int pipe,
-		    u8 request, u8 requesttype, u16 value, u16 index,
-		    void *data, u16 size, int timeout)
+static int usbhid_usb_control_msg(struct usb_device *dev, unsigned int pipe,
+		u8 request, u8 requesttype, u16 value, u16 index,
+		void *data, u16 size, int timeout, bool bind_hid_owner)
 {
 	/*
 	 * Upstream Linux:
@@ -5704,7 +6700,7 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 	 */
 	struct usbhid_sync_request sync = { 0 };
 	struct usbhid_usb_device *physical_owner;
-	struct hid_device *hid_owner;
+	struct hid_device *hid_owner = NULL;
 	u32 generation;
 	u8 dev_addr;
 	int ret;
@@ -5725,10 +6721,12 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 				       &generation);
 	if (ret)
 		return ret;
-	ret = usbhid_usb_device_control_owner_get(dev, requesttype, index,
-						 &hid_owner);
-	if (ret)
-		goto out_physical;
+	if (bind_hid_owner) {
+		ret = usbhid_usb_device_control_owner_get(dev, requesttype, index,
+							 &hid_owner);
+		if (ret)
+			goto out_physical;
+	}
 	/*
 	 * usb_control_msg() blocks in Linux USB core. The metadata-slot executor
 	 * owns EP0 here while the sleeping caller keeps its direct buffer alive;
@@ -5745,6 +6743,14 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 out_physical:
 	usbhid_usb_device_io_put(physical_owner);
 	return ret;
+}
+
+int usb_control_msg(struct usb_device *dev, unsigned int pipe,
+		    u8 request, u8 requesttype, u16 value, u16 index,
+		    void *data, u16 size, int timeout)
+{
+	return usbhid_usb_control_msg(dev, pipe, request, requesttype, value,
+				      index, data, size, timeout, true);
 }
 
 int usb_interrupt_msg(struct usb_device *dev, unsigned int pipe,

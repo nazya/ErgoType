@@ -168,6 +168,8 @@ struct wacom {
 	struct usb_interface *intf;
 	struct wacom_wac wacom_wac;
 	struct hid_device *hdev;
+	/* Firmware may remove one physical shared-data sibling independently. */
+	struct list_head shared_node;
 	struct mutex lock;
 	struct work_struct wireless_work;
 	struct work_struct battery_work;
@@ -176,6 +178,10 @@ struct wacom {
 	struct delayed_work aes_battery_work;
 	struct wacom_remote *remote;
 	struct work_struct mode_change_work;
+#if defined(WACOM_MODE_CHANGE_TEST)
+	u8 mode_test_command;
+	bool mode_test_fail_rebuild;
+#endif
 	struct timer_list idleprox_timer;
 	bool generic_has_leds;
 	struct wacom_leds {
@@ -216,7 +222,9 @@ static inline void wacom_schedule_work(struct wacom_wac *wacom_wac,
 		usbhid_lifecycle_schedule_work(&wacom->remote_work);
 		break;
 	case WACOM_WORKER_MODE_CHANGE:
-		schedule_work(&wacom->mode_change_work);
+		// schedule_work(&wacom->mode_change_work);
+		// Mode changes rebuild sibling input/devres graphs on lifecycle.
+		usbhid_lifecycle_schedule_work(&wacom->mode_change_work);
 		break;
 	}
 }

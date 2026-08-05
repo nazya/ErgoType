@@ -14,6 +14,16 @@ allocation numbers are maintained only in
 
 ## Current Status
 
+The dirty Wacom candidate is not hardware-qualified yet. It retains all 150
+pinned fixed USB rows in their original order: 19 qualified profiles keep
+their feature pointers, while 131 zero-data barriers make Wacom decline and
+leave the device to `hid-generic`. One final wired USB wildcard handles only a
+PID absent from the fixed table; receiver children still require an exact
+qualified fixed row. The candidate also adds lifecycle-owned Pen/Touch
+descriptor mode-change rebuild and a captured-signature memory quirk for
+`056a:03ce`. Its temporary mode-change hooks and host markers must be removed
+after a successful hardware run before rebuilding a production image.
+
 The following paths have produced input events on hardware:
 
 - a generic USB keyboard, including the keyboard interface of a composite
@@ -105,7 +115,8 @@ Both complete removal snapshots repeated `60744/54464/9`; all 13 snapshots had
 The fixture is protocol-equivalent rather than a retail capture, and numeric
 X/Y values are not exposed by production logging.
 
-The Wacom checkpoint additionally links complete pinned Wacom sources. The
+The preceding hardware-qualified Wacom checkpoints linked complete pinned
+Wacom sources through narrower exact-ID tables. The
 hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
 `056a:5048`, and receiver `056a:0084`. The later focused Intuos stage adds
@@ -188,10 +199,10 @@ Production logs still do not expose exact detached battery fields or ordering,
 and the AES fixture does not wait for the real 30-minute expiry. The receiver
 fixture deterministically covers initial sibling work while pending but cannot
 externally hold the short pre-PID callback after workqueue promotion or during
-execution. Receiver lookup can select any child PID in the current exact-ID
-table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
-bootloader, I2C, PCI, and product IDs outside that table
-remain excluded.
+execution. In those historical images, receiver lookup selected a child PID
+from the then-active exact-ID table; hardware receiver coverage is limited to
+`056a:0027`. The dirty candidate's receiver lookup instead requires one of its
+19 qualified fixed rows. Bluetooth, bootloader, I2C, and PCI remain excluded.
 
 A focused receiver lifecycle pair passed on 2026-08-03. Its first phase used a
 temporary compile-gated host hook to fail only the `033c` Touch child after

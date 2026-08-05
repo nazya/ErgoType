@@ -5,12 +5,23 @@
 
 #include "wacom_wac.h"
 #include "wacom.h"
+#include <linux/delay.h>
 #include <linux/input/mt.h>
 // Upstream input registration publishes evdev synchronously.
 #include "usb_host/evdev.h"
 
 #define WAC_MSG_RETRIES		5
 #define WAC_CMD_RETRIES		10
+
+#if defined(WACOM_MODE_CHANGE_TEST)
+enum wacom_mode_test_command {
+	WACOM_MODE_TEST_NORMAL,
+	WACOM_MODE_TEST_WAIT,
+	WACOM_MODE_TEST_RUN,
+	WACOM_MODE_TEST_FAIL_PEN,
+	WACOM_MODE_TEST_FAIL_TOUCH,
+};
+#endif
 
 #define DEV_ATTR_RW_PERM (S_IRUGO | S_IWUSR | S_IWGRP)
 #define DEV_ATTR_WO_PERM (S_IWUSR | S_IWGRP)
@@ -179,9 +190,20 @@ static int wacom_raw_event(struct hid_device *hdev, struct hid_report *report,
 	if (wacom_wac_pen_serial_enforce(hdev, report, raw_data, size))
 		return -1;
 
+#if defined(WACOM_MODE_CHANGE_TEST)
+	if (hdev->vendor == USB_VENDOR_ID_WACOM && hdev->product == 0x0350 &&
+	    report->id == 0x13 && size == 9)
+		__atomic_store_n(&wacom->mode_test_command, raw_data[1],
+				 __ATOMIC_RELEASE);
+#endif
+
 	wacom->wacom_wac.data = raw_data;
 
 	wacom_wac_irq(&wacom->wacom_wac, size);
+
+#if defined(WACOM_MODE_CHANGE_TEST)
+	usbhid_wacom_test_input_note(hdev, report->id, raw_data, size);
+#endif
 
 	return 0;
 }
@@ -503,7 +525,10 @@ static void wacom_post_parse_hid(struct hid_device *hdev,
 	if (features->type == HID_GENERIC) {
 		/* Any last-minute generic device setup */
 		if (wacom_wac->has_mode_change) {
-			if (wacom_wac->is_direct_mode)
+			// if (wacom_wac->is_direct_mode)
+			// Report parsing and lifecycle rebuild run in different tasks.
+			if (__atomic_load_n(&wacom_wac->is_direct_mode,
+					    __ATOMIC_ACQUIRE))
 				features->device_type |= WACOM_DEVICETYPE_DIRECT;
 			else
 				features->device_type &= ~WACOM_DEVICETYPE_DIRECT;
@@ -763,6 +788,7 @@ static void wacom_retrieve_hid_descriptor(struct hid_device *hdev,
 
 struct wacom_hdev_data {
 	struct list_head list;
+	struct list_head devices;
 	struct kref kref;
 	struct hid_device *dev;
 	struct wacom_shared shared;
@@ -779,6 +805,8 @@ static bool wacom_are_sibling(struct hid_device *hdev,
 	struct wacom_features *features = &wacom->wacom_wac.features;
 	struct wacom *sibling_wacom = hid_get_drvdata(sibling);
 	struct wacom_features *sibling_features = &sibling_wacom->wacom_wac.features;
+	bool mode_change_pair = wacom->wacom_wac.has_mode_change ||
+		sibling_wacom->wacom_wac.has_mode_change;
 	__u32 oVid = features->oVid ? features->oVid : hdev->vendor;
 	__u32 oPid = features->oPid ? features->oPid : hdev->product;
 
@@ -809,7 +837,11 @@ static bool wacom_are_sibling(struct hid_device *hdev,
 	 * Direct-input devices may not be siblings of indirect-input
 	 * devices.
 	 */
-	if ((features->device_type & WACOM_DEVICETYPE_DIRECT) &&
+	// if ((features->device_type & WACOM_DEVICETYPE_DIRECT) &&
+	//     !(sibling_features->device_type & WACOM_DEVICETYPE_DIRECT))
+	// Firmware may re-enumerate one mode-change sibling at descriptor default.
+	if (!mode_change_pair &&
+	    (features->device_type & WACOM_DEVICETYPE_DIRECT) &&
 	    !(sibling_features->device_type & WACOM_DEVICETYPE_DIRECT))
 		return false;
 
@@ -817,7 +849,11 @@ static bool wacom_are_sibling(struct hid_device *hdev,
 	 * Indirect-input devices may not be siblings of direct-input
 	 * devices.
 	 */
-	if (!(features->device_type & WACOM_DEVICETYPE_DIRECT) &&
+	// if (!(features->device_type & WACOM_DEVICETYPE_DIRECT) &&
+	//     (sibling_features->device_type & WACOM_DEVICETYPE_DIRECT))
+	// A later mode report rebuilds the rejoined Pen/Touch pair consistently.
+	if (!mode_change_pair &&
+	    !(features->device_type & WACOM_DEVICETYPE_DIRECT) &&
 	    (sibling_features->device_type & WACOM_DEVICETYPE_DIRECT))
 		return false;
 
@@ -874,6 +910,42 @@ static void wacom_release_shared_data(struct kref *kref)
 	kfree(data);
 }
 
+/* Firmware may remove a physical sibling without removing its peer. */
+static void wacom_clear_shared_role(struct wacom *wacom, bool remove_device)
+{
+	struct wacom_shared *shared = wacom->wacom_wac.shared;
+	struct hid_device *peer = NULL;
+	bool peer_locked = false;
+
+	if (!shared)
+		return;
+
+	if (shared->touch == wacom->hdev)
+		peer = shared->pen;
+	else if (shared->pen == wacom->hdev)
+		peer = shared->touch;
+
+	if (peer && !sema_owned_by_current(&peer->driver_input_lock)) {
+		down(&peer->driver_input_lock);
+		peer_locked = true;
+	}
+
+	if (shared->touch == wacom->hdev) {
+		shared->touch_input = NULL;
+		shared->touch_down = false;
+		shared->type = 0;
+		if (remove_device)
+			shared->touch = NULL;
+	} else if (shared->pen == wacom->hdev) {
+		shared->stylus_in_proximity = false;
+		if (remove_device)
+			shared->pen = NULL;
+	}
+
+	if (peer_locked)
+		up(&peer->driver_input_lock);
+}
+
 static void wacom_remove_shared_data(void *res)
 {
 	struct wacom *wacom = res;
@@ -884,10 +956,16 @@ static void wacom_remove_shared_data(void *res)
 		data = container_of(wacom_wac->shared, struct wacom_hdev_data,
 				    shared);
 
-		if (wacom_wac->shared->touch == wacom->hdev)
-			wacom_wac->shared->touch = NULL;
-		else if (wacom_wac->shared->pen == wacom->hdev)
-			wacom_wac->shared->pen = NULL;
+		wacom_clear_shared_role(wacom, true);
+
+		list_del(&wacom->shared_node);
+		/* Keep the path-comparison anchor on any surviving shared member. */
+		if (data->dev == wacom->hdev && !list_empty(&data->devices)) {
+			struct wacom *survivor = list_first_entry(
+				&data->devices, struct wacom, shared_node);
+
+			data->dev = survivor->hdev;
+		}
 
 		kref_put(&data->kref, wacom_release_shared_data);
 		wacom_wac->shared = NULL;
@@ -913,6 +991,7 @@ static int wacom_add_shared_data(struct hid_device *hdev)
 		}
 
 		kref_init(&data->kref);
+		INIT_LIST_HEAD(&data->devices);
 		data->dev = hdev;
 		list_add_tail(&data->list, &wacom_udev_list);
 	}
@@ -920,6 +999,8 @@ static int wacom_add_shared_data(struct hid_device *hdev)
 	// mutex_unlock(&wacom_udev_list_lock);
 
 	wacom_wac->shared = &data->shared;
+	/* Link first: devm_add_action_or_reset() may run removal immediately. */
+	list_add_tail(&wacom->shared_node, &data->devices);
 
 	retval = devm_add_action_or_reset(&hdev->dev, wacom_remove_shared_data, wacom);
 	if (retval)
@@ -2446,6 +2527,7 @@ static void wacom_release_resources(struct wacom *wacom)
 	if (!wacom->resources)
 		return;
 
+	wacom_clear_shared_role(wacom, false);
 	devres_release_group(&hdev->dev, wacom);
 
 	wacom->resources = false;
@@ -2561,6 +2643,14 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 	error = wacom_setup_inputs(wacom);
 	if (error)
 		goto fail;
+
+#if defined(WACOM_MODE_CHANGE_TEST)
+	if (wacom->mode_test_fail_rebuild) {
+		wacom->mode_test_fail_rebuild = false;
+		error = -ENOMEM;
+		goto fail;
+	}
+#endif
 
 	if (features->type == HID_GENERIC)
 		connect_mask |= HID_CONNECT_DRIVER;
@@ -2730,8 +2820,19 @@ static void wacom_wireless_work(struct work_struct *work)
 				break;
 			id++;
 		}
+		dbg("WACOM_RX_CHILD %04x %s", pid,
+		    !id->bus ? "UNKNOWN" :
+		    !id->driver_data ? "GATED" : "SELECTED");
+#if defined(WACOM_MODE_CHANGE_TEST)
+		usbhid_wacom_test_receiver_note(pid,
+			!id->bus ? USBHID_WACOM_TEST_RX_UNKNOWN :
+			!id->driver_data ? USBHID_WACOM_TEST_RX_GATED :
+			USBHID_WACOM_TEST_RX_SELECTED);
+#endif
 
-		if (!id->bus) {
+		// if (!id->bus) {
+		// Firmware keeps zero-data fixed rows ahead of the USB wildcard.
+		if (!id->bus || !id->driver_data) {
 			hid_info(wacom->hdev, "ignoring unknown PID.\n");
 			// return;
 			// Firmware releases the two parser locks before returning.
@@ -3053,43 +3154,217 @@ static void wacom_remote_work(struct work_struct *work)
 }
 // #endif
 
+static bool wacom_mode_generation_current(struct hid_device *hdev,
+					  u32 generation)
+{
+	return !hdev ||
+		usbhid_lifecycle_generation_current(hdev, generation);
+}
+
 static void wacom_mode_change_work(struct work_struct *work)
 {
 	struct wacom *wacom = container_of(work, struct wacom, mode_change_work);
 	struct wacom_shared *shared = wacom->wacom_wac.shared;
-	struct wacom *wacom1 = NULL;
-	struct wacom *wacom2 = NULL;
-	bool is_direct = wacom->wacom_wac.is_direct_mode;
+	// struct wacom *wacom1 = NULL;
+	// struct wacom *wacom2 = NULL;
+	/* Snapshot siblings before either devres group can release @shared. */
+	struct hid_device *hdev1 = shared->pen;
+	struct hid_device *hdev2 = shared->touch;
+	struct wacom *wacom1 = hdev1 ? hid_get_drvdata(hdev1) : NULL;
+	struct wacom *wacom2 = hdev2 ? hid_get_drvdata(hdev2) : NULL;
+	u32 generation1 = 0;
+	u32 generation2 = 0;
+	bool generation1_valid = hdev1 &&
+		usbhid_lifecycle_generation_snapshot(hdev1, &generation1);
+	bool generation2_valid = hdev2 &&
+		usbhid_lifecycle_generation_snapshot(hdev2, &generation2);
+	struct semaphore *input_lock1 = NULL;
+	struct semaphore *input_lock2 = NULL;
+	bool stopped1 = false;
+	bool stopped2 = false;
+	bool began = false;
+	bool coalesced;
+#if defined(WACOM_MODE_CHANGE_TEST)
+	u8 test_command = __atomic_load_n(&wacom->mode_test_command,
+					  __ATOMIC_ACQUIRE);
+#endif
+	// bool is_direct = wacom->wacom_wac.is_direct_mode;
+	// Firmware refreshes this snapshot after quiescing every rebuilt producer.
+	bool is_direct;
 	int error = 0;
 
-	if (shared->pen) {
-		wacom1 = hid_get_drvdata(shared->pen);
+#if defined(WACOM_MODE_CHANGE_TEST)
+	if (test_command == WACOM_MODE_TEST_WAIT) {
+		dbg("WACOM_MODE_TEST_WAIT");
+		msleep(750);
+	}
+#endif
+
+	// if (shared->pen) {
+	if (generation1_valid) {
+		// wacom1 = hid_get_drvdata(shared->pen);
+		cancel_delayed_work_sync(&wacom1->init_work);
+		generation1_valid =
+			wacom_mode_generation_current(hdev1, generation1);
+	}
+
+	// if (shared->touch) {
+	if (generation2_valid) {
+		// wacom2 = hid_get_drvdata(shared->touch);
+		cancel_delayed_work_sync(&wacom2->init_work);
+		generation2_valid =
+			wacom_mode_generation_current(hdev2, generation2);
+	}
+
+	/*
+	 * Close and drain interrupt-IN while the old input graphs are still live.
+	 * hid_hw_stop() can then run under the parser locks without waiting on a
+	 * report task which is itself waiting for either lock.
+	 */
+	if (generation1_valid)
+		generation1_valid = usbhid_lifecycle_quiesce_rebuild(
+			hdev1, generation1);
+	if (generation2_valid)
+		generation2_valid = usbhid_lifecycle_quiesce_rebuild(
+			hdev2, generation2);
+
+#if defined(WACOM_MODE_CHANGE_TEST)
+	if (test_command == WACOM_MODE_TEST_RUN) {
+		dbg("WACOM_MODE_TEST_RUN");
+		msleep(8000);
+	}
+#endif
+
+	if (generation1_valid) {
+		down(&hdev1->driver_input_lock);
+		input_lock1 = &hdev1->driver_input_lock;
+		if (!wacom_mode_generation_current(hdev1, generation1)) {
+			up(input_lock1);
+			input_lock1 = NULL;
+			generation1_valid = false;
+		}
+	}
+	if (generation2_valid) {
+		down(&hdev2->driver_input_lock);
+		input_lock2 = &hdev2->driver_input_lock;
+		if (!wacom_mode_generation_current(hdev2, generation2)) {
+			up(input_lock2);
+			input_lock2 = NULL;
+			generation2_valid = false;
+		}
+	}
+
+	/*
+	 * A newer mode report may queue this same work while lifecycle waits for
+	 * the parser locks. Coalesce that pass and use its latest parsed value.
+	 */
+	coalesced = usbhid_lifecycle_cancel_work(work);
+	is_direct = __atomic_load_n(&wacom->wacom_wac.is_direct_mode,
+				    __ATOMIC_ACQUIRE);
+#if defined(WACOM_MODE_CHANGE_TEST)
+	__atomic_store_n(&wacom->mode_test_command, WACOM_MODE_TEST_NORMAL,
+			 __ATOMIC_RELEASE);
+#endif
+	if (!input_lock1 && !input_lock2)
+		return;
+
+	began = true;
+	dbg("WACOM_MODE_BEGIN value=%u", is_direct);
+#if defined(WACOM_MODE_CHANGE_TEST)
+	dbg("WACOM_MODE_PEERS pen_addr=%u pen_gen=%u touch_addr=%u touch_gen=%u",
+	    wacom1 ? (unsigned int)wacom1->usbdev->dev_addr : 0u,
+	    (unsigned int)generation1,
+	    wacom2 ? (unsigned int)wacom2->usbdev->dev_addr : 0u,
+	    (unsigned int)generation2);
+#endif
+	if (coalesced)
+		dbg("WACOM_MODE_COALESCED value=%u", is_direct);
+
+	/*
+	 * The firmware timer callback does not acquire driver_input_lock. Once a
+	 * live member's timer is cancelled, finish its stop/rebuild even if its
+	 * peer disconnects so that a surviving member is never left half-stopped.
+	 */
+	// if (shared->pen) {
+	// Firmware also requires a drained, generation-current physical HID.
+	if (input_lock1 &&
+	    wacom_mode_generation_current(hdev1, generation1)) {
+		timer_delete_sync(&wacom1->idleprox_timer);
 		wacom_release_resources(wacom1);
 		hid_hw_stop(wacom1->hdev);
+		stopped1 = true;
 		wacom1->wacom_wac.has_mode_change = true;
-		wacom1->wacom_wac.is_direct_mode = is_direct;
+		// wacom1->wacom_wac.is_direct_mode = is_direct;
+		// Keep target state coherent with mode reports from another HID.
+		__atomic_store_n(&wacom1->wacom_wac.is_direct_mode, is_direct,
+				 __ATOMIC_RELEASE);
 	}
 
-	if (shared->touch) {
-		wacom2 = hid_get_drvdata(shared->touch);
+	// if (shared->touch) {
+	// Firmware also requires a drained, generation-current physical HID.
+	if (input_lock2 &&
+	    wacom_mode_generation_current(hdev2, generation2)) {
+		timer_delete_sync(&wacom2->idleprox_timer);
 		wacom_release_resources(wacom2);
 		hid_hw_stop(wacom2->hdev);
+		stopped2 = true;
 		wacom2->wacom_wac.has_mode_change = true;
-		wacom2->wacom_wac.is_direct_mode = is_direct;
+		// wacom2->wacom_wac.is_direct_mode = is_direct;
+		// Keep target state coherent with mode reports from another HID.
+		__atomic_store_n(&wacom2->wacom_wac.is_direct_mode, is_direct,
+				 __ATOMIC_RELEASE);
 	}
 
-	if (wacom1) {
+	// if (wacom1) {
+	// Rebuild only a stop completed for this exact physical generation.
+	if (stopped1 &&
+	    wacom_mode_generation_current(hdev1, generation1)) {
+#if defined(WACOM_MODE_CHANGE_TEST)
+		wacom1->mode_test_fail_rebuild =
+			test_command == WACOM_MODE_TEST_FAIL_PEN;
+#endif
 		error = wacom_parse_and_register(wacom1, false);
-		if (error)
-			return;
+		if (error) {
+			dbg("WACOM_MODE_REBUILD_PEN_FAIL");
+			// return;
+			// A physical Pen disconnect may still require Touch recovery.
+			if (wacom_mode_generation_current(hdev1, generation1))
+				goto unlock;
+		} else if (wacom_mode_generation_current(hdev1, generation1)) {
+			evdev_activate_hid(hdev1);
+			dbg("WACOM_MODE_REBUILD_PEN_OK");
+		}
 	}
 
-	if (wacom2) {
+	// if (wacom2) {
+	// Rebuild only a stop completed for this exact physical generation.
+	if (stopped2 &&
+	    wacom_mode_generation_current(hdev2, generation2)) {
+#if defined(WACOM_MODE_CHANGE_TEST)
+		wacom2->mode_test_fail_rebuild =
+			test_command == WACOM_MODE_TEST_FAIL_TOUCH;
+#endif
 		error = wacom_parse_and_register(wacom2, false);
-		if (error)
-			return;
+		if (error) {
+			dbg("WACOM_MODE_REBUILD_TOUCH_FAIL");
+			// return;
+			// The successfully rebuilt Pen is already active, as in Linux.
+			goto unlock;
+		}
+		if (wacom_mode_generation_current(hdev2, generation2)) {
+			evdev_activate_hid(hdev2);
+			dbg("WACOM_MODE_REBUILD_TOUCH_OK");
+		}
 	}
 
+unlock:
+	if (input_lock2)
+		up(input_lock2);
+	if (input_lock1)
+		up(input_lock1);
+
+	if (began)
+		dbg("WACOM_MODE_END");
 	return;
 }
 
@@ -3123,6 +3398,7 @@ static int wacom_probe(struct hid_device *hdev,
 
 	hid_set_drvdata(hdev, wacom);
 	wacom->hdev = hdev;
+	INIT_LIST_HEAD(&wacom->shared_node);
 
 	wacom_wac = &wacom->wacom_wac;
 	wacom_wac->features = *((struct wacom_features *)id->driver_data);
@@ -3155,9 +3431,8 @@ static int wacom_probe(struct hid_device *hdev,
 	INIT_WORK(&wacom->wireless_work, wacom_wireless_work);
 	INIT_WORK(&wacom->battery_work, wacom_battery_work);
 	INIT_WORK(&wacom->remote_work, wacom_remote_work);
-	// INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
+	INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
 	timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
-	// Mode-change callbacks remain outside the exact USB allowlist.
 
 	/* ask for the report descriptor to be loaded by HID */
 	error = hid_parse(hdev);
@@ -3213,8 +3488,9 @@ static void wacom_remove(struct hid_device *hdev)
 	// Remote input/devres mutations run on this firmware lifecycle owner.
 	usbhid_lifecycle_cancel_work(&wacom->remote_work);
 	// cancel_work_sync(&wacom->mode_change_work);
+	// Mode-change work shares this lifecycle owner, so queued removal is sync.
+	usbhid_lifecycle_cancel_work(&wacom->mode_change_work);
 	timer_delete_sync(&wacom->idleprox_timer);
-	// Mode-change work is not initialized by the active USB profiles.
 	if (hdev->bus == BUS_BLUETOOTH)
 		device_remove_file(&hdev->dev, &dev_attr_speed);
 
@@ -3245,11 +3521,37 @@ static int wacom_reset_resume(struct hid_device *hdev)
 	return wacom_resume(hdev);
 }
 
+// Firmware keeps unqualified fixed USB IDs as zero-data precedence barriers.
+static bool wacom_match(struct hid_device *hdev, bool ignore_special_driver)
+{
+	const struct hid_device_id *id;
+
+	if (ignore_special_driver ||
+	    (hdev->quirks & HID_QUIRK_IGNORE_SPECIAL_DRIVER))
+		return false;
+
+	id = hid_match_id(hdev, wacom_ids);
+	/* Test-only hardware oracle; remove after the matching-matrix run. */
+	if (!id->driver_data) {
+		dbg("WACOM_MATCH_GENERIC_FALLBACK %04x:%04x",
+		    hdev->vendor, hdev->product);
+		return false;
+	}
+	if (id->product == HID_ANY_ID)
+		dbg("WACOM_MATCH_WILDCARD %04x:%04x",
+		    hdev->vendor, hdev->product);
+	else
+		dbg("WACOM_MATCH_FIXED %04x:%04x",
+		    hdev->vendor, hdev->product);
+	return true;
+}
+
 // static struct hid_driver wacom_driver = {
 // The firmware registry never mutates imported driver descriptors.
 static const struct hid_driver wacom_driver = {
 	.name =		"wacom",
 	.id_table =	wacom_ids,
+	.match =	wacom_match,
 	.probe =	wacom_probe,
 	.remove =	wacom_remove,
 	.report =	wacom_wac_report,

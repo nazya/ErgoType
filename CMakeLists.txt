@@ -935,6 +935,7 @@ pico_add_extra_outputs(${PROJECT_NAME})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         __KERNEL__ # use kernel UAPI layouts; firmware has no userspace ioctl headers
+        WACOM_MODE_CHANGE_TEST=1 # remove with mode-change hardware markers/hooks
         PICO_STDIO_STACK_BUFFER_SIZE=256 # use a small printf on stack buffer
         PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000000 # avoid discarding long CDC bursts under load
         PICO_DEFAULT_PIO_USB_DP_PIN=21

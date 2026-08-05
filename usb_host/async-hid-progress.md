@@ -10,6 +10,23 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Implementation Milestones
 
+- The dirty Wacom candidate retains all 150 pinned fixed USB rows in source
+  order. Nineteen qualified rows keep their feature pointers; 131 zero-data
+  precedence barriers make Wacom decline and allow `hid-generic` to bind. A
+  final USB-only `056a:*` wildcard handles only PIDs absent from that fixed
+  table, while receiver children still require an exact qualified fixed row.
+  Descriptor mode change is lifecycle-owned: it snapshots the Pen/Touch pair,
+  fences and drains both report transports, stops both graphs, reparses and
+  restarts them in Pen-then-Touch order, then reopens reporting. Sibling removal
+  retargets the shared anchor, repeated requests coalesce, and Linux's partial
+  restart policy is retained on failure. Matching arbitration, receiver-child
+  selection, mode-change success/failure, disconnect, and recovery remain
+  hardware-pending; the temporary markers and fault commands are test-only.
+- The same candidate recognizes the captured `056a:03ce` descriptor only by
+  its exact 1435-byte length and report-d9/da signature before applying the
+  explicit-Feature-usage compaction. This is independent of interface number
+  and changes allocation only; `HID_MAX_USAGES=675` remains the sole retained
+  usage-capacity knob.
 - `usb_host/usbhid.c` owns a bounded USB-device cache and fixed probe-identity
   slots allocated before the TinyUSB host starts. Its bounded
   application-driver ingest copies the ephemeral raw configuration stream;
@@ -436,7 +453,7 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
-- The complete pinned Wacom sources use a narrow USB-only table containing the
+- The preceding hardware-qualified Wacom stages used narrow USB-only tables containing the
   seven hardware-tested base IDs `056a:0027/0029/0084/00de/037a/037b/5048`
   plus external wired Intuos `0302/0303/030e/0323`, Intuos 2
   `033b/033c/033d/033e`, Intuos Pro `0314/0315/0317`, and wired Cintiq 13HD
@@ -449,12 +466,12 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   allocations. The separate wired and AES/receiver automatic fixtures passed
   their complete hardware runs for the original seven IDs. The focused
   eleven-ID Intuos matrix also passed with 29 balanced input-node lifetimes,
-  `oom=0`, and terminal `f15, f10`. Its family captures verify exact-ID
+  `oom=0`, and terminal `f15, f10`. Their family captures verify exact-ID
   selection and reused parser-family/mode/input smoke, but are not byte-exact
-  retail descriptors for every model. Bluetooth,
-  bootloader, I2C, PCI, and every other product ID remain
-  gated. Receiver lookup can resolve any child PID already in the selected
-  table; hardware receiver coverage is still limited to child `056a:0027`.
+  retail descriptors for every model. Their receiver lookup resolved a child
+  PID from the selected exact table; hardware receiver coverage is still
+  limited to child `056a:0027`. The current candidate boundary is recorded in
+  the first milestone above.
   The focused `0304` fixture also passed delayed mode exchange, Pen and
   nine-button Pad input, pre-deadline cancellation, same-PID reconnect, and
   balanced teardown. Its report descriptor is protocol-equivalent rather than

@@ -433,9 +433,20 @@ numeric X/Y values remain outside the production-log verdict.
 
 ## Active USB Wacom Boundary
 
-The current build links the complete pinned `wacom_sys.c` and `wacom_wac.c`
-implementation plus the scoped newer-upstream FIFO and post-start cleanup
-fixes, while keeping a narrow USB-only match table:
+The dirty hardware-pending build links the complete pinned `wacom_sys.c` and
+`wacom_wac.c` implementation plus the scoped newer-upstream FIFO and
+post-start cleanup fixes. It preserves all 150 pinned fixed USB rows in source
+order: 19 qualified rows keep their feature pointers, while 131 zero-data
+barriers make Wacom decline so `hid-generic` can bind. The qualified fixed PIDs
+are `0027/0029/0084/00de/0302/0303/0304/030e/0314/0315/0317/0323/0331/
+033b/033c/033d/033e/037a/037b`. One final wired USB `056a:*` wildcard handles
+only a PID absent from the fixed table. Receiver children require an exact
+qualified fixed row and can select neither a barrier nor the wildcard.
+Bluetooth, I2C, PCI, Lenovo, and the broad all-devices policy remain disabled.
+
+That wildcard arbitration and the new two-sibling descriptor mode-change
+lifecycle are source-audited and build-clean but have no hardware verdict.
+The following list describes the preceding hardware-tested exact-ID stages:
 
 - One by Wacom Small CTL-472 `056a:037a` and Medium CTL-672 `056a:037b` use
   the upstream `BAMBOO_PEN` parser, record FIFO, sibling shared data, and
@@ -523,7 +534,7 @@ registration. Its `f13` marker and absence of an interface-1 completion proved
 both the second child's local stop and the worker's additional stop of the
 already-started first child. The LED, Bamboo-rejection, and monitor-open callers
 share the exact upstream label but were not fault-injected independently;
-Remote remains compile-gated.
+Remote was compile-gated in that historical image.
 
 Receiver rebind also clears `stylus_in_proximity` and `touch_down` while both
 child report parsers are fenced. Two independent `0027` logical rebinds left
@@ -577,11 +588,12 @@ allocation/unregister resources for managed inputs. The generic evdev client
 uses `input_dev->id` and leaves Wacom's opaque `struct wacom *` driver data
 untouched. The separate Rapoo managed extra-input regression remains pending.
 
-All other Wacom product IDs remain behind
-`CONFIG_HID_WACOM_ALL_DEVICES`. Bluetooth, bootloader, I2C, PCI, Linux
-LED/sysfs presentation, Remote mode/unpair sysfs, and product IDs outside the
-20-entry USB table remain excluded. Receiver lookup can select any child PID already in
-that table; only child `056a:0027` is covered by the receiver hardware verdict.
+Those historical images excluded Wacom product IDs outside their exact table.
+The dirty candidate instead applies the fixed-row barriers and final USB
+wildcard described above. Bluetooth, bootloader, I2C, PCI, Linux LED/sysfs
+presentation, and Remote mode/unpair sysfs remain excluded. Current receiver
+lookup accepts only a qualified fixed child PID; only child `056a:0027` has a
+receiver-path hardware verdict.
 The focused Intuos matrix verifies mode and Pen/Pad smoke for all eleven
 selected PIDs, Pro LED initialization for `0314/0315/0317`, and Finger smoke
 for seven touch-capable profiles, with 29 balanced input lifetimes, `oom=0`,
