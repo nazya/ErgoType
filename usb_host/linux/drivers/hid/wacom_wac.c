@@ -5176,19 +5176,12 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x4004) },
 	{ USB_DEVICE_WACOM(0x5000) },
 	{ USB_DEVICE_WACOM(0x5002) },
-#endif
-	// Stage the exact wired 0x0374 through the disabled upstream USB wildcard.
-	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
-		     USB_VENDOR_ID_WACOM, 0x0374),
-	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
-	// The exact wired 0x5048 profile reaches the upstream generic AES path.
-	{ HID_DEVICE(BUS_USB, HID_GROUP_WACOM,
-		     USB_VENDOR_ID_WACOM, 0x5048),
-	  .driver_data = (kernel_ulong_t)&wacom_features_HID_ANY_ID },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_LENOVO(0x6004) },
+#endif
 
+	/* Firmware enables only the upstream wired USB descriptor wildcard. */
 	{ USB_DEVICE_WACOM(HID_ANY_ID) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ I2C_DEVICE_WACOM(HID_ANY_ID) },
 	{ PCI_DEVICE_WACOM(HID_ANY_ID) },
 	{ BT_DEVICE_WACOM(HID_ANY_ID) },

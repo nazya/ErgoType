@@ -14,6 +14,32 @@ allocation numbers are maintained only in
 
 ## Current Status
 
+The current Wacom candidate keeps 19 qualified fixed USB rows active. The 131
+other pinned fixed USB PIDs remain compile-gated and are explicitly listed in
+`hid_quirks[]` with upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`, so unchanged
+`hid-generic` handles them. One final wired USB wildcard handles only a PID
+absent from that unfinished list; receiver children require an exact active
+fixed row and can select neither a compile-gated profile nor the wildcard.
+The broad configuration restores the upstream fixed rows and disables the
+unfinished-profile quirk block. It also enables the compile-gated Bluetooth,
+I2C, PCI, and Lenovo rows, so it is not a USB-only production option. A
+wildcard device whose parsed descriptor retains an INPUT usage equivalent to
+`WACOM_HID_WD_MODE_CHANGE` is rejected before bind.
+
+Only the paired Pen/Touch mode-change runtime is deferred on
+`wip/wacom-wildcard-mode-change` pending a two-Pico setup on a common working
+USB hub. The current quirk-list implementation passed its complete
+single-Pico matching matrix on hardware on 2026-09-07, including generic
+fallback for unfinished `0333`, receiver gating and publication, two GET 8
+completions, and captured `0350` rejection at phase 6 before terminal phase 7.
+Its exact artifacts are recorded in `hid-emulator-coverage.md`.
+
+Test-only host gates and markers were then removed and production rebuilt;
+the run remains hardware evidence for the unchanged production logic it
+exercised. Only the exact cleaned production UF2 was not separately flashed.
+The independent captured-signature memory quirk for `056a:03ce` remains active
+and was not exercised by this matrix.
+
 The following paths have produced input events on hardware:
 
 - a generic USB keyboard, including the keyboard interface of a composite
@@ -105,8 +131,9 @@ Both complete removal snapshots repeated `60744/54464/9`; all 13 snapshots had
 The fixture is protocol-equivalent rather than a retail capture, and numeric
 X/Y values are not exposed by production logging.
 
-The Wacom checkpoint additionally links complete pinned Wacom sources. The
-hardware-tested base matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
+The preceding hardware-qualified Wacom checkpoints linked complete pinned
+Wacom sources through narrower exact-ID tables. The hardware-tested base
+matches CTL-472 `056a:037a`, CTL-672 `056a:037b`,
 PTK-450 `056a:0029`, CTH-470 `056a:00de`, PTH-650 `056a:0027`, Yoga 260 AES
 `056a:5048`, and receiver `056a:0084`. The later focused Intuos stage adds
 external wired `056a:0302/0303/030e/0314/0315/0317/0323/033b/033c/033d/033e`,
@@ -188,10 +215,10 @@ Production logs still do not expose exact detached battery fields or ordering,
 and the AES fixture does not wait for the real 30-minute expiry. The receiver
 fixture deterministically covers initial sibling work while pending but cannot
 externally hold the short pre-PID callback after workqueue promotion or during
-execution. Receiver lookup can select any child PID in the current exact-ID
-table, but hardware receiver coverage is limited to `056a:0027`. Bluetooth,
-bootloader, I2C, PCI, and product IDs outside that table
-remain excluded.
+execution. In the earlier exact-ID images, receiver lookup selected a child PID
+from the then-active exact-ID table; hardware receiver coverage is limited to
+`056a:0027`. The current candidate's receiver lookup instead requires one of its
+19 qualified fixed rows. Bluetooth, bootloader, I2C, and PCI remain excluded.
 
 A focused receiver lifecycle pair passed on 2026-08-03. Its first phase used a
 temporary compile-gated host hook to fail only the `033c` Touch child after
@@ -714,11 +741,10 @@ Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
 Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
 Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
 the USB-only Magic Mouse 2 / Trackpad 2 driver.
-The linked complete Logitech HID++/DJ, UC-Logic, and Wacom sources retain
-separate narrow USB ID gates. The Wacom gate contains the seven
-hardware-tested base IDs plus eleven external wired Intuos exact-ID selections
-hardware-tested with the documented family captures above, plus focused wired
-Cintiq 13HD `056a:0304`.
+The linked complete Logitech HID++/DJ and UC-Logic sources retain their narrow
+USB ID gates. Wacom instead uses the 19 qualified fixed profiles, explicit
+unfinished-profile quirks, and final wired wildcard described in Current
+Status above.
 Microsoft is likewise narrow: 14 wired non-gaming USB IDs are selected, while
 SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF remain compile-gated
 with matching special-driver gates. The exact per-device-release pair passed

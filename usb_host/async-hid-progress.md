@@ -10,6 +10,36 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Implementation Milestones
 
+- The current Wacom candidate keeps 19 qualified fixed USB rows active. The
+  other 131 pinned fixed USB PIDs remain compile-gated in `wacom_ids[]` and are
+  the explicit unfinished-profile list in `hid_quirks[]`, where the upstream
+  `HID_QUIRK_IGNORE_SPECIAL_DRIVER` flag leaves them to the unchanged
+  `hid-generic` path. A final USB-only `056a:*` wildcard handles PIDs absent
+  from that unfinished list. Receiver children require an exact active fixed
+  row and can select neither a compile-gated profile nor the wildcard. Enabling
+  `CONFIG_HID_WACOM_ALL_DEVICES` restores the upstream fixed rows and removes
+  the unfinished-profile quirk block.
+  After wildcard parsing, a retained INPUT usage equivalent to
+  `WACOM_HID_WD_MODE_CHANGE` is rejected before the device can bind. The full
+  Pen/Touch mode-change runtime is deferred and preserved only on
+  `wip/wacom-wildcard-mode-change`, not in the production candidate, pending a
+  two-Pico setup on a common working USB hub. This specific deferral does not
+  characterize all 131 unfinished fixed profiles.
+  A single-Pico matrix passed the current candidate on hardware on 2026-09-07,
+  covering
+  qualified-fixed/unfinished-fixed-generic/wildcard outcomes, receiver-child
+  selection, two non-waiting GET 8 completions, parsed input, and captured
+  `0350` rejection. The exact test artifacts are recorded in
+  [`hid-emulator-coverage.md`](hid-emulator-coverage.md). Its host-only
+  coordinator and verdict markers were removed before rebuilding production.
+  The run remains hardware evidence for the unchanged production logic it
+  exercised; only the exact cleaned production UF2 was not separately flashed.
+- The candidate recognizes the captured `056a:03ce` descriptor only by its
+  exact 1435-byte length, terminal `0xc0`, and report `0xd9`/`0xda` signature
+  before applying the explicit-Feature-usage compaction. This is independent
+  of interface number and is a descriptor-proven memory quirk whose wire
+  layout remains unchanged; `HID_MAX_USAGES=675` remains the sole retained
+  usage-capacity knob.
 - `usb_host/usbhid.c` owns a bounded USB-device cache and fixed probe-identity
   slots allocated before the TinyUSB host starts. Its bounded
   application-driver ingest copies the ephemeral raw configuration stream;
@@ -436,25 +466,26 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   Pico-PIO-USB sources are not modified by this step.
 - Fixed-slot task-side input-report delivery, the firmware workqueue, and the
   firmware timer bridges are present for the currently linked driver set.
-- The complete pinned Wacom sources use a narrow USB-only table containing the
-  seven hardware-tested base IDs `056a:0027/0029/0084/00de/037a/037b/5048`
+- The preceding hardware-qualified Wacom stages used narrow USB-only
+  tables containing the seven hardware-tested base IDs
+  `056a:0027/0029/0084/00de/037a/037b/5048`
   plus external wired Intuos `0302/0303/030e/0323`, Intuos 2
-  `033b/033c/033d/033e`, Intuos Pro `0314/0315/0317`, and wired Cintiq 13HD
-  `0304`, plus ExpressKey Remote `0331`. The active upstream paths retain Pen/Pad/Touch parsing,
-  ExpressKeys, Touch Ring, LED control, pen-touch arbitration, ordinary/AES
-  battery, delayed initialization, idle proximity, and receiver
-  pair/unpair/re-pair with dynamic sibling rebind. Rebind clears the
-  connect-lifetime HID field-ordering graph after the low-level transport has
-  stopped, so the next `hid_hw_start()` rebuilds it without accumulating stale
-  allocations. The separate wired and AES/receiver automatic fixtures passed
-  their complete hardware runs for the original seven IDs. The focused
-  eleven-ID Intuos matrix also passed with 29 balanced input-node lifetimes,
-  `oom=0`, and terminal `f15, f10`. Its family captures verify exact-ID
-  selection and reused parser-family/mode/input smoke, but are not byte-exact
-  retail descriptors for every model. Bluetooth,
-  bootloader, I2C, PCI, and every other product ID remain
-  gated. Receiver lookup can resolve any child PID already in the selected
-  table; hardware receiver coverage is still limited to child `056a:0027`.
+  `033b/033c/033d/033e`, Intuos Pro `0314/0315/0317`, wired Cintiq 13HD
+  `0304`, and ExpressKey Remote `0331`. The active upstream paths in those
+  images retained Pen/Pad/Touch parsing, ExpressKeys, Touch Ring, LED control,
+  pen-touch arbitration, ordinary/AES battery, delayed initialization, idle
+  proximity, and receiver pair/unpair/re-pair with dynamic sibling rebind.
+  Rebind cleared the connect-lifetime HID field-ordering graph after the
+  low-level transport stopped. The next `hid_hw_start()` rebuilt it without
+  accumulating stale allocations. The separate wired and AES/receiver
+  automatic fixtures passed their complete hardware runs for the original
+  seven IDs. The focused eleven-ID Intuos matrix also passed with 29 balanced
+  input-node lifetimes, `oom=0`, and terminal `f15, f10`. Its family captures
+  verified exact-ID selection and reused parser-family/mode/input smoke, but
+  were not byte-exact retail descriptor captures for every model. The
+  historical receiver fixture resolved a child PID from its selected exact
+  table; receiver hardware coverage is still limited to child `056a:0027`.
+  The current candidate boundary is recorded in the first milestone above.
   The focused `0304` fixture also passed delayed mode exchange, Pen and
   nine-button Pad input, pre-deadline cancellation, same-PID reconnect, and
   balanced teardown. Its report descriptor is protocol-equivalent rather than
@@ -525,6 +556,21 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-09-07: the current Wacom matching candidate passed all seven
+  single-Pico phases with host test UF2
+  `21f9dfc661dacb341e02e06c551569b861b1746054aca1490bd02ffef497d7a0`,
+  emulator UF2
+  `a9caf3fda39a9d3fce8c527b55de4c6c9ba2288f80f07084cd8a01a12b793c50`,
+  and host log
+  `7c1d4cf5c880bf7f19cb2774cb4695ec643ebaf9a393e36bc3dc3b95a054c8eb`.
+  The run ended at `f10` with ordered input nonces, exactly two successful GET
+  8 completions, complete receiver classification/publication, balanced
+  teardown, captured `0350` rejection, `oom=0` in all 33 snapshots, and 6456 B
+  minimum heap. The host-only coordinator was removed and production UF2
+  `dc8c0b3efd1197afce439e94e7536149e608059738444e456a2a93f1d4858101`
+  rebuilt but was not separately flashed. The run remains hardware evidence
+  for the unchanged production logic it exercised. The matrix did not exercise
+  the independent descriptor-qualified `056a:03ce` memory quirk.
 - 2026-08-03: the focused Wacom receiver lifecycle checkpoint used test-only
   host UF2 SHA256
   `068194dfbef409bcd96cfc8cd6a3543a43a3324ccb89256c4d663c17f27776ce`

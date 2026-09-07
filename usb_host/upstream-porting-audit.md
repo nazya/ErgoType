@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-08-03
+Updated: 2026-09-07
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -21,12 +21,21 @@ below.
 
 Active-path conformance for the linked keyboard, mouse, multitouch, haptic,
 input-core, and FF paths through the Linux input-event publication boundary at
-the preceding clean checkpoint. The current Wacom checkpoint activates 19
-exact USB IDs. Its base wired matrix passed after the devres and evdev identity
-corrections; the AES/receiver matrix passed after the receiver
-sibling-initialization and HID-ordering lifetime corrections; and the focused
-eleven-ID Intuos matrix passed after exact-ID feature-usage compaction removed
-unused duplicate metadata without changing report values or wire bytes.
+the preceding clean checkpoint. The current Wacom candidate activates 19
+qualified fixed USB IDs, lists 131 compile-gated fixed PIDs with upstream
+`HID_QUIRK_IGNORE_SPECIAL_DRIVER`, and enables one final wired wildcard. A
+single-Pico hardware matrix exercised the same intended selection outcomes on
+2026-09-07 with the current quirk-list candidate. That run is hardware evidence
+for the unchanged production logic it exercised. Its host-only coordinator was
+then removed; only the exact cleaned production UF2 was not separately flashed.
+Exact artifacts are recorded in `hid-emulator-coverage.md`. The independent
+descriptor-qualified `056a:03ce` memory-quirk branch remains source-audited,
+not covered by that matrix. The preceding exact-ID base wired matrix passed
+after the devres and evdev identity corrections; the AES/receiver matrix passed
+after the receiver sibling-initialization and HID-ordering lifetime corrections;
+and the focused eleven-ID Intuos matrix passed after exact-ID feature-usage
+compaction removed unused duplicate metadata without changing report values or
+wire bytes.
 The exact wired Cintiq 13HD `056a:0304` row also passed its focused delayed
 initialization, Pen/Pad input, cancellation, reconnect, and teardown fixture.
 The focused UC-Logic expansion selects only Deco 01 original `28bd:0042` and
@@ -130,23 +139,54 @@ extra-input regression remains pending.
 
 ## Current USB Wacom Contract Result
 
-The active allowlist contains 21 USB Wacom products: PTH-650 `056a:0027`,
-PTK-450 `056a:0029`, receiver `056a:0084`, CTH-470 `056a:00de`, CTL-472
-`056a:037a`, CTL-672 `056a:037b`, the Intuos S bounded-parser checkpoint
-`056a:0374`, Yoga 260 AES `056a:5048`, external wired Intuos
-`056a:0302/0303/030e/0323`, Intuos Pro `056a:0314/0315/0317`, Intuos 2
-`056a:033b/033c/033d/033e`, wired Cintiq 13HD `056a:0304`, and ExpressKey
-Remote `056a:0331`. The previously hardware-qualified 20-ID scope reaches the
-pinned Pen/Pad/Touch, ExpressKeys, Touch Ring, LED, arbitration, ordinary/AES
-battery,
-idle-proximity timer, and receiver pair/unpair plus dynamic sibling-rebind
-paths applicable to those exact profiles. Receiver lookup can select any child
-PID already in this table; hardware receiver coverage is limited to child
-`056a:0027`. Bluetooth, bootloader, I2C, PCI, and product IDs outside the
-21-entry table remain outside this checkpoint. The `056a:0374` fixture passed
-its parser, Pen/Pad, control, teardown, and reconnect sequence on 2026-08-04 at
-the temporary `HID_MAX_USAGES=64`; that verdict does not qualify omitted values
-or the post-test production image at the default 675.
+The current candidate keeps 19 qualified fixed USB rows active in the pinned
+`wacom_ids[]`; they retain their original nonzero `wacom_features_*`. The other
+131 pinned fixed USB PIDs remain in their upstream positions behind
+`CONFIG_HID_WACOM_ALL_DEVICES`. Because the final wildcard would otherwise
+claim them, the same PIDs form an explicit firmware-boundary block in
+`hid_quirks[]`, each using upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`.
+Unchanged HID driver matching therefore skips the Wacom special driver and
+lets unchanged `hid-generic` handle them. Enabling the broad configuration
+restores all upstream fixed rows and compiles out this unfinished-profile quirk
+block. No Wacom-specific `.match()` callback or `hid-generic` control-flow
+change is present. One final wired USB `056a:*` wildcard selects
+`wacom_features_HID_ANY_ID` only for a PID absent from the unfinished list.
+Bluetooth, I2C, PCI, Lenovo, and `CONFIG_HID_WACOM_ALL_DEVICES` remain off in
+production. Receiver rebind performs exact lookup among active fixed rows and
+can select neither a compile-gated profile nor the wildcard.
+
+`CONFIG_HID_WACOM_ALL_DEVICES` is not a supported USB-only completeness knob:
+it also enables the compile-gated Bluetooth, I2C, PCI, Lenovo, and broader
+Wacom paths. It remains a development-wide upstream switch.
+
+The 19 qualified fixed products are
+`0027/0029/0084/00de/0302/0303/0304/030e/0314/0315/0317` and
+`0323/0331/033b/033c/033d/033e/037a/037b`. The canonical 131-PID
+unfinished-profile list is the `hid_quirks[]` block rather than a second copy
+here. The wildcard, generic fallback, and receiver-child gating remain current.
+After wildcard parsing, a retained INPUT usage equivalent to
+`WACOM_HID_WD_MODE_CHANGE` causes rejection before successful bind. The complete
+Pen/Touch mode-change runtime is deferred on `wip/wacom-wildcard-mode-change`
+rather than retained in production because its paired Pen/Touch test requires
+two emulator Picos on a common working USB hub. This specific deferral does
+not describe all 131 unfinished fixed profiles. A single-Pico test matrix
+passed the current quirk-list candidate on hardware on 2026-09-07: it covered
+generic fallback, fixed and wildcard binding, receiver-child gating and
+publication, two GET 8 completions, ordered input, balanced teardown, and
+captured `0350` rejection before terminal phase 7. Exact test UF2/log hashes
+are recorded in `hid-emulator-coverage.md`. Its host-only markers and gates
+were removed before the production rebuild. The run remains hardware evidence
+for the unchanged production logic it exercised; only the exact cleaned UF2
+was not separately flashed. The independent descriptor-qualified `056a:03ce`
+branch was not part of this matrix.
+
+The preceding hardware-qualified reduced scope also contained staged exact
+`0374` and `5048` rows. Its Pen/Pad/Touch, ExpressKeys, Touch Ring, LED,
+arbitration, battery, timer, receiver, and Remote results remain valid only for
+the exact historical images recorded below. Receiver hardware coverage is
+limited to child `056a:0027`. The `056a:0374` fixture passed at temporary
+`HID_MAX_USAGES=64`; that verdict does not qualify omitted values or a later
+production image at the default 675.
 
 Exact `056a:0084`, `056a:0374`, and `056a:5048` descriptors plus the captured
 `056a:0317` PTH-851 family descriptor contain large VARIABLE Feature reports
@@ -165,6 +205,14 @@ reports;
 mode, LED, and proximity operations use separate small reports. The normal
 Wacom feature-mapping pass is bounded by `field->maxusage`, so the repeated
 entries removed here have no reachable consumer.
+
+The Wacom probe additionally recognizes only the captured `056a:03ce`
+descriptor with length 1435, terminal `0xc0`, and its exact report
+`0xd9`/`0xda` byte signature. That signature enables the same
+explicit-Feature-usage compaction independently of USB interface number; it is
+a memory quirk, not a binding allowlist or a hardware-pass claim. General
+retained storage still has one capacity knob, `HID_MAX_USAGES`; no sparse
+replacement parser or second usage limit was introduced.
 
 Receiver work snapshots PID under the monitor parser lock, releases that lock
 before rebuilding siblings, and lets a later monitor report queue the next
@@ -570,9 +618,9 @@ sources so their enablement contract remains visible.
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
 | `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
-| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow with an exact 21-ID USB allowlist: the hardware-qualified base `056a:0027/0029/0084/00de/037a/037b/5048`, ExpressKey Remote `0331`, and external wired `0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/033d/033e`, plus the `0374` bounded-parser checkpoint qualified at temporary limit 64; four report-ID hash reads use the sparse registry; the shared-device list and receiver sibling lookup rely on the lifecycle owner; Pen/Pad/Touch, LED, ordinary/AES/receiver/Remote battery, timer, receiver rebind, and dynamic Remote paths are active. Newer upstream FIFO hardening and post-start `fail_hw_stop` routing are imported directly; firmware resets cross-generation receiver arbitration under both child locks and stops child one if child two fails. Receiver lookup can select any child PID in that table; only child `0027` has receiver-path hardware coverage, and its ToolSerial-independent lifecycle fixture does not cover the FIFO branches. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and all other product IDs remain gated; the driver descriptor is immutable. |
+| `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow under the USB boundary documented above: 19 qualified fixed rows, 131 compile-gated fixed PIDs sent to unchanged `hid-generic` through upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`, one final USB wildcard, exact-only receiver children, and pre-bind wildcard mode-change rejection. Four report-ID hash reads use the sparse registry; existing parser and lifecycle behavior remains. The current selection/rejection paths passed the 2026-09-07 matrix; the independent descriptor-qualified `03ce` memory quirk remains source-audited. Bluetooth, bootloader, I2C, PCI, Lenovo, Remote sysfs, and the broad all-devices policy remain disabled; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
-| `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue, audited against the corresponding Linux lifecycle rather than claimed as copied source. `usbhid.c` scopes explicit-feature-usage compaction to Wacom `056a:0084/0314/0315/0317/0374/5048`; HIDRAW is lifecycle-only; power-supply events cross as detached coalesced value snapshots; Wacom LEDs retain control/work lifetime without Linux sysfs; receiver rebind uses lifecycle-owned borrowed sibling lookup. |
+| `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue audited against the corresponding Linux lifecycle. The Wacom probe selects explicit-feature-usage compaction immediately before the full HID parse; `usbhid.c` remains descriptor transport and owns no Wacom matching policy. Raw GET/SET retain upstream report-ID offset/count semantics and use the HID-owned control path, so teardown can cancel an in-flight slot. HIDRAW is lifecycle-only; power, LED, evdev, and receiver-rebind adapters retain their documented lifetimes. Test-only coordinator markers were removed; `WACOM_MODE_CHANGE_UNSUPPORTED` is the production rejection diagnostic. |
 
 The exact scalar timestamp replacements now retain Linux's `ktime_set()`,
 `ktime_compare()`, and `ktime_get()` lines. The managed-input path restores the
@@ -703,19 +751,32 @@ it contains no callback, logging, allocation, or wait.
   visible beside the explained firmware boundary. Full 15-contact behavior is
   not claimed because the later evdev-to-KeyD queue remains a separate bounded
   consumer.
-- The imported Wacom sources retain the complete pinned switch/parser flow and
-  match the seven base IDs `056a:0027/0029/0084/00de/037a/037b/5048` plus
-  external wired `056a:0302/0303/0304/030e/0314/0315/0317/0323/033b/033c/
-  033d/033e`. Their active paths retain upstream Pen, Pad, Touch,
-  ExpressKey, Touch Ring, LED, arbitration, shared-data/devres, delayed
-  initialization, ordinary/AES/receiver battery, timer, and receiver-rebind
-  logic. All other Wacom IDs remain behind `CONFIG_HID_WACOM_ALL_DEVICES`.
-  The separate base wired, AES/receiver, and focused Intuos pairs completed
-  their hardware matrices with balanced input lifetimes, stable removal
-  plateaus, and `oom=0`. Exact
-  queued power values, elapsed AES expiry, and consumer-start failure remain
-  outside those runtime results. The Rapoo managed extra-input regression
-  remains separate.
+- The imported Wacom sources retain the complete pinned switch/parser flow.
+  The current candidate activates 19 qualified fixed USB rows. The 131 other
+  fixed PIDs remain compile-gated and use upstream
+  `HID_QUIRK_IGNORE_SPECIAL_DRIVER` for unchanged generic fallback; one final
+  USB-only wildcard covers a PID absent from that unfinished list. Its active
+  paths retain upstream Pen, Pad, Touch, ExpressKey, Touch Ring, LED,
+  arbitration, shared-data/devres, delayed initialization,
+  ordinary/AES/receiver battery, timer, and receiver-rebind logic. Broad
+  configuration restores the upstream rows and removes the
+  unfinished-profile quirk block. Receiver children select only qualified
+  fixed rows. Wildcard devices retaining parsed INPUT
+  `WACOM_HID_WD_MODE_CHANGE` are rejected before bind; only the full paired
+  sibling runtime is deferred on `wip/wacom-wildcard-mode-change` pending a
+  two-Pico setup on a common working USB hub.
+  The current implementation's single-Pico host-gated matrix passed on
+  2026-09-07 with generic fallback, fixed/wildcard selection, receiver
+  publication, two GET 8 completions, captured `0350` rejection at phase 6,
+  and terminal acknowledgement at phase 7. Its test-only host coordinator and
+  verdict markers were removed afterward; the descriptor-qualified `03ce`
+  memory quirk was outside this matrix.
+  Bluetooth, I2C, PCI, Lenovo, and the broad all-devices policy remain
+  disabled. The separate earlier exact-ID base wired, AES/receiver, and focused
+  Intuos pairs completed their hardware matrices with balanced input lifetimes,
+  stable removal plateaus, and `oom=0`. Exact queued power values, elapsed AES
+  expiry, and consumer-start failure remain outside those runtime results. The
+  Rapoo managed extra-input regression remains separate.
 - The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole. Direct USB
   matching selects only IDs `046d:c08d` and `046d:c08a`; the current
   exact-class gate additionally selects DJ child IDs M560 `046d:402d`, T650

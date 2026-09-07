@@ -4262,22 +4262,6 @@ static int usbhid_parse(struct hid_device *hid)
 	if (quirks & HID_QUIRK_IGNORE)
 		return -ENODEV;
 
-	/*
-	 * Exact 0x0084/0x5048, captured 0x0317 Pro-family, and captured 0x0374
-	 * descriptors have VARIABLE Features whose last explicit usage Linux
-	 * repeats. Scoped Wacom callers do not consume the omitted mapping/value
-	 * tails; wire sizes stay full while RAM values remain capped.
-	 * 0x0314/0x0315 reuse the family quirk without retail-descriptor claims.
-	 */
-	if (hid->vendor == 0x056a &&
-	    (hid->product == 0x0084 || hid->product == 0x0314 ||
-	     hid->product == 0x0315 || hid->product == 0x0317 ||
-	     hid->product == 0x0374 || hid->product == 0x5048)) {
-		quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
-		hid->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
-		transport_quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
-	}
-
 	/* Many keyboards and mice don't like to be polled for reports,
 	 * so we will always set the HID_QUIRK_NOGET flag for them. */
 	// if (interface->desc.bInterfaceSubClass == USB_INTERFACE_SUBCLASS_BOOT) {

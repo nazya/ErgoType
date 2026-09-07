@@ -15,6 +15,96 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
+The current production candidate, after replacing the previous Wacom
+zero-data/custom-match boundary with an explicit list using the upstream
+`HID_QUIRK_IGNORE_SPECIAL_DRIVER` flag, measures:
+
+```text
+text/data/bss                 611544 / 788 / 245412 B
+__bss_end__                   0x2003feec
+main-bank headroom            276 B to 0x20040000
+HID_MAX_FIELDS/USAGES         64 / 675
+UF2 SHA-256                   dc8c0b3efd1197afce439e94e7536149e608059738444e456a2a93f1d4858101
+hardware coverage             production logic passed 2026-09-07 matrix;
+                              exact cleaned UF2 not separately flashed
+```
+
+Compared with the preceding post-test production rebuild below, this is 128
+bytes less text with unchanged data, BSS, and main-bank headroom. Compilation
+and size alone are not runtime evidence; the matrix run above is the runtime
+evidence for the production logic it exercised.
+
+The archived `wip/wacom-wildcard-mode-change` test image measured:
+
+```text
+text/data/bss                 625128 / 788 / 245532 B
+__bss_end__                   0x2003ff64
+main-bank headroom            156 B to 0x20040000
+HID_MAX_FIELDS/USAGES         64 / 675
+UF2 SHA-256                   2536504fe2a7fdb4fa08ffd27f9ed513a831c0a0cee6033dfbcaadfe8617c036
+hardware verdict              none claimed; WIP test image only
+```
+
+The pinned source retains 150 fixed Wacom rows, but the production
+`wacom_ids[]` activates only 19 qualified rows plus the final USB wildcard.
+The 131 other fixed PIDs are immutable entries in the explicit unfinished
+`hid_quirks[]` block, using upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` rather
+than extra matching logic; the broad configuration restores their upstream
+Wacom rows and removes that block.
+
+Runtime report-field allocation still follows the Linux model and has one
+retained-value capacity knob, `HID_MAX_USAGES`; no sparse replacement table or
+second limit was added. Exact explicit-Feature-usage compaction remains a
+descriptor-proven exception, including the captured `056a:03ce` signature.
+The archived WIP numbers retain the memory cost of the deferred shared Pen/Touch
+mode-change runtime; they are not current production-image accounting.
+Production instead rejects a wildcard descriptor retaining INPUT
+`WACOM_HID_WD_MODE_CHANGE` before bind. That specific runtime awaits a
+two-Pico setup on a common working USB hub; it is not a property attributed to
+all 131 unfinished fixed profiles.
+
+The current quirk-list candidate passed the complete single-Pico matching
+matrix on hardware on 2026-09-07:
+
+```text
+HID_MAX_FIELDS/USAGES         64 / 675
+host test UF2 SHA-256         21f9dfc661dacb341e02e06c551569b861b1746054aca1490bd02ffef497d7a0
+emulator UF2 SHA-256          a9caf3fda39a9d3fce8c527b55de4c6c9ba2288f80f07084cd8a01a12b793c50
+host log SHA-256              7c1d4cf5c880bf7f19cb2774cb4695ec643ebaf9a393e36bc3dc3b95a054c8eb
+heap minimum                  6456 B, oom=0 in all 33 snapshots
+```
+
+All seven host-gated phases reached terminal `f10`. The run covered the
+current `HID_QUIRK_IGNORE_SPECIAL_DRIVER` fallback, fixed and wildcard binds,
+receiver gating/publication, two non-waiting GET 8 completions, ordered input,
+balanced teardown, and captured `0350` rejection. It did not exercise the
+independent descriptor-qualified `056a:03ce` memory-quirk branch.
+
+The smaller single-Pico matching-matrix image passed on hardware on 2026-09-05:
+
+```text
+text/data/bss                 617048 / 788 / 245460 B
+__bss_end__                   0x2003ff1c
+main-bank headroom            228 B to 0x20040000
+HID_MAX_FIELDS/USAGES         64 / 675
+host test UF2 SHA-256         5b7fb8ce594528281bc589f11a0622bd181cd5fe8a8387dc81244b1eec4e49e3
+emulator UF2 SHA-256          a9caf3fda39a9d3fce8c527b55de4c6c9ba2288f80f07084cd8a01a12b793c50
+host log SHA-256              f129a1b0b514d677400b5b8333e2267f06f7cf0c27b534d41b29cc0cff21c7e0
+heap minimum                  6456 B, oom=0 in all 33 snapshots
+```
+
+After removing its host-only coordinator and restoring the ordinary 512-word
+lifecycle stack, the production rebuild measured:
+
+```text
+text/data/bss                 611672 / 788 / 245412 B
+__bss_end__                   0x2003feec
+main-bank headroom            276 B to 0x20040000
+UF2 SHA-256                   86d035eb51ce09c0399d86e6f2343c6e5a6435d75e87cb99a26f897423eacab3
+hardware coverage             production logic passed 2026-09-05 matrix;
+                              exact cleaned UF2 not separately flashed
+```
+
 The Microsoft wired-USB per-device-release checkpoint was:
 
 ```text

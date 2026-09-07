@@ -3156,14 +3156,74 @@ static int wacom_probe(struct hid_device *hdev,
 	INIT_WORK(&wacom->battery_work, wacom_battery_work);
 	INIT_WORK(&wacom->remote_work, wacom_remote_work);
 	// INIT_WORK(&wacom->mode_change_work, wacom_mode_change_work);
+	// Mode-change descriptors are rejected below before their reports can run.
 	timer_setup(&wacom->idleprox_timer, &wacom_idleprox_timeout, TIMER_DEFERRABLE);
-	// Mode-change callbacks remain outside the exact USB allowlist.
+
+	{
+		/*
+		 * Upstream Linux materializes repeated VARIABLE Feature usages. The
+		 * firmware keeps full wire sizes, but the scoped Wacom paths do not
+		 * consume the repeated mapping/value tails. Match the captured 0x03ce
+		 * descriptor through its final byte rather than assuming a USB
+		 * interface number.
+		 */
+		static const u8 wacom_one_12_feature_signature[] = {
+			0x85, 0xd9, 0x09, 0x01, 0x96, 0x00, 0x0a, 0xb1, 0x02,
+			0x85, 0xda, 0x09, 0x01, 0x96, 0x04, 0x04, 0xb1, 0x02,
+		};
+
+		if (hdev->vendor == USB_VENDOR_ID_WACOM &&
+		    (hdev->product == 0x0084 || hdev->product == 0x0314 ||
+		     hdev->product == 0x0315 || hdev->product == 0x0317 ||
+		     hdev->product == 0x0374 || hdev->product == 0x5048 ||
+		     (hdev->product == 0x03ce && hdev->dev_rsize == 1435 &&
+		      hdev->dev_rdesc[1434] == 0xc0 &&
+		      !memcmp(hdev->dev_rdesc + 1317,
+			      wacom_one_12_feature_signature,
+			      sizeof(wacom_one_12_feature_signature)))))
+			hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+	}
 
 	/* ask for the report descriptor to be loaded by HID */
 	error = hid_parse(hdev);
 	if (error) {
 		hid_err(hdev, "parse failed\n");
 		return error;
+	}
+
+	/*
+	 * Upstream Linux initializes mode_change_work above. Firmware defers that
+	 * two-sibling lifecycle, so reject its retained INPUT usage before reports
+	 * can schedule the uninitialized work.
+	 */
+	if (id->product == HID_ANY_ID) {
+		struct hid_report_enum *rep_enum =
+			&hdev->report_enum[HID_INPUT_REPORT];
+		struct hid_report *report;
+		bool has_mode_change = false;
+
+		list_for_each_entry(report, &rep_enum->report_list, list) {
+			for (unsigned int i = 0;
+			     i < report->maxfield && !has_mode_change; i++) {
+				struct hid_field *field = report->field[i];
+
+				for (unsigned int j = 0; j < field->maxusage; j++) {
+					if (wacom_equivalent_usage(field->usage[j].hid) ==
+					    WACOM_HID_WD_MODE_CHANGE) {
+						has_mode_change = true;
+						break;
+					}
+				}
+			}
+			if (has_mode_change)
+				break;
+		}
+
+		if (has_mode_change) {
+			dbg("WACOM_MODE_CHANGE_UNSUPPORTED %04x:%04x",
+			    hdev->vendor, hdev->product);
+			return -ENODEV;
+		}
 	}
 
 	if (features->type == BOOTLOADER) {
@@ -3213,8 +3273,8 @@ static void wacom_remove(struct hid_device *hdev)
 	// Remote input/devres mutations run on this firmware lifecycle owner.
 	usbhid_lifecycle_cancel_work(&wacom->remote_work);
 	// cancel_work_sync(&wacom->mode_change_work);
+	// Mode-change work is not initialized because probe rejects that usage.
 	timer_delete_sync(&wacom->idleprox_timer);
-	// Mode-change work is not initialized by the active USB profiles.
 	if (hdev->bus == BUS_BLUETOOTH)
 		device_remove_file(&hdev->dev, &dev_attr_speed);
 
