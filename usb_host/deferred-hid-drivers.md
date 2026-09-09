@@ -550,11 +550,12 @@ before compaction; this allowed the Finger graph to complete without reducing
 the retained `HID_MAX_USAGES=675` policy.
 
 Receiver rebind repeatedly executes `hid_hw_stop()` followed by
-`hid_hw_start()`. The port releases the connect-lifetime HID field-ordering
-graph only after the low-level transport has synchronously stopped all report
-producers; the next connect rebuilds it for the new Wacom profile. Allocation
-failure keeps Linux's nonfatal descriptor-order fallback and does not change
-the return value of `hid_connect()`.
+`hid_hw_start()`. The field-ordering graph belongs to the parsed `hid_report`
+and remains valid across that cycle because Wacom reuses the same report and
+field topology. `hid_report_process_ordering()` returns when `field_entries`
+already exists, and `hid_free_report()` releases it with the report. A real
+allocation failure leaves the pointer `NULL`, preserving Linux's nonfatal
+descriptor-order fallback and allowing a later connect to retry.
 
 If initial receiver-monitor probe queued `init_work` and a later
 `hid_hw_open()` fails, the common failure path synchronously cancels that

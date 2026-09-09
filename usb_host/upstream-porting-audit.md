@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-09-07
+Updated: 2026-09-09
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -32,10 +32,11 @@ Exact artifacts are recorded in `hid-emulator-coverage.md`. The independent
 descriptor-qualified `056a:03ce` memory-quirk branch remains source-audited,
 not covered by that matrix. The preceding exact-ID base wired matrix passed
 after the devres and evdev identity corrections; the AES/receiver matrix passed
-after the receiver sibling-initialization and HID-ordering lifetime corrections;
-and the focused eleven-ID Intuos matrix passed after exact-ID feature-usage
-compaction removed unused duplicate metadata without changing report values or
-wire bytes.
+with the former stop-time HID-ordering correction. The current report-lifetime
+guard is source-audited and runtime-validated on Linux 7.2.3, but has not yet
+run on firmware hardware. The focused eleven-ID Intuos matrix passed after
+exact-ID feature-usage compaction removed unused duplicate metadata without
+changing report values or wire bytes.
 The exact wired Cintiq 13HD `056a:0304` row also passed its focused delayed
 initialization, Pen/Pad input, cancellation, reconnect, and teardown fixture.
 The focused UC-Logic expansion selects only Deco 01 original `28bd:0042` and
@@ -222,15 +223,16 @@ battery callbacks use nonblocking parser-lock retry because firmware
 power-supply unregister frees directly while physical removal owns the same
 lock and synchronously cancels work.
 
-Receiver rebind exposes a connect-lifetime ordering allocation retained by
-pinned `hid_disconnect()`: repeated `hid_hw_stop()`/`hid_hw_start()` otherwise
-rebuilds `field_entries` and overwrites the old pointer. The port keeps
-`hid_disconnect()` unchanged, calls the low-level synchronous stop, then clears
-the field-ordering lists and allocations. The next connect rebuilds them after
-the current Wacom input mapping. Allocation failure retains Linux's nonfatal
-descriptor-order fallback and does not change `hid_connect()` return
-semantics. A bare repeated `hid_connect()` without the required stop remains
-outside this lifecycle contract.
+Receiver rebind reuses the parsed `hid_report` objects and their field topology
+across `hid_hw_stop()`/`hid_hw_start()`. Rebuilding the ordering graph on every
+`hid_connect()` would overwrite its owning `field_entries` pointer. The current
+downstream Linux-generic guard makes `hid_report_process_ordering()` return when
+that pointer already exists. Once successfully allocated, the graph is retained
+until `hid_free_report()`. Wacom may idempotently reapply usage-ID fixes or
+logical bounds, but it does not change field topology, report counts, or
+ordering priorities during rebind. A real allocation failure leaves the
+pointer `NULL`, retains Linux's nonfatal descriptor-order fallback, and lets a
+later connect retry.
 
 If initial receiver-monitor probe queued `init_work` and its later
 `hid_hw_open()` fails, the common failure path synchronously cancels that
@@ -610,7 +612,7 @@ sources so their enablement contract remains visible.
 | `ff-memless.c` | Its two upstream `event_lock` scopes use the per-input task-context PI mutex; the original `guard(spinlock_irq*)` lines remain adjacent. |
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
-| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and post-transport-stop release of connect-lifetime field ordering for reversible Wacom rebind. |
+| `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-apple.c` | Complete pinned source with exactly 18 external wired USB IDs active; Bluetooth, internal/legacy keyboard and trackpad, Touch Bar, and backlight-only rows/code remain adjacent behind `CONFIG_HID_APPLE_ALL_DEVICES`; battery report lookup uses the sparse registry and the driver descriptor is immutable. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
@@ -644,12 +646,13 @@ baseline is updated:
   devres-owned haptic object from ff-core's generic `kfree(ff->private)` path.
 - `hid-rapoo`: call `hid_hw_stop()` if allocation or input registration fails
   after a successful `hid_hw_start()`.
-- `hid-core`: after `hid_hw_stop()` has disconnected clients and the low-level
-  driver has synchronously stopped report producers, release the
-  connect-lifetime field-ordering graph. Pinned Linux otherwise overwrites the
-  retained allocation when Wacom receiver rebind performs the documented
-  stop/start sequence. The next `hid_connect()` rebuilds the graph and keeps
-  the existing nonfatal allocation fallback.
+- `hid-core`: make field-ordering initialization idempotent by returning when
+  `report->field_entries` already exists. The graph belongs to `hid_report` and
+  is released by `hid_free_report()`; Wacom receiver rebind reuses the same
+  reports and fields across stop/start. This prevents pointer overwrite without
+  stop-time allocator churn or a report-producer lifetime dependency. A real
+  allocation failure still leaves `NULL` and keeps the existing nonfatal retry
+  behavior.
 - `input.c`: pass the UAPI `*_CNT` bit counts to `bitmap_subset()` instead of
   the pinned baseline's last-valid-bit `*_MAX` values, so handler matching does
   not silently omit the final capability bit in each bitmap.
@@ -658,6 +661,18 @@ Every replaced baseline statement remains commented beside these fixes. The
 local upstream checkout is shallow/grafted, so this audit claims only that the
 fixes are absent from the pinned baseline/local refs; it does not invent later
 upstream commit IDs.
+
+The minimal field-ordering guard was runtime-validated on Linux 7.2.3 with
+Wacom `056a:0084`. The unpatched kernel retained eleven 512-byte allocations
+after six reconnects. With the guard, ten reconnects, six receiver connections,
+and two kmemleak scans retained no objects. This demonstrates that the guard
+fixes the tested Linux leak. The exact before/after Linux test commit IDs are
+not available in this workspace. The patch-header IDs `41a79e43c82b` and
+`7d45c0a12e19` identify `hid-core.c` blobs in the reference diff against the
+firmware's pinned Linux baseline, not those Linux test commits. The firmware
+port builds and is source-audited, but the new guard has not run on firmware
+hardware; its earlier receiver artifacts used the former stop-time
+clear/rebuild implementation.
 
 ## Wait and Lock Inventory
 
@@ -1766,7 +1781,7 @@ Current checkpoint audit:
 - extended that source/call-graph audit to exact AES `056a:5048` and receiver
   `056a:0084`, including explicit-feature compaction, timer and battery work,
   sibling initialization cancellation, PID snapshotting, reversible
-  stop/start, and field-ordering release
+  stop/start, and the then-current stop-time field-ordering release
 - audited the active AES/receiver Wacom paths and their receiver-specific
   lifetime corrections. Host
   `8e07cbaba2c2822ef3e93e68aa318f29e9434976e275b2963bf25850dfda7cb8`

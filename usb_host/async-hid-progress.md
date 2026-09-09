@@ -34,6 +34,9 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   coordinator and verdict markers were removed before rebuilding production.
   The run remains hardware evidence for the unchanged production logic it
   exercised; only the exact cleaned production UF2 was not separately flashed.
+  The later report-lifetime field-ordering guard is source-audited and has the
+  Linux runtime validation recorded in `upstream-porting-audit.md`, but these
+  firmware artifacts predate that guard and do not give it a hardware verdict.
 - The candidate recognizes the captured `056a:03ce` descriptor only by its
   exact 1435-byte length, terminal `0xc0`, and report `0xd9`/`0xda` signature
   before applying the explicit-Feature-usage compaction. This is independent
@@ -475,14 +478,14 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   images retained Pen/Pad/Touch parsing, ExpressKeys, Touch Ring, LED control,
   pen-touch arbitration, ordinary/AES battery, delayed initialization, idle
   proximity, and receiver pair/unpair/re-pair with dynamic sibling rebind.
-  Rebind cleared the connect-lifetime HID field-ordering graph after the
-  low-level transport stopped. The next `hid_hw_start()` rebuilt it without
-  accumulating stale allocations. The separate wired and AES/receiver
-  automatic fixtures passed their complete hardware runs for the original
-  seven IDs. The focused eleven-ID Intuos matrix also passed with 29 balanced
-  input-node lifetimes, `oom=0`, and terminal `f15, f10`. Its family captures
-  verified exact-ID selection and reused parser-family/mode/input smoke, but
-  were not byte-exact retail descriptor captures for every model. The
+  The separate wired and AES/receiver automatic fixtures passed their complete
+  hardware runs for the original seven IDs. Those images used the former
+  stop-time field-ordering clear/rebuild fix. In current code, a successfully
+  allocated report-owned ordering graph is retained across stop/start until
+  `hid_free_report()`. The focused eleven-ID Intuos matrix also passed with 29
+  balanced input-node lifetimes, `oom=0`, and terminal `f15, f10`. Its family
+  captures verified exact-ID selection and reused parser-family/mode/input
+  smoke, but were not byte-exact retail descriptor captures for every model. The
   historical receiver fixture resolved a child PID from its selected exact
   table; receiver hardware coverage is still limited to child `056a:0027`.
   The current candidate boundary is recorded in the first milestone above.

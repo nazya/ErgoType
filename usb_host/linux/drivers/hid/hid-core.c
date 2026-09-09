@@ -2074,6 +2074,9 @@ static void hid_report_process_ordering(struct hid_device *hid,
 	unsigned int a, u, usages;
 	unsigned int count = 0;
 
+	if (report->field_entries)
+		return;
+
 	/* count the number of individual fields in the report */
 	for (a = 0; a < report->maxfield; a++) {
 		field = report->field[a];
@@ -2124,22 +2127,6 @@ static void hid_process_ordering(struct hid_device *hid)
 
 	list_for_each_entry(report, &report_enum->report_list, list)
 		hid_report_process_ordering(hid, report);
-}
-
-/*
- * Port deviation from pinned Linux: field ordering is connect-lifetime state.
- * Release it after report producers stop so a later hid_connect() rebuilds it.
- */
-static void hid_clear_ordering(struct hid_device *hid)
-{
-	struct hid_report *report;
-	struct hid_report_enum *report_enum = &hid->report_enum[HID_INPUT_REPORT];
-
-	list_for_each_entry(report, &report_enum->report_list, list) {
-		INIT_LIST_HEAD(&report->field_entry_list);
-		kfree(report->field_entries);
-		report->field_entries = NULL;
-	}
 }
 
 /*
@@ -2805,7 +2792,6 @@ void hid_hw_stop(struct hid_device *hdev)
 {
 	hid_disconnect(hdev);
 	hdev->ll_driver->stop(hdev);
-	hid_clear_ordering(hdev);
 }
 EXPORT_SYMBOL_GPL(hid_hw_stop);
 

@@ -15,24 +15,25 @@ failure caused by static RAM layout.
 
 ## Current Link Picture
 
-The current production candidate, after replacing the previous Wacom
-zero-data/custom-match boundary with an explicit list using the upstream
-`HID_QUIRK_IGNORE_SPECIAL_DRIVER` flag, measures:
+The current production candidate uses an explicit Wacom unfinished-profile
+list with upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` and idempotent
+report-lifetime field ordering. It measures:
 
 ```text
-text/data/bss                 611544 / 788 / 245412 B
+text/data/bss                 611576 / 788 / 245412 B
 __bss_end__                   0x2003feec
 main-bank headroom            276 B to 0x20040000
 HID_MAX_FIELDS/USAGES         64 / 675
-UF2 SHA-256                   dc8c0b3efd1197afce439e94e7536149e608059738444e456a2a93f1d4858101
-hardware coverage             production logic passed 2026-09-07 matrix;
-                              exact cleaned UF2 not separately flashed
+UF2 SHA-256                   edb4151b55f5885ab5973ea521aa9b699289bb35f42a561ecdb1b15ef27b58d8
+hardware coverage             pre-guard Wacom matrix passed 2026-09-07;
+                              ordering guard not run on firmware hardware
 ```
 
-Compared with the preceding post-test production rebuild below, this is 128
+Compared with the preceding post-test production rebuild below, this is 96
 bytes less text with unchanged data, BSS, and main-bank headroom. Compilation
-and size alone are not runtime evidence; the matrix run above is the runtime
-evidence for the production logic it exercised.
+and size alone are not runtime evidence. The matrix remains runtime evidence
+for the unchanged production logic it exercised, not for the later ordering
+guard.
 
 The archived `wip/wacom-wildcard-mode-change` test image measured:
 
@@ -78,7 +79,8 @@ All seven host-gated phases reached terminal `f10`. The run covered the
 current `HID_QUIRK_IGNORE_SPECIAL_DRIVER` fallback, fixed and wildcard binds,
 receiver gating/publication, two non-waiting GET 8 completions, ordered input,
 balanced teardown, and captured `0350` rejection. It did not exercise the
-independent descriptor-qualified `056a:03ce` memory-quirk branch.
+independent descriptor-qualified `056a:03ce` memory-quirk branch. It also
+predates the report-lifetime field-ordering guard.
 
 The smaller single-Pico matching-matrix image passed on hardware on 2026-09-05:
 
@@ -855,9 +857,12 @@ hardware verdict               passed 2026-07-30 for the qualified scope below
 Relative to the expanded wired host, this adds 2,048 B of text with unchanged
 data, BSS, and main-bank headroom. The important cost is dynamic: each AES
 attachment owns separate Pen and Finger HID/input graphs, while a paired
-receiver owns monitor state plus dynamic Pen, Pad, and Finger graphs. Receiver
-rebind frees each input/devres graph and the previous connect-lifetime HID
-field-ordering graph before rebuilding the selected child profile.
+receiver owns monitor state plus dynamic Pen, Pad, and Finger graphs. At this
+archived checkpoint, receiver rebind freed each input/devres graph and the
+previous connect-lifetime HID field-ordering graph before rebuilding the
+selected child profile. Current code retains that report-owned ordering graph
+across logical stop/start and frees it only when `hid_free_report()` destroys
+the report.
 
 The run completed four AES and four physical receiver attachments. Eight AES
 and twelve dynamic receiver input additions had matching removals. All 47 heap

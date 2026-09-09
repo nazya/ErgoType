@@ -60,6 +60,9 @@ again removed. Production UF2
 was rebuilt with the ordinary lifecycle stack but was not separately flashed.
 The run remains hardware evidence for the unchanged production logic it
 exercised; only that exact cleaned binary lacks an independent flash run.
+The report-lifetime field-ordering guard added afterward is source-audited and
+runtime-validated on Linux 7.2.3, but these firmware artifacts used the former
+stop-time clear/rebuild implementation.
 
 Phases 1--5 cover unknown `7ffe` through the final wildcard, qualified fixed
 `037a`, three-interface fixed `033b`, generic fallback for unfinished fixed PID
