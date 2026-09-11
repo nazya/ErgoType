@@ -4986,9 +4986,10 @@ static const struct wacom_features wacom_features_0x94 =
 	.driver_data = (kernel_ulong_t)&wacom_features_##prod
 
 const struct hid_device_id wacom_ids[] = {
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These standalone wired tablets use existing upstream fixed parsers.
 	{ USB_DEVICE_WACOM(0x00) },
 	{ USB_DEVICE_WACOM(0x03) },
+	// These wired Graphire models exercise the upstream wacom_graphire_irq path.
 	{ USB_DEVICE_WACOM(0x10) },
 	{ USB_DEVICE_WACOM(0x11) },
 	{ USB_DEVICE_WACOM(0x12) },
@@ -4998,23 +4999,22 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x16) },
 	{ USB_DEVICE_WACOM(0x17) },
 	{ USB_DEVICE_WACOM(0x18) },
+	// The wired Bamboo1 Medium uses the same upstream Graphire parser.
 	{ USB_DEVICE_WACOM(0x19) },
+	// These wired Intuos models exercise the upstream legacy Intuos parser.
 	{ USB_DEVICE_WACOM(0x20) },
 	{ USB_DEVICE_WACOM(0x21) },
 	{ USB_DEVICE_WACOM(0x22) },
 	{ USB_DEVICE_WACOM(0x23) },
 	{ USB_DEVICE_WACOM(0x24) },
+	// The wired Intuos5 family exercises the already qualified Pen, Pad,
+	// Touch, battery, LED, and mode-switch paths.
 	{ USB_DEVICE_WACOM(0x26) },
-#endif
-	// The wired PTH-650 exercises upstream USB battery publication.
 	{ USB_DEVICE_WACOM(0x27) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x28) },
-#endif
-	// The wired PTK-450 exercises the upstream Pen, Pad, and Touch Ring path.
 	{ USB_DEVICE_WACOM(0x29) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0x2A) },
+	// These wired pen displays use the existing upstream PL parser.
 	{ USB_DEVICE_WACOM(0x30) },
 	{ USB_DEVICE_WACOM(0x31) },
 	{ USB_DEVICE_WACOM(0x32) },
@@ -5024,18 +5024,26 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x37) },
 	{ USB_DEVICE_WACOM(0x38) },
 	{ USB_DEVICE_WACOM(0x39) },
+	// The standalone Cintiq 21UX exercises its direct Pen and Pad path.
 	{ USB_DEVICE_WACOM(0x3F) },
+	// These wired Intuos2 models reuse the legacy Intuos parser.
 	{ USB_DEVICE_WACOM(0x41) },
 	{ USB_DEVICE_WACOM(0x42) },
 	{ USB_DEVICE_WACOM(0x43) },
 	{ USB_DEVICE_WACOM(0x44) },
 	{ USB_DEVICE_WACOM(0x45) },
 	{ USB_DEVICE_WACOM(0x47) },
+	// The standalone DTK-2241 exercises its direct Pen and Pad path.
 	{ USB_DEVICE_WACOM(0x57) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0x59) },
 	{ USB_DEVICE_WACOM(0x5B) },
 	{ USB_DEVICE_WACOM(0x5D) },
 	{ USB_DEVICE_WACOM(0x5E) },
+#endif
+	// These wired Volito, PenPartner, and Bamboo1 models exercise the same
+	// upstream Graphire parser.
 	{ USB_DEVICE_WACOM(0x60) },
 	{ USB_DEVICE_WACOM(0x61) },
 	{ USB_DEVICE_WACOM(0x62) },
@@ -5045,17 +5053,24 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x69) },
 	{ USB_DEVICE_WACOM(0x6A) },
 	{ USB_DEVICE_WACOM(0x6B) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// Bluetooth remains outside the wired-only firmware scope.
 	{ BT_DEVICE_WACOM(0x81) },
 #endif
 	// The USB wireless receiver retains the upstream three-interface path.
 	{ USB_DEVICE_WACOM(0x84) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These wired ISDv4 profiles use the upstream Tablet PC parsers.
 	{ USB_DEVICE_WACOM(0x90) },
 	{ USB_DEVICE_WACOM(0x93) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// Firmware has no consumer for the Wacom bootloader's hidraw-only path.
 	{ USB_DEVICE_WACOM(0x94) },
+#endif
 	{ USB_DEVICE_WACOM(0x97) },
 	{ USB_DEVICE_WACOM(0x9A) },
 	{ USB_DEVICE_WACOM(0x9F) },
+	// These wired Intuos3 and USB Intuos4 models exercise the upstream
+	// generation-specific Pen, Pad, mouse, ring, strip, and LED paths.
 	{ USB_DEVICE_WACOM(0xB0) },
 	{ USB_DEVICE_WACOM(0xB1) },
 	{ USB_DEVICE_WACOM(0xB2) },
@@ -5068,32 +5083,42 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0xBA) },
 	{ USB_DEVICE_WACOM(0xBB) },
 	{ USB_DEVICE_WACOM(0xBC) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// Bluetooth remains outside the wired-only firmware scope.
 	{ BT_DEVICE_WACOM(0xBD) },
+#endif
+	// These wired pen displays also use the existing upstream PL parser.
 	{ USB_DEVICE_WACOM(0xC0) },
 	{ USB_DEVICE_WACOM(0xC2) },
 	{ USB_DEVICE_WACOM(0xC4) },
+	// These standalone Cintiqs exercise the WACOM_BEE Pen and Pad path.
 	{ USB_DEVICE_WACOM(0xC5) },
 	{ USB_DEVICE_WACOM(0xC6) },
 	{ USB_DEVICE_WACOM(0xC7) },
+	// The standalone Cintiq 21UX2 exercises its wide Pad and LED path.
 	{ USB_DEVICE_WACOM(0xCC) },
+	// These wired direct-input profiles use existing upstream parsers.
 	{ USB_DEVICE_WACOM(0xCE) },
 	{ USB_DEVICE_WACOM(0xD0) },
+	// These wired Bamboo 2FG models share the upstream Pen, Touch, and Pad path.
 	{ USB_DEVICE_WACOM(0xD1) },
 	{ USB_DEVICE_WACOM(0xD2) },
 	{ USB_DEVICE_WACOM(0xD3) },
+	// These wired Bamboo Pen models reuse the qualified BAMBOO_PEN path.
 	{ USB_DEVICE_WACOM(0xD4) },
 	{ USB_DEVICE_WACOM(0xD5) },
+	// These wired Bamboo 2FG models share the upstream Pen, Touch, and Pad path.
 	{ USB_DEVICE_WACOM(0xD6) },
 	{ USB_DEVICE_WACOM(0xD7) },
 	{ USB_DEVICE_WACOM(0xD8) },
 	{ USB_DEVICE_WACOM(0xDA) },
 	{ USB_DEVICE_WACOM(0xDB) },
+	// The wired Bamboo Connect reuses the qualified Pen and Pad paths.
 	{ USB_DEVICE_WACOM(0xDD) },
-#endif
-	// The wired CTH-470 exercises the upstream paired Pen/Touch/Pad path.
+	// These wired Bamboo 16FG models share the qualified Pen/Touch/Pad path.
 	{ USB_DEVICE_WACOM(0xDE) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
 	{ USB_DEVICE_WACOM(0xDF) },
+	// These wired ISDv4 and DTU profiles use existing upstream parsers.
 	{ USB_DEVICE_WACOM(0xE2) },
 	{ USB_DEVICE_WACOM(0xE3) },
 	{ USB_DEVICE_WACOM(0xE5) },
@@ -5102,10 +5127,16 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0xED) },
 	{ USB_DEVICE_WACOM(0xEF) },
 	{ USB_DEVICE_WACOM(0xF0) },
+	// The standalone Cintiq 24HD exercises its dual-ring Pad and LED path.
 	{ USB_DEVICE_WACOM(0xF4) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0xF6) },
 	{ USB_DEVICE_WACOM(0xF8) },
+#endif
+	// The standalone Cintiq 22HD exercises its wide Pad and softkey path.
 	{ USB_DEVICE_WACOM(0xFA) },
+	// These wired DTU and ISDv4 profiles use existing upstream parsers.
 	{ USB_DEVICE_WACOM(0xFB) },
 	{ USB_DEVICE_WACOM(0x100) },
 	{ USB_DEVICE_WACOM(0x101) },
@@ -5114,9 +5145,9 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x10F) },
 	{ USB_DEVICE_WACOM(0x116) },
 	{ USB_DEVICE_WACOM(0x12C) },
+	// The wired Bamboo One Small and Medium reuse the BAMBOO_PEN path.
 	{ USB_DEVICE_WACOM(0x300) },
 	{ USB_DEVICE_WACOM(0x301) },
-#endif
 	// These external wired Intuos models use the already active upstream
 	// INTUOSHT, INTUOSHT2, and first-generation Intuos Pro paths.
 	{ USB_DEVICE_WACOM(0x302) },
@@ -5124,6 +5155,7 @@ const struct hid_device_id wacom_ids[] = {
 	// The wired Cintiq 13HD reuses the active Pen/Pad path.
 	{ USB_DEVICE_WACOM(0x304) },
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0x307) },
 	{ USB_DEVICE_WACOM(0x309) },
 	{ USB_DEVICE_WACOM(0x30A) },
@@ -5133,32 +5165,41 @@ const struct hid_device_id wacom_ids[] = {
 	{ USB_DEVICE_WACOM(0x314) },
 	{ USB_DEVICE_WACOM(0x315) },
 	{ USB_DEVICE_WACOM(0x317) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These Bamboo Pad profiles use two HID interfaces of one USB device.
 	{ USB_DEVICE_WACOM(0x318) },
 	{ USB_DEVICE_WACOM(0x319) },
-#endif
 	{ USB_DEVICE_WACOM(0x323) },
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0x325) },
 	{ USB_DEVICE_WACOM(0x326) },
+#endif
+	// The standalone wired 27QHD uses the upstream Cintiq parser.
 	{ USB_DEVICE_WACOM(0x32A) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0x32B) },
 	{ USB_DEVICE_WACOM(0x32C) },
-	{ USB_DEVICE_WACOM(0x32F) },
 #endif
+	// The wired DTU1031X uses the existing upstream DTUSX parser.
+	{ USB_DEVICE_WACOM(0x32F) },
 	// The USB ExpressKey Remote receiver uses the upstream dynamic Remote path.
 	{ USB_DEVICE_WACOM(0x331) },
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// These touch-display siblings require cross-PID lifecycle coverage.
 	{ USB_DEVICE_WACOM(0x333) },
 	{ USB_DEVICE_WACOM(0x335) },
-	{ USB_DEVICE_WACOM(0x336) },
 #endif
+	// The wired DTU1141 uses the existing upstream DTUS parser.
+	{ USB_DEVICE_WACOM(0x336) },
 	{ USB_DEVICE_WACOM(0x33B) },
 	{ USB_DEVICE_WACOM(0x33C) },
 	{ USB_DEVICE_WACOM(0x33D) },
 	{ USB_DEVICE_WACOM(0x33E) },
-#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// The wired DTK1651 uses the existing upstream DTUS parser.
 	{ USB_DEVICE_WACOM(0x343) },
+#if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+	// Bluetooth remains outside the wired-only firmware scope.
 	{ BT_DEVICE_WACOM(0x360) },
 	{ BT_DEVICE_WACOM(0x361) },
 	{ BT_DEVICE_WACOM(0x377) },
@@ -5172,12 +5213,14 @@ const struct hid_device_id wacom_ids[] = {
 	{ BT_DEVICE_WACOM(0x3c6) },
 	{ BT_DEVICE_WACOM(0x3c8) },
 	{ BT_DEVICE_WACOM(0x3dd) },
+#endif
+	// These wired ISDv4 profiles use the upstream multitouch parser.
 	{ USB_DEVICE_WACOM(0x4001) },
 	{ USB_DEVICE_WACOM(0x4004) },
 	{ USB_DEVICE_WACOM(0x5000) },
 	{ USB_DEVICE_WACOM(0x5002) },
+	// The wired Lenovo ISD-V4 uses the upstream TABLETPC parser.
 	{ USB_DEVICE_LENOVO(0x6004) },
-#endif
 
 	/* Firmware enables only the upstream wired USB descriptor wildcard. */
 	{ USB_DEVICE_WACOM(HID_ANY_ID) },

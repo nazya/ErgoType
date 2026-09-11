@@ -435,11 +435,24 @@ numeric X/Y values remain outside the production-log verdict.
 
 The current production candidate links the complete pinned `wacom_sys.c` and
 `wacom_wac.c` sources plus the scoped newer-upstream FIFO and post-start
-cleanup fixes. Nineteen qualified fixed USB rows remain active in
-`wacom_ids[]`: `0027/0029/0084/00de/0302/0303/0304/030e/0314/0315/0317`
-and `0323/0331/033b/033c/033d/033e/037a/037b`.
+cleanup fixes. A total of 134 fixed USB rows are active in `wacom_ids[]`: 133
+Wacom rows plus wired Lenovo `17ef:6004`. Nineteen retain their existing
+exact-image verdicts. The distinct executable paths exposed by the other 115
+rows ran in the 33-profile representative family matrix on 2026-09-11;
+same-path PID aliases are source-compared rather than redundantly attached.
+Those rows are:
+`0026/0028/002a/00d4/00d5/00dd/00df/0300/0301`, the
+14 Graphire-family rows `0010/0011/0012/0013/0014/0019/0060/0061/0062/0063/`
+`0064/0069/006a/006b`, and the eight Bamboo 2FG rows
+`00d1/00d2/00d3/00d6/00d7/00d8/00da/00db`, plus 30 standalone legacy
+Intuos/Cintiq rows: 11 Intuos/Intuos2, seven Intuos3, five wired Intuos4, and
+seven Cintiq/DTK profiles, plus 53 legacy, TabletPC, Bamboo Pad, DTUS, and
+multi-touch Wacom rows and the Lenovo TABLETPC row newly included in the same
+single-Pico fixture.
 
-The other 131 pinned fixed USB PIDs are the canonical unfinished-profile list.
+The other 17 pinned Wacom USB PIDs are the canonical unfinished-profile list:
+16 rows form eight cross-PID sibling pairs which one emulator Pico cannot
+present concurrently, and `0094` is the hidraw-only bootloader profile.
 They stay in their original upstream positions in `wacom_ids[]`, behind
 `CONFIG_HID_WACOM_ALL_DEVICES`, and the same explicit PID list appears once in
 the corresponding firmware-boundary block in `hid_quirks[]`. Each entry uses
@@ -453,7 +466,7 @@ port-specific.
 
 Enabling `CONFIG_HID_WACOM_ALL_DEVICES` restores the upstream fixed Wacom rows
 and compiles out the unfinished-profile quirk block. It also enables the
-compile-gated non-USB and Lenovo rows, so it is a development-wide upstream
+compile-gated non-USB rows, so it is a development-wide upstream
 switch, not a supported USB-only completeness knob.
 
 Every future pinned-table update must recompare the two PID sets and check for
@@ -462,14 +475,14 @@ an earlier Wacom quirk entry, because `hid_quirks[]` uses first-match order.
 One final wired USB `056a:*` wildcard handles only a PID absent from the
 unfinished-profile list. Receiver children use exact lookup among the active
 fixed rows and can select neither a compile-gated profile nor the wildcard.
-Bluetooth, I2C, PCI, Lenovo, and the broad all-devices policy remain disabled
+Bluetooth, I2C, PCI, and the broad all-devices policy remain disabled
 in the production configuration.
 
 After the wildcard descriptor is parsed, any retained INPUT usage equivalent
 to `WACOM_HID_WD_MODE_CHANGE` is rejected before the device can bind. Only
 that paired Pen/Touch mode-change runtime is deferred for lack of the required
 two-Pico setup on a common working USB 2.0 hub; the unfinished-profile list
-does not claim that all 131 fixed profiles need mode change. The preserved
+does not claim that all 17 fixed profiles need mode change. The preserved
 implementation is on `wip/wacom-wildcard-mode-change` and is not part of the
 production boundary.
 
@@ -481,8 +494,17 @@ publication, two GET 8 completions, ordered input, and balanced teardown. The
 test-only coordinator and verdict markers were removed before rebuilding
 production. The run remains hardware evidence for the unchanged production
 logic it exercised; only the exact cleaned production UF2 was not separately
-flashed. This matrix does not qualify the independent descriptor-signature
-path for `056a:03ce`.
+flashed. A separate 2026-09-10 temporary-64 matrix qualified the independent
+descriptor-signature path for `056a:03ce`: one lifetime canceled before any
+delayed mode request and one completed the delayed Feature SET/GET. It also
+qualified 18 receiver rebind generations across six child profiles. It
+does not qualify production 675 or full Linux value retention; exact artifacts
+are recorded in `hid-emulator-coverage.md`.
+The 2026-09-11 representative matrix later exercised the normal-stack
+rejection and the newly reachable fixed and descriptor-signature paths at a
+temporary 32-usage limit. Its incomplete `p`/`m` marker capture and exact
+artifacts are recorded in `hid-emulator-coverage.md`; production 675 remains
+outside that verdict.
 
 The following list describes the preceding hardware-tested exact-ID stages:
 
@@ -555,7 +577,10 @@ and remains valid across that cycle because Wacom reuses the same report and
 field topology. `hid_report_process_ordering()` returns when `field_entries`
 already exists, and `hid_free_report()` releases it with the report. A real
 allocation failure leaves the pointer `NULL`, preserving Linux's nonfatal
-descriptor-order fallback and allowing a later connect to retry.
+descriptor-order fallback and allowing a later connect to retry. The
+2026-09-10 temporary-64 fixture exercised this guard through 18 logical
+stop/start generations with balanced input lifetimes and no cumulative heap
+retention.
 
 If initial receiver-monitor probe queued `init_work` and a later
 `hid_hw_open()` fails, the common failure path synchronously cancels that
@@ -631,8 +656,9 @@ Those historical images excluded Wacom product IDs outside their exact table.
 The current candidate instead uses the explicit unfinished-profile quirk list
 and final USB wildcard described above. Bluetooth, bootloader, I2C, PCI, Linux
 LED/sysfs presentation, and Remote mode/unpair sysfs remain excluded. Current
-receiver lookup accepts only a qualified fixed child PID; only child
-`056a:0027` has a receiver-path hardware verdict.
+receiver lookup accepts only an active exact fixed child PID. The historical
+receiver verdict covered only `056a:0027`; the 2026-09-10 matrix later covered
+`0027/0029/033b/033c/0302/030e`. Other child PIDs remain unqualified.
 
 The focused Intuos matrix verifies mode and Pen/Pad smoke for all eleven
 selected PIDs, Pro LED initialization for `0314/0315/0317`, and Finger smoke
@@ -644,8 +670,8 @@ retirement for the non-waiting `INTUOSHT2` Feature GET 8 described above.
 Representative `0302/0314/033b` battery IN completions are device-side only;
 host work enqueue and detached values remain unobserved. This matrix does not
 add pending/running-work cancellation, same-PID reconnect, Touch Ring
-semantics, explicit arbitration, or receiver-child `033b` coverage to the
-older `0084 -> 0027` receiver verdict.
+semantics or explicit arbitration to the older matrix. Receiver-child `033b`
+was covered separately by the 2026-09-10 matrix.
 
 Exact USB ExpressKey Remote `056a:0331` is active through the pinned dynamic
 five-child runtime. Firmware replaces the report/worker spinlock regions with

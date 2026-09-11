@@ -14,15 +14,19 @@ allocation numbers are maintained only in
 
 ## Current Status
 
-The current Wacom candidate keeps 19 qualified fixed USB rows active. The 131
-other pinned fixed USB PIDs remain compile-gated and are explicitly listed in
+The current Wacom candidate keeps 134 fixed USB rows active: 133 Wacom rows
+plus wired Lenovo `17ef:6004`. Nineteen retain prior hardware verdicts; 115
+family-protocol rows expose 33 distinct paths exercised by the representative
+single-Pico matrix on 2026-09-11; same-path aliases remain source-audited.
+The other 17 pinned Wacom USB PIDs remain
+compile-gated and are explicitly listed in
 `hid_quirks[]` with upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`, so unchanged
 `hid-generic` handles them. One final wired USB wildcard handles only a PID
 absent from that unfinished list; receiver children require an exact active
 fixed row and can select neither a compile-gated profile nor the wildcard.
 The broad configuration restores the upstream fixed rows and disables the
 unfinished-profile quirk block. It also enables the compile-gated Bluetooth,
-I2C, PCI, and Lenovo rows, so it is not a USB-only production option. A
+I2C, and PCI rows, so it is not a USB-only production option. A
 wildcard device whose parsed descriptor retains an INPUT usage equivalent to
 `WACOM_HID_WD_MODE_CHANGE` is rejected before bind.
 
@@ -33,12 +37,37 @@ single-Pico matching matrix on hardware on 2026-09-07, including generic
 fallback for unfinished `0333`, receiver gating and publication, two GET 8
 completions, and captured `0350` rejection at phase 6 before terminal phase 7.
 Its exact artifacts are recorded in `hid-emulator-coverage.md`.
+The normal-stack rejection path was later exercised by the 2026-09-11
+representative matrix. Production retains only the ordinary `HID_IGNORED`
+probe result, not a Wacom-specific diagnostic.
 
 Test-only host gates and markers were then removed and production rebuilt;
 the run remains hardware evidence for the unchanged production logic it
 exercised. Only the exact cleaned production UF2 was not separately flashed.
-The independent captured-signature memory quirk for `056a:03ce` remains active
-and was not exercised by this matrix.
+The independent captured-signature memory quirk for `056a:03ce` remains
+active. A separate 2026-09-10 single-Pico matrix exercised it at temporary
+`HID_MAX_USAGES=64`: cancellation before any delayed mode request, followed by
+a completed delayed Feature SET/GET. The same run completed 18 logical
+receiver stop/start generations across six
+child profiles, exercising the report-lifetime field-ordering guard without
+cumulative heap retention. This does not qualify the production 675-entry
+image or full Linux retention; exact artifacts are in
+`hid-emulator-coverage.md`.
+The 2026-09-11 representative matrix used captured
+`03cb/03a6/03f5/03f7/03f0/03c0` profiles to exercise every distinct
+descriptor-qualified compaction length/signature branch and their
+control/input paths; `03ce` remained as a regression. Same-body
+`03ed/03ec/03f9/03c4/03d0` aliases remain source-compared instead of
+redundantly attached. Its temporary `HID_MAX_USAGES=32` host ran those 10
+standalone profiles after 33 representatives for the distinct fixed parser
+paths, then one unfinished-profile generic fallback and the normal-stack
+`0350` rejection. The missing generic `p` and terminal `m` markers make the
+fixture protocol formally incomplete, but the observed host behavior was
+accepted; exact evidence and limitations are in `hid-emulator-coverage.md`.
+Already qualified Remote, receiver, IntuosHT2, `0374`, and Yoga suites were
+not repeated. The six simultaneous Pen/Touch composites are outside the
+RP2040 heap budget and remain deferred. This run does not qualify production
+675.
 
 The following paths have produced input events on hardware:
 
@@ -216,9 +245,10 @@ and the AES fixture does not wait for the real 30-minute expiry. The receiver
 fixture deterministically covers initial sibling work while pending but cannot
 externally hold the short pre-PID callback after workqueue promotion or during
 execution. In the earlier exact-ID images, receiver lookup selected a child PID
-from the then-active exact-ID table; hardware receiver coverage is limited to
-`056a:0027`. The current candidate's receiver lookup instead requires one of its
-19 qualified fixed rows. Bluetooth, bootloader, I2C, and PCI remain excluded.
+from the then-active exact-ID table; receiver coverage for those images was
+limited to `056a:0027`. The current candidate's receiver lookup instead requires
+one of its 133 active Wacom fixed rows. Bluetooth, bootloader, I2C, and PCI remain
+excluded.
 
 A focused receiver lifecycle pair passed on 2026-08-03. Its first phase used a
 temporary compile-gated host hook to fail only the `033c` Touch child after
@@ -742,7 +772,7 @@ Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
 Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
 the USB-only Magic Mouse 2 / Trackpad 2 driver.
 The linked complete Logitech HID++/DJ and UC-Logic sources retain their narrow
-USB ID gates. Wacom instead uses the 19 qualified fixed profiles, explicit
+USB ID gates. Wacom instead uses the 134 active fixed profiles, explicit
 unfinished-profile quirks, and final wired wildcard described in Current
 Status above.
 Microsoft is likewise narrow: 14 wired non-gaming USB IDs are selected, while

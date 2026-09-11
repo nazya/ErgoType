@@ -3163,25 +3163,78 @@ static int wacom_probe(struct hid_device *hdev,
 		/*
 		 * Upstream Linux materializes repeated VARIABLE Feature usages. The
 		 * firmware keeps full wire sizes, but the scoped Wacom paths do not
-		 * consume the repeated mapping/value tails. Match the captured 0x03ce
-		 * descriptor through its final byte rather than assuming a USB
-		 * interface number.
+		 * consume the repeated mapping/value tails. Match captured fixed-size
+		 * descriptor signatures rather than assuming USB interface numbers.
 		 */
-		static const u8 wacom_one_12_feature_signature[] = {
+		static const u8 wacom_pen_feature_signature_2560[] = {
 			0x85, 0xd9, 0x09, 0x01, 0x96, 0x00, 0x0a, 0xb1, 0x02,
 			0x85, 0xda, 0x09, 0x01, 0x96, 0x04, 0x04, 0xb1, 0x02,
 		};
+		static const u8 wacom_pen_feature_signature_1280[] = {
+			0x85, 0xd9, 0x09, 0x01, 0x96, 0x00, 0x05, 0xb1, 0x02,
+			0x85, 0xda, 0x09, 0x01, 0x96, 0x04, 0x02, 0xb1, 0x02,
+		};
+		static const u8 wacom_touch_feature_signature_256[] = {
+			0x85, 0x07, 0x09, 0x00, 0x15, 0x00, 0x26, 0xff, 0x00,
+			0x75, 0x08, 0x96, 0x00, 0x01, 0xb1, 0x02,
+			0x85, 0x08, 0x09, 0x00, 0x15, 0x00, 0x26, 0xff, 0x00,
+			0x75, 0x08, 0x96, 0x87, 0x00, 0xb1, 0x02,
+			0x85, 0x09, 0x09, 0x00, 0x96, 0x3f, 0x00, 0xb1, 0x02,
+		};
+		static const u8 wacom_touch_feature_signature_1037[] = {
+			0x85, 0x07, 0x09, 0x00, 0x15, 0x00, 0x26, 0xff, 0x00,
+			0x75, 0x08, 0x96, 0x0d, 0x04, 0xb1, 0x02,
+			0x85, 0x08, 0x09, 0x00, 0x15, 0x00, 0x26, 0xff, 0x00,
+			0x75, 0x08, 0x96, 0x0d, 0x04, 0xb1, 0x02,
+			0x85, 0x09, 0x09, 0x00, 0x96, 0x01, 0x04, 0xb1, 0x02,
+		};
 
-		if (hdev->vendor == USB_VENDOR_ID_WACOM &&
-		    (hdev->product == 0x0084 || hdev->product == 0x0314 ||
-		     hdev->product == 0x0315 || hdev->product == 0x0317 ||
-		     hdev->product == 0x0374 || hdev->product == 0x5048 ||
-		     (hdev->product == 0x03ce && hdev->dev_rsize == 1435 &&
-		      hdev->dev_rdesc[1434] == 0xc0 &&
-		      !memcmp(hdev->dev_rdesc + 1317,
-			      wacom_one_12_feature_signature,
-			      sizeof(wacom_one_12_feature_signature)))))
-			hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		if (hdev->vendor == USB_VENDOR_ID_WACOM) {
+			if (hdev->product == 0x0084 || hdev->product == 0x0314 ||
+			    hdev->product == 0x0315 || hdev->product == 0x0317 ||
+			    hdev->product == 0x0374 || hdev->product == 0x5048)
+				hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+
+			if (((((hdev->product == 0x03ce || hdev->product == 0x03ed) &&
+			       hdev->dev_rsize == 1435) ||
+			      ((hdev->product == 0x03cb || hdev->product == 0x03ec) &&
+			       hdev->dev_rsize == 1500) ||
+			      ((hdev->product == 0x03c0 || hdev->product == 0x03c4 ||
+			        hdev->product == 0x03d0) && hdev->dev_rsize == 1184)) &&
+			     hdev->dev_rdesc[hdev->dev_rsize - 1] == 0xc0 &&
+			     !memcmp(hdev->dev_rdesc + hdev->dev_rsize - 118,
+				     wacom_pen_feature_signature_2560,
+				     sizeof(wacom_pen_feature_signature_2560))))
+				hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+
+			if ((((hdev->product == 0x03a6 && hdev->dev_rsize == 875) ||
+			      (hdev->product == 0x03f5 && hdev->dev_rsize == 1292) ||
+			      ((hdev->product == 0x03f7 || hdev->product == 0x03f9) &&
+			       hdev->dev_rsize == 1324) ||
+			      (hdev->product == 0x03f0 && hdev->dev_rsize == 1233)) &&
+			     hdev->dev_rdesc[hdev->dev_rsize - 1] == 0xc0 &&
+			     !memcmp(hdev->dev_rdesc + hdev->dev_rsize - 118,
+				     wacom_pen_feature_signature_1280,
+				     sizeof(wacom_pen_feature_signature_1280))))
+				hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+
+			if (((((hdev->product == 0x03cb || hdev->product == 0x03ec ||
+			        hdev->product == 0x03c4) && hdev->dev_rsize == 1779) ||
+			      (hdev->product == 0x03f0 && hdev->dev_rsize == 1735)) &&
+			     hdev->dev_rdesc[hdev->dev_rsize - 1] == 0xc0 &&
+			     !memcmp(hdev->dev_rdesc + hdev->dev_rsize - 70,
+				     wacom_touch_feature_signature_256,
+				     sizeof(wacom_touch_feature_signature_256))))
+				hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+
+			if ((hdev->product == 0x03c0 || hdev->product == 0x03d0) &&
+			    hdev->dev_rsize == 1779 &&
+			    hdev->dev_rdesc[hdev->dev_rsize - 1] == 0xc0 &&
+			    !memcmp(hdev->dev_rdesc + hdev->dev_rsize - 70,
+				    wacom_touch_feature_signature_1037,
+				    sizeof(wacom_touch_feature_signature_1037)))
+				hdev->quirks |= HID_QUIRK_EXPLICIT_FEATURE_USAGES;
+		}
 	}
 
 	/* ask for the report descriptor to be loaded by HID */
@@ -3192,8 +3245,9 @@ static int wacom_probe(struct hid_device *hdev,
 	}
 
 	/*
-	 * Upstream Linux initializes mode_change_work above. Firmware defers that
-	 * two-sibling lifecycle, so reject its retained INPUT usage before reports
+	 * Upstream Linux: no equivalent pre-bind rejection; its initialized
+	 * mode_change_work handles this usage after bind. Firmware defers that
+	 * two-sibling lifecycle, so reject the retained INPUT usage before reports
 	 * can schedule the uninitialized work.
 	 */
 	if (id->product == HID_ANY_ID) {
@@ -3219,11 +3273,8 @@ static int wacom_probe(struct hid_device *hdev,
 				break;
 		}
 
-		if (has_mode_change) {
-			dbg("WACOM_MODE_CHANGE_UNSUPPORTED %04x:%04x",
-			    hdev->vendor, hdev->product);
+		if (has_mode_change)
 			return -ENODEV;
-		}
 	}
 
 	if (features->type == BOOTLOADER) {

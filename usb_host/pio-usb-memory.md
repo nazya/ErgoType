@@ -13,27 +13,34 @@ static `.data` or `.bss` reduces the maximum possible `configTOTAL_HEAP_SIZE`.
 Task stack tuning can improve free heap at runtime, but it does not fix a link
 failure caused by static RAM layout.
 
-## Current Link Picture
+## Current Production Link Baseline
 
-The current production candidate uses an explicit Wacom unfinished-profile
-list with upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` and idempotent
-report-lifetime field ordering. It measures:
+The production-mode rebuild after the representative matrix uses the default
+`HID_MAX_USAGES=675`. It includes 134 active fixed USB rows, the explicit
+upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` boundary, the wired wildcard,
+modern descriptor-signature compaction, and idempotent report-lifetime field
+ordering. It measured:
 
 ```text
-text/data/bss                 611576 / 788 / 245412 B
+text/data/bss                 628104 / 788 / 245412 B
 __bss_end__                   0x2003feec
 main-bank headroom            276 B to 0x20040000
 HID_MAX_FIELDS/USAGES         64 / 675
-UF2 SHA-256                   edb4151b55f5885ab5973ea521aa9b699289bb35f42a561ecdb1b15ef27b58d8
-hardware coverage             pre-guard Wacom matrix passed 2026-09-07;
-                              ordering guard not run on firmware hardware
+UF2 SHA-256                   a81fceea27f59026f64f103799ad3a2e8af1fa537769761a336c4d09277642e7
+hardware coverage             representative logic exercised at temporary
+                              HID_MAX_USAGES=32 on 2026-09-11;
+                              ordering guard passed 18 rebinds at temporary
+                              HID_MAX_USAGES=64 on 2026-09-10;
+                              this production UF2 was not flashed
 ```
 
-Compared with the preceding post-test production rebuild below, this is 96
-bytes less text with unchanged data, BSS, and main-bank headroom. Compilation
-and size alone are not runtime evidence. The matrix remains runtime evidence
-for the unchanged production logic it exercised, not for the later ordering
-guard.
+Compilation and size alone are not runtime evidence. The temporary matrices
+exercised the recorded logic, but this production image itself was not
+flashed.
+The wildcard `0350` rejection was later exercised on the normal 512-word
+lifecycle stack by the 2026-09-11 representative matrix. No formatted or
+Wacom-specific diagnostic is retained; the ordinary probe path reports
+`HID_IGNORED`.
 
 The archived `wip/wacom-wildcard-mode-change` test image measured:
 
@@ -46,9 +53,12 @@ UF2 SHA-256                   2536504fe2a7fdb4fa08ffd27f9ed513a831c0a0cee6033dfb
 hardware verdict              none claimed; WIP test image only
 ```
 
-The pinned source retains 150 fixed Wacom rows, but the production
-`wacom_ids[]` activates only 19 qualified rows plus the final USB wildcard.
-The 131 other fixed PIDs are immutable entries in the explicit unfinished
+The pinned source retains 150 fixed Wacom rows and one Lenovo row. The current
+candidate activates 133 Wacom rows, Lenovo `17ef:6004`, and the final Wacom USB
+wildcard. Nineteen rows retain prior hardware verdicts; the 115
+family-protocol rows expose 33 distinct paths exercised by the 2026-09-11
+representative single-Pico matrix; same-path aliases remain source-audited.
+The 17 other Wacom PIDs are immutable entries in the explicit unfinished
 `hid_quirks[]` block, using upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` rather
 than extra matching logic; the broad configuration restores their upstream
 Wacom rows and removes that block.
@@ -56,13 +66,17 @@ Wacom rows and removes that block.
 Runtime report-field allocation still follows the Linux model and has one
 retained-value capacity knob, `HID_MAX_USAGES`; no sparse replacement table or
 second limit was added. Exact explicit-Feature-usage compaction remains a
-descriptor-proven exception, including the captured `056a:03ce` signature.
+descriptor-proven exception for `03ce` and the captured modern signatures
+listed in `upstream-porting-audit.md`. The distinct signatures ran at the
+temporary 32-usage limit on 2026-09-11; `03ce` also retains its earlier
+temporary-64 verdict.
 The archived WIP numbers retain the memory cost of the deferred shared Pen/Touch
 mode-change runtime; they are not current production-image accounting.
 Production instead rejects a wildcard descriptor retaining INPUT
 `WACOM_HID_WD_MODE_CHANGE` before bind. That specific runtime awaits a
 two-Pico setup on a common working USB hub; it is not a property attributed to
-all 131 unfinished fixed profiles.
+all 17 unfinished fixed profiles. Sixteen require cross-PID siblings, while
+`0094` is a hidraw-only bootloader profile.
 
 The current quirk-list candidate passed the complete single-Pico matching
 matrix on hardware on 2026-09-07:
@@ -81,6 +95,49 @@ receiver gating/publication, two non-waiting GET 8 completions, ordered input,
 balanced teardown, and captured `0350` rejection. It did not exercise the
 independent descriptor-qualified `056a:03ce` memory-quirk branch. It also
 predates the report-lifetime field-ordering guard.
+
+The combined Wacom One 12 and receiver-rebind fixture passed on hardware on
+2026-09-10 with the deliberately smaller usage limit:
+
+```text
+HID_MAX_FIELDS/USAGES         64 / 64
+host test UF2 SHA-256         9cc0b2967e645ccd1d514c2820940d4cb41bdd571c82bd3d31347bf3118c723b
+emulator UF2 SHA-256          b36c7d920d70d6413474b66405da8944d1b5f0f73764138ef086cbf6dd177fec
+host log SHA-256              4eea4de0c4e05b40c632706e623952bef5175312d8edd980318d387fd200af1c
+heap minimum-ever             352 B, oom=0 in all 115 snapshots
+smallest largest free block   112 B
+maximum free-block count      16
+```
+
+Both `03ce` probes had 384 bytes free with a 112-byte largest block. All nine
+alert-live snapshots were exactly 54,432 bytes free, and all eight completed
+alert-removal snapshots were exactly 60,712 bytes. The second and third
+logical-unpair plateaus matched for every receiver profile; the only warm-up
+change was 16 bytes for `033b` and `030e`. All task watermarks remained
+nonzero. This is hardware evidence that no cumulative ordering allocation was
+retained across the 18 exercised stop/start generations. It is also a
+deliberately near-exhaustion result, not evidence that captured
+`03ce` fits the production 675-entry policy.
+
+The representative matrix ran on hardware on 2026-09-11 with test-only
+`HID_MAX_USAGES=32`. It exercised 33 distinct fixed-parser paths, 10 standalone
+modern descriptor paths, one generic fallback, and one rejection instead of
+repeating same-path PID aliases. The host UF2 was
+`f5df2a6e5aca34d24e05f622cf7d6f4bbc21658831890a3f30919e364df9ffe4`;
+the hardware-run emulator UF2 was
+`2887ade1f9be687d9aa008f2e688c73214692d1f3a6f87d5939253000db7e595`.
+The captured tail reached fixed terminal `f11`, every modern marker through
+`l`, balanced generic `0333` add/remove, and normal-stack `0350` rejection and
+recovery. All 154 resource snapshots had `oom=0`; heap minimum was 6,128 bytes,
+the smallest largest block was 6,000 bytes, and every task watermark remained
+nonzero. The missing generic `p` and terminal `m` leave the marker protocol
+formally incomplete, although the observed host behavior was accepted.
+
+The six captured Pen+Touch composites were not in this RP2040 run: even with a
+near-minimal usage cap, their two simultaneous HID graphs plus device state
+exceed the available heap. The 32-entry limit was a test-fixture capacity
+choice, not a second parser limit or a production-policy change, and this run
+does not qualify production 675.
 
 The smaller single-Pico matching-matrix image passed on hardware on 2026-09-05:
 

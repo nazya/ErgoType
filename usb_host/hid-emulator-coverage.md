@@ -17,6 +17,116 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### Accepted 2026-09-11 representative Wacom hardware evidence
+
+The current single-Pico fixture targets distinct executable paths rather than
+iterating every PID. It runs 33 fixed-family representatives, 10 standalone
+modern descriptor representatives, one compile-gated generic fallback, and
+one exact nonfunctional `056a:0350` rejection. The temporary RP2040 host uses
+`HID_MAX_USAGES=32`; wire sizes and raw-report dispatch are unchanged, but the
+run cannot qualify mappings beyond that retained prefix or the production
+675-usage image.
+
+The fixed set covers the distinct Graphire, Bamboo 2FG/Connect/Touch/Pad,
+legacy Intuos, Intuos3/4 size boundaries, Cintiq/DTK generation-specific Pad
+and LED paths, PenPartner/PTU/PL/DTU/DTUS, and TabletPC coordinate/touch
+formats made reachable by the current table change. Two PL representatives
+cover both sides of the 8-bit pressure branch. The Lenovo `17ef:6004` row
+also checks the non-Wacom vendor match. Same-type PID aliases are checked by
+source comparison of the pinned ID/features tables rather than redundant
+runtime attachments; the protocol fixtures do not claim byte-exact retail
+compatibility for those aliases.
+
+After fixed markers `f1 ... f11`, the modern set runs `03ce`, `03cb`
+Pen/Touch, `03a6`, `03f5`, `03f7`, `03f0` Pen/Touch, and `03c0` Pen/Touch.
+Together these cover every distinct descriptor-length/signature arm of the
+explicit-Feature-usage quirk. The same-body `03ed/03ec/03f9/03c4/03d0`
+aliases remain source-audited. The modern success markers are
+`t,f12,1,3,8,9,a,b,d,e`, followed by alert `l`.
+
+A compact `056a:0333` profile then checks unchanged `hid-generic` fallback
+and emits `p`. The final exact `056a:0350` profile must not produce a Wacom
+device add; `HID_IGNORED` and recovery precede terminal `m`. Any `z`, host
+`ERR`, OOM, zero task watermark, unbalanced applicable input lifetime, or
+missing ordered marker fails the run. The complete fixed marker order and
+per-profile event expectations are in the emulator README.
+
+The fixture deliberately omits already qualified `0374`, Yoga 260 AES,
+IntuosHT2 non-waiting GET, Remote, and receiver-rebind suites. Emulator CDC is
+disabled and is not an oracle.
+
+The matrix ran on hardware on 2026-09-11 with host test UF2
+`f5df2a6e5aca34d24e05f622cf7d6f4bbc21658831890a3f30919e364df9ffe4`
+and emulator UF2
+`2887ade1f9be687d9aa008f2e688c73214692d1f3a6f87d5939253000db7e595`.
+The captured 2040-line host-log tail has SHA-256
+`3497596f28572773ee2c16a96c228d28f23b23b1bd7cde372ba58ff5e61b9de9`.
+The sequential fixture reached fixed-stage terminal `f11`, then every modern
+marker through `l`. It also showed balanced generic `056a:0333` add/remove,
+`HID_IGNORED` with no `056a:0350` device publication, and the recovery alert.
+All 154 resource snapshots had `oom=0`; heap minimum was 6,128 bytes and every
+task watermark remained nonzero. There was no host `ERR` or failure marker.
+The three `EVDEV_BATCH_CAP` warnings were the expected downstream result for
+the `03cb`, `03f0`, and `03c0` Finger interfaces.
+
+The generic-input marker `p` and final marker `m` were not captured. The
+hardware-run fixture disconnected `0333` immediately after USB completion, so
+the missing `p` is consistent with teardown preceding host report processing;
+the log tail ended immediately after the recovery alert was published. The
+fixed/modern parsing and input, generic selection, teardown, and rejection
+behavior is retained as host-code evidence, but the fixture's ordered-marker
+protocol is not recorded as a formally complete pass. A later emulator-only
+activation-delay build has UF2
+`bac6d9ccaccd309f4eb459d3dba119bca762a76f790d56ab47df9eba323a53e0`;
+it was compiled but not rerun. Neither the temporary 32-usage run nor that
+build-only image qualifies the production 675-usage UF2, and compilation is
+not runtime evidence.
+
+### Hardware-verified Wacom One 12 and receiver rebind matrix
+
+The combined single-Pico fixture passed on hardware on 2026-09-10 with
+temporary host limits `HID_MAX_FIELDS=64` and `HID_MAX_USAGES=64`. Exact
+artifacts were host test UF2
+`9cc0b2967e645ccd1d514c2820940d4cb41bdd571c82bd3d31347bf3118c723b`,
+emulator UF2
+`b36c7d920d70d6413474b66405da8944d1b5f0f73764138ef086cbf6dd177fec`,
+and 1052-line main-host log
+`4eea4de0c4e05b40c632706e623952bef5175312d8edd980318d387fd200af1c`.
+The marker order was `f1, f2, f3, f4, f5, f6, 1, 2, 3`, with no failure
+marker, host `ERR`, `HID_PROBE_NOMEM`, `HID_REPORT_SKIP`, OOM, or stall.
+Nine `EVDEV_BATCH_CAP` warnings, one per Finger generation, were the expected
+bounded downstream KeyD result.
+
+Two balanced `056a:03ce` lifetimes covered cancellation before any delayed
+mode request and the complete delayed Feature SET/GET path. A test-only
+check ran after descriptor parsing and before Wacom input registration. Each
+successful `03ce` add therefore proves that report `0xd9` kept its complete
+2,560-byte payload layout, one explicit usage, and the expected 64-value
+retained prefix; any failed predicate returned `-EINVAL` before the add. Its
+`WACOM_ONE12_D9_BOUNDS_OK` text was dropped because the immediately preceding
+`HID_FIELDS64_UPSTREAM256` message occupied the one-slot asynchronous logger.
+The successful gated adds, rather than that best-effort text, are the host
+oracle.
+
+Six physical `056a:0084` receiver attachments exercised three logical
+pair/unpair generations each: `0027`, `0029`, `033b`, `033c`, `0302`, and
+`030e`. All 18 generations published their expected fixture Pen/Pad/Finger
+topology, produced input, and removed every child. This repeatedly exercised the
+report-lifetime field-ordering guard across `hid_hw_stop()`/`hid_hw_start()`;
+second and third logical-unpair heap plateaus matched, and every following
+alert returned to 54,432 bytes free. All 115 heap snapshots had `oom=0`, the
+minimum-ever heap counter was 352 bytes, and minimum stack watermarks were
+TinyUSB 265, KeyD 658, async 389, work 207, timer 332, lifecycle 187, and
+report 850 words. Firmware `hid_info()` is a no-op, so balanced child
+`DEVICE:` lifetimes, not Linux receiver prose messages, are the oracle.
+
+This run proves the exercised firmware logic only at the temporary 64-usage
+limit. It does not prove full Linux retention or that the production
+`HID_MAX_USAGES=675` image fits the captured `03ce` graph. The test-only limit
+and D9 gate were removed afterward; production UF2
+`a807e31475ab94552dba4611dd0a78d96ed2d0b3d23a5d1b6a8c7a525c4c1c2d`
+was rebuilt but was not flashed.
+
 ### Hardware-verified Wacom wildcard matching matrix
 
 The recorded fixture is one Pico cycling the driver-selection profiles and one
@@ -61,8 +171,14 @@ was rebuilt with the ordinary lifecycle stack but was not separately flashed.
 The run remains hardware evidence for the unchanged production logic it
 exercised; only that exact cleaned binary lacks an independent flash run.
 The report-lifetime field-ordering guard added afterward is source-audited and
-runtime-validated on Linux 7.2.3, but these firmware artifacts used the former
-stop-time clear/rebuild implementation.
+runtime-validated on Linux 7.2.3. These particular artifacts used the former
+stop-time clear/rebuild implementation; the separate 2026-09-10 matrix above
+provides its firmware-hardware result.
+The `0350` rejection in this older matrix ran with a temporary 1024-word
+lifecycle stack. The 2026-09-11 representative matrix above exercised the
+normal 512-word stack; `HID_IGNORED`, absence of a Wacom device add, and
+recovery were observed directly in the host log. No Wacom-specific production
+diagnostic is retained.
 
 Phases 1--5 cover unknown `7ffe` through the final wildcard, qualified fixed
 `037a`, three-interface fixed `033b`, generic fallback for unfinished fixed PID
@@ -80,9 +196,8 @@ synchronization check, not a runtime pass.
 
 Phase 6 presents the captured `0350` descriptor through the wildcard. Because
 its parsed INPUT reports retain `WACOM_HID_WD_MODE_CHANGE`, production rejects
-it before bind and logs `WACOM_MODE_CHANGE_UNSUPPORTED`. With the test guard
-enabled, the host oracle additionally records exactly one
-`WACOM_TEST_MODE_REJECT`.
+it before bind. With the test guard enabled, the host oracle additionally
+records exactly one `WACOM_TEST_MODE_REJECT`.
 
 Phase 7 is terminal only. The host coordinator reads phases 1--7 from the exact
 `MATCHING-MATRIX-1` alert Feature report and echoes a phase only after its
@@ -92,7 +207,7 @@ verdict markers are host-only test instrumentation.
 The full Pen/Touch mode-change runtime is deferred on
 `wip/wacom-wildcard-mode-change` pending a two-Pico setup on a common working
 USB hub; it is not part of this matrix or production and is not a requirement
-shared by all 131 unfinished fixed profiles.
+shared by all 17 unfinished fixed profiles.
 
 ### Hardware-verified Microsoft wired-USB fixture
 
@@ -649,7 +764,7 @@ drivers are not counted here.
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
 | USB-only Magic Mouse / Trackpad parsing, MT mapping, and mode SET | `hid-magicmouse.c` | normal four-interface Trackpad 2 mode/native/reconnect path verified by the combined 2026-07-23 fixture; fault injection remains |
-| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, wildcard mode-change rejection, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; 19 qualified fixed USB rows are active, 131 compile-gated fixed PIDs use upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` for unchanged generic fallback, and one wired wildcard handles PIDs outside that unfinished list; receiver children require a qualified exact row; wildcard parsed INPUT `WACOM_HID_WD_MODE_CHANGE` is rejected before bind | Historical CTL-472, wired, AES/receiver, Intuos, Cintiq 13HD, Remote, and focused GET-completion artifacts keep only their exact-image verdicts. The 2026-09-07 single-Pico matrix passed the current qualified-fixed/unfinished-fixed-generic/wildcard outcomes, receiver classification and publication, GET-completion handling, input smoke, balanced teardown, captured `0350` rejection, and terminal phase 7. The descriptor-qualified `03ce` memory quirk remains outside that verdict. Only the paired Pen/Touch mode-change runtime is deferred on `wip/wacom-wildcard-mode-change` pending a two-Pico/common-hub setup. The matrix is hardware evidence for the production logic exercised; only the exact cleaned production UF2 was not separately flashed. |
+| Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, wildcard mode-change rejection, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; 134 fixed USB rows are active (133 Wacom plus Lenovo `17ef:6004`), 19 retain prior hardware verdicts, and the other 115 expose 33 distinct paths exercised by the 2026-09-11 representative matrix while same-path aliases remain source-audited. Seventeen compile-gated Wacom PIDs use upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` for unchanged generic fallback, and one wired Wacom wildcard handles PIDs outside that unfinished list; receiver children require an active exact row; wildcard parsed INPUT `WACOM_HID_WD_MODE_CHANGE` is rejected before bind | Historical CTL-472, wired, AES/receiver, Intuos, Cintiq 13HD, Remote, and focused GET-completion artifacts keep only their exact-image verdicts. The 2026-09-07 single-Pico matrix passed the then-current qualified-fixed/unfinished-fixed-generic/wildcard outcomes, receiver classification and publication, GET-completion handling, input smoke, balanced teardown, captured `0350` rejection, and terminal phase 7. The 2026-09-10 temporary-capacity matrix additionally passed the descriptor-qualified `03ce` memory quirk, the pre-deadline cancellation lifetime, the completed delayed Feature SET/GET lifetime, and 18 receiver generations across six child profiles, thereby exercising report-lifetime field ordering on firmware hardware. The 2026-09-11 temporary-32 matrix exercised the 33 newly reachable fixed representatives, all distinct modern signature paths, generic selection, and normal-stack rejection; its missing `p` and `m` markers keep the fixture protocol from being a formally complete pass. Only the paired Pen/Touch mode-change runtime is deferred on `wip/wacom-wildcard-mode-change` pending a two-Pico/common-hub setup. Each matrix is evidence only for its exact limits and exercised logic; the production-675 UF2 is not covered by the temporary runs. |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
 ## Pending Dedicated Hardware Passes
@@ -675,9 +790,9 @@ wired Intuos artifact passed all eleven selected IDs using the documented
 family captures, and the focused Cintiq 13HD artifact passed exact `0304`.
 UC-Logic Star G640 Rev A `28bd:0094` also passed its focused string-cancel,
 generated-Pen, and reconnect artifact.
-Exact power-snapshot
-values, elapsed AES expiry, receiver children outside selected profile
-`056a:0027`, and Remote coverage remain separate.
+Exact power-snapshot values, elapsed AES expiry, receiver children outside the
+2026-09-10 set `0027/0029/033b/033c/0302/030e`, and Remote coverage remain
+separate.
 Core/common glue (`hid-core`,
 `hid-input`, `hid-generic`, `hid-drivers`, and `hid-quirks`) is exercised by all
 fixtures.
@@ -697,8 +812,9 @@ Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
 `c532`, and Lenovo
 `6009/6047`. The non-Wacom active allowlist is covered except for the Holtek
 mouse driver-specific hardware result. The current Wacom
-quirk-list/wildcard/receiver boundary passed the single-Pico matrix; its
-descriptor-qualified `03ce` branch remains source-audited. Memory-gated
+quirk-list/wildcard/receiver boundary passed the single-Pico matrix. The later
+temporary-64 matrix exercised its descriptor-qualified `03ce` branch and
+report-lifetime field-ordering guard on firmware hardware. Memory-gated
 `c52f/c534/60ee` have logic coverage at temporary `64/256`, not RP2040 support
 at retained `64/675`.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
@@ -1855,8 +1971,8 @@ input smoke completes. It does not add pending/running-work cancellation,
 same-PID reconnect, Touch Ring semantics, explicit pen-touch arbitration,
 receiver `0084 -> 033b`, or exact multitouch/max-contact oracles. Earlier
 focused Wacom fixtures cover the cancellation, same-PID reconnect, ring, and
-arbitration paths; receiver `0084 -> 033b` and exact multitouch/max-contact
-oracles remain uncovered.
+arbitration paths. Receiver `0084 -> 033b` was covered later by the 2026-09-10
+matrix; exact multitouch/max-contact oracles remain uncovered.
 
 The `INTUOSHT2` smoke had a further transport blind spot. It sent one general
 pen packet with no known tool ID and checked only that Feature GET_REPORT 8
