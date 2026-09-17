@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-09-11
+Updated: 2026-09-17
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -50,6 +50,14 @@ Parblo A610 Pro `28bd:1903`; their exact-ID table-gate change passed its
 two-profile input, request, reconnect, and teardown fixture.
 The subsequent Star G640 Rev A `28bd:0094` row passed focused raw string-100
 cancellation, generated-Pen input, same-PID reconnect, and teardown coverage.
+The full pinned ELAN driver is retained but not linked: its CMake entry and
+`CONFIG_HID_ELAN` gate are inactive. Wired USB `04f3:074d/0755` and the
+upstream I2C rows remain visible in source. Its only source-file adaptations
+are the USB-only match boundary and the immutable driver descriptor. ELAN is
+source-audited only; no firmware build or hardware verdict is claimed.
+The LetSketch USB `6161:4d15` driver matches pinned source plus upstream fix
+`46c8beeccd8a`. Its interface-0 string initialization, raw inputs, and timer
+lifetime are active; its dedicated no-CDC fixture passed on 2026-09-17.
 The separate Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
@@ -537,9 +545,10 @@ support:
 
 ## Scope
 
-The audit covers all 69 imported HID `.c` files (27 linked and 42 unlinked), all
-six files under `linux/drivers/input`, all 53 headers under `linux/include` (45
-compatibility-facing `linux/**` files plus eight asm/dt/UAPI files), the host
+The audit covers all 80 imported HID `.c` files (38 linked and 42 unlinked), all
+five input `.c` files, all 57 headers under `linux/include`
+(48 compatibility-facing `linux/**` files plus nine asm/dt/kunit/UAPI files),
+the host
 glue/header/CMake files, the root CMake wiring, and the SHA-pinned generated
 TinyUSB/Pico-HCD transformations. This is the complete imported/host-port tree,
 not only the Git diff or linked objects.
@@ -639,6 +648,8 @@ sources so their enablement contract remains visible.
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
+| `hid-elan.c` | Complete pinned source retained outside the active CMake allowlist, with its `CONFIG_HID_ELAN` gate inactive. Wired USB `04f3:074d/0755`, upstream I2C rows, immutable driver descriptor, and exact `ENAVAIL` compatibility value remain ready for a future enablement stage; no build or hardware verdict is claimed. |
+| `hid-letsketch.c` | Complete pinned source plus upstream `46c8beeccd8a`, wired USB `6161:4d15`, and an immutable driver descriptor. The active path keeps the 255-read string initialization, raw Pen/Pad parser, and permanent timer shutdown; its no-CDC fixture passed the failure/input/reconnect matrix on 2026-09-17. |
 | `hid-apple.c` | Complete pinned source with exactly 18 external wired USB IDs active; Bluetooth, internal/legacy keyboard and trackpad, Touch Bar, and backlight-only rows/code remain adjacent behind `CONFIG_HID_APPLE_ALL_DEVICES`; battery report lookup uses the sparse registry and the driver descriptor is immutable. |
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-microsoft.c` | Complete pinned source with exactly 14 non-gaming wired USB IDs active; SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF state/code/table rows remain adjacent behind `CONFIG_HID_MICROSOFT_ALL_DEVICES`; the driver descriptor is immutable. |
@@ -727,10 +738,11 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 26 vendor driver descriptor translation units across 25 enabled
-  vendor `CONFIG_HID_*` families (the compound Holtek config contributes
-  keyboard and mouse fixup drivers). Generic `hid-multitouch` and `hid-haptic`
-  are also linked. Stadia has no reduced config gate and is excluded simply by
+- CMake links 27 vendor-driver descriptor translation units across 26 vendor
+  families; Holtek contributes separate keyboard and mouse units, while Wacom
+  and LetSketch are selected directly through CMake. Generic `hid-multitouch`
+  and `hid-haptic` are also linked. Stadia has no reduced config gate and is
+  excluded simply by
   leaving its source out of CMake. The unlinked game-controller-only
   `hid-holtekff` ID is left generic instead of being marked as having an absent
   special driver. Active vendor/generic changes keep adjacent upstream lines
@@ -1398,10 +1410,11 @@ contains a hypothetical NULL check that no current caller can exercise.
   no extra silent busy-loop or release-build fail-stop policy. Its current
   repository caller is in the unlinked `ff-memless` path; linking that helper
   still evaluates the expression exactly once before the assertion.
-- The timer bridge does not reject a timer whose callback is `NULL`, and a
-  zero-delay self-rearming callback could monopolize its single task. All
-  active timers have non-NULL callbacks and rearm in the future, so neither
-  compatibility difference is reachable in the linked driver set.
+- The timer bridge rejects a shutdown timer whose callback is `NULL` while
+  holding the same mutex used by `timer_shutdown_sync()`. This mirrors Linux's
+  permanent shutdown state and prevents a concurrent rearm from relinking the
+  timer. A zero-delay self-rearming callback could still monopolize the single
+  timer task; all active callbacks rearm in the future.
 - Repository-wide wait review also found two intentionally separate non-host
   cases: the pointing task's single-tick IRQ burst coalescing delay, and CDC
   logger's bounded producer-throttle loop. Sensor `busy_wait_us` calls are
@@ -1750,10 +1763,11 @@ Current checkpoint audit:
 - retained the prior whole-file audit and diffed the newly linked
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
-  both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`, and
-  `hid-lenovo.c` against the same pin. There are now 39 linked Linux-derived C
-  translation units; thirty-eight have an upstream source
-  counterpart and `hid-drivers.c` is the documented firmware-only
+  both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`,
+  `hid-lenovo.c`, and `hid-letsketch.c`, plus retained unlinked
+  `hid-elan.c`, against the same pin.
+  There are now 40 linked Linux-derived C translation units; thirty-nine have an
+  upstream source counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres
   contract now follows pinned Linux and CMake follows the aggregate Wacom

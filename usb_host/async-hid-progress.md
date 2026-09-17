@@ -1180,6 +1180,13 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   matrices passed at the retained `64/675` parser policy. Pad keys and Dials
   reach Linux input; unsupported tablet semantics remain visible at the
   downstream KeyD boundary.
+- LetSketch USB `6161:4d15` retains the upstream interface-0 string sequence,
+  raw Pen/Pad inputs, 100-ms out-of-range timer, and upstream
+  `46c8beeccd8a` shutdown fix. Its CDC-free fixture passed on 2026-09-17:
+  ordered `f1` through `f10`, exact retry/raw/timer diagnostics, 29 expected
+  rejected interfaces, three balanced Tablet/Pad generations, 32 `oom=0`
+  snapshots, and stable `61744`-byte detached target heap. The temporary host
+  diagnostics were then removed and the production host rebuilt.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
@@ -1243,10 +1250,8 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   PIDs under one common parent/hub and both arrival orders. A single Pico
   cannot represent that topology, so neither row should be enabled without
   the paired fixture.
-- Change reduced `ktime_after()` only in the following independent stage with a
-  deterministic counter-wrap test. Signed modulo-`2^32` ordering is valid only
-  when the compared distance is below `2^31` milliseconds; do not claim
-  arbitrary long-gap correctness.
+- Keep the reduced `ktime_after()` unchanged. Its 32-bit millisecond wrap is an
+  accepted bounded-uptime limitation; a reboot within 49.7 days avoids it.
 - Recheck active `c532` and Lenovo `6009/6047` at retained `64/675`. The
   unchanged combined emulator still presents memory-gated `c52f/c534/60ee`, so
   its stop at the first gated profile is not a passing automatic sequence and

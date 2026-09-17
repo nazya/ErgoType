@@ -757,6 +757,27 @@ contact ID 32, and multi-contact queue saturation remain separate fault tests.
 This bounded USB result is not a reason to enable every Apple HID driver or
 the broader HID++ capability/receiver stack.
 
+## Retained ELAN USB Source
+
+Full pinned `hid-elan.c` remains in the tree, but its CMake entry and
+`CONFIG_HID_ELAN` gate are inactive. The retained source contains wired USB
+`04f3:074d/0755`, synchronous five-byte Feature SET/GET initialization,
+managed five-slot MT input, raw `0x81/0x82/0x83` parsing, final multitouch SET,
+and the upstream I2C rows. It is source-audited only; no active-driver, build,
+mute-LED, or hardware claim is made.
+
+## Active LetSketch USB Boundary
+
+Full `hid-letsketch.c` is linked for wired USB `6161:4d15`. The port retains
+the upstream interface-0 gate, 255-read string initialization, separate Tablet
+and Pad inputs, raw Pen/Pad parser, and 100-ms synthetic out-of-range timer.
+It also includes upstream commit `46c8beeccd8a` so removal stops report input
+before permanently shutting down the timer. A CDC-free HID fixture covers the
+request failures, parse failure, input branches, pending-timer disconnect, and
+same-PID reconnect. Its complete hardware run passed on 2026-09-17 with
+balanced lifetimes, stable detached heap, nonzero task watermarks, and no OOM
+or host error.
+
 ## Future Transport Work
 
 Drivers beyond the current boundary need extensions to the existing
@@ -778,7 +799,6 @@ by itself is no longer a transport blocker:
 
 - `hid-alps.c`: raw GET/SET transport is present, but the surrounding init and
   device-specific state remain unaudited.
-- `hid-letsketch.c`: uses `usb_string()` for tablet string data.
 - `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
   wait-style init dependencies remain unaudited.
 - broader `hid-logitech-hidpp.c` capability, power, touchpad, and receiver

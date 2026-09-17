@@ -4,6 +4,7 @@
 #include <ctype.h>
 
 #include "asm/byteorder.h"
+#include "delay.h"
 #include "hid_compat.h"
 
 // Upstream Linux USB core is not ported; this header keeps only the USB identity,

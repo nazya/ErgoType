@@ -768,9 +768,20 @@ current sizes are recorded in `pio-usb-memory.md`.
 
 The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
+LetSketch USB `6161:4d15`,
 Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
 Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
 the USB-only Magic Mouse 2 / Trackpad 2 driver.
+The full ELAN source remains in the tree, but its CMake entry and
+`CONFIG_HID_ELAN` gate are inactive. It is not part of the current allowlist;
+no ELAN build or hardware verdict is claimed.
+LetSketch retains the upstream interface-0 gate, 255-read USB-string
+initialization, separate Tablet/Pad inputs, raw Pen/Pad parser, and 100-ms
+out-of-range timer. Its removal follows upstream `46c8beeccd8a`: stop report
+input, then permanently shut down the timer. The dedicated CDC-free fixture is
+hardware-verified: the 2026-09-17 run completed every failure, input,
+pending-timer disconnect, and same-PID reconnect phase with balanced input
+lifetimes, stable detached heap, nonzero task watermarks, and `oom=0`.
 The linked complete Logitech HID++/DJ and UC-Logic sources retain their narrow
 USB ID gates. Wacom instead uses the 134 active fixed profiles, explicit
 unfinished-profile quirks, and final wired wildcard described in Current
