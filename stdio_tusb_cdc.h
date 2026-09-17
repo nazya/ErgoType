@@ -11,13 +11,21 @@
 #define ASYNC_MSG_BUFSIZE 32u
 #define ASYNC_MSG_TEXT_MAX (ASYNC_MSG_BUFSIZE - 2u)
 
+typedef void (*stdio_tusb_cdc_write_char_fn)(char character, void *context);
+typedef void (*stdio_tusb_cdc_render_fn)(
+    stdio_tusb_cdc_write_char_fn write_character,
+    void *write_context,
+    void *render_context);
+
 // TinyUSB CDC log buffer (no pico stdio / no newlib hooks).
 //
 // Write path (task context): buffer bytes and queue a deferred TinyUSB wake.
 // Read/flush path (USB task): stdio_tusb_cdc_poll() pumps to tud_cdc_write*.
 //
-// Buffer bytes for later transmit over CDC. Not safe to call from an ISR.
-void stdio_tusb_cdc_write(const void *buf, size_t length);
+// Render one complete buffered write. The renderer may be replayed after
+// throttling. Not safe to call from an ISR.
+void stdio_tusb_cdc_write_rendered(stdio_tusb_cdc_render_fn render,
+                                   void *context);
 // Queue one fixed diagnostic. Task context only.
 void _async_msg(const char *s);
 #define async_msg(s) do { \

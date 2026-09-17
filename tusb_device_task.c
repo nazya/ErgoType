@@ -35,7 +35,7 @@ void tusb_device_task(void *pvParameters)
     }
 
     while (1) {
-        // Wait for USB events (or a deferred "kick" from stdio_tusb_cdc_write()).
+        // Wait for USB events (or a deferred "kick" from the CDC logger).
         tud_task();
         stdio_tusb_cdc_poll();
     }
