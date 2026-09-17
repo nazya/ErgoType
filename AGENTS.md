@@ -16,7 +16,7 @@
 - Keep temporarily unsupported or Linux-specific upstream code commented next to the active port code.
 - When a port-specific replacement is required, retain the upstream line or block beside it and add a short reason for the difference.
 - Keep upstream switch branches inline; adapt only the immediate platform/interface operations.
-- HID-host work must move toward the HID proxy rather than the current remapper subset.
+- Do not implement, qualify, or resume HID proxy work without a new explicit user request.
 
 ## Code Organization
 

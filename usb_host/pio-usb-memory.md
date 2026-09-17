@@ -13,30 +13,31 @@ static `.data` or `.bss` reduces the maximum possible `configTOTAL_HEAP_SIZE`.
 Task stack tuning can improve free heap at runtime, but it does not fix a link
 failure caused by static RAM layout.
 
-## Current Production Link Baseline
+## Current Working Link Baseline
 
-The production-mode rebuild after the representative matrix uses the default
-`HID_MAX_USAGES=675`. It includes 134 active fixed USB rows, the explicit
-upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` boundary, the wired wildcard,
-modern descriptor-signature compaction, and idempotent report-lifetime field
-ordering. It measured:
+The current RP2040 build uses the default `HID_MAX_USAGES=675`. The retained
+ELAN source is excluded by CMake and `CONFIG_HID_ELAN`; hardware-verified
+LetSketch USB `6161:4d15` remains linked and adds one 48-byte builtin-driver
+runtime record. The production rebuild after removing the LetSketch coverage
+markers and excluding ELAN is:
 
 ```text
-text/data/bss                 628104 / 788 / 245412 B
-__bss_end__                   0x2003feec
-main-bank headroom            276 B to 0x20040000
+text/data/bss                 628156 / 788 / 243408 B
+__bss_end__                   0x2003f718
+main-bank headroom            2280 B to 0x20040000
 HID_MAX_FIELDS/USAGES         64 / 675
-UF2 SHA-256                   a81fceea27f59026f64f103799ad3a2e8af1fa537769761a336c4d09277642e7
+UF2 SHA-256                   148c7b468e4ff95b6f7125a10f2a5496cc824a8fdd4e916f4b0474d42ed4b773
 hardware coverage             representative logic exercised at temporary
                               HID_MAX_USAGES=32 on 2026-09-11;
                               ordering guard passed 18 rebinds at temporary
                               HID_MAX_USAGES=64 on 2026-09-10;
-                              this production UF2 was not flashed
+                              LetSketch matrix passed at retained 64/675 on
+                              2026-09-17; this production UF2 was not flashed
 ```
 
-Compilation and size alone are not runtime evidence. The temporary matrices
-exercised the recorded logic, but this production image itself was not
-flashed.
+Compilation and size alone are not runtime evidence. The LetSketch test image
+exercised the recorded logic, but this marker-free production image itself was
+not flashed.
 The wildcard `0350` rejection was later exercised on the normal 512-word
 lifecycle stack by the 2026-09-11 representative matrix. No formatted or
 Wacom-specific diagnostic is retained; the ordinary probe path reports

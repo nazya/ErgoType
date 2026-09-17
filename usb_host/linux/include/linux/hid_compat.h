@@ -54,6 +54,7 @@ typedef long loff_t;
 #define CONFIG_HID_CHICONY 1
 #define CONFIG_HID_CREATIVE_SB0540 1
 #define CONFIG_HID_CYPRESS 1
+// #define CONFIG_HID_ELAN 1
 #define CONFIG_HID_ELECOM 1
 #define CONFIG_HID_EVISION 1
 #define CONFIG_HID_HOLTEK 1
@@ -305,6 +306,7 @@ typedef int atomic_t;
 #define GFP_ATOMIC 0
 #define ENOMEM 12
 #define ENODEV 19
+#define ENAVAIL 119
 #define EBUSY 16
 #define EINVAL 22
 #define ERANGE 34
@@ -2187,6 +2189,7 @@ static inline void timer_setup(struct timer_list *timer, void (*function)(struct
 int mod_timer(struct timer_list *timer, unsigned long expires);
 int timer_delete(struct timer_list *timer);
 int timer_delete_sync(struct timer_list *timer);
+int timer_shutdown_sync(struct timer_list *timer);
 // #define timer_delete(timer) timer_delete_sync(timer)
 // Linux keeps timer_delete() non-waiting and timer_delete_sync() waiting.
 // ff-memless calls timer_delete() from its timer callback after expiry.

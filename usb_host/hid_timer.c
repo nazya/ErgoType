@@ -126,6 +126,10 @@ int mod_timer(struct timer_list *timer, unsigned long expires)
 	int was_pending;
 
 	hid_timer_lock();
+	if (!timer->function) {
+		hid_timer_unlock();
+		return 0;
+	}
 	was_pending = timer->pending;
 	timer->expires = expires;
 	if (!timer->pending) {
@@ -170,7 +174,13 @@ int timer_delete(struct timer_list *timer)
 	return was_pending;
 }
 
-int timer_delete_sync(struct timer_list *timer)
+enum hid_timer_stop_mode {
+	HID_TIMER_ALLOW_REARM,
+	HID_TIMER_PREVENT_REARM,
+};
+
+static int hid_timer_stop_sync(struct timer_list *timer,
+			       enum hid_timer_stop_mode mode)
 {
 	struct hid_timer_waiter waiter = {
 		.timer = timer,
@@ -187,6 +197,8 @@ int timer_delete_sync(struct timer_list *timer)
 	hid_timer_lock();
 	was_pending = hid_timer_delete_pending_locked(timer);
 	if (!timer->running) {
+		if (mode == HID_TIMER_PREVENT_REARM)
+			timer->function = NULL;
 		hid_timer_unlock();
 		return was_pending;
 	}
@@ -209,12 +221,24 @@ int timer_delete_sync(struct timer_list *timer)
 		 */
 		was_pending |= hid_timer_delete_pending_locked(timer);
 		if (!timer->running) {
+			if (mode == HID_TIMER_PREVENT_REARM)
+				timer->function = NULL;
 			hid_timer_waiter_unlink_locked(&waiter);
 			hid_timer_unlock();
 			return was_pending;
 		}
 		hid_timer_unlock();
 	}
+}
+
+int timer_delete_sync(struct timer_list *timer)
+{
+	return hid_timer_stop_sync(timer, HID_TIMER_ALLOW_REARM);
+}
+
+int timer_shutdown_sync(struct timer_list *timer)
+{
+	return hid_timer_stop_sync(timer, HID_TIMER_PREVENT_REARM);
 }
 
 void hid_timer_task(void *pvParameters)

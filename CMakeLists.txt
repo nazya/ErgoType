@@ -758,6 +758,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cmedia.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-creative-sb0540.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cypress.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-elan.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-elecom.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-evision.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-ezkey.c
@@ -783,6 +784,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Complete pinned Lenovo driver for external USB TrackPoint keyboards
         # 6009/6047; full 60ee is retained but exceeds the RP2040 heap at 675.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lenovo.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-letsketch.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lcpower.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-macally.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-maltron.c

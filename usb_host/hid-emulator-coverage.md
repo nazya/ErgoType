@@ -627,6 +627,7 @@ claims for unrelated drivers.
 | 2026-08-01 | Star G640 Rev A `device/uclogic-star-g640` (`4e020e2`), host `f0822c02…`, emulator `e0752af6…` | one callback-time string-100 cancellation followed by a full Pen generation and same-PID reconnect completes `f1, f2, f3, f10`; two Pen lifetimes balance, both complete removals repeat `60744/54464/9`, all 13 snapshots have `oom=0`, and no `f12`, `HID_REPORT_SKIP`, or host `ERR` appears; parameters/reports are protocol-equivalent and numeric X/Y values are not production-log-visible |
 | 2026-08-03 | focused `device/wacom-receiver-lifecycle`, test host `068194df…`, emulator `e0710149…` | `f13, f14, f10` completes without a failure marker, host `ERR`, timeout, input drop, or OOM; test-only `033c` proves both child stop paths after the second-child post-start error, and exactly three `0027` generations produce real Finger then Pen events across two logical rebinds, proving both shared arbitration fields are reset |
 | 2026-08-04 | focused `device/wacom-wired-matrix`, production host `72a83e26…`, emulator `d675aee2…` | two unknown-tool `033b` packets force two Feature GET 8 callbacks before enter or disconnect; the second callback proves parsing/retirement of the first GET and CTRL progress, then balanced Pen/Pad removal and alert markers `f15, f10` complete without `f12`, host `ERR`, timeout, input drop, report-memory warning, or OOM |
+| 2026-09-17 | `device/letsketch-wp9620n`, test host `98bf2d4d…`, emulator `39cd84c9…`, log `4026ee47…` | exact string retry/failure sequence, parse rejection, raw-event branches, Pen, all five Pad buttons, timer expiry, pending-timer disconnect, and same-PID reconnect complete `f1` through `f10`; 29 expected `HID_IGNORED`, six balanced Tablet/Pad adds/removes, 32 `oom=0` snapshots, stable `61744` detached heap, and no `f12`, host `ERR`, drop, timeout, or unexpected warning |
 
 ## Recorded Emulator Branches
 
@@ -749,17 +750,18 @@ drivers are not counted here.
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
 | `report_fixup` | `hid-apple`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; the `holtek-mouse` hardware pass remains pending |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `a4tech-x5-005d`, `cypress-mouse`, `ite8595-rfkill`, and `zydacron-remote` verified |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class |
 | driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified |
-| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | `chicony-wireless-radio`, `creative-sb0540`, `primax-keyboard`, `pxrc-phoenixrc`, `rapoo-2_4g-receiver`, `saitek-rat7`, `zydacron-remote` |
-| `input_configured` / extra input device naming | `hid-creative-sb0540` | `creative-sb0540` |
+| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `letsketch-wp9620n` verifies the LetSketch branches |
+| `input_configured` / extra managed input | `hid-creative-sb0540` | Creative verifies the callback; Wacom fixtures cover additional managed-input ownership |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
 | workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, and receiver work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
 | periodic regular GET_REPORT and timer teardown | `hid-apple` Magic Keyboard battery path | `apple-external-usb` verified immediate GET, one real 60-second deadline, queued-request disconnect, timer teardown, and reconnect |
-| USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | `rapoo-2_4g-receiver`, `razer-blackwidow` |
+| driver-time USB string sequence and report-driven timer shutdown | `hid-letsketch` | CDC-free `letsketch-wp9620n` fixture verified 2026-09-17 |
+| USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | Existing composite-interface fixtures cover the metadata graph |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
@@ -776,11 +778,16 @@ checks the repaired `0x2fff` boundary, pointer input, and reconnect. The normal
 USB Magic Trackpad 2 route is hardware-verified above; accepted mode-SET
 `-EIO`, disconnect during that SET, and queue saturation remain targeted fault
 passes rather than normal-driver gaps.
+ELAN USB `04f3:074d/0755` remains in retained source, but its CMake entry and
+`CONFIG_HID_ELAN` gate are inactive. It is not part of this active-hook audit
+and has no firmware build or hardware verdict.
+LetSketch USB `6161:4d15` is active with a hardware-verified no-CDC fixture for
+its string sequence, raw reports, timer expiry/shutdown, and reconnect graph.
 Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech,
 Apple external USB, Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
-Kensington, KYE, Lenovo `6009/6047`, Microsoft, Primax, PXRC, Rapoo, Razer,
+Kensington, KYE, Lenovo `6009/6047`, LetSketch, Microsoft, Primax, PXRC, Rapoo, Razer,
 Saitek, Topre, Wacom,
 and Zydacron. Apple and Microsoft passed their focused exact-artifact hardware
 runs on 2026-07-31. Wacom's historical exact
@@ -810,8 +817,8 @@ Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
 Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
 `056a:0304` flows, UC-Logic Star G640 Rev A `28bd:0094`, active Logitech
 `c532`, and Lenovo
-`6009/6047`. The non-Wacom active allowlist is covered except for the Holtek
-mouse driver-specific hardware result. The current Wacom
+`6009/6047`. The non-Wacom active allowlist has hardware coverage except for
+the Holtek mouse result. The current Wacom
 quirk-list/wildcard/receiver boundary passed the single-Pico matrix. The later
 temporary-64 matrix exercised its descriptor-qualified `03ce` branch and
 report-lifetime field-ordering guard on firmware hardware. Memory-gated
