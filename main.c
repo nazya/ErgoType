@@ -38,7 +38,7 @@
 #define TUH_STACK_SIZE 512
 #define USBHID_LIFECYCLE_STACK_SIZE 512
 #define USBHID_REPORT_STACK_SIZE 1024
-#define KEYD_STACK_SIZE 5120
+#define KEYD_STACK_SIZE 4864
 #define MIN_STACK_SIZE configMINIMAL_STACK_SIZE
 #define IDLE_PRIORITY tskIDLE_PRIORITY
 
@@ -74,6 +74,7 @@ void vkbd_hid_nkro_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
 extern const char *keyd_overlay_conf;
+extern const uint32_t __firmware_build_id_start[];
 
 static void app_task(void *pvParameters);
 
@@ -189,6 +190,15 @@ static void app_task(void *pvParameters)
     (void)pvParameters;
 
     msg("");
+    const uint32_t *build_id = __firmware_build_id_start;
+    msg("%sfirmware: %08lx%08lx%08lx%08lx%08lx%s",
+        ANSI_BLACK_ON_BRIGHT_WHITE,
+        (unsigned long)__builtin_bswap32(build_id[0]),
+        (unsigned long)__builtin_bswap32(build_id[1]),
+        (unsigned long)__builtin_bswap32(build_id[2]),
+        (unsigned long)__builtin_bswap32(build_id[3]),
+        (unsigned long)__builtin_bswap32(build_id[4]),
+        ANSI_RESET);
 
     static config_t config;
 
@@ -220,10 +230,10 @@ static void app_task(void *pvParameters)
 
     // if (mode == HID) {
     if (mode == HID && hid_output_profile != HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
-        xTaskCreateAffinitySet(tusb_device_task, NULL, MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
+        xTaskCreateAffinitySet(tusb_device_task, "tud", MIN_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     } else {
-        xTaskCreateAffinitySet(tusb_device_task, NULL, TUD_STACK_SIZE, NULL, TUSB_PRIORITY,
+        xTaskCreateAffinitySet(tusb_device_task, "tud", TUD_STACK_SIZE, NULL, TUSB_PRIORITY,
                                CORE0, NULL);
     }
     dbg("startup keys: count=%u key=%u", nr_pressed, startup_key);
@@ -232,9 +242,9 @@ static void app_task(void *pvParameters)
     if (base_mode != HID) {
         warn("base mode=MSC: config parse failed");
     }
-    msg("mode resolved: %s (%s)",
-        mode == HID ? "HID" : "MSC",
-        mode_resolution.reason);
+    dbg0("mode resolved: %s (%s)",
+         mode == HID ? "HID" : "MSC",
+         mode_resolution.reason);
     dbg3config(&config);
     
 
@@ -243,7 +253,7 @@ static void app_task(void *pvParameters)
         config.ws2812_pin != -1 ||
         config.ssd1306.i2c_idx != -1) {
         TaskHandle_t ui_task_handle = NULL;
-        xTaskCreateAffinitySet(ui_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY, CORE1, &ui_task_handle);
+        xTaskCreateAffinitySet(ui_task, "ui", MIN_STACK_SIZE, &config, IDLE_PRIORITY, CORE1, &ui_task_handle);
         configASSERT(ui_task_handle);
     }
 
@@ -319,19 +329,19 @@ static void app_task(void *pvParameters)
             async_msg("ERR: TUH_RUNTIME_OWNER_MISSING");
         }
 
-        xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
+        xTaskCreateAffinitySet(keyscan_task, "keyscan", MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
         if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
             dbg("hid output profile: nkro");
-            xTaskCreateAffinitySet(vkbd_hid_nkro_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+            xTaskCreateAffinitySet(vkbd_hid_nkro_task, "vkbd", MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
         } else {
             dbg("hid output profile: boot");
-            xTaskCreateAffinitySet(vkbd_hid_boot_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
+            xTaskCreateAffinitySet(vkbd_hid_boot_task, "vkbd", MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
         }
 
         if (config.nr_pmw3360 || config.nr_pmw3389) {
             TaskHandle_t pointing_task_handle = NULL;
-            xTaskCreateAffinitySet(pointing_device_task, NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 5, CORE1, &pointing_task_handle);
+            xTaskCreateAffinitySet(pointing_device_task, "pointing", MIN_STACK_SIZE, &config, IDLE_PRIORITY + 5, CORE1, &pointing_task_handle);
             for (uint8_t i = 0; i < config.nr_pmw3360; ++i)
                 pointing_motion_irq_init(pointing_task_handle, config.pmw3360[i].irq, i);
             for (uint8_t i = 0; i < config.nr_pmw3389; ++i)
@@ -339,10 +349,12 @@ static void app_task(void *pvParameters)
         }
 
         /* Peak use was 3,760 words with the former 7,168-word stack. */
-        xTaskCreateAffinitySet(keyd_task, NULL, KEYD_STACK_SIZE, NULL,
+        xTaskCreateAffinitySet(keyd_task, "keyd", KEYD_STACK_SIZE, NULL,
                                IDLE_PRIORITY + 4, CORE0, NULL);
     }
 
+    dbg2("app stack min free=%u words",
+         (unsigned int)uxTaskGetStackHighWaterMark(NULL));
     vTaskDelete(NULL);
 }
 
@@ -351,7 +363,7 @@ int main()
     board_init();
     log_mutex = xSemaphoreCreateMutex();
     stdio_tusb_cdc_mutex = xSemaphoreCreateMutex();
-    xTaskCreateAffinitySet(app_task, NULL, 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);
+    xTaskCreateAffinitySet(app_task, "app", 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
     // main(): no logging here. Start scheduler ASAP, do init/logging from tasks.
     while (1) { };

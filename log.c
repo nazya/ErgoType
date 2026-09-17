@@ -14,112 +14,117 @@
 #include "semphr.h"
 
 int log_level = 0;
-int suppress_colours = 0;
+int use_colours = 1;
 
-// FreeRTOSConfig.h has configUSE_NEWLIB_REENTRANT=0, so newlib stdio/printf
-// is not task-safe. Also, colorize() uses a shared static buffer.
-// Serialize the whole log call to avoid truncated/garbled output.
+// Serialize each rendered write so a throttled replay cannot interleave with
+// another producer.
 extern SemaphoreHandle_t log_mutex;
 
-static const char *colorize(const char *s)
-{
-	int i;
-
-	static char buf[BUFSIZE];
-	// static char buf[4096];
-	size_t n = 0;
-	int inside_escape = 0;
-
-	// for (i = 0; s[i] != 0 && n < sizeof(buf); i++) {
-	for (i = 0; s[i] != 0 && (sizeof(buf) - n) > 1; i++) {
-		if (s[i + 1] == '{') {
-			int escape_num = 0;
-
-			switch (s[i]) {
-			case 'r': escape_num = 1; break;
-			case 'g': escape_num = 2; break;
-			case 'y': escape_num = 3; break;
-			case 'b': escape_num = 4; break;
-			case 'm': escape_num = 5; break;
-			case 'c': escape_num = 6; break;
-			case 'w': escape_num = 7; break;
-			default: break;
-			}
-
-			if (escape_num) {
-				if (!suppress_colours && (sizeof(buf) - n > 5)) {
-					buf[n++] = '\033';
-					buf[n++] = '[';
-					buf[n++] = '3';
-					buf[n++] = '0' + escape_num;
-					buf[n++] = 'm';
-				}
-
-				inside_escape = 1;
-				i++;
-				continue;
-			}
-		}
-
-		if (s[i] == '}' && inside_escape) {
-			if (!suppress_colours && (sizeof(buf) - n > 4)) {
-				memcpy(buf + n, "\033[0m", 4);
-				n += 4;
-			}
-
-			inside_escape = 0;
-			continue;
-		}
-
-		buf[n++] = s[i];
-	}
-
-	buf[n] = 0;
-	return buf;
-}
+typedef struct {
+	stdio_tusb_cdc_write_char_fn write_character;
+	void *context;
+} log_writer_t;
 
 typedef struct {
-	char buf[BUFSIZE];
-	size_t len;
-} log_sink_t;
+	int level;
+	log_kind_t kind;
+	const char *file;
+	unsigned int line;
+	const char *format;
+	va_list *format_args;
+	bool use_colours;
+} log_entry_t;
 
-static void sink_flush(log_sink_t *sink)
+static void write_string(log_writer_t *writer, const char *string)
 {
-	if (sink->len)
-		stdio_tusb_cdc_write(sink->buf, sink->len);
-	sink->len = 0;
+	while (*string)
+		writer->write_character(*string++, writer->context);
 }
 
-static void sink_out(char character, void *arg)
+static void write_decimal(log_writer_t *writer, unsigned int value)
 {
-	log_sink_t *sink = (log_sink_t *)arg;
-	if (character == '\n' && (sizeof(sink->buf) - sink->len) > 1) {
-		sink->buf[sink->len++] = '\r';
-		sink->buf[sink->len++] = '\n';
-		sink_flush(sink);
+	char digits[10];
+	size_t length = 0;
+
+	do {
+		digits[length++] = (char)('0' + value % 10u);
+		value /= 10u;
+	} while (value);
+
+	while (length)
+		writer->write_character(digits[--length], writer->context);
+}
+
+static void write_log_prefix(log_writer_t *writer,
+			     const log_entry_t *entry)
+{
+	const char *prefix;
+	const char *suffix;
+
+	switch (entry->kind) {
+	case LOG_KIND_MSG:
 		return;
+	case LOG_KIND_DBG:
+		if (!entry->use_colours)
+			prefix = "INFO: ";
+		else if (entry->level == 1)
+			prefix = "\033[32mINFO:\033[0m \033[38;2;107;108;115m";
+		else if (entry->level == 2)
+			prefix = "\033[36mINFO:\033[0m \033[38;2;107;108;115m";
+		else
+			prefix = "\033[35mINFO:\033[0m \033[38;2;107;108;115m";
+		break;
+	case LOG_KIND_WARN:
+		prefix = entry->use_colours ?
+			 "\t\033[1;37;43mWARNING:\033[0m \033[38;2;107;108;115m" : "\tWARNING: ";
+		break;
+	case LOG_KIND_ERR:
+		prefix = entry->use_colours ?
+			 "\t\033[1;37;41mERROR:\033[0m \033[38;2;107;108;115m" : "\tERROR: ";
+		break;
 	}
 
-	if ((sizeof(sink->buf) - sink->len) == 2) {
-		// Very long line: drop incoming bytes
-		sink->buf[sink->len++] = '\r';
-		sink->buf[sink->len++] = '\n';
-		sink_flush(sink);
-		return;
-	}
-	
-	sink->buf[sink->len++] = character;
+	if (!entry->use_colours)
+		suffix = ": ";
+	else
+		suffix = ":\033[0m ";
+	write_string(writer, prefix);
+	write_string(writer, entry->file);
+	writer->write_character(':', writer->context);
+	write_decimal(writer, entry->line);
+	write_string(writer, suffix);
 }
 
-static void vmsg(int level, const char *fmt, va_list ap)
+static void write_crlf_character(char character, void *context)
 {
-	xSemaphoreTake(log_mutex, portMAX_DELAY);
-	log_sink_t sink = {0};
-	vfctprintf(sink_out, &sink, colorize(fmt), ap);
-	xSemaphoreGive(log_mutex);
+	log_writer_t *writer = context;
+
+	if (character == '\n')
+		writer->write_character('\r', writer->context);
+	writer->write_character(character, writer->context);
 }
 
-void _msg(int level, log_kind_t kind, const char *fmt, ...)
+static void render_log_line(stdio_tusb_cdc_write_char_fn write_character,
+			    void *write_context, void *render_context)
+{
+	log_entry_t *entry = render_context;
+	log_writer_t writer = {
+		.write_character = write_character,
+		.context = write_context,
+	};
+
+	write_log_prefix(&writer, entry);
+
+	/* Throttling may render the line twice, so restart its arguments. */
+	va_list args;
+	va_copy(args, *entry->format_args);
+	vfctprintf(write_crlf_character, &writer, entry->format, args);
+	va_end(args);
+}
+
+/* _msg() is the logger's printf-style entry point. */
+void _msg(int level, log_kind_t kind, const char *file, unsigned int line,
+	  const char *format, ...)
 {
 	if (level > log_level)
 		return;
@@ -132,29 +137,24 @@ void _msg(int level, log_kind_t kind, const char *fmt, ...)
 		ui_notify_err();
 		break;
 	case LOG_KIND_MSG:
+	case LOG_KIND_DBG:
 		break;
 	}
 
-	va_list ap;
-	va_start(ap, fmt);
-	vmsg(level, fmt, ap);
-	va_end(ap);
+	va_list format_args;
+	va_start(format_args, format);
+	log_entry_t entry = {
+		.level = level,
+		.kind = kind,
+		.file = file,
+		.line = line,
+		.format = format,
+		.format_args = &format_args,
+		.use_colours = use_colours,
+	};
+
+	xSemaphoreTake(log_mutex, portMAX_DELAY);
+	stdio_tusb_cdc_write_rendered(render_log_line, &entry);
+	xSemaphoreGive(log_mutex);
+	va_end(format_args);
 }
-
-// void die(const char *fmt, ...)
-// {
-// 	va_list ap;
-
-// 	xSemaphoreTake(log_mutex, portMAX_DELAY);
-
-// 	const char *prefix = colorize("r{FATAL ERROR:} ");
-// 	stdio_tusb_cdc_write(prefix, strlen(prefix));
-
-// 	va_start(ap, fmt);
-// 	log_sink.len = 0;
-// 	vfctprintf(sink_out, &log_sink, colorize(fmt), ap);
-// 	va_end(ap);
-// 	sink_out('\n', &log_sink);
-// 	xSemaphoreGive(log_mutex);
-// 	// exit(-1);
-// }

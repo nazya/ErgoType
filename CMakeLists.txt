@@ -679,6 +679,8 @@ set_source_files_properties("${TINYUSB_PIO_HCD_PORT_SOURCE}" PROPERTIES
                             COMPILE_FLAGS
                             "-Wno-conversion -Wno-cast-qual -Wno-attributes")
 
+add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})
 
@@ -926,12 +928,25 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         # pico_cyw43_arch_none
 )
 
+target_link_options(${PROJECT_NAME} PRIVATE
+        "LINKER:--build-id=sha1"
+        "LINKER:--script=${CMAKE_CURRENT_LIST_DIR}/firmware_build_id.ld"
+)
+set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/firmware_build_id.ld"
+)
 
 
 # Uncomment this line to enable fix for Errata RP2040-E5 (the fix requires use of GPIO 15)
 #target_compile_definitions(${PROJECT_NAME} PUBLIC PICO_RP2040_USB_DEVICE_ENUMERATION_FIX=1)
 
 pico_add_extra_outputs(${PROJECT_NAME})
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_READELF} --notes $<TARGET_FILE:${PROJECT_NAME}>
+        COMMENT "Firmware build ID"
+        VERBATIM
+)
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
         __KERNEL__ # use kernel UAPI layouts; firmware has no userspace ioctl headers

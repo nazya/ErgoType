@@ -46,6 +46,16 @@ static void log_memory_watermarks(void)
 	UBaseType_t timer_stack_words = task_stack_watermark("hid-timer");
 	UBaseType_t lifecycle_stack_words = task_stack_watermark("hid-lifecycle");
 	UBaseType_t report_stack_words = task_stack_watermark("hid-report");
+	UBaseType_t tud_stack_words = task_stack_watermark("tud");
+	UBaseType_t ui_stack_words = task_stack_watermark("ui");
+	UBaseType_t keyscan_stack_words = task_stack_watermark("keyscan");
+	UBaseType_t vkbd_stack_words = task_stack_watermark("vkbd");
+	UBaseType_t pointing_stack_words = task_stack_watermark("pointing");
+	UBaseType_t rtos_timer_stack_words = task_stack_watermark("Tmr Svc");
+	UBaseType_t idle0_stack_words = uxTaskGetStackHighWaterMark(
+		xTaskGetIdleTaskHandleForCore(0));
+	UBaseType_t idle1_stack_words = uxTaskGetStackHighWaterMark(
+		xTaskGetIdleTaskHandleForCore(1));
 
 	vPortGetHeapStats(&heap_stats);
 	dbg2("heap free=%u min=%u largest=%u blocks=%u oom=%u; tuh stack min free=%u words; keyd stack min free=%u words",
@@ -62,6 +72,15 @@ static void log_memory_watermarks(void)
 	     (unsigned int)timer_stack_words,
 	     (unsigned int)lifecycle_stack_words,
 	     (unsigned int)report_stack_words);
+	dbg2("system stacks min free: tud=%u ui=%u keyscan=%u vkbd=%u pointing=%u timer=%u idle0=%u idle1=%u words",
+	     (unsigned int)tud_stack_words,
+	     (unsigned int)ui_stack_words,
+	     (unsigned int)keyscan_stack_words,
+	     (unsigned int)vkbd_stack_words,
+	     (unsigned int)pointing_stack_words,
+	     (unsigned int)rtos_timer_stack_words,
+	     (unsigned int)idle0_stack_words,
+	     (unsigned int)idle1_stack_words);
 }
 
 static void free_config(struct config *config)
@@ -335,12 +354,16 @@ static int event_handler(struct event *ev)
 		break;
 	case EV_DEV_ADD:
 		ev->dev->data = active_kbd;
-		msg("DEVICE: added\t%s %s", ev->dev->id, ev->dev->name);
+		msg("%sDEVICE: %sadded\t%s %s%s%s", ANSI_BRIGHT_WHITE,
+		    ANSI_BOLD, ev->dev->name, ANSI_DARK_GREY, ev->dev->id,
+		    ANSI_RESET);
 		log_memory_watermarks();
 		break;
 	case EV_DEV_REMOVE:
 		haptic_cleanup(ev->dev);
-		msg("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
+		msg("%sDEVICE: %sremoved\t%s %s%s%s", ANSI_BRIGHT_WHITE,
+		    ANSI_BOLD, ev->dev->name, ANSI_DARK_GREY, ev->dev->id,
+		    ANSI_RESET);
 		log_memory_watermarks();
 		break;
 	// case EV_FD_ACTIVITY:
@@ -416,7 +439,7 @@ int run_daemon(void)
 
 	reload();
 
-	msg("Starting keyd");
+	dbg0("Starting keyd");
 	evloop(event_handler);
 	return 0;
 }
