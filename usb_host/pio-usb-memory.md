@@ -17,27 +17,37 @@ failure caused by static RAM layout.
 
 The current RP2040 build uses the default `HID_MAX_USAGES=675`. The retained
 ELAN source is excluded by CMake and `CONFIG_HID_ELAN`; hardware-verified
-LetSketch USB `6161:4d15` remains linked and adds one 48-byte builtin-driver
-runtime record. The production rebuild after removing the LetSketch coverage
-markers and excluding ELAN is:
+LetSketch USB `6161:4d15` and ALPS USB `044e:120b/120c/1215/121e` remain
+linked. The production rebuild after removing the ALPS coverage markers is:
 
 ```text
-text/data/bss                 628156 / 788 / 243408 B
-__bss_end__                   0x2003f718
-main-bank headroom            2280 B to 0x20040000
+text/data/bss                 631300 / 788 / 243456 B
+__bss_end__                   0x2003f748
+main-bank headroom            2232 B to 0x20040000
 HID_MAX_FIELDS/USAGES         64 / 675
-UF2 SHA-256                   148c7b468e4ff95b6f7125a10f2a5496cc824a8fdd4e916f4b0474d42ed4b773
+UF2 SHA-256                   8c209c9bc4a419b747d859e214d43c5c227bc5815165ac04fdbef2603145e059
 hardware coverage             representative logic exercised at temporary
                               HID_MAX_USAGES=32 on 2026-09-11;
                               ordering guard passed 18 rebinds at temporary
                               HID_MAX_USAGES=64 on 2026-09-10;
                               LetSketch matrix passed at retained 64/675 on
-                              2026-09-17; this production UF2 was not flashed
+                              2026-09-17; ALPS matrix passed at retained 64/675
+                              on 2026-09-18; this production UF2 was not flashed
 ```
 
-Compilation and size alone are not runtime evidence. The LetSketch test image
-exercised the recorded logic, but this marker-free production image itself was
-not flashed.
+Compilation and size alone are not runtime evidence. The LetSketch and ALPS
+test images exercised their recorded logic, but this marker-free production
+image itself was not flashed.
+The ALPS test image was `632676/788/243456`, host UF2
+`9e294a563db0176686a63af160c39e0f69d668408f7e1df057299ac192dfedc4`.
+Emulator UF2
+`b307c1fb9f5446a529c713071d41a4b47540a9db42264c2c698be9e55d0e89f9`
+and host log
+`76dba757d357a0cdc8e902ee23301d02889845177f486d287fc54e4a586fdee6`
+completed all U1/T4 phases. All 30 snapshots had `oom=0`; minimum-ever free
+heap was 48,584 B. Minimum host stack watermarks were async/work/timer/
+lifecycle/report `389/346/348/157/873` words, and every system-task watermark
+remained nonzero.
 The wildcard `0350` rejection was later exercised on the normal 512-word
 lifecycle stack by the 2026-09-11 representative matrix. No formatted or
 Wacom-specific diagnostic is retained; the ordinary probe path reports

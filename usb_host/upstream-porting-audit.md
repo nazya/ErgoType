@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -58,6 +58,11 @@ source-audited only; no firmware build or hardware verdict is claimed.
 The LetSketch USB `6161:4d15` driver matches pinned source plus upstream fix
 `46c8beeccd8a`. Its interface-0 string initialization, raw inputs, and timer
 lifetime are active; its dedicated no-CDC fixture passed on 2026-09-17.
+The complete pinned ALPS driver is active for `044e:120b/120c/1215/121e`.
+Only two unsafe unaligned loads, secondary-input ownership in the reduced
+device core, and immutable driver metadata differ from the pinned source. Its
+no-CDC U1/T4 fixture passed initialization, malformed-reply rejection, input,
+same-PID reconnect, and balanced primary/secondary teardown on 2026-09-18.
 The separate Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
@@ -648,6 +653,7 @@ sources so their enablement contract remains visible.
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
+| `hid-alps.c` | Complete pinned source active for `044e:120b/120c/1215/121e`; only the offset-6 `u32` and offset-13 `u16` loads use unaligned LE helpers, the DualPoint secondary input is device-managed for the reduced device core, and the driver descriptor is immutable. The no-CDC U1/T4 matrix passed on 2026-09-18; `121e` is a source-audited same-path alias. |
 | `hid-elan.c` | Complete pinned source retained outside the active CMake allowlist, with its `CONFIG_HID_ELAN` gate inactive. Wired USB `04f3:074d/0755`, upstream I2C rows, immutable driver descriptor, and exact `ENAVAIL` compatibility value remain ready for a future enablement stage; no build or hardware verdict is claimed. |
 | `hid-letsketch.c` | Complete pinned source plus upstream `46c8beeccd8a`, wired USB `6161:4d15`, and an immutable driver descriptor. The active path keeps the 255-read string initialization, raw Pen/Pad parser, and permanent timer shutdown; its no-CDC fixture passed the failure/input/reconnect matrix on 2026-09-17. |
 | `hid-apple.c` | Complete pinned source with exactly 18 external wired USB IDs active; Bluetooth, internal/legacy keyboard and trackpad, Touch Bar, and backlight-only rows/code remain adjacent behind `CONFIG_HID_APPLE_ALL_DEVICES`; battery report lookup uses the sparse registry and the driver descriptor is immutable. |
@@ -738,9 +744,9 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 27 vendor-driver descriptor translation units across 26 vendor
-  families; Holtek contributes separate keyboard and mouse units, while Wacom
-  and LetSketch are selected directly through CMake. Generic `hid-multitouch`
+- CMake links 28 vendor-driver descriptor translation units across 27 vendor
+  families; Holtek contributes separate keyboard and mouse units, while ALPS,
+  Wacom, and LetSketch are selected directly through CMake. Generic `hid-multitouch`
   and `hid-haptic` are also linked. Stadia has no reduced config gate and is
   excluded simply by
   leaving its source out of CMake. The unlinked game-controller-only
@@ -1765,8 +1771,8 @@ Current checkpoint audit:
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
   both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`,
   `hid-lenovo.c`, and `hid-letsketch.c`, plus retained unlinked
-  `hid-elan.c`, against the same pin.
-  There are now 40 linked Linux-derived C translation units; thirty-nine have an
+  `hid-elan.c` and active `hid-alps.c`, against the same pin.
+  There are now 41 linked Linux-derived C translation units; forty have an
   upstream source counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres
@@ -1774,6 +1780,11 @@ Current checkpoint audit:
   order. The reduced kfifo contract is documented beside the compatibility
   types. Remaining Wacom gate comments are the explicit porting-hygiene
   exceptions above; bounded P2 contracts are listed above
+- compared active `hid-alps.c` with the pinned source. The original statements
+  remain beside the two unaligned-load replacements, managed secondary-input
+  allocation, and immutable descriptor. The 2026-09-18 hardware matrix reached
+  every selected non-alias U1/T4 path and returned both DualPoint inputs on
+  each disconnect with no error, OOM, or zero task watermark
 - audited the newly linked UC-Logic sources against pinned
   `83f1454877cc292b88baf13c829c16ce6937d120`: its complete upstream device
   table remains visible. Huion `256c:006d/006e` and Deco 01 V2 `28bd:0905`

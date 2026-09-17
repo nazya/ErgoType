@@ -740,6 +740,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # more RP2040 heap at the retained usage limit; other rows stay gated.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-alps.c
         # Pinned Apple driver, selected to external wired USB keyboards and
         # Mighty Mouse; legacy, Bluetooth, internal, Touch Bar, and
         # backlight-only devices remain gated in the source.

@@ -778,6 +778,17 @@ same-PID reconnect. Its complete hardware run passed on 2026-09-17 with
 balanced lifetimes, stable detached heap, nonzero task watermarks, and no OOM
 or host error.
 
+## Active ALPS USB Boundary
+
+Full pinned `hid-alps.c` is linked for wired USB `044e:120b/120c/1215/121e`.
+It retains the upstream U1/T4 Feature GET/SET initialization and raw touch,
+button, and DualPoint-stick parsing. Two genuinely unaligned little-endian
+loads use the compatibility helpers; the secondary stick input is managed so
+the reduced device core releases it on disconnect. A CDC-free fixture passed
+the malformed-T4-reply, U1, repeated DualPoint, repeated T4, input, reconnect,
+and teardown matrix on 2026-09-18. The descriptors are protocol-equivalent;
+the `121e` same-path alias remains source-audited rather than separately run.
+
 ## Future Transport Work
 
 Drivers beyond the current boundary need extensions to the existing
@@ -797,8 +808,6 @@ These are examples from upstream classes that still need a driver-by-driver
 subsystem/lifecycle audit before they can be trusted. Synchronous raw GET/SET
 by itself is no longer a transport blocker:
 
-- `hid-alps.c`: raw GET/SET transport is present, but the surrounding init and
-  device-specific state remain unaudited.
 - `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
   wait-style init dependencies remain unaudited.
 - broader `hid-logitech-hidpp.c` capability, power, touchpad, and receiver

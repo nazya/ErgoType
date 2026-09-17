@@ -582,6 +582,22 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Manual Test Notes
 
+- 2026-09-18: the CDC-free ALPS matrix passed with host test UF2
+  `9e294a563db0176686a63af160c39e0f69d668408f7e1df057299ac192dfedc4`,
+  emulator UF2
+  `b307c1fb9f5446a529c713071d41a4b47540a9db42264c2c698be9e55d0e89f9`,
+  and 356-line host log
+  `76dba757d357a0cdc8e902ee23301d02889845177f486d287fc54e4a586fdee6`.
+  Ordered `f1,f2,f3,f4,f5,f6,f7,f10` completed without `f12`; all branch and
+  value markers had their exact expected counts. U1, two DualPoint primary and
+  stick generations, and two T4 generations had balanced lifetimes. All 30
+  heap snapshots reported `oom=0`, minimum-ever free heap was 48,584 B, and
+  every task watermark remained nonzero. There was no host error, warning,
+  input drop, or timeout. The fixture is protocol-equivalent, not a retail
+  descriptor capture; `121e` is source-audited only. Temporary host markers
+  were removed, and marker-free production UF2
+  `8c209c9bc4a419b747d859e214d43c5c227bc5815165ac04fdbef2603145e059`
+  was rebuilt but not flashed.
 - 2026-09-11: the representative Wacom fixture ran with host test UF2
   `f5df2a6e5aca34d24e05f622cf7d6f4bbc21658831890a3f30919e364df9ffe4`
   at temporary `HID_MAX_USAGES=32` and emulator UF2
@@ -1187,6 +1203,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   rejected interfaces, three balanced Tablet/Pad generations, 32 `oom=0`
   snapshots, and stable `61744`-byte detached target heap. The temporary host
   diagnostics were then removed and the production host rebuilt.
+- ALPS USB `044e:120b/120c/1215/121e` retains pinned U1/T4 raw Feature
+  initialization and input parsing. Only the unsafe offset-6/13 loads, reduced
+  secondary-input ownership, and immutable metadata differ. The 2026-09-18
+  no-CDC matrix passed rejection, input, reconnect, and balanced teardown; the
+  `121e` alias remains source-audited.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node
