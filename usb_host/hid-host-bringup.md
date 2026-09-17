@@ -766,7 +766,7 @@ depletes or fragments the runtime heap. Excluding a driver from CMake also
 excludes its runtime record while leaving its source in the repository. Exact
 current sizes are recorded in `pio-usb-memory.md`.
 
-The current allowlist is `hid-generic` plus A4Tech, Chicony, Creative SB0540,
+The current allowlist is `hid-generic` plus A4Tech, ALPS, Chicony, Creative SB0540,
 Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
 LetSketch USB `6161:4d15`,
 Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
@@ -782,6 +782,13 @@ input, then permanently shut down the timer. The dedicated CDC-free fixture is
 hardware-verified: the 2026-09-17 run completed every failure, input,
 pending-timer disconnect, and same-PID reconnect phase with balanced input
 lifetimes, stable detached heap, nonzero task watermarks, and `oom=0`.
+ALPS selects pinned wired `044e:120b/120c/1215/121e`. Its synchronous raw
+Feature initialization runs through the existing transport; U1/T4 touch and
+button reports stay in the upstream raw parser, and DualPoint owns a managed
+secondary stick input. The 2026-09-18 no-CDC fixture passed malformed T4
+replies, U1, two DualPoint generations, two T4 geometry generations, input,
+reconnect, and balanced teardown. `121e` remains a source-audited same-path
+alias, and the protocol-equivalent fixture is not a retail descriptor claim.
 The linked complete Logitech HID++/DJ and UC-Logic sources retain their narrow
 USB ID gates. Wacom instead uses the 134 active fixed profiles, explicit
 unfinished-profile quirks, and final wired wildcard described in Current

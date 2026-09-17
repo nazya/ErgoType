@@ -46,6 +46,7 @@ typedef long loff_t;
  * This port mirrors the HID drivers currently linked from CMake.
  */
 #define CONFIG_HID_GENERIC 1
+#define CONFIG_HID_ALPS 1
 #define CONFIG_HID_APPLE 1
 // Keep legacy, Bluetooth, internal keyboard/trackpad, Touch Bar, and
 // backlight-only devices visible but outside the selected USB scope.
@@ -347,6 +348,7 @@ typedef int atomic_t;
 #define EXPORT_SYMBOL(x)
 #define EXPORT_SYMBOL_GPL(x)
 #define __must_check
+#define __maybe_unused __attribute__((unused))
 #define __init
 #define __exit
 #define THIS_MODULE NULL

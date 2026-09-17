@@ -17,6 +17,36 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### Hardware-verified ALPS U1/T4 matrix
+
+The CDC-free `device/alps-matrix` fixture passed on 2026-09-18 with host test
+UF2 `9e294a563db0176686a63af160c39e0f69d668408f7e1df057299ac192dfedc4`,
+emulator UF2
+`b307c1fb9f5446a529c713071d41a4b47540a9db42264c2c698be9e55d0e89f9`,
+and 356-line main-host log
+`76dba757d357a0cdc8e902ee23301d02889845177f486d287fc54e4a586fdee6`.
+The ordered markers `f1,f2,f3,f4,f5,f6,f7,f10` each had one down/up pair;
+`f12` was absent. Every temporary ALPS branch/value marker appeared exactly as
+specified by the fixture README, with no `ERR`, `WARN`, `HID_IGNORED`, drop,
+timeout, OOM, or zero task watermark.
+
+The run covered three malformed first T4 replies, one U1 `1215` generation,
+two same-PID U1 DualPoint `120b` generations, and two same-PID T4 `120c`
+generations using both signed-sensor-nibble outcomes. U1 touch/release, T4
+touch/palm/release, and DualPoint stick/button input reached the host. Every
+primary input and both secondary stick inputs removed; each completed U1 or
+DualPoint phase returned to the established 61,728-byte post-USB heap plateau,
+and both T4 removals reported 61,744 bytes. All 30 snapshots had `oom=0` and
+the minimum-ever heap counter was 48,584 bytes. Minimum host watermarks were
+async/work/timer/lifecycle/report `389/346/348/157/873` words.
+
+The descriptors are protocol-equivalent fixtures, not retail captures.
+`044e:121e` selects the same pinned U1 branch and remains source-audited rather
+than repeated. Temporary host diagnostics were removed after the run. The
+marker-free production host rebuilt as
+`8c209c9bc4a419b747d859e214d43c5c227bc5815165ac04fdbef2603145e059`;
+that cleaned UF2 was not flashed.
+
 ### Accepted 2026-09-11 representative Wacom hardware evidence
 
 The current single-Pico fixture targets distinct executable paths rather than
@@ -603,6 +633,7 @@ claims for unrelated drivers.
 
 | Date | Branch | Verified signal |
 | --- | --- | --- |
+| 2026-09-18 | `device/alps-matrix`, host `9e294a56…`, emulator `b307c1fb…`, log `76dba757…` | malformed T4 address/size/checksum replies, U1 initialization/input, two same-PID DualPoint generations with managed stick input, and two T4 geometry generations complete through `f10`; target input lifetimes balance, all 30 snapshots have `oom=0`, every task watermark remains nonzero, and no `f12`, host error, warning, drop, or timeout appears |
 | 2026-07-10 | `device/razer-blackwidow` | host sends Razer raw SET_REPORT, emulator then emits macro usage, and Pico host sees unsupported KeyD code `0x290` events |
 | 2026-07-14 | `device/google-stadiaff` (historical host `hid: stabilize stadia ff teardown`) | layout-change FF trigger sends Stadia rumble start and ff-memless timer stop; emulator marker moves pointer up on start and down on stop; this does not verify the current mutex conversion |
 | 2026-07-22 | `device/google-stadiaff` (`f8f9a38`) with temporary linked/instrumented host trigger | retained mutex conversion passes start, 300-ms timer stop, same-ID replay, unplug during the exact running Stadia work, and clean remove in two complete cycles separated by reconnect; both cycles return to the same 60,816-byte free-heap plateau with `oom=0` |
@@ -750,15 +781,16 @@ drivers are not counted here.
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
 | `report_fixup` | `hid-apple`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, and `zydacron-remote` verified; the `holtek-mouse` hardware pass remains pending |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-alps`, `hid-apple`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies the ALPS mapping suppression |
 | driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified |
-| `raw_event` hooks | `hid-chicony`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `letsketch-wp9620n` verifies the LetSketch branches |
-| `input_configured` / extra managed input | `hid-creative-sb0540` | Creative verifies the callback; Wacom fixtures cover additional managed-input ownership |
+| `raw_event` hooks | `hid-alps`, `hid-chicony`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies U1/T4 touch, button, palm, release, and stick branches; `letsketch-wp9620n` verifies LetSketch |
+| `input_configured` / extra managed input | `hid-alps`, `hid-creative-sb0540` | `alps-matrix` verifies two balanced DualPoint secondary-stick lifetimes; Creative verifies the callback; Wacom fixtures cover additional managed-input ownership |
 | `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
 | workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, and receiver work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
+| synchronous raw Feature SET/GET initialization | `hid-alps`, Wacom, selected UC-Logic and Lenovo paths | `alps-matrix` validates every U1/T4 SET request byte, resulting initialization/input values, and three T4 reply-rejection branches |
 | periodic regular GET_REPORT and timer teardown | `hid-apple` Magic Keyboard battery path | `apple-external-usb` verified immediate GET, one real 60-second deadline, queued-request disconnect, timer teardown, and reconnect |
 | driver-time USB string sequence and report-driven timer shutdown | `hid-letsketch` | CDC-free `letsketch-wp9620n` fixture verified 2026-09-17 |
 | USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | Existing composite-interface fixtures cover the metadata graph |
@@ -783,9 +815,12 @@ ELAN USB `04f3:074d/0755` remains in retained source, but its CMake entry and
 and has no firmware build or hardware verdict.
 LetSketch USB `6161:4d15` is active with a hardware-verified no-CDC fixture for
 its string sequence, raw reports, timer expiry/shutdown, and reconnect graph.
+ALPS USB `044e:120b/120c/1215/121e` is active; the no-CDC U1/T4 matrix verifies
+its request/reply, raw input, managed secondary input, reconnect, and teardown
+graph. The `121e` alias remains source-audited.
 Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
-A4Tech,
+A4Tech, ALPS,
 Apple external USB, Chicony, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Lenovo `6009/6047`, LetSketch, Microsoft, Primax, PXRC, Rapoo, Razer,
 Saitek, Topre, Wacom,
@@ -811,7 +846,7 @@ reuse an already tested hook shape.
 ## Coverage Decision
 
 The existing emulator set plus the hardware-verified work-input, combined
-haptic/Trackpad, Microsoft, Apple, exact Wacom, and temporary-capacity
+haptic/Trackpad, Microsoft, Apple, ALPS, exact Wacom, and temporary-capacity
 Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
 Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
 Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
