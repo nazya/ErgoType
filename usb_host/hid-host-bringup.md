@@ -766,8 +766,9 @@ depletes or fragments the runtime heap. Excluding a driver from CMake also
 excludes its runtime record while leaving its source in the repository. Exact
 current sizes are recorded in `pio-usb-memory.md`.
 
-The current allowlist is `hid-generic` plus A4Tech, ALPS, Chicony, Creative SB0540,
-Cypress, ELECOM, EVision, Holtek keyboard and mouse fixups, ITE, Kensington,
+The current allowlist is `hid-generic` plus A4Tech, ALPS, Chicony, Corsair
+Glaive/Scimitar/K70, Cougar 500K/700K, Creative SB0540, Cypress, ELECOM, EVision,
+Holtek keyboard and mouse fixups, ITE, Kensington,
 LetSketch USB `6161:4d15`,
 Kye, Lenovo `6009/6047`, Microsoft, Apple external USB, Primax, PXRC, Rapoo,
 Razer, Saitek, Topre, and Zydacron, plus generic multitouch, HID Haptics, and
@@ -789,6 +790,18 @@ secondary stick input. The 2026-09-18 no-CDC fixture passed malformed T4
 replies, U1, two DualPoint generations, two T4 geometry generations, input,
 reconnect, and balanced teardown. `121e` remains a source-audited same-path
 alias, and the protocol-equivalent fixture is not a retail descriptor claim.
+Corsair selects wired Glaive `1b1c:1b34` and Scimitar Pro `1b1c:1b3e` for
+their exact Consumer descriptor repair plus the K70/K70 RAPIDFIRE row
+`1b1c:1b09`, whose driver-table data is zero. K70 reuses the linked callback
+graph and is source-audited, not separately enumerated; K90 retains generic
+fallback.
+Cougar selects wired 500K `060b:500a` and 700K `060b:700a`, including the
+composite sibling keyboard/vendor sharing and mouse usage-count repair. Their
+combined CDC-free fixture passed both probe orders, target input, reconnect,
+and teardown on 2026-09-18 with `oom=0` and nonzero stack watermarks. The first
+alert `f1` was sent without the later activation delay and was absent,
+consistent with startup input draining; all target events, markers `f2`
+through `f6`, and terminal `f10` were present, with no `f12`.
 The linked complete Logitech HID++/DJ and UC-Logic sources retain their narrow
 USB ID gates. Wacom instead uses the 134 active fixed profiles, explicit
 unfinished-profile quirks, and final wired wildcard described in Current

@@ -441,7 +441,11 @@ static const struct hid_device_id hid_have_special_driver[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CMEDIA, USB_DEVICE_ID_CM6533) },
 #endif
 #if IS_ENABLED(CONFIG_HID_CORSAIR)
+// Keep the upstream K90 special-driver row gated with its unsupported
+// vendor-control/LED path so hid-generic remains available for that keyboard.
+#if IS_ENABLED(CONFIG_HID_CORSAIR_KEYBOARDS)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR, USB_DEVICE_ID_CORSAIR_K90) },
+#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR, USB_DEVICE_ID_CORSAIR_GLAIVE_RGB) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR, USB_DEVICE_ID_CORSAIR_SCIMITAR_PRO_RGB) },
 #endif
