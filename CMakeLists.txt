@@ -745,6 +745,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Mighty Mouse; legacy, Bluetooth, internal, Touch Bar, and
         # backlight-only devices remain gated in the source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-apple.c
+        # External wired Claymore II; laptop WMI/backlight and other ASUS
+        # device families remain visibly gated in the pinned upstream source.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-asus.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-a4tech.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-aureal.c
         # Deferred: HIDDEV-forced driver; keep out until hiddev proxy coverage is

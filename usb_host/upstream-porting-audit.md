@@ -63,6 +63,17 @@ Only two unsafe unaligned loads, secondary-input ownership in the reduced
 device core, and immutable driver metadata differ from the pinned source. Its
 no-CDC U1/T4 fixture passed initialization, malformed-reply rejection, input,
 same-PID reconnect, and balanced primary/secondary teardown on 2026-09-18.
+The complete pinned ASUS driver is active for nine wired USB rows: Claymore II,
+six zero-quirk rows, G752, and Medion E1239T. The common path retains its
+cross-type report-ID search, ordered synchronous Feature SET/GET handshakes,
+ASUS/MS mappings, event forwarding, and AURA filters. Claymore retains its
+exact sleep filter; G752 retains its exact descriptor repair; Medion retains
+its multi-input touchpad, toggle, mute, and multitouch-start graph. T100 remains
+gated because its shared IDs require unavailable DMI touchpad qualification;
+backlight/NKEY/Ally, I2C, and Bluetooth paths remain gated for their stated
+platform or bus dependencies. The expanded 2026-09-18 CDC-free hardware pass
+qualifies the Claymore, exact/neighboring G752, two-interface Medion, and AK1D
+paths. The other zero-quirk aliases are source-audited but were not enumerated.
 The separate Rapoo managed extra-input regression remains pending.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
@@ -654,6 +665,7 @@ sources so their enablement contract remains visible.
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-alps.c` | Complete pinned source active for `044e:120b/120c/1215/121e`; only the offset-6 `u32` and offset-13 `u16` loads use unaligned LE helpers, the DualPoint secondary input is device-managed for the reduced device core, and the driver descriptor is immutable. The no-CDC U1/T4 matrix passed on 2026-09-18; `121e` is a source-audited same-path alias. |
+| `hid-asus.c`, `platform_data/x86/asus-wmi.h` | Complete pinned source active for nine wired USB rows: Claymore II `0b05:196b`; zero-quirk XGM 2022/2023, AK1D, MD-5110/5112, and T101HA; G752 `0b05:1822`; and Medion E1239T `048d:ce50`. Active paths preserve the upstream common handshake/mapping graph, exact Claymore filter, exact G752 fixup, and Medion multi-input touchpad/toggle/mute graph. T100 remains gated for unavailable DMI model qualification; backlight/NKEY/Ally, I2C, and Bluetooth paths remain adjacent behind `CONFIG_HID_ASUS_ALL_DEVICES`. Matching special-driver rows follow the same boundary; the driver descriptor is immutable. The expanded 2026-09-18 CDC-free hardware pass qualifies Claymore, exact/neighboring G752, two-interface Medion, and AK1D; the other zero-quirk aliases are source-audited only. |
 | `hid-corsair.c` | Complete pinned source with wired Glaive `1b1c:1b34`, Scimitar Pro `1b1c:1b3e`, and the K70/K70 RAPIDFIRE row `1b1c:1b09` active with zero driver-table data. K70 reuses the already-linked callback graph and is source-audited rather than separately enumerated. K90 vendor-control/LED remains adjacent behind `CONFIG_HID_CORSAIR_KEYBOARDS`; its special-driver row uses the same gate so generic fallback remains available. The driver descriptor is immutable; the 2026-09-18 hardware run passed the exact and rejected mouse-descriptor predicates and target input, not K70 extra-key usages. |
 | `hid-cougar.c` | Complete pinned source active for wired 500K `060b:500a` and 700K `060b:700a`. Firmware explicitly initializes the heap-backed static mutex before driver registration and moves the shared-state devres action after releasing that mutex, correcting the inherited lock/cleanup ordering because `_or_reset` invokes the action immediately when registration fails. The upstream composite sibling, kref, report-fixup, and raw-event flow otherwise remains intact; the driver descriptor is immutable. The 2026-09-18 hardware run passed both probe orders, vendor-key routing, reconnect, and target teardown. |
 | `hid-elan.c` | Complete pinned source retained outside the active CMake allowlist, with its `CONFIG_HID_ELAN` gate inactive. Wired USB `04f3:074d/0755`, upstream I2C rows, immutable driver descriptor, and exact `ENAVAIL` compatibility value remain ready for a future enablement stage; no build or hardware verdict is claimed. |
@@ -746,9 +758,9 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 28 vendor-driver descriptor translation units across 27 vendor
+- CMake links 29 vendor-driver descriptor translation units across 28 vendor
   families; Holtek contributes separate keyboard and mouse units, while ALPS,
-  Wacom, and LetSketch are selected directly through CMake. Generic `hid-multitouch`
+  ASUS, Wacom, and LetSketch are selected directly through CMake. Generic `hid-multitouch`
   and `hid-haptic` are also linked. Stadia has no reduced config gate and is
   excluded simply by
   leaving its source out of CMake. The unlinked game-controller-only
@@ -1772,9 +1784,9 @@ Current checkpoint audit:
   `hid-logitech-hidpp.c`, full pinned `hid-logitech-dj.c`, and corresponding
   `hid-core.c` ingress/lifecycle changes against clean `83f14548`, then audited
   both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`,
-  `hid-lenovo.c`, and `hid-letsketch.c`, plus retained unlinked
+  `hid-lenovo.c`, `hid-letsketch.c`, and `hid-asus.c`, plus retained unlinked
   `hid-elan.c` and active `hid-alps.c`, against the same pin.
-  There are now 41 linked Linux-derived C translation units; forty have an
+  There are now 42 linked Linux-derived C translation units; 41 have an
   upstream source counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres

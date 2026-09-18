@@ -633,6 +633,8 @@ claims for unrelated drivers.
 
 | Date | Branch | Verified signal |
 | --- | --- | --- |
+| 2026-09-18 | Expanded ASUS wired USB matrix, host `eb31fbb0…`, emulator `e36984c9…`, log `01d9fad2…` | ordered `f1` through `f10`, exact translated-event counts, all rejection intervals, the exact and three neighboring G752 predicates, two Medion generations, and AK1D pass. All 15 target lifetimes balance; all 50 heap snapshots have `oom=0`; nine connected-alert plateaus recover to 49,232 bytes; every stack watermark is nonzero; and no `f12`, host error, warning, `HID_IGNORED`, drop, or report skip appears |
+| 2026-09-18 | ASUS Claymore II fixture, host `c3304ff8…`, emulator `c403ce32…`, log `f284a356…` | ordered `f1,f2,f3,f4,f5,f10` proves valid cross-type `5a/5d/5e` initialization, nonfatal mismatched/short responses, representative ASUS/MS mappings, exact `02 00` and AURA `5d/5e` filtering, accepted neighboring packets, no-init-ID fallback, reconnect, and teardown. Four target lifetimes balance, all 20 snapshots have `oom=0`, repeated alert plateaus are stable, every stack watermark remains nonzero, and no `f12`, `ERR`, `WARN`, `HID_IGNORED`, drop, or report skip appears |
 | 2026-09-18 | Corsair/Cougar fixture, host `e1119fc8…`, emulator `c859eee8…`, log `43c875e2…` | exact and negative Corsair fixup predicates, surviving composite siblings, both Cougar probe orders, vendor-key routing, reconnect, and target teardown pass; every target event, exactly two expected `HID_IGNORED`, terminal `f10`, `oom=0`, and nonzero task watermarks are present. Initial `f1`, sent without the later activation delay, is absent; this is target-path coverage rather than a complete marker-protocol pass |
 | 2026-09-18 | `device/alps-matrix`, host `9e294a56…`, emulator `b307c1fb…`, log `76dba757…` | malformed T4 address/size/checksum replies, U1 initialization/input, two same-PID DualPoint generations with managed stick input, and two T4 geometry generations complete through `f10`; target input lifetimes balance, all 30 snapshots have `oom=0`, every task watermark remains nonzero, and no `f12`, host error, warning, drop, or timeout appears |
 | 2026-07-10 | `device/razer-blackwidow` | host sends Razer raw SET_REPORT, emulator then emits macro usage, and Pico host sees unsupported KeyD code `0x290` events |
@@ -781,20 +783,20 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-apple`, `hid-corsair`, `hid-cougar`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote`, and the Corsair/Cougar matrix verified; the `holtek-mouse` hardware pass remains pending |
-| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-alps`, `hid-apple`, `hid-corsair`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies the ALPS mapping suppression; the Corsair mouse fixture reaches only the unchanged fallthrough, while the active K70 usage mappings are source-audited rather than hardware-enumerated |
-| driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-corsair`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, and `saitek-rat7` verified; the Corsair mouse report reaches the non-K90 fallthrough |
-| `raw_event` hooks | `hid-alps`, `hid-chicony`, `hid-cougar`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies U1/T4 touch, button, palm, release, and stick branches; `letsketch-wp9620n` verifies LetSketch; the Cougar sibling-routing matrix passed on hardware |
-| `input_configured` / extra managed input | `hid-alps`, `hid-creative-sb0540` | `alps-matrix` verifies two balanced DualPoint secondary-stick lifetimes; Creative verifies the callback; Wacom fixtures cover additional managed-input ownership |
-| `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio` |
+| `report_fixup` | `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cougar`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote`, Corsair/Cougar, Claymore, and the exact/neighboring G752 predicates are verified; `holtek-mouse` remains pending |
+| `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-alps`, `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies the ALPS mapping suppression; Claymore declares every ASUS/MS switch usage and its run passed representative mappings; the Corsair mouse fixture reaches only the unchanged fallthrough, while the active K70 usage mappings are source-audited rather than hardware-enumerated |
+| driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, `saitek-rat7`, and Claymore illumination-key forwarding verified; the Corsair mouse report reaches the non-K90 fallthrough |
+| `raw_event` hooks | `hid-alps`, `hid-asus`, `hid-chicony`, `hid-cougar`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies U1/T4 touch, button, palm, release, and stick branches; ASUS verifies Claymore filtering plus Medion mute/toggle/touchpad paths and rejection neighbors; `letsketch-wp9620n` verifies LetSketch; the Cougar sibling-routing matrix passed on hardware |
+| `input_configured` / extra managed input | `hid-alps`, `hid-asus`, `hid-creative-sb0540` | `alps-matrix` verifies two balanced DualPoint secondary-stick lifetimes; the ASUS matrix verifies Claymore ownership and two balanced three-input Medion generations; Creative verifies the callback; Wacom fixtures cover additional managed-input ownership |
+| `HID_QUIRK_MULTI_INPUT` / `HID_QUIRK_INPUT_PER_APP` | Medion path in `hid-asus`, KYE entries from `hid-quirks.c`, `hid-chicony` | `kye-easypen-m406`, `chicony-wireless-radio`, and the Medion interface-1 multi-input path are verified |
 | workqueue callback | `hid-input` LED work, active `hid-haptic` effect/stop work, and Wacom initialization, LED, ordinary/AES battery, and receiver work | LED path via `holtek-kbd-a055`; `haptic-lifecycle` verifies ordinary work; the exact Wacom artifacts cover pre-deadline and held-callback removal, PTK/PTH work disconnect, AES pending work, and receiver sibling-init/rebind/teardown lifetime |
 | async raw SET_REPORT | `hid-razer` | `razer-blackwidow` |
 | async regular SET_REPORT | `hid-kye`, `hid-input` LED work | `kye-easypen-m406`, `holtek-kbd-a055` |
 | async GET_REPORT to SET_REPORT continuation | `hid-input` resolution multiplier path | `hires-wheel` |
-| synchronous raw Feature SET/GET initialization | `hid-alps`, Wacom, selected UC-Logic and Lenovo paths | `alps-matrix` validates every U1/T4 SET request byte, resulting initialization/input values, and three T4 reply-rejection branches |
+| synchronous raw Feature SET/GET initialization | `hid-alps`, `hid-asus`, Wacom, selected UC-Logic and Lenovo paths | `alps-matrix` validates every U1/T4 SET request byte, resulting initialization/input values, and three T4 reply-rejection branches; ASUS verifies Claymore/AK1D ordered handshakes, nonfatal mismatch recovery, and Medion's per-interface handshake plus multitouch-start sequence |
 | periodic regular GET_REPORT and timer teardown | `hid-apple` Magic Keyboard battery path | `apple-external-usb` verified immediate GET, one real 60-second deadline, queued-request disconnect, timer teardown, and reconnect |
 | driver-time USB string sequence and report-driven timer shutdown | `hid-letsketch` | CDC-free `letsketch-wp9620n` fixture verified 2026-09-17 |
-| USB interface metadata before probe | `hid-rapoo`, Razer mouse/keyboard protocol split | Existing composite-interface fixtures cover the metadata graph |
+| USB interface metadata before probe | Medion path in `hid-asus`, `hid-rapoo`, Razer mouse/keyboard protocol split | Existing composite-interface fixtures cover the metadata graph; the ASUS matrix verifies Medion interface-1 selection |
 | product-string quirk before probe | name-based ignore entries in `hid-quirks.c` | `quirks-atmel-ma901` |
 | `bcdDevice` version quirk before probe | Jabra version ignore entries in `hid-quirks.c` | `quirks-jabra-version` |
 | Deferred Stadia `FF_RUMBLE` through memless FF (`ff-core.c` remains active for HID Haptics) | retained `hid-google-stadiaff.c` and `ff-memless.c`; upload/timer/replay/running-work-remove/reconnect path passed before deferral | `google-stadiaff` |
@@ -828,10 +830,23 @@ routing, reconnect, and balanced teardown. The 2026-09-18 run passed every
 target event and remaining marker through `f10`; only the initial alert `f1`,
 sent without the later
 activation delay and therefore exposed to startup draining, was absent.
+ASUS ROG Claymore II `0b05:196b` and eight additional wired rows are active.
+The six zero-quirk aliases are source-audited against the common ASUS graph;
+G752 and Medion add exact descriptor-fixup and multi-input touchpad/raw paths.
+The historical Claymore CDC-free fixture uses
+only public TinyUSB APIs and leaves the main-host log as the sole oracle. It
+passed `f1` for the initial alert, `f2` after valid cross-type initialization
+plus mapping/filter neighbors, `f3` after nonfatal mismatched/short replies and
+`5d/5e` filtering, `f4` after a plain profile with no initialization IDs, `f5`
+after clean reconnect, and terminal `f10`, with no `f12`, on 2026-09-18. The
+expanded matrix subsequently passed the exact/neighboring G752 fixup, full
+two-interface Medion path, AK1D common path, reconnect, and balanced teardown
+in the same hardware run. The other five zero-quirk aliases remain
+source-audited rather than individually enumerated.
 Stadia has a dedicated emulator fixture and a current result for its retained,
 unlinked `FF_RUMBLE` implementation. The remaining active vendor allowlist is
 A4Tech, ALPS,
-Apple external USB, Chicony, Corsair, Cougar, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
+Apple external USB, ASUS wired USB, Chicony, Corsair, Cougar, Creative SB0540, Cypress, ELECOM, EVision, Holtek keyboard, ITE,
 Kensington, KYE, Lenovo `6009/6047`, LetSketch, Microsoft, Primax, PXRC, Rapoo, Razer,
 Saitek, Topre, Wacom,
 and Zydacron. Apple and Microsoft passed their focused exact-artifact hardware
