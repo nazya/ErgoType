@@ -18,26 +18,23 @@ failure caused by static RAM layout.
 The current RP2040 build uses the default `HID_MAX_USAGES=675`. The retained
 ELAN source is excluded by CMake and `CONFIG_HID_ELAN`; hardware-verified
 LetSketch USB `6161:4d15` and ALPS USB `044e:120b/120c/1215/121e` remain
-linked. The production rebuild after removing the ALPS coverage markers is:
+linked. The Corsair/Cougar hardware-test image is:
 
 ```text
-text/data/bss                 631300 / 788 / 243456 B
-__bss_end__                   0x2003f748
-main-bank headroom            2232 B to 0x20040000
+text/data/bss                 634320 / 788 / 243556 B
+__bss_end__                   0x2003f7cc
+main-bank headroom            2100 B to 0x20040000
 HID_MAX_FIELDS/USAGES         64 / 675
-UF2 SHA-256                   8c209c9bc4a419b747d859e214d43c5c227bc5815165ac04fdbef2603145e059
-hardware coverage             representative logic exercised at temporary
-                              HID_MAX_USAGES=32 on 2026-09-11;
-                              ordering guard passed 18 rebinds at temporary
-                              HID_MAX_USAGES=64 on 2026-09-10;
-                              LetSketch matrix passed at retained 64/675 on
-                              2026-09-17; ALPS matrix passed at retained 64/675
-                              on 2026-09-18; this production UF2 was not flashed
+UF2 SHA-256                   e1119fc83351722ac89c30fc5e5426e8314cc7e8ca2aab7f9162921b5ad72be4
+hardware coverage             LetSketch and ALPS retain their recorded passes;
+                              Corsair/Cougar target matrix passed 2026-09-18;
+                              undelayed initial alert f1 was absent
 ```
 
 Compilation and size alone are not runtime evidence. The LetSketch and ALPS
-test images exercised their recorded logic, but this marker-free production
-image itself was not flashed.
+test images exercised their recorded logic. The Corsair/Cougar run produced
+all target events, exactly two expected HID_IGNORED warnings, `oom=0`, and
+nonzero task watermarks; it did not produce the early `f1` alert marker.
 The ALPS test image was `632676/788/243456`, host UF2
 `9e294a563db0176686a63af160c39e0f69d668408f7e1df057299ac192dfedc4`.
 Emulator UF2

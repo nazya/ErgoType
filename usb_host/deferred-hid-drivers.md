@@ -789,6 +789,27 @@ the malformed-T4-reply, U1, repeated DualPoint, repeated T4, input, reconnect,
 and teardown matrix on 2026-09-18. The descriptors are protocol-equivalent;
 the `121e` same-path alias remains source-audited rather than separately run.
 
+## Active Corsair and Cougar USB Boundary
+
+Pinned `hid-corsair.c` is linked for Glaive `1b1c:1b34` and Scimitar Pro
+`1b1c:1b3e`, whose Consumer interface needs the exact upstream descriptor
+repair, and for the K70/K70 RAPIDFIRE row `1b1c:1b09`, whose driver-table data
+is zero. K70 reuses the already-linked Corsair callbacks and remains
+source-audited rather than separately enumerated; its extra-key usages are not
+a hardware-pass claim.
+K90 vendor control/LED support remains compile-gated, and its special-driver
+entry is gated with its driver row so generic HID fallback is unchanged.
+
+Pinned `hid-cougar.c` is linked for 500K `060b:500a` and 700K `060b:700a`.
+Its three-interface path retains the upstream mouse usage-count repair and
+routes vendor G-keys through the sibling keyboard input. Firmware initializes
+the compatibility mutex before probe and registers the shared cleanup action
+after releasing that mutex. The 2026-09-18 CDC-free run passed both probe
+orders, routing, reconnect, and target teardown with no OOM. Its initial `f1`
+alert marker was sent without the later activation delay and was absent,
+consistent with startup draining, while all target events and the remaining
+ordered markers through `f10` were present.
+
 ## Future Transport Work
 
 Drivers beyond the current boundary need extensions to the existing

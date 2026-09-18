@@ -1208,6 +1208,16 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   secondary-input ownership, and immutable metadata differ. The 2026-09-18
   no-CDC matrix passed rejection, input, reconnect, and balanced teardown; the
   `121e` alias remains source-audited.
+- Corsair Glaive/Scimitar `1b1c:1b34/1b3e`, the zero-driver-data K70/K70
+  RAPIDFIRE row `1b1c:1b09`, and Cougar 500K/700K `060b:500a/700a` are linked
+  from the pinned drivers. K70 reuses the already-linked Corsair callback graph
+  and is source-audited rather than separately enumerated. The 2026-09-18
+  CDC-free run passed the exact and rejected Corsair fixup predicates, live
+  sibling interfaces, both Cougar probe orders, vendor-key routing, reconnect,
+  and target teardown with `oom=0` and nonzero stack watermarks. The initial
+  `f1` alert marker was sent without the later activation delay and was absent,
+  consistent with the host startup drain; `f2` through `f6` and terminal `f10`
+  were present, with no `f12`.
 - HID core now restores the upstream-shaped HIDRAW
   connect/claim/report/disconnect lifecycle. The reduced object stores no
   reports and has no subscriber, VFS, file descriptor, ioctl, or device-node

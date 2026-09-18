@@ -757,6 +757,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Deferred: mixed driver file; CM6533 raw/hiddev path is disabled in
         # source, and HS100B-only enablement should be tested explicitly.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cmedia.c
+        # Glaive/Scimitar descriptor repair and the K70 row with zero driver
+        # data are active; K90 and the separate Corsair headset driver remain
+        # outside this stage.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-corsair.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cougar.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-creative-sb0540.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cypress.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-elan.c

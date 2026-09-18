@@ -54,6 +54,10 @@ typedef long loff_t;
 #define CONFIG_HID_A4TECH 1
 #define CONFIG_HID_CHICONY 1
 #define CONFIG_HID_CREATIVE_SB0540 1
+#define CONFIG_HID_CORSAIR 1
+// K90 vendor controls/LEDs stay visible in the complete source but gated.
+// #define CONFIG_HID_CORSAIR_KEYBOARDS 1
+#define CONFIG_HID_COUGAR 1
 #define CONFIG_HID_CYPRESS 1
 // #define CONFIG_HID_ELAN 1
 #define CONFIG_HID_ELECOM 1
@@ -197,8 +201,8 @@ struct mutex {
 
 /*
  * PORTING DEBT: this is only zero storage, not Linux's usable static mutex.
- * No linked caller locks a DEFINE_MUTEX object; require explicit mutex_init()
- * or compile-gate the caller before enabling one.
+ * A linked caller must explicitly run mutex_init() before first use or remain
+ * compile-gated; Cougar does so from its built-in initcall.
  */
 #define DEFINE_MUTEX(name) struct mutex name = { 0 }
 
