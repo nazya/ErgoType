@@ -51,6 +51,11 @@ typedef long loff_t;
 // Keep legacy, Bluetooth, internal keyboard/trackpad, Touch Bar, and
 // backlight-only devices visible but outside the selected USB scope.
 // #define CONFIG_HID_APPLE_ALL_DEVICES 1
+#define CONFIG_HID_ASUS 1
+// Select nine wired USB rows whose complete paths use available firmware
+// services. T100, backlight/Ally, I2C, and Bluetooth paths remain retained.
+// This is not a standalone switch: WMI, DMI and backlight locking are absent.
+// #define CONFIG_HID_ASUS_ALL_DEVICES 1
 #define CONFIG_HID_A4TECH 1
 #define CONFIG_HID_CHICONY 1
 #define CONFIG_HID_CREATIVE_SB0540 1

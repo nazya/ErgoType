@@ -810,6 +810,27 @@ alert marker was sent without the later activation delay and was absent,
 consistent with startup draining, while all target events and the remaining
 ordered markers through `f10` were present.
 
+## Active ASUS Wired USB Boundary
+
+The complete pinned `hid-asus.c` is linked for nine wired USB rows. Claymore
+II `0b05:196b` retains ordered Feature handshakes, ASUS/MS mappings, AURA
+filters, and its exact sleep-packet filter. The zero-quirk XGM 2022/2023,
+AK1D, MD-5110/5112, and T101HA rows use that already active common driver
+graph. G752 `0b05:1822` additionally repairs its exact 75-byte descriptor;
+Medion E1239T `048d:ce50` additionally uses interface-1 multi-input touchpad,
+toggle-key, synthesized mute, and multitouch-start paths.
+
+T100 rows remain gated because their shared USB IDs require unavailable DMI
+identity to select the correct touchpad geometry. The nine backlight/NKEY/Ally
+rows remain gated pending their WMI, DMI, listener, and locking services; I2C
+and Bluetooth rows remain outside the wired scope. Matching special-driver
+rows use the same active boundary, so excluded devices retain generic
+fallback. The expanded CDC-free Claymore/G752/Medion/AK1D matrix passed on
+hardware on 2026-09-18: all required markers, translated events, rejection
+intervals, and 15 target lifetimes matched, with `oom=0` and nonzero task
+watermarks. The remaining zero-quirk aliases are source-audited common-path
+rows and were not enumerated individually.
+
 ## Future Transport Work
 
 Drivers beyond the current boundary need extensions to the existing
