@@ -262,20 +262,20 @@ transport. Those parts are not current functionality and must not be added
 without a device or internal consumer that defines their exact contract.
 
 Direct HID++ does not depend on HIDRAW. The hardware-tested request/reply
-foundation links a deliberately narrow slice from pinned upstream
-`hid-logitech-hidpp.c`; the current host extends it:
+foundation came from a narrow slice of pinned upstream `hid-logitech-hidpp.c`.
+The current uncommitted expansion restores its common USB/DJ flow:
 
-- direct USB `046d:c08d` and `046d:c08a` are selected;
-- generic HID input remains active, while the HID++ driver adds `.probe`,
-  `.remove`, `.raw_event`, and protocol-version detection;
+- direct USB `046d:c081/c082/c086/c087/c088/c08a/c08d/c090/c091/c094/c09a/
+  c09b/c343` are selected; the source retains pinned table order;
+- ordinary HID input remains active, with the upstream HID++ probe, raw,
+  fixup, event, and input callbacks;
 - a real single-waiter task bridge preserves register-before-test, the durable
   response predicate, timeout, response wake, and exact-interface disconnect
   cancellation without polling or report-time allocation;
 - probe-time interrupt replies enter only the driver's validated `raw_event`
   matcher; ordinary field/input parsing stays behind final evdev activation;
-- the current extension enables upstream pre-connect HID++ 2.0 name
-  and unit-ID/serial discovery before `hid_connect()`; the unit ID remains in
-  Linux HID/input state;
+- upstream HID++ 2.0 name and unit-ID/serial discovery runs before
+  `hid_connect()`; the unit ID remains in Linux HID/input state;
 - the evdev/devmon boundary retains the bounded final name and the KeyD task
   reports device attachment as `DEVICE: added <vid:pid> <name>`;
 - direct HID++ battery discovery and notifications use a real reduced
@@ -285,22 +285,27 @@ foundation links a deliberately narrow slice from pinned upstream
   value. The UI task currently reads and ignores value events, then owns queue
   cleanup after terminal `REMOVED`; KeyD and the ordinary devmon path are not
   involved, and UI presentation remains deferred;
-- generic HID battery strength, sysfs, force feedback, broad Logitech
-  matching, Bluetooth, and legacy 27 MHz classes remain visibly gated in
-  their upstream positions. The current exact-class stage additionally selects
-  only the exact upstream M560, T650, K400, and K750 DJ child classes,
-  including their class-specific input hooks and delayed initialization.
+- exact DJ child rows `4011/4101/1017/402d/101b/101a/4024/4002/407f` retain
+  their upstream quirks before the DJ-group wildcard. This is not a wildcard
+  for arbitrary physical Logitech USB devices. A child without HID++ reports
+  stays bound to HID++ with ordinary HID input and no protocol state;
+- common battery, high-resolution wheel, touch, connect, and reset work are
+  active. Both workers stop before waiter unbinding and mutex destruction.
+  Linux sysfs publication remains a reduced no-op; force feedback, headsets,
+  Bluetooth, legacy 27 MHz, and proxy/Dinovo exact classes stay gated.
 
 The first single-M705 receiver checkpoint has since been superseded by the
 pinned-upstream-shaped `hid-logitech-dj.c` port. Runtime matching enables
-`046d:c52b/c532`. The adjacent upstream `c52f` mouse-only and `c534` HID++ rows
+`046d:c52b/c532`, gaming/Lightspeed/Powerplay
+`c531/c537/c539/c53a/c53f/c543`, and Lightspeed 1.3 `c547/c54d`.
+The adjacent upstream `c52f` mouse-only and `c534` HID++ rows
 remain intact behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`: at the retained
 `HID_MAX_USAGES=675`, their physical 652-usage Consumer field requests 20,980
 bytes and their 675-entry virtual-child field requests 21,716 bytes. Those two
 persistent allocations alone total 42,696 bytes and do not fit the RP2040 heap
-with the receiver graph. Gaming, Lightspeed/Powerplay, legacy 27 MHz,
-Bluetooth-proxy, and Dinovo rows remain behind the same broader gate. The
-active port retains the upstream multi-slot virtual-child model, standard
+with the receiver graph. Legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain
+behind the same broader gate. The active port retains the upstream multi-slot
+virtual-child model, standard
 mouse/keyboard/Consumer/power/media descriptors, HID++ descriptors, and
 virtual-child raw-request routing through the physical receiver. Firmware glue
 supplies the task-owned work/lifecycle boundary and final evdev activation.
@@ -311,12 +316,12 @@ exact retained-policy regression remains pending. Because the IDs are absent onl
 Linux-style generic fallback may still publish their physical interfaces; it
 sends no DJ/HID++ startup sequence and creates no virtual receiver child.
 
-The exact-class extension keeps the upstream IDs and quirks:
-M560 `046d:402d`, T650 `046d:4101`, K400 `046d:4024`, and K750
+The earlier hardware-tested exact-class extension kept the upstream IDs and
+quirks: M560 `046d:402d`, T650 `046d:4101`, K400 `046d:4024`, and K750
 `046d:4002`. M560 and T650 retain upstream delayed input publication; T650
 uses the WTP raw-XY path, K400 retains its normal composite reports, and K750
-uses the reduced power-supply boundary for solar events. It does not enable a
-wildcard ID, Bluetooth, Bolt, force feedback, or a new HIDRAW consumer. Its
+uses the reduced power-supply boundary for solar events. That stage did not
+enable a wildcard ID, Bluetooth, Bolt, force feedback, or a new HIDRAW consumer. Its
 matching automatic emulator completed the full hardware sequence on
 2026-07-26, including both M560/T650 generations, K400, K750, and the final
 direct regression.
@@ -341,18 +346,21 @@ Logitech firmware entities.
 
 The staged order from here is:
 
-1. Keep the hardware-verified exact-class change at the Linux input/evdev
-   boundary. Downstream KeyD
-   policy for high-resolution wheel or absolute touch input is a separate
-   stage.
+1. Retain the 2026-09-22 13-generation HID++ protocol/lifecycle pass at
+   temporary `64/256`. It covers wheel setup, reset-work, gaming/Lightspeed,
+   physical-button WTP, and wildcard-fallback paths, not exact hi-res values
+   or queued-versus-running reset timing. Scope ends at Linux input/evdev;
+   KeyD/downstream policy is unchanged. See `hid-emulator-coverage.md`.
 2. Extend reduced HIDRAW only when a concrete driver or internal consumer
    requires descriptor or raw-report exchange.
 3. Preserve `64/675` as the current compatibility policy. Do not optimize only
    to force every large descriptor graph onto RP2040; validate those graphs on
-   a measured larger-RAM target if that becomes the selected hardware.
+   a measured larger-RAM target if that becomes the selected hardware. The
+   synthetic `c539` child exhausted heap at 675; `c547` was not reached there.
+   Both passed at temporary 256; this is not a per-retail-descriptor verdict.
 
-The current capability/receiver matrix covers M705, M560, K400, K750,
-T650, generic simultaneous Unifying keyboard/mouse children, and direct USB
+The earlier hardware-qualified capability/receiver matrix covers M705, M560,
+K400, K750, T650, generic simultaneous Unifying keyboard/mouse children, and direct USB
 HID++ regression. A direct-USB MX Vertical capability fixture remains future.
 Logitech Bolt must be treated as a separate protocol/device check rather than
 assumed from Unifying/DJ coverage. Bluetooth-only models remain outside this
@@ -895,8 +903,8 @@ by itself is no longer a transport blocker:
 
 - `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
   wait-style init dependencies remain unaudited.
-- broader `hid-logitech-hidpp.c` capability, power, touchpad, and receiver
-  paths beyond the narrow direct request/reply candidate above.
+- remaining `hid-logitech-hidpp.c` force-feedback, headset, Bluetooth, and
+  legacy proxy/27 MHz classes outside the USB/DJ boundary above.
 - `hid-ntrig.c`: USB control-message firmware/query path.
 - `hid-sony.c`, `hid-nintendo.c`, `hid-playstation.c`: controller init uses
   request/response and worker-style state.

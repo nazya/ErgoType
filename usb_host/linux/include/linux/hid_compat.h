@@ -95,28 +95,14 @@ typedef long loff_t;
 // #define CONFIG_HID_MICROSOFT_ALL_DEVICES 1
 #define CONFIG_HID_LOGITECH_HIDPP 1
 #define CONFIG_HID_LOGITECH_DJ 1
-#define CONFIG_HID_LOGITECH_DJ_ORDINARY_RECEIVERS 1
 // #define CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS 1
-// Select c52b plus c532. The retained c52f/c534 rows need both their physical
-// and virtual Consumer graphs and exceed the RP2040 heap at HID_MAX_USAGES=675;
-// gaming, 27 MHz, Bluetooth-proxy, and Dinovo rows share the broader gate.
-/*
- * Direct-USB HID++ is enabled in measured stages. Request/reply remains the
- * transport umbrella, while identity opens only upstream pre-connect name and
- * unit-ID discovery. Broader capabilities and device families stay gated until
- * each has an independent hardware pass.
- */
-#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY 1
-#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_IDENTITY 1
-#define CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY 1
-// The selected DJ stage enables the upstream M705 HID++ 1.0 wheel path.
-#define CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0 1
-/*
- * The practical Unifying stage opens only the exact upstream M560, T650,
- * K400, and K750 child classes. Broad DJ matching, Bluetooth, legacy proxy
- * devices, and force feedback remain outside this stage.
- */
-#define CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES 1
+// c52b/c532 and gaming/Lightspeed/Powerplay receivers use upstream dispatch.
+// Enabled IDs do not imply RAM fit: the c539 fixture exceeds heap at 675 usages.
+// c52f/c534 still exceed the RP2040 heap with physical plus virtual Consumer
+// graphs at HID_MAX_USAGES=675; legacy 27 MHz/Bluetooth-proxy rows stay gated.
+// #define CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES 1
+// USB mice/keyboards and DJ children use the common upstream HID++ flow.
+// Bluetooth, legacy 27 MHz/proxy, headsets, and wheel force feedback stay gated.
 // Keep the complete pinned hid-uclogic device table in source while the active
 // stages match Huion 256c:006d/006e and selected modern XP-Pen UGEE-v2 IDs.
 // #define CONFIG_HID_UCLOGIC_ALL_DEVICES 1

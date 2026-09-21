@@ -2192,15 +2192,10 @@ static const struct hid_device_id logi_dj_receivers[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_UNIFYING_RECEIVER),
 	 .driver_data = recvr_type_dj},
-	// Upstream Linux enables every receiver below. Firmware selects c532
-	// separately from the memory-gated and non-ordinary receiver rows.
-#if defined(CONFIG_HID_LOGITECH_DJ_ORDINARY_RECEIVERS) || \
-	defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
 	{ /* Logitech unifying receiver (0xc532) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_UNIFYING_RECEIVER_2),
 	 .driver_data = recvr_type_dj},
-#endif
 
 #if defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
 	// Retain the upstream Nano rows, but keep them inactive in the RP2040 DJ
@@ -2213,6 +2208,8 @@ static const struct hid_device_id logi_dj_receivers[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_NANO_RECEIVER_2),
 	 .driver_data = recvr_type_hidpp},
+#endif
+
 	{ /* Logitech G700(s) receiver (0xc531) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH,
 			 USB_DEVICE_ID_LOGITECH_G700_RECEIVER),
@@ -2246,6 +2243,8 @@ static const struct hid_device_id logi_dj_receivers[] = {
 		USB_DEVICE_ID_LOGITECH_NANO_RECEIVER_LIGHTSPEED_1_4),
 	 .driver_data = recvr_type_gaming_hidpp_ls_1_3},
 
+#if defined(CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS)
+	/* Legacy 27 MHz and Bluetooth-proxy receivers remain outside the port. */
 	{ /* Logitech 27 MHz HID++ 1.0 receiver (0xc513) */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_MX3000_RECEIVER),
 	 .driver_data = recvr_type_27mhz},
