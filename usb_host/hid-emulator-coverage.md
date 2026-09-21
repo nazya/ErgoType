@@ -17,6 +17,68 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### USB HID++ expansion matrix — temporary `64/256` hardware pass
+
+The current CDC-free single-Pico fixture has 13 target generations: direct
+`c094`; DJ wildcard `0x2121` wheel and `0x2120` fallback; `1017` HID++ 1.0
+wheel and battery continuation; `407f` reconnect/reset work, queued-detach timing
+stimulus, running unpair/re-pair, running physical detach, and fresh recovery;
+gaming `c539`; Lightspeed 1.3 `c547`; physical-button WTP `4011`; and a DJ
+wildcard child without HID++ reports. Exact PID aliases are source-audited.
+The 2026-09-22 hardware run passed the protocol/lifecycle matrix with
+`HID_MAX_FIELDS=64` and temporary `HID_MAX_USAGES=256`. Child descriptors were
+not changed. Production `64/675` is restored; its generation-10 capacity
+failure is recorded below. KeyD is unchanged.
+
+```text
+host UF2  a0e4353c60b090ab6516ec3a74a136a7e014be77fb6eb44d5a8ce910eefd6e60
+emu UF2   a5d212dd17ade0a6cc9954ee5a7b56fb6201f9d2aff43925380c08fdebebcf3c
+host log  ce1bd631d047a983251c6be4a3c13685f8d570a8020de4b28227cbf3aa1a96a7
+```
+
+The initial production `64/675` image, UF2 SHA-256
+`64bb39e2e303756617a7522175022e984f51a2e5d027bb70006f4474950e709a`,
+ran with the same emulator and stopped after nine `f11` pairs parsing the
+generation-10 synthetic `c539` virtual child: `ERR: HID_FIELD_NOMEM`, `oom=1`,
+minimum heap 776 bytes, and failure marker `f12 10`. The failed host-log SHA-256 is
+`dd4c1a71753d309095d2f2cad5714189846783f5c32d388c7d82e3991aa6c2f9`.
+Generation-11 `c547` was not reached at 675. This is a measured limit of this
+fixture graph, not a verdict for every retail descriptor. The complete matrix
+pass belongs only to the `a0e4353c...` temporary-256 image above.
+
+After restoring `HID_MAX_USAGES=675` and updating comments/header lines, the
+final standard production rebuild has UF2 SHA-256
+`d71402c151df28ee615dee9b709f9ec76744b4b6cf495fbf63e2c63529451d05`
+and build ID `d4bd446991ec6b9c7731c258fdcbc365927e5b27`. UF2 size is
+1,293,312 bytes; text/data/bss remain `645732/788/243604` bytes. This final
+image was not reflashed or rerun.
+
+The successful temporary-256 log contains one `f1` pair, 13 `f11` pairs,
+terminal `f10`, and no `f12`. All 14 Logitech target additions have matching
+removals, including the generation-07 re-pair. The marker keyboard has 14
+additions/13 removals and intentionally remains attached.
+`HID_REPORT_SET_Q/OK` totals are 22/22.
+Both gaming generations show `a` and volume-up input; WTP events reach the
+input boundary, and the final `40fd` generic-input child completes.
+
+Every heap snapshot has `oom=0`; the minimum is 6,928 bytes. Equivalent marker
+plateaus repeat at 49,232 bytes connected and 61,640 bytes removed. Minimum
+host stack margins are async/work/timer/lifecycle/report
+`389/132/348/177/822` words; USB host/KeyD are `265/400`. System minima are
+USB device/UI/keyscan/vkbd/pointing/RTOS timer/idle0/idle1
+`4009/70/223/319/83/965/344/360` words; app reports 1,085 words.
+
+The emulator checks request bytes, but this pass does not prove exact
+high-resolution wheel values or WTP contact/button-state values. Generation
+06 remains a detach timing stimulus: the log does not distinguish queued
+from already-running reset work. Scope ends at input/evdev, not downstream.
+Emulator CDC is absent and is not an oracle.
+
+The emulator README records each generation and the remaining limits: no
+claim for LED output, real radio pairing, allocation failure, Bluetooth,
+wheel force feedback, headsets, or memory-heavy Nano configurations. Earlier
+HID++ hardware verdicts below remain attached to their historical artifacts.
+
 ### Hardware-verified ALPS U1/T4 matrix
 
 The CDC-free `device/alps-matrix` fixture passed on 2026-09-18 with host test

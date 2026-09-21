@@ -1174,9 +1174,15 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   wake, and exact-generation disconnect cancellation. Probe replies take the
   port-only raw-event-only ingress while ordinary input stays behind final
   activation.
-- The current host selects direct USB `046d:c08d` and
-  `046d:c08a`. It reaches upstream pre-connect HID++ 2.0 name and
-  unit-ID/serial discovery, then the direct battery paths. The final name
+- The current host selects the pinned wired mouse/keyboard USB rows and DJ
+  children through exact quirks followed by the DJ-group wildcard. Common
+  upstream capability flow, including connect/reset work, is restored. The
+  13-generation protocol/lifecycle matrix passed on 2026-09-22 at temporary
+  `64/256`. The initial production `64/675` run exhausted heap parsing the
+  generation-10 synthetic `c539` child; `c547` was not reached at 675. Exact
+  artifacts and evidence limits are in `hid-emulator-coverage.md`. Scope ends
+  at Linux input/evdev, with KeyD unchanged. It reaches pre-connect HID++ 2.0 name
+  and unit-ID/serial discovery, then the battery paths. The final name
   reaches the KeyD device-add log with VID:PID; the unit ID remains in Linux
   HID/input state and is not copied into `port_input_dev`. Battery values cross
   a reduced `power_supply` boundary through one coalescing length-one value
@@ -1236,10 +1242,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
   API.
 - The first reduced single-M705 checkpoint was superseded by the
   pinned-upstream-shaped `hid-logitech-dj.c` port. Receivers `046d:c52b/c532`
+  and gaming/Lightspeed/Powerplay `c531/c537/c539/c53a/c53f/c543/c547/c54d`
   are active. The pinned `c52f/c534` mouse-only and HID++ rows remain adjacent
   but are disabled on RP2040 because their physical and virtual Consumer fields
-  exceed the heap at 675 usages. Gaming, Lightspeed/Powerplay, 27 MHz,
-  Bluetooth-proxy, and Dinovo receivers remain compile-gated. The driver
+  exceed the heap at 675 usages. Legacy 27 MHz, Bluetooth-proxy, and Dinovo
+  receivers remain compile-gated. The driver
   retains multiple virtual-child slots,
   standard mouse/keyboard/Consumer/power/media descriptors, HID++ descriptors,
   and raw-request routing through the physical receiver. The selected `c532`

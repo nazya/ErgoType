@@ -708,8 +708,8 @@ deferred FF sources so their enablement contract remains visible.
 | `hid-magicmouse.c` | USB-only Mouse 2/Trackpad 2 IDs, three unreachable delayed-work statements retained beside the firmware gate, sparse full-range report-ID lookup, a documented 90-second firmware battery interval beside upstream's 60 seconds, and an immutable driver descriptor. Raw parsing and MT event flow remain upstream. |
 | `hid-microsoft.c` | Complete pinned source with exactly 14 non-gaming wired USB IDs active; SideWinder, Bluetooth, Xbox/8BitDo, Surface Dial, and FF state/code/table rows remain adjacent behind `CONFIG_HID_MICROSOFT_ALL_DEVICES`; the driver descriptor is immutable. |
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
-| `hid-logitech-hidpp.c` | Full pinned source with direct request/reply, pre-connect identity, and battery stage gates; sparse report-ID lookup; cross-task response-state lock; exact-interface wait cancellation; two direct USB IDs; and an immutable driver descriptor. The production path has no test trace API or otherwise unused RAP/FAP probe; broader upstream subsystems remain visible but unreachable. |
-| `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` active; upstream `c52f/c534` mouse-only and HID++ rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS` after their measured RP2040 heap result, together with gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows; firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable driver metadata, and virtual-child raw requests routed through the physical receiver. The upstream multi-slot mouse/keyboard/HID++ descriptor and child model remains intact. |
+| `hid-logitech-hidpp.c` | Full pinned common USB/DJ flow, wired mouse/keyboard rows, exact child quirks before the DJ-group wildcard, sparse report-ID lookup, cross-task response-state lock, exact-interface wait cancellation, and immutable driver metadata. Connect/reset workers stop before waiter unbind and mutex destruction. Bluetooth, legacy proxy/27 MHz, headsets, and wheel FF stay gated. The 13-generation protocol/lifecycle matrix passed on 2026-09-22 at temporary `64/256`, not as a production `64/675` RAM-fit verdict. |
+| `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` and gaming/Lightspeed/Powerplay `c531/c537/c539/c53a/c53f/c543/c547/c54d` active. Memory-gated `c52f/c534`, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. Firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable metadata, and physical-receiver raw routing retain the upstream multi-slot child model. |
 | `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow under the USB boundary documented above: 134 active fixed rows (133 Wacom plus Lenovo `17ef:6004`), of which 19 retain prior hardware verdicts and the distinct paths exposed by the other 115 ran in the 2026-09-11 representative matrix; same-path PID aliases remain source-audited. Seventeen compile-gated Wacom PIDs are sent to unchanged `hid-generic` through upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`; one final Wacom USB wildcard, receiver children selected from active exact fixed rows, and pre-bind wildcard mode-change rejection remain. Four report-ID hash reads use the sparse registry; existing parser and lifecycle behavior remains. The current selection/rejection paths passed the 2026-09-07 matrix; the independent descriptor-qualified `03ce` memory quirk and six-profile receiver rebind passed the 2026-09-10 temporary-64 matrix; the newly reachable fixed and modern representative paths plus normal-stack rejection ran at temporary 32 on 2026-09-11 with the marker caveat recorded in `hid-emulator-coverage.md`. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and the broad all-devices policy remain disabled; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue audited against the corresponding Linux lifecycle. The Wacom probe selects explicit-feature-usage compaction immediately before the full HID parse; `usbhid.c` remains descriptor transport and owns no Wacom matching policy. Raw GET/SET retain upstream report-ID offset/count semantics and use the HID-owned control path, so teardown can cancel an in-flight slot. HIDRAW is lifecycle-only; power, LED, evdev, and receiver-rebind adapters retain their documented lifetimes. Test-only coordinator markers and the Wacom-specific rejection diagnostic were removed; the ordinary probe path reports `HID_IGNORED`. |
@@ -895,20 +895,19 @@ it contains no callback, logging, allocation, or wait.
   stable removal plateaus, and `oom=0`. Exact queued power values, elapsed AES
   expiry, and consumer-start failure remain outside those runtime results. The
   Rapoo managed extra-input regression remains separate.
-- The direct-HID++ path imports pinned `hid-logitech-hidpp.c` whole. Direct USB
-  matching selects only IDs `046d:c08d` and `046d:c08a`; the current
-  exact-class gate additionally selects DJ child IDs M560 `046d:402d`, T650
-  `046d:4101`, K400 `046d:4024`, and K750 `046d:4002`.
-  The direct IDs reach `.probe`, `.remove`, and `.raw_event`; the exact child
-  classes also reach only their upstream `.input_configured` and
-  `.input_mapping` paths. The
-  active request path retains upstream protocol detection, RAP/FAP builders,
+- The HID++ path imports pinned `hid-logitech-hidpp.c` whole. The current
+  expansion selects its wired mouse/keyboard USB rows and exact DJ child
+  quirks before the DJ-group wildcard; exact IDs are listed in
+  `deferred-hid-drivers.md`. Common upstream callbacks and capability flow
+  replace the former staged early returns. Both connect and reset workers
+  are initialized and cancelled before waiter unbinding/mutex destruction.
+  The active request path retains upstream protocol detection, RAP/FAP builders,
   answer/error matching, send mutex, BUSY retry, and work item. A port-only
   raw-event-only ingress reuses `hid-core` validation and `driver_input_lock`
   while stopping before field/input parsing, so `hid_device_io_start()` can
   receive probe replies without bypassing final evdev activation. The
-  request/reply foundation has exact-artifact hardware coverage. The current
-  host-only gate additionally reaches upstream HID++ 2.0 pre-connect name and
+  request/reply foundation has exact-artifact hardware coverage. The driver
+  reaches upstream HID++ 2.0 pre-connect name and
   unit-ID/serial discovery; its Linux-only `%4phD` and packed `u32` access have
   adjacent firmware-safe replacements. The evdev client retains the final
   bounded name across queued ADD/removal, and the KeyD task reports VID:PID and
@@ -927,11 +926,16 @@ it contains no callback, logging, allocation, or wait.
   property copy, and publishes `battery->ps` only after success, so concurrent
   battery users never observe an `ERR_PTR` and a later receiver-child event may
   retry. Generic HID battery strength is active through the same reduced
-  power-supply boundary; HID++ sysfs, FF, broad vendor-key classes, Bluetooth,
-  and legacy 27 MHz matching remain compiled out of reach. M705/M560 wheel
-  handling, T650 WTP raw XY, K400, K750 solar,
-  and M560/T650 delayed input initialization are now reachable only through
-  the listed exact DJ IDs. The complete automatic sequence later passed with
+  power-supply boundary. HID++ sysfs publication uses the documented no-op;
+  FF/headset, Bluetooth/proxy, and legacy 27 MHz rows remain gated. Exact
+  class quirks retain their upstream order, including `4011` physical buttons,
+  `1017/101a/101b` HID++ 1.0 wheel, and `407f` reconnect reset work. The new
+  common-flow expansion passed its 13-generation protocol/lifecycle matrix
+  on 2026-09-22 at temporary `64/256`. The initial production `64/675` run
+  exhausted heap parsing the synthetic `c539` child; `c547` was not reached
+  at 675. Exact wheel values and generation-06
+  queued-versus-running timing remain unclaimed; KeyD is unchanged.
+  The earlier automatic sequence passed with
   temporary `8/256` parser limits.
   Hardware also established the retained `64/675` capacity boundary recorded
   in `hid-emulator-coverage.md`: simultaneous M705 and ordinary keyboard
@@ -942,12 +946,13 @@ it contains no callback, logging, allocation, or wait.
   the final direct regression.
 - The first reduced single-M705 DJ checkpoint was replaced by the full pinned
   upstream port. Runtime matching enables `046d:c52b/c532` with the exact
-  pinned `recvr_type_dj` assignment. The adjacent `c52f/c534`
-  `recvr_type_mouse_only` and `recvr_type_hidpp` rows remain intact behind the
-  broader gate. Gaming, Lightspeed/Powerplay, legacy 27 MHz, Bluetooth-proxy,
-  and Dinovo rows stay behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The
-  upstream multi-slot child
-  table, mouse/keyboard/Consumer/power/media/HID++ descriptors,
+  pinned `recvr_type_dj` assignment, gaming/Lightspeed/Powerplay
+  `c531/c537/c539/c53a/c53f/c543`, and Lightspeed 1.3 `c547/c54d`.
+  The adjacent `c52f/c534` `recvr_type_mouse_only` and `recvr_type_hidpp`
+  rows remain intact behind the
+  broader gate. Legacy 27 MHz, Bluetooth-proxy, and Dinovo rows stay behind
+  `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. The upstream multi-slot child table,
+  mouse/keyboard/Consumer/power/media/HID++ descriptors,
   pair/unpair/link-loss/connection handling, and virtual-child raw-request
   routing remain present. Firmware adaptations provide task-owned work,
   lifecycle destruction, sparse report lookup, and final evdev activation.

@@ -753,11 +753,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         # USB-only Magic Mouse 2 / Trackpad 2; Bluetooth and legacy IDs remain
         # visibly disabled beside the upstream match table in the source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-magicmouse.c
-        # Staged direct USB HID++ request/reply, pre-connect identity, and
-        # battery. Broader capability and receiver paths remain behind gates.
+        # Wired USB HID++ and DJ children retain common upstream capability
+        # flow; Bluetooth, legacy proxy, headsets, and wheel FF remain gated.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-hidpp.c
-        # Pinned-upstream Unifying/DJ port for c52b/c532. Nano c52f/c534 need
-        # more RP2040 heap at the retained usage limit; other rows stay gated.
+        # Unifying plus gaming/Lightspeed/Powerplay receivers. Nano c52f/c534
+        # need more RP2040 heap; legacy 27 MHz and Bluetooth proxy stay gated.
+        # Enabled does not mean RAM fit: the c539 fixture exceeds heap at 675.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-alps.c

@@ -25,8 +25,8 @@
 #include <linux/fixp-arith.h>
 #include <linux/unaligned.h>
 // #include "usbhid/usbhid.h"
-// Firmware keeps USB-private transport state in usbhid_private.h; this direct
-// slice needs only hid_to_usb_dev(), already exposed by the reduced hid.h.
+// Firmware keeps USB-private transport state in usbhid_private.h; HID++ needs
+// only hid_to_usb_dev(), already exposed by the reduced hid.h.
 #include "hid-ids.h"
 
 MODULE_DESCRIPTION("Support for Logitech devices relying on the HID++ specification");
@@ -3911,9 +3911,7 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 	struct hidpp_report *question, *answer;
 	struct hidpp_report *report = (struct hidpp_report *)data;
 	int ret;
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	int last_online;
-#endif
 
 	/*
 	 * If the mutex is locked then we have a pending answer from a
@@ -3961,29 +3959,12 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 		hid_compat_waitqueue_state_unlock(&hidpp->wait);
 	}
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
-	!IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY)
-	/*
-	 * The direct firmware stage covers request/reply plus pre-connect identity.
-	 * Battery, receiver connect events, wheel extensions, and vendor-key
-	 * handling stay in their upstream positions for later tested stages.
-	 */
-	if (hidpp->hid_dev->group != HID_GROUP_LOGITECH_DJ_DEVICE)
-		return 0;
-#endif
-
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	if (hidpp->hid_dev->group == HID_GROUP_LOGITECH_DJ_DEVICE &&
-	    unlikely(hidpp_report_is_connect_event(hidpp, report))) {
-#else
 	if (unlikely(hidpp_report_is_connect_event(hidpp, report))) {
-#endif
 		if (schedule_work(&hidpp->work) == 0)
 			dbg_hid("%s: connect event already queued\n", __func__);
 		return 1;
 	}
 
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	if (hidpp->hid_dev->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    data[0] == REPORT_ID_HIDPP_SHORT &&
 	    data[2] == HIDPP_SUB_ID_USER_IFACE_EVENT &&
@@ -3993,11 +3974,8 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 		dev_err_ratelimited(&hidpp->hid_dev->dev,
 			"See: https://gitlab.freedesktop.org/jwrdegoede/logitech-27mhz-keyboard-encryption-setup/\n");
 	}
-#endif
 
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	last_online = hidpp->battery.online;
-#endif
 	if (hidpp->capabilities & HIDPP_CAPABILITY_HIDPP20_BATTERY) {
 		ret = hidpp20_battery_event_1000(hidpp, data, size);
 		if (ret != 0)
@@ -4022,13 +4000,6 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 			return ret;
 	}
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/*
-	 * The selected M705 path uses the standard HID wheel event hook below the
-	 * parser. HID++ report wheels, reset work, and vendor keys remain staged.
-	 */
-	return 0;
-#else
 	if (hidpp->quirks & HIDPP_QUIRK_RESET_HI_RES_SCROLL) {
 		if (last_online == 0 && hidpp->battery.online == 1)
 			schedule_work(&hidpp->reset_hi_res_work);
@@ -4053,7 +4024,6 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 	}
 
 	return 0;
-#endif
 }
 
 static int hidpp_raw_event(struct hid_device *hdev, struct hid_report *report,
@@ -4098,18 +4068,12 @@ static int hidpp_raw_event(struct hid_device *hdev, struct hid_report *report,
 	if (ret != 0)
 		return ret;
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
-	!IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	/* WTP and M560 subclass parsing belongs to a separately selected stage. */
-	return 0;
-#else
 	if (hidpp->quirks & HIDPP_QUIRK_CLASS_WTP)
 		return wtp_raw_event(hdev, data, size);
 	else if (hidpp->quirks & HIDPP_QUIRK_CLASS_M560)
 		return m560_raw_event(hdev, data, size);
 
 	return 0;
-#endif
 }
 
 static int hidpp_event(struct hid_device *hdev, struct hid_field *field,
@@ -4239,10 +4203,7 @@ static int hidpp_initialize_battery(struct hidpp_device *hidpp)
 	// Firmware cannot publish Linux ERR_PTR through concurrent battery users.
 	if (IS_ERR(ps)) {
 		ret = PTR_ERR(ps);
-		/*
-		 * A later receiver-child connect event can retry. Direct USB runs this
-		 * work once. In both cases release the unpublished property copy now.
-		 */
+		/* A later connect event can retry; release the unpublished copy now. */
 		devm_kfree(&hidpp->hid_dev->dev, battery_props);
 		return ret;
 	}
@@ -4319,51 +4280,6 @@ static void hidpp_connect_event(struct work_struct *work)
 
 	/* Get device version to check if it is connected */
 	ret = hidpp_root_get_protocol_version(hidpp);
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	if (hdev->group != HID_GROUP_LOGITECH_DJ_DEVICE) {
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_BATTERY)
-		/*
-		 * The upstream repeat-work disconnect path continues below for
-		 * receiver children. Direct probe runs this work once, before
-		 * battery.ps can be registered.
-		 */
-		if (ret)
-			return;
-
-		/* Run the upstream battery initialization/query block before direct return. */
-		(void)hidpp_initialize_battery(hidpp);
-		if (hidpp->capabilities & HIDPP_CAPABILITY_HIDPP10_BATTERY) {
-			hidpp10_enable_battery_reporting(hidpp);
-			if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_MILEAGE)
-				hidpp10_query_battery_mileage(hidpp);
-			else
-				hidpp10_query_battery_status(hidpp);
-		} else if (hidpp->capabilities &
-			   HIDPP_CAPABILITY_HIDPP20_BATTERY) {
-			if (hidpp->capabilities & HIDPP_CAPABILITY_BATTERY_VOLTAGE)
-				hidpp20_query_battery_voltage_info(hidpp);
-			else if (hidpp->capabilities &
-				 HIDPP_CAPABILITY_UNIFIED_BATTERY)
-				hidpp20_query_battery_info_1004(hidpp);
-			else if (hidpp->capabilities &
-				 HIDPP_CAPABILITY_ADC_MEASUREMENT)
-				hidpp20_query_adc_measurement_info_1f20(hidpp);
-			else
-				hidpp20_query_battery_info_1000(hidpp);
-		}
-		if (hidpp->battery.ps)
-			power_supply_changed(hidpp->battery.ps);
-#else
-		/*
-		 * Identity runs synchronously in probe before hid_connect(). The work
-		 * item retains only upstream protocol detection for direct USB.
-		 */
-		(void)ret;
-#endif
-		return;
-	}
-#endif
-
 	if (ret) {
 		hid_dbg(hidpp->hid_dev, "Disconnected\n");
 		if (hidpp->battery.ps) {
@@ -4426,20 +4342,6 @@ static void hidpp_connect_event(struct work_struct *work)
 			hidpp->name = devm_name;
 		}
 	}
-
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
-	/*
-	 * The selected M705 stage ends at Linux wheel publication. Other exact
-	 * DJ classes continue through their upstream battery and delayed-input
-	 * setup below.
-	 */
-	if (hidpp->quirks & HIDPP_QUIRK_HI_RES_SCROLL_1P0) {
-		hidpp_initialize_hires_scroll(hidpp);
-		if (hidpp->capabilities & HIDPP_CAPABILITY_HI_RES_SCROLL)
-			hi_res_scroll_enable(hidpp);
-		return;
-	}
-#endif
 
 	hidpp_initialize_battery(hidpp);
 	if (!hid_is_usb(hidpp->hid_dev))
@@ -4615,8 +4517,6 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	}
 
-	/* Keep the upstream 27 MHz quirk selection outside the direct USB stage. */
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	if (id->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    hidpp_application_equals(hdev, HID_GD_MOUSE))
 		hidpp->quirks |= HIDPP_QUIRK_HIDPP_WHEELS |
@@ -4625,14 +4525,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	if (id->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    hidpp_application_equals(hdev, HID_GD_KEYBOARD))
 		hidpp->quirks |= HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS;
-#endif
 
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) || \
-	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	/*
-	 * The exact M560/T650/K400/K750 stage uses the corresponding upstream
-	 * class allocations without enabling the broad Logitech match table.
-	 */
 	if (hidpp->quirks & HIDPP_QUIRK_CLASS_WTP) {
 		ret = wtp_allocate(hdev, id);
 		if (ret)
@@ -4642,37 +4535,28 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		if (ret)
 			return ret;
 	}
-#endif
 
 	INIT_WORK(&hidpp->work, hidpp_connect_event);
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
-#else
-	// INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
-	// Reset-on-reconnect devices remain outside the selected M705 stage.
-#endif
 	mutex_init(&hidpp->send_mutex);
 	/* Linux embeds an infallible mutex; the firmware mutex owns heap storage. */
 	if (!mutex_initialized(&hidpp->send_mutex))
 		return -ENOMEM;
 	init_waitqueue_head(&hidpp->wait);
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/*
-	 * Upstream publishes power attributes through the sysfs block retained
-	 * below. This checkpoint has no sysfs/power endpoint; bind disconnect
-	 * cancellation to the exact USB interface generation before I/O instead.
+	 * Firmware additionally binds disconnect cancellation to the exact USB
+	 * interface generation before I/O; upstream wait queues need no binding.
 	 */
 	ret = hid_compat_waitqueue_bind(&hidpp->wait, hdev);
 	if (ret)
 		goto hid_wait_bind_fail;
-#else
+
 	/* indicates we are handling the battery properties in the kernel */
 	ret = sysfs_create_group(&hdev->dev.kobj, &ps_attribute_group);
 	if (ret)
 		hid_warn(hdev, "Cannot allocate sysfs group for %s\n",
 			 hdev->name);
-#endif
 
 	/*
 	 * First call hid_hw_start(hdev, 0) to allow IO without connecting any
@@ -4696,7 +4580,6 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	/* Allow incoming packets */
 	hid_device_io_start(hdev);
 
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
 	/* Get name + serial, store in hdev->name + hdev->uniq */
 	if (id->group == HID_GROUP_LOGITECH_DJ_DEVICE)
 		hidpp_unifying_init(hidpp);
@@ -4705,28 +4588,6 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	if (hidpp->quirks & HIDPP_QUIRK_DELAYED_INIT)
 		connect_mask &= ~HID_CONNECT_HIDINPUT;
-#else
-	/*
-	 * Direct USB and the selected DJ child now use the corresponding upstream
-	 * pre-connect identity paths.
-	 */
-	if (id->group == HID_GROUP_LOGITECH_DJ_DEVICE)
-		hidpp_unifying_init(hidpp);
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_IDENTITY)
-	else
-		hidpp_non_unifying_init(hidpp);
-#endif
-#endif
-
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY) && \
-	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	/*
-	 * Upstream delays M560/T650 input publication until their connect worker
-	 * has obtained the device-specific configuration.
-	 */
-	if (hidpp->quirks & HIDPP_QUIRK_DELAYED_INIT)
-		connect_mask &= ~HID_CONNECT_HIDINPUT;
-#endif
 
 	/* Now export the actual inputs and hidraw nodes to the world */
 	hid_device_io_stop(hdev);
@@ -4741,11 +4602,8 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	schedule_work(&hidpp->work);
 	flush_work(&hidpp->work);
 
-	/*
-	 * Keep upstream G920 force-feedback initialization visible below; force
-	 * feedback is outside the direct request/reply checkpoint.
-	 */
-#if !IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Force-feedback devices remain outside the wired keyboard/mouse port. */
 	if (hidpp->quirks & HIDPP_QUIRK_CLASS_G920) {
 		struct hidpp_ff_private_data data;
 
@@ -4774,16 +4632,12 @@ hid_hw_init_fail:
 hid_hw_open_fail:
 	hid_hw_stop(hdev);
 hid_hw_start_fail:
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/*
-	 * No upstream sysfs group was published in this checkpoint; release its
-	 * exact-interface wait binding instead of removing that group.
-	 */
-	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
-#else
 	sysfs_remove_group(&hdev->dev.kobj, &ps_attribute_group);
-#endif
 	cancel_work_sync(&hidpp->work);
+	/* Reset work can also be queued after probe starts report ingress. */
+	cancel_work_sync(&hidpp->reset_hi_res_work);
+	/* Keep disconnect cancellation bound until both workers have stopped. */
+	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
 	mutex_destroy(&hidpp->send_mutex);
 	return ret;
 
@@ -4799,24 +4653,13 @@ static void hidpp_remove(struct hid_device *hdev)
 	if (!hidpp)
 		return hid_hw_stop(hdev);
 
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/*
-	 * Direct battery uses a managed firmware power_supply object; its devres
-	 * action runs after report ingress stops and releases its queued work.
-	 * No sysfs group exists in this stage.
-	 */
-#else
 	sysfs_remove_group(&hdev->dev.kobj, &ps_attribute_group);
-#endif
 
 	hid_hw_stop(hdev);
 	cancel_work_sync(&hidpp->work);
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/* hid_hw_stop() published disconnect; now release the wait binding. */
-	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
-#else
 	cancel_work_sync(&hidpp->reset_hi_res_work);
-#endif
+	/* Keep disconnect cancellation bound until both workers have stopped. */
+	hid_compat_waitqueue_unbind(&hidpp->wait, hdev);
 	mutex_destroy(&hidpp->send_mutex);
 }
 
@@ -4829,37 +4672,6 @@ static void hidpp_remove(struct hid_device *hdev)
 		   USB_VENDOR_ID_LOGITECH, (product))
 
 static const struct hid_device_id hidpp_devices[] = {
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/*
-	 * Keep direct USB at its measured identity/battery stage and add only
-	 * the separately selected exact receiver-child classes. Bluetooth,
-	 * legacy receiver classes, and broad Logitech matching remain below.
-	 */
-	{ /* Logitech G502 Lightspeed Wireless Gaming Mouse over USB */
-	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08D) },
-	{ /* MX Vertical over USB */
-	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC08A) },
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	{ /* wireless touchpad T650 */
-	  LDJ_DEVICE(0x4101),
-	  .driver_data = HIDPP_QUIRK_CLASS_WTP | HIDPP_QUIRK_DELAYED_INIT },
-	{ /* Mouse logitech M560 */
-	  LDJ_DEVICE(0x402d),
-	  .driver_data = HIDPP_QUIRK_DELAYED_INIT | HIDPP_QUIRK_CLASS_M560 },
-#endif
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
-	{ /* Mouse Logitech M705 (firmware RQM17) */
-	  LDJ_DEVICE(0x101b), .driver_data = HIDPP_QUIRK_HI_RES_SCROLL_1P0 },
-#endif
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	{ /* Keyboard logitech K400 */
-	  LDJ_DEVICE(0x4024),
-	  .driver_data = HIDPP_QUIRK_CLASS_K400 },
-	{ /* Solar Keyboard Logitech K750 */
-	  LDJ_DEVICE(0x4002),
-	  .driver_data = HIDPP_QUIRK_CLASS_K750 },
-#endif
-#else
 	{ /* wireless touchpad */
 	  LDJ_DEVICE(0x4011),
 	  .driver_data = HIDPP_QUIRK_CLASS_WTP | HIDPP_QUIRK_DELAYED_INIT |
@@ -4867,10 +4679,13 @@ static const struct hid_device_id hidpp_devices[] = {
 	{ /* wireless touchpad T650 */
 	  LDJ_DEVICE(0x4101),
 	  .driver_data = HIDPP_QUIRK_CLASS_WTP | HIDPP_QUIRK_DELAYED_INIT },
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Bluetooth remains outside the USB-host port. */
 	{ /* wireless touchpad T651 */
 	  HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_LOGITECH,
 		USB_DEVICE_ID_LOGITECH_T651),
 	  .driver_data = HIDPP_QUIRK_CLASS_WTP | HIDPP_QUIRK_DELAYED_INIT },
+#endif
 	{ /* Mouse Logitech Anywhere MX */
 	  LDJ_DEVICE(0x1017), .driver_data = HIDPP_QUIRK_HI_RES_SCROLL_1P0 },
 	{ /* Mouse logitech M560 */
@@ -4886,6 +4701,8 @@ static const struct hid_device_id hidpp_devices[] = {
 	{ /* Solar Keyboard Logitech K750 */
 	  LDJ_DEVICE(0x4002),
 	  .driver_data = HIDPP_QUIRK_CLASS_K750 },
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Bluetooth-receiver HID proxy classes are not enabled. */
 	{ /* Keyboard MX5000 (Bluetooth-receiver in HID proxy mode) */
 	  LDJ_DEVICE(0xb305),
 	  .driver_data = HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS },
@@ -4895,12 +4712,15 @@ static const struct hid_device_id hidpp_devices[] = {
 	{ /* Keyboard MX5500 (Bluetooth-receiver in HID proxy mode) */
 	  LDJ_DEVICE(0xb30b),
 	  .driver_data = HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS },
+#endif
 	{ /* Logitech G502 Lightspeed Wireless Gaming Mouse */
 	  LDJ_DEVICE(0x407f),
 	  .driver_data = HIDPP_QUIRK_RESET_HI_RES_SCROLL },
 
 	{ LDJ_DEVICE(HID_ANY_ID) },
 
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Legacy 27 MHz receivers remain outside the selected USB families. */
 	{ /* Keyboard LX501 (Y-RR53) */
 	  L27MHZ_DEVICE(0x0049),
 	  .driver_data = HIDPP_QUIRK_KBD_ZOOM_WHEEL },
@@ -4915,6 +4735,7 @@ static const struct hid_device_id hidpp_devices[] = {
 	  .driver_data = HIDPP_QUIRK_KBD_SCROLL_WHEEL },
 
 	{ L27MHZ_DEVICE(HID_ANY_ID) },
+#endif
 
 	{ /* Logitech G403 Wireless Gaming Mouse over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC082) },
@@ -4938,12 +4759,15 @@ static const struct hid_device_id hidpp_devices[] = {
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC091) },
 	{ /* Logitech G915 TKL Keyboard over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC343) },
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Wheel force feedback remains outside the wired keyboard/mouse port. */
 	{ /* Logitech G920 Wheel over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G920_WHEEL),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS},
 	{ /* Logitech G923 Wheel (Xbox version) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G923_XBOX_WHEEL),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+#endif
 	{ /* Logitech G Pro X Superlight Gaming Mouse over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xC094) },
 	{ /* Logitech G Pro X Superlight 2 Gaming Mouse over USB */
@@ -4951,6 +4775,8 @@ static const struct hid_device_id hidpp_devices[] = {
 	{ /* Logitech G PRO 2 LIGHTSPEED Wireless Mouse over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0xc09a) },
 
+#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_ALL_DEVICES)
+	/* Headsets and Bluetooth stay retained but unmatched by this port. */
 	{ /* G935 Gaming Headset */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, 0x0a87),
 		.driver_data = HIDPP_QUIRK_WIRELESS_STATUS },
@@ -5049,27 +4875,6 @@ static const struct hid_usage_id hidpp_usages[] = {
 static const struct hid_driver hidpp_driver = {
 	.name = "logitech-hidpp-device",
 	.id_table = hidpp_devices,
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DIRECT_REQUEST_REPLY)
-	/*
-	 * M705 high-resolution scrolling uses the upstream usage interception.
-	 * Exact M560/T650/K400/K750 classes additionally select only the upstream
-	 * input hooks they reach.
-	 */
-	.probe = hidpp_probe,
-	.remove = hidpp_remove,
-	.raw_event = hidpp_raw_event,
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0)
-	.usage_table = hidpp_usages,
-	.event = hidpp_event,
-#endif
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_HI_RES_SCROLL_1P0) || \
-	IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	.input_configured = hidpp_input_configured,
-#endif
-#if IS_ENABLED(CONFIG_HID_LOGITECH_HIDPP_DJ_DEVICE_CLASSES)
-	.input_mapping = hidpp_input_mapping,
-#endif
-#else
 	.report_fixup = hidpp_report_fixup,
 	.probe = hidpp_probe,
 	.remove = hidpp_remove,
@@ -5079,7 +4884,6 @@ static const struct hid_driver hidpp_driver = {
 	.input_configured = hidpp_input_configured,
 	.input_mapping = hidpp_input_mapping,
 	.input_mapped = hidpp_input_mapped,
-#endif
 };
 
 module_hid_driver(hidpp_driver);
