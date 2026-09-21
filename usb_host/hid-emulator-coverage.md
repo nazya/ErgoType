@@ -804,7 +804,67 @@ drivers are not counted here.
 | Wacom mode SET/GET, record FIFO, Pen/Pad/Touch, LED, ordinary/AES/receiver battery, arbitration, receiver rebind, wildcard mode-change rejection, and ghost-interface rejection | `wacom_sys.c`, `wacom_wac.c`; 134 fixed USB rows are active (133 Wacom plus Lenovo `17ef:6004`), 19 retain prior hardware verdicts, and the other 115 expose 33 distinct paths exercised by the 2026-09-11 representative matrix while same-path aliases remain source-audited. Seventeen compile-gated Wacom PIDs use upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER` for unchanged generic fallback, and one wired Wacom wildcard handles PIDs outside that unfinished list; receiver children require an active exact row; wildcard parsed INPUT `WACOM_HID_WD_MODE_CHANGE` is rejected before bind | Historical CTL-472, wired, AES/receiver, Intuos, Cintiq 13HD, Remote, and focused GET-completion artifacts keep only their exact-image verdicts. The 2026-09-07 single-Pico matrix passed the then-current qualified-fixed/unfinished-fixed-generic/wildcard outcomes, receiver classification and publication, GET-completion handling, input smoke, balanced teardown, captured `0350` rejection, and terminal phase 7. The 2026-09-10 temporary-capacity matrix additionally passed the descriptor-qualified `03ce` memory quirk, the pre-deadline cancellation lifetime, the completed delayed Feature SET/GET lifetime, and 18 receiver generations across six child profiles, thereby exercising report-lifetime field ordering on firmware hardware. The 2026-09-11 temporary-32 matrix exercised the 33 newly reachable fixed representatives, all distinct modern signature paths, generic selection, and normal-stack rejection; its missing `p` and `m` markers keep the fixture protocol from being a formally complete pass. Only the paired Pen/Touch mode-change runtime is deferred on `wip/wacom-wildcard-mode-change` pending a two-Pico/common-hub setup. Each matrix is evidence only for its exact limits and exercised logic; the production-675 UF2 is not covered by the temporary runs. |
 | Historical timer/HIDDEV-force path, inactive | `hid-appleir.c` at `hid: stabilize stadia ff teardown` | `apple-ir` |
 
+## Completed Native HID-BPF / Rakk Hardware Matrix
+
+The current emulator replaces the committed ASUS fixture in place with
+`hid_bpf_wired_test.c`: 44 generations exercise 17 native upstream HID-BPF
+programs plus Rakk, covering the new descriptor/event/mode/lifecycle paths.
+The 22-ID host scope is listed in `deferred-hid-drivers.md`; Kamvas Pro27
+`256c:006c` is a same-program alias rather than a separate generation.
+The fixture exposes at most two target HID interfaces plus a marker keyboard,
+has no CDC, and uses only public TinyUSB APIs. The main host log was the sole
+oracle.
+
+Require `f1`, 44 `f11` press/release pairs, terminal `f10`, and no `f12`.
+The temporary `ERGOTYPE_HID_BPF_TEST` observer required 55
+`INFO: HID_BATCH_OK NN.I` targets, one `INFO: HID_BATCH_LIMIT 21.0`, and no
+`HID_BATCH_BAD`, with complete descriptor fingerprints and 78 selected ordered
+report checks. Generation 21 checks the unique Kamvas Pro19 438-to-448-byte
+fixup and expected 1387-slot INPUT ARRAY rejection at `HID_MAX_USAGES=675`;
+generation 20 covers the identical event callback. The remaining checks include
+Inspiroy S forced-tip repeat counts,
+Artist24 state transitions and fresh attachment state, Huion string fallback,
+ACK05 delayed output, and original-descriptor fallback without an OUT endpoint.
+Generation 31 required actual pending-work cancellation. Test-only host mode
+extended just that generation's delay to five seconds and the fixture retained
+its normal post-completion settling interval before unplug; generations 29/32
+retained and verified upstream's ten-millisecond execution. Only the host
+observer, not fixture progress, established that work was scheduled and then
+canceled.
+Exactly one `WARN: HID_IGNORED` is expected for generation 21. Full input
+binding for that descriptor requires `HID_MAX_USAGES >= 1387`, about 55.6 KiB
+for the oversized field alone, and a separate memory-rich hardware run.
+
+The hardware result comes from two separate runs whose retained main-host log
+captures overlap at generation 14 because terminal scrollback could not hold
+one complete run:
+
+- generations 1--14: SHA-256
+  `8ff5d9c5eb47772832216630af4b34b823659b6720eba6e44723dd39bcc5d362`;
+- generations 14--44: SHA-256
+  `d31c14d9db1112059b0e0e992da36f0d858d7974ba440d93911df8f349c8189a`.
+
+The overlapping `14.0/14.1` verdicts agree. Together the captures confirm all
+55 `HID_BATCH_OK` verdicts, `HID_BATCH_LIMIT 21.0`, 78 selected ordered report checks,
+the initial `f1`, all 44 `f11` generation-completion pairs, and terminal `f10`.
+It contains no `HID_BATCH_BAD`, `f12`, OOM, or zero stack watermark. The only
+expected warnings were `EVDEV_BATCH_CAP` in generation 20 and `HID_IGNORED` in
+generation 21. Minimum-ever free heap was 21,744 bytes and the final detached
+snapshot was 61,640 bytes. The tested host UF2 SHA-256 was
+`5aae7b0ec6b9d24d46f57b77f8a578b2baa46f5c04a596197861e1e39941c5b1`;
+the emulator UF2 SHA-256 was
+`722bd27ec8aef44613fc8653ea91f1e03e0b74fb83c74fcfa3e4ce9dc1954f90`.
+
+This qualifies the README's selected descriptor, report, and lifecycle paths,
+not every packet, allocation-failure branch, or retail tablet mode switch.
+The test observer and its generation-31 delay override were removed after the
+run. All 17 program sources and Rakk remain in the tree but are commented out
+in the default CMake build; the cleaned production image was rebuilt but not
+separately flashed as a repetition of the instrumented run.
+
 ## Pending Dedicated Hardware Passes
+
+### Other pending or retained boundaries
 
 `hid-holtek-mouse` is active so `CONFIG_HID_HOLTEK` no longer marks six mouse
 IDs as special without linking their report fixup. Its unverified

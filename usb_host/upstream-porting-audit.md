@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-09-18
+Updated: 2026-09-21
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -17,7 +17,37 @@ Post-baseline upstream fixes are the multitouch active-slot bitmap commit
 ToolSerial FIFO hardening plus post-`hid_hw_start()` failure routing described
 below.
 
+The retained native HID-BPF/Rakk ports additionally use Frego commit
+`857e71cb0a538b1660743a4267a1e789575f7966` and Rakk commit
+`15a0449c955c862045c17f35d9479791981e7812`; the other 16 selected BPF
+programs use the baseline above. Huion string-mode glue follows
+`huion-switcher` commit `7f63cd48aed5362b073b3c876d98228b3e3a6e90`.
+
 ## Result
+
+The current batch retains 22 wired VID:PIDs through 17 native
+HID-BPF programs plus Rakk. Their 18 source entries are commented out in the
+default CMake build and can be enabled individually. Exact source comparison
+retains the selected upstream descriptor/event branches and tables. BPF
+loader/maps are replaced by immutable registration and per-HID private state;
+the firmware adapter exposes only the retained native contracts while the
+imported helper headers remain untouched. Huion uses standard USB string mode
+requests, and ACK05 retains initial/delayed output with original-descriptor
+fallback when initial output is unavailable. Bluetooth stays disabled and
+Artist24 Pro `092d` stays on UC-Logic. The temporary observer checked 56 target
+descriptor outcomes and 78 selected ordered report checks across the
+44-generation fixture.
+One target is an explicit bounded-parser verdict: Kamvas Pro19's 438-to-448
+fixup is verified before its 1387-slot INPUT ARRAY is rejected by the current
+`HID_MAX_USAGES=675`; its event callback is already covered by the old-descriptor
+generation.
+Two separate hardware runs with retained captures overlapping at generation 14
+cover all generations: 55 targets passed and the remaining Kamvas Pro19 target
+produced its required bounded-parser verdict.
+They also contain every progress marker, no failure marker or OOM, and positive
+task watermarks. The temporary observer was removed and the default-off
+production image rebuilt. Artifact identity is in `pio-usb-memory.md` and log
+identity and limits are in `hid-emulator-coverage.md`.
 
 Active-path conformance for the linked keyboard, mouse, multitouch, haptic,
 input-core, and FF paths through the Linux input-event publication boundary at
@@ -561,13 +591,14 @@ support:
 
 ## Scope
 
-The audit covers all 80 imported HID `.c` files (38 linked and 42 unlinked), all
-five input `.c` files, all 57 headers under `linux/include`
+The historical whole-tree audit covered all 80 then-imported HID `.c` files
+(38 linked and 42 unlinked), all five input `.c` files, all 57 headers under `linux/include`
 (48 compatibility-facing `linux/**` files plus nine asm/dt/kunit/UAPI files),
 the host
 glue/header/CMake files, the root CMake wiring, and the SHA-pinned generated
-TinyUSB/Pico-HCD transformations. This is the complete imported/host-port tree,
-not only the Git diff or linked objects.
+TinyUSB/Pico-HCD transformations. This was the complete imported/host-port tree,
+not only the Git diff or linked objects. Later imports are recorded below;
+the current batch retains 17 BPF program translation units and `hid-rakk.c`.
 The later `keyd/port/device.c` event consumer was inspected for reachability but
 is not included in the upstream-conformance result above.
 
@@ -649,10 +680,11 @@ without an explicit compile-time byte-order guard. Finally, `input.c` currently
 gets generic compatibility primitives by including `hid.h`; that upward layer
 dependency is marked as cleanup debt, not claimed as upstream structure.
 
-The linked non-compatibility private headers `hid-ids.h`, `hid-haptic.h`,
+The linked non-compatibility private headers `hid-haptic.h`,
 `input-core-private.h`, and Wacom's `wacom_wac.h` are byte-for-byte identical
-to the pinned baseline. The table also records the two audited deferred FF
-sources so their enablement contract remains visible.
+to the pinned baseline. `hid-ids.h` additionally carries the post-baseline
+Telink/Rakk IDs from `15a0449c955c`. The table also records the two audited
+deferred FF sources so their enablement contract remains visible.
 
 | Linux-derived file | Remaining explained differences |
 | --- | --- |
@@ -663,6 +695,8 @@ sources so their enablement contract remains visible.
 | `hid-haptic.c` | Five-slot firmware RAM policy plus the documented unassigned-usage, unnumbered-report-ID, HOST/DEVICE mode, erase, and queued-work lifetime fixes. |
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
+| `hid-rakk.c` | Complete `15a0449c955c` descriptor fixup with both USB rows retained; its source is excluded by default CMake, the Bluetooth match remains commented, and driver metadata is immutable. |
+| `bpf/progs/*.bpf.c`, `hid_bpf_static.c` | Seventeen selected upstream programs retain descriptor/event logic and tables; their sources are excluded by default CMake. The three imported `hid_bpf*.h` helper headers remain byte-for-byte baseline; generated `vmlinux.h` reaches the firmware adapter first, where the deliberately selected native ABI suppresses their unavailable VM/map definitions. Native registration replaces BPF sections, private attachment storage replaces mutable BPF globals, and the Huion property comes from public USB string requests. ACK05's probe output runs after transport start with original-descriptor fallback. `i32()` uses signed 64-bit bounds for the RP2 ILP32 compiler. No VM/userspace-loader or runtime program mutation is provided. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-alps.c` | Complete pinned source active for `044e:120b/120c/1215/121e`; only the offset-6 `u32` and offset-13 `u16` loads use unaligned LE helpers, the DualPoint secondary input is device-managed for the reduced device core, and the driver descriptor is immutable. The no-CDC U1/T4 matrix passed on 2026-09-18; `121e` is a source-audited same-path alias. |
 | `hid-asus.c`, `platform_data/x86/asus-wmi.h` | Complete pinned source active for nine wired USB rows: Claymore II `0b05:196b`; zero-quirk XGM 2022/2023, AK1D, MD-5110/5112, and T101HA; G752 `0b05:1822`; and Medion E1239T `048d:ce50`. Active paths preserve the upstream common handshake/mapping graph, exact Claymore filter, exact G752 fixup, and Medion multi-input touchpad/toggle/mute graph. T100 remains gated for unavailable DMI model qualification; backlight/NKEY/Ally, I2C, and Bluetooth paths remain adjacent behind `CONFIG_HID_ASUS_ALL_DEVICES`. Matching special-driver rows follow the same boundary; the driver descriptor is immutable. The expanded 2026-09-18 CDC-free hardware pass qualifies Claymore, exact/neighboring G752, two-interface Medion, and AK1D; the other zero-quirk aliases are source-audited only. |
@@ -758,9 +792,12 @@ it contains no callback, logging, allocation, or wait.
 
 ## Conforming Areas
 
-- CMake links 29 vendor-driver descriptor translation units across 28 vendor
-  families; Holtek contributes separate keyboard and mouse units, while ALPS,
-  ASUS, Wacom, and LetSketch are selected directly through CMake. Generic `hid-multitouch`
+- The earlier CMake checkpoint linked 29 vendor-driver descriptor translation
+  units across 28 vendor families; Holtek contributes separate keyboard and
+  mouse units, while ALPS,
+  ASUS, Wacom, and LetSketch were selected directly through CMake. The current
+  batch retains Rakk and 17 native BPF program units, all excluded from the
+  default CMake build. Generic `hid-multitouch`
   and `hid-haptic` are also linked. Stadia has no reduced config gate and is
   excluded simply by
   leaving its source out of CMake. The unlinked game-controller-only
@@ -1379,11 +1416,17 @@ contains a hypothetical NULL check that no current caller can exercise.
   no debugfs sink is linked. Both reductions are documented at their active
   compatibility definitions; enabling PM or a debug proxy requires replacing
   the corresponding stub, not inheriting it silently.
-- `CONFIG_HID_BPF` is disabled and its compatibility hooks are no-ops. The BPF
-  descriptor-rescan branch currently ignores `hid_set_group()`'s port-only
-  `-ENOMEM` propagation; it is unreachable with the present identity fixup.
-  Enabling HID-BPF requires auditing that rescan and runtime driver mutation as
-  one feature rather than widening the active glue pre-emptively.
+- The kernel BPF VM/loader remains absent. When a retained program source is
+  enabled, descriptor/event and lifecycle hooks dispatch to that static native
+  upstream program. The descriptor-rescan branch then becomes reachable and
+  propagates `hid_set_group()`'s firmware `-ENOMEM` result.
+  `hid_close_report()` is exposed to the adapter for ACK05's pre-input-connect
+  fallback to the original descriptor. These two core adaptations retain their
+  original lines and reasons. The current default registry contains only an
+  empty sentinel, so it selects no program. Raw-request and output-interception
+  hooks remain no-ops because no retained program implements them; helpers for
+  unsupported BPF operations are not exposed. Dynamic program loading or
+  runtime driver mutation is not implemented.
 - The compatibility layer still uses one worker task instead of Linux's worker
   pools, so a blocking callback delays unrelated queues. Selection itself is
   round-robin by workqueue: after taking one item the supplying queue moves
@@ -1786,7 +1829,7 @@ Current checkpoint audit:
   both linked Wacom translation units, `hid-microsoft.c`, `hid-apple.c`,
   `hid-lenovo.c`, `hid-letsketch.c`, and `hid-asus.c`, plus retained unlinked
   `hid-elan.c` and active `hid-alps.c`, against the same pin.
-  There are now 42 linked Linux-derived C translation units; 41 have an
+  That checkpoint counted 42 linked Linux-derived C translation units; 41 had an
   upstream source counterpart and `hid-drivers.c` is the documented firmware-only
   linker registry. The raw-event-only signature and ordinary call sites retain
   their exact upstream forms beside the added argument. The active devres

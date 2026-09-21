@@ -923,7 +923,10 @@ static void hid_free_report(struct hid_report *report)
  * Close report. This function returns the device
  * state to the point prior to hid_open_report().
  */
-static void hid_close_report(struct hid_device *device)
+// static void hid_close_report(struct hid_device *device)
+// The native HID-BPF adapter must restore the original parsed descriptor if a
+// program's upstream probe-time transport request fails after ll_driver start.
+void hid_close_report(struct hid_device *device)
 {
 	// unsigned i, j;
 	// The RP2040 sparse index has no dense ID range to scan during teardown.
@@ -3234,7 +3237,13 @@ static int __hid_device_probe(struct hid_device *hdev, const struct hid_driver *
 		/* the report descriptor changed, we need to re-scan it */
 		if (original_rdesc != hdev->bpf_rdesc) {
 			hdev->group = 0;
-			hid_set_group(hdev);
+			// hid_set_group(hdev);
+			// Firmware's heap-backed pre-scan can return -ENOMEM. HID-BPF
+			// descriptor replacements make this second scan reachable, so
+			// propagate that failure instead of continuing with a wrong group.
+			ret = hid_set_group(hdev);
+			if (ret)
+				return ret;
 		}
 	}
 

@@ -15,6 +15,65 @@ failure caused by static RAM layout.
 
 ## Current Working Link Baseline
 
+The current production build is RP2040 `pico`, Release, with
+unchanged `HID_MAX_FIELDS/USAGES=64/675`. The native HID-BPF/Rakk adapter and
+source files are retained, but all 17 program entries and `hid-rakk.c` are
+commented out in CMake; the test observer is absent. The standard build
+produced:
+
+```text
+firmware build ID            1f1ef709bda012f32656e5c7507d573ebeb021d5
+text/data/bss                642964 / 788 / 243604 B
+__bss_end__                  0x2003f7fc
+main-bank headroom           2052 B to 0x20040000
+build/ErgoType.elf           5211556 B (includes non-flashed debug/link data)
+build/ErgoType.uf2           1287680 B
+ELF SHA-256                  0834b5bfb4d58fccb1bf3fdc6d6d7a9a42cb9f172a39e0d32c850ab77c27419e
+UF2 SHA-256                  dc441c85df1d5fdbb756cd62ccb0f11e60aa930a3b855a24971d6f880ba6dcfb
+hardware verdict            not separately flashed after test cleanup
+```
+
+The default registry contains only its empty sentinel, so no HID can allocate
+native-program state. When at least one program source is enabled, its static
+registration, replacement descriptors, and tilt tables live in flash. Each
+matched HID separately owns its adapter/private state; a Huion firmware
+property, when read, adds 64 heap bytes. Event programs allocate scratch at
+connect, sized to their largest parsed report rounded up to 64 bytes, and
+release it at disconnect. Private state lasts until attachment destruction.
+This is in addition to ordinary HID parser, report, input, and transport
+allocations; unmatched devices do not allocate an adapter.
+
+Probe arguments temporarily include a 4096-byte descriptor plus metadata and
+are freed before attachment allocation/mode requests. Huion string exchange
+uses a separate transient 256-byte buffer. Descriptor replacement uses a
+4096-byte workspace plus the final descriptor copy briefly at the same time;
+the workspace is then freed. ACK05 output copies its 32-byte request for the
+existing transport and uses one reusable delayed-work item, not a new task.
+These are source-derived allocation costs, excluding allocator overhead and
+other concurrent owners, not measured runtime peaks.
+
+### Native HID-BPF/Rakk hardware-test checkpoint
+
+The instrumented RP2040 image enabled all 17 programs and Rakk and used the
+temporary observer:
+
+```text
+firmware build ID            7a15c6ff79e879ce4fcaafb362079d3f894340c9
+text/data/bss                661716 / 788 / 243652 B
+UF2 SHA-256                  5aae7b0ec6b9d24d46f57b77f8a578b2baa46f5c04a596197861e1e39941c5b1
+hardware coverage           two runs with overlapping captures cover 1--44
+```
+
+Together the two runs confirm 55 successful target verdicts, the expected bounded
+generation-21 verdict, 78 ordered report checks, all progress markers, and no
+OOM or zero task watermark. Minimum-ever free heap was 21,744 bytes; the final
+detached snapshot was 61,640 bytes. The observer was then removed and the
+default-off production image above rebuilt. Compilation and size alone are
+not runtime evidence; exact log hashes and scope limits are in
+`hid-emulator-coverage.md`.
+
+### Earlier Corsair/Cougar hardware checkpoint
+
 The current RP2040 build uses the default `HID_MAX_USAGES=675`. The retained
 ELAN source is excluded by CMake and `CONFIG_HID_ELAN`; hardware-verified
 LetSketch USB `6161:4d15` and ALPS USB `044e:120b/120c/1215/121e` remain
