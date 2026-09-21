@@ -332,6 +332,21 @@ unsupported WebHID interface may produce `WARN: HID_IGNORED` while the keyboard
 and mouse interfaces continue working. CDC is not HID and never enters this
 probe path.
 
+When enabled, the retained native HID-BPF programs attach before the driver's
+full parse, apply descriptor fixups, then rescan the group. Event
+fixups run before report lookup under the same HID's parser lock. Mutable
+program state and report scratch belong to that HID, not to a global program.
+Huion mode requests use standard device-recipient string descriptors
+`0/201/200`, with the upstream `100/123` fallback, through task-owned USB
+messages. ACK05 performs its initial interrupt-OUT after transport start;
+failure restores the original parsed descriptor before input connection.
+Its reconnect event schedules the upstream ten-millisecond mode write, and
+disconnect synchronously cancels that work before releasing its storage.
+The 22-ID batch passed its CDC-free fixture in two separate hardware runs whose
+retained main-host log captures overlap at generation 14. Its temporary
+observer was removed afterward; the 17 program source
+entries and Rakk are retained but commented out in the default CMake build.
+
 The selected UC-Logic paths use this same per-interface lifecycle. Huion reads
 decoded firmware string 201 and raw parameter string 200 before parsing its
 generated Pen/Pad/Touch Strip/Dial descriptors. Deco 01 V2 exposes three HID
@@ -940,6 +955,8 @@ wrote into adjacent `mt_device` state on RP2040.
 | Message | Meaning |
 | --- | --- |
 | `WARN: HID_IGNORED` | No linked driver accepted this HID interface; other composite interfaces are unaffected. |
+| `WARN: HUION_MODE_INIT` | The native Huion switcher's public USB string initialization failed; any firmware property already read remains available to the upstream program. |
+| `WARN: HUION_MODE_UNCONFIRMED` | The string sequence returned without confirming Huion mode selection. This is not a successful mode-change verdict. |
 | `ERR: HID_ADD_FAIL` | `hid_add_device()` failed for an error other than `-ENODEV`, such as parse, registration, or start failure. |
 | `ERR: HID_EVDEV_FAIL` | The evdev input handler itself could not register. TinyUSB and the HID core continue for other input consumers. |
 | `ERR: HID_INITCALL_FAIL` | At least one linked Linux module initcall failed; every remaining initcall still ran and host startup continued. |

@@ -712,6 +712,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_devres.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_kfifo.c
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_bpf_static.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/leds.c
         # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
@@ -729,6 +730,25 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-drivers.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-quirks.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-haptic.c
+        # Hardware-qualified native HID-BPF programs, excluded from the default
+        # build. Uncomment individual sources as their device support is needed.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Dial-2.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Inspiroy-2-M.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Inspiroy-2-S.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Inspiroy-Frego-M.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Kamvas-Pro-19.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Kamvas13Gen3.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Kamvas16Gen3.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__KeydialK20.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Mistel__MD770.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Trust__Philips-SPK6327.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/IOGEAR__Kaliber-MMOmentum.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__ACK05.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__Artist24.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__ArtistPro16Gen2.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__Deco01V3.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__Deco02.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/XPPen__DecoMini4.bpf.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-multitouch.c
         # USB-only Magic Mouse 2 / Trackpad 2; Bluetooth and legacy IDs remain
         # visibly disabled beside the upstream match table in the source.
@@ -812,6 +832,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-plantronics.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-primax.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-pxrc.c
+        # Hardware-qualified Rakk Dasig fixup; enable when support is needed.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rakk.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-razer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rapoo.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-redragon.c

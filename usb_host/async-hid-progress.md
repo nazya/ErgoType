@@ -1152,6 +1152,18 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Current Driver Boundary
 
+- The retained 22-ID native HID-BPF/Rakk batch provides 17 upstream BPF
+  programs and Rakk. Their source entries are commented out in the default
+  CMake build and can be enabled individually. Huion mode strings use existing
+  synchronous USB messages from lifecycle context; ACK05 initial and
+  ten-millisecond delayed output uses the existing interrupt-OUT/workqueue
+  path, with synchronous cancellation before freeing its attachment. No new
+  transport task, Bluetooth, or proxy is added. An instrumented build passed
+  the CDC-free 44-generation matrix in two separate hardware runs whose
+  retained captures overlap at generation 14: 55
+  successful targets, the expected bounded generation-21 rejection, and 78
+  ordered report checks. The observer was then removed; see
+  `hid-emulator-coverage.md`.
 - The linked driver set can use upstream `hid_hw_request()` followed by
   `hid_hw_wait()`, including returned feature data during probe. The bounded
   firmware queue still rejects overload instead of attempting Linux's much
@@ -1277,6 +1289,11 @@ in [`pio-usb-memory.md`](pio-usb-memory.md), and current audit findings in
 
 ## Next Checks
 
+- If full Kamvas Pro19 input binding is needed, repeat generation 21 on a
+  memory-rich build with `HID_MAX_USAGES >= 1387`. The completed RP2040 test
+  intentionally verified its exact 438-to-448-byte fixup and then the bounded
+  rejection of the 1387-slot INPUT ARRAY at `HID_MAX_USAGES=675`; compilation
+  alone is not a hardware verdict.
 - Qualify `056a:0333/0335` next with two simultaneously live device-level
   PIDs under one common parent/hub and both arrival orders. A single Pico
   cannot represent that topology, so neither row should be enabled without

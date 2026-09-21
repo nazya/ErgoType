@@ -116,6 +116,20 @@ specific hardware request instead of paying static registry RAM by default.
 Those are missing Linux subsystem ownership layers, not the same problem as
 blocking inside TinyUSB callbacks.
 
+## Deferred Synaptics RMI-over-HID Boundary
+
+`hid-rmi.c` is deferred by product scope, not because wired USB transport is
+unavailable. Its known upstream USB devices are internal laptop touchpads or
+touchpads integrated into detachable keyboard covers and docks, such as the
+Razer Blade 14, Lenovo X1 Cover, and Acer Switch 5. The `HID_GROUP_RMI`
+wildcard identifies the protocol; it is not evidence of a mainstream
+standalone RMI peripheral intended for an external USB Type-A or Type-C port.
+These devices are outside the current input-side boundary of user-pluggable
+wired USB peripherals and receivers.
+
+Reconsider the upstream RMI stack if a concrete external wired USB product or
+an explicit need for one of the internal, cover, or dock devices appears.
+
 ## Active Microsoft Wired USB Boundary
 
 The complete pinned `hid-microsoft.c` is linked with a deliberately narrow
@@ -830,6 +844,35 @@ hardware on 2026-09-18: all required markers, translated events, rejection
 intervals, and 15 target lifetimes matched, with `oom=0` and nonzero task
 watermarks. The remaining zero-quirk aliases are source-audited common-path
 rows and were not enumerated individually.
+
+## Retained Native HID-BPF and Rakk Support
+
+The tree retains 17 upstream HID-BPF programs as native callbacks and the
+ordinary `hid-rakk.c` driver. All 18 source entries are commented out in the
+default CMake build and can be enabled individually when their device support
+is needed. Together they cover these 22 wired VID:PIDs:
+
+| Family | Retained USB IDs |
+| --- | --- |
+| Rakk Dasig X direct / receiver | `248a:fb01/fa02` |
+| Mistel MD770, Trust/Philips SPK6327, IOGEAR MMOmentum | `04d9:0339`, `145f:024b`, `258a:0027` |
+| Huion Dial2, Inspiroy2 S/M, K20, Kamvas Pro19/27, Kamvas13/16 Gen3, Frego | `256c:0060/0066/0067/0069/006b/006c/2008/2009/2012` |
+| XP-Pen ACK05, Artist24, ArtistPro14/16/19 Gen2, Deco01V3/02/Mini4 | `28bd:0202/093a/095a/095b/096a/0947/0803/0929` |
+
+Upstream predicates, descriptor replacements, event logic, and tables remain;
+native glue replaces the BPF loader/maps and gives each HID its own mutable
+state. Huion mode selection uses standard USB string requests through the
+existing task-owned transport; ACK05 uses its existing interrupt-OUT and
+delayed-work contracts. There is no BPF VM, dynamic attachment, new bus, or
+proxy. Frego/Rakk Bluetooth rows remain commented out; Artist24 Pro `092d`
+stays with the existing UC-Logic driver rather than receiving a second fixup.
+An instrumented build passed the 44-generation, no-CDC host-path matrix in two
+separate hardware runs whose retained captures overlap at generation 14. The
+temporary observer was removed afterward,
+and the default production build excludes these sources. This qualifies the
+selected synthetic executable paths, not every retail-device behavior; source
+revisions and coverage limits are recorded in `upstream-porting-audit.md` and
+`hid-emulator-coverage.md`.
 
 ## Future Transport Work
 

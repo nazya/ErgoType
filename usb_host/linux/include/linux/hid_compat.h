@@ -79,6 +79,7 @@ typedef long loff_t;
 // #define CONFIG_HID_LENOVO_ALL_DEVICES 1
 #define CONFIG_HID_PRIMAX 1
 #define CONFIG_HID_PXRC 1
+// #define CONFIG_HID_RAKK 1
 #define CONFIG_HID_RAPOO 1
 #define CONFIG_HID_RAZER 1
 #define CONFIG_HID_SAITEK 1
