@@ -5,6 +5,146 @@ list of every "large" driver. The important boundary is whether the upstream
 driver's transport and subsystem dependencies are implemented by the firmware
 port.
 
+## Product Decisions and Remaining Wired USB Gaps
+
+This is the authoritative selection register for the working tree based on
+host commit `27bf73e`, audited against pinned Linux
+`83f1454877cc292b88baf13c829c16ce6937d120`.
+Later sections explain individual implementations and measurements. Keep these
+states distinct:
+
+- **active** means linked in the production build; it does not claim that every
+  retail alias was exercised on hardware;
+- **retained, default-off** means a selected port is present but deliberately
+  omitted from CMake to save firmware/RAM until that device is selected;
+- **remaining input gap** means the complete applicable upstream behavior is
+  not yet available as a coherent port merely by enabling one CMake entry;
+- **outside the current product scope** means deliberately not selected now,
+  not impossible to port later.
+
+The selected product is a wired remapper for user-pluggable keyboards, mice,
+presenters, touchpads, drawing tablets, pads, dials, and their USB receivers.
+A gaming label does not exclude an otherwise useful keyboard or mouse.
+Conversely, generic HID fallback is not equivalent to Linux driver support:
+basic keys or pointer movement may work while repaired descriptors, extra
+buttons, macro keys, high-resolution axes, battery data, or vendor functions
+remain absent. Scope ends at Linux input/evdev; KeyD policy is separate.
+
+### Gaming-related coverage already present
+
+- Razer BlackWidow, Cougar 500K/700K, Corsair Glaive/Scimitar Pro/K70,
+  Genius Gila/Manticore/GX Imperator, Saitek/Mad Catz R.A.T./M.M.O. mice,
+  Holtek gaming keyboard/mice, and the selected EVision paths are active.
+- Wired Logitech HID++ plus Unifying, gaming, Lightspeed, and Powerplay DJ
+  receivers are active within the memory limits documented below.
+- Rapoo `24ae:2015` is active through `hid-rapoo.c`: interface 1 publishes its
+  two side-button bits through a separate managed Back/Forward input. The
+  older pinned HID-BPF descriptor fix targets the same receiver and is not
+  stacked on top of that newer driver. Two synthetic two-interface generations
+  passed the managed-input lifecycle regression described below.
+- The pinned G13 `046d:c21c`, G11 `c225`, G15
+  `c222/c227`, and G510 `c22d/c22e` input/control paths are active.
+  Independent macro, preset, record, LCD-menu and applicable mute keys are
+  retained, as is the G13 thumbstick input and the exact startup
+  interrupt-OUT/Feature-SET flow.
+  LED/backlight code and Z-10 remain adjacent but compile-disabled.
+- The pinned non-FF `hid-lg.c` paths are active for
+  Logitech S510 `046d:c50c`, UltraX `c101`, diNovo `c704`, Elite `c30a`, and
+  LX500 `c512`. The complete S510 `0x104d` descriptor expansion and mappings
+  are retained. `HID_MAX_USAGES` remains the sole capacity knob: the current
+  RP2040 fixture narrows only its synthetic range to exercise the code, while
+  a full retail-range verdict requires a sufficiently large setting and heap,
+  expected on a PSRAM target. Wheel, joystick, force-feedback, Wii setup, and
+  SpaceNavigator paths remain visibly gated.
+- Sony VAIO RF mice `054c:024b/0374` are linked through the pinned
+  `hid-sony.c` descriptor correction. Only those exact wired USB rows are
+  active; Sony controller and Bluetooth paths remain visibly gated.
+- Pinned `hid-kysona.c` is active for Kysona M600 and VXE
+  R1 Pro wired/dongle rows `3554:f57c/f57d/f58a/f58c`. Interface 1 sends the
+  exact online/battery OUTPUT queries at probe and every five seconds; accepted
+  INPUT replies publish online, charging, capacity and voltage through the
+  unchanged reduced `power_supply` snapshot boundary. Driver-local
+  `power_supply_changed()` calls replace Linux's direct sysfs visibility; the
+  UI still consumes snapshots without presenting them.
+- Static common quirks already cover ADATA XPG, Cooler Master, Logitech G710+,
+  and several Corsair K65/K70/K95/Strafe/M65 rows. They are table quirks, not
+  missing vendor-driver ports.
+- Glorious Model O/O-/D/I `258a:0036/0033`, `22d4:1503`, Redragon Asura
+  `0c45:760b`, and Semitek `1ea7:0907` descriptor/input fixes are retained and
+  default-off; they are unavailable in the production build until their CMake
+  entries are enabled. Rakk Dasig X `248a:fb01/fa02` and the IOGEAR
+  MMOmentum `258a:0027` native HID-BPF fix are likewise default-off, with their
+  synthetic executable paths covered by the documented hardware matrix.
+
+### Concrete remaining wired-device work
+
+| Device or family | Current gap | Decision |
+| --- | --- | --- |
+| 3Dconnexion SpaceNavigator `046d:c626` / SpaceTraveller `c623` | Six axes are declared REL instead of ABS. The old `hid-lg.c` fix covers only some offsets; pinned SpaceNavigator HID-BPF additionally covers descriptor sizes 202/217/228 and offsets 32/36/49/53. | Useful external CAD input; port the applicable `hid-lg` and BPF fixes together. |
+| Corsair K90 `1b1c:1b02` | Generic fallback keeps the ordinary keyboard, but the already-retained mapping for G1--G18, profile and record controls is not selected. Upstream changes hardware/software macro mode only through userspace control, not at probe. | An input-only enablement does not require LED support, but real G-key availability depends on an explicit macro-mode policy and corresponding test. |
+| Original Roccat Kone `1e7d:2ced` | Linux suppresses repeated tilt/special-button events emitted by firmware 1.38. | Genuine legacy mouse correction. Other Roccat families mostly add profile/DPI/configuration and `/dev/roccat*` streams with no selected firmware consumer. |
+| Wacom ArtPen on Intuos Pro 2 M `056a:0357`, tool `0804` | The absent pinned HID-BPF filter interpolates every other repeated pressure sample. Base Wacom input remains active. | Specialized pen-quality gap, independent of Wacom transport support. |
+| WALTOP Batteryless Tablet `172f:0505` | The absent pinned HID-BPF program adds the second pen button, corrects tilt limits and pressure, and disambiguates tip/barrel input. Retained `hid-waltop.c` covers `0502`, not `0505`. | Specialized tablet candidate requiring its complete descriptor/event fix. |
+| Creative Prodikeys PC-MIDI `041e:2801` | Generic keyboard operation remains, but Linux adds MIDI plus office/media keys such as Messenger, Calendar, Documents, Send/Reply, and Open/Save/Undo/Redo. | Hybrid music-keyboard project, explicitly low priority rather than incorrectly described as MIDI-only. |
+
+### Explicitly outside the current stage
+
+- No further game-controller expansion: PlayStation/Sony controller rows,
+  Nintendo, Steam, NVIDIA Shield, Lenovo Legion Go, ASUS Ally, Logitech
+  wheels/joysticks, Thrustmaster, WinWing, universal PIDFF, and the older
+  ACRUX/Betop/BigBen/DragonRise/EMS/GreenAsia/Mayflash/MegaWorld/PantherLord/
+  SmartJoy/ZeroPlus families remain out. Some need real input repair as well as
+  force feedback; they are excluded by product scope, not described as
+  FF-only. Existing PXRC, Saitek PS1000, and retained Stadia FF code are
+  historical exceptions and do not select a broader controller roadmap.
+- Controller-only HID-BPF programs for FR-TEC Raptor Mach 2, Thrustmaster TCA
+  Yoke Boeing, and Bluetooth Xbox Elite 2 remain out. Steam's controller
+  driver and its lizard-mode management are also separate from accepting the
+  keyboard/mouse reports that hardware may emit on its own.
+- SteelSeries in the pinned baseline means the SRW-S1 wheel and Arctis 1/9
+  headset battery paths, not a missing modern SteelSeries keyboard/mouse
+  driver. Corsair Void, Logitech HID++ headset rows, Jabra, Plantronics, and
+  CMedia audio-related controls are likewise outside the input product.
+- No new Bluetooth, internal-laptop, detachable-cover/dock, or handheld-control
+  family is selected merely because its electrical transport is USB. This
+  excludes TUXEDO Sirius F13 filtering, Synaptics RMI laptop/cover devices,
+  and laptop/handheld-only backlight or controller paths. Already active
+  historical exceptions such as ASUS T101HA, Medion E1239T, and ALPS remain
+  supported within their documented boundaries.
+- Linux udev metadata alone is not a firmware input feature. The generic
+  Win8-touchpad HID-BPF PadType property is intentionally omitted because it
+  changes no input report. Sysfs/hidraw vendor configuration, RGB/DPI/profile
+  channels, framebuffer/LCD appliances, ALSA/raw-MIDI, and hwrng stay out
+  until a concrete firmware consumer is selected.
+- HID proxy work remains paused until a new explicit user request. This
+  decision does not block ordinary host-side raw GET/SET or HID++ transport.
+
+The combined CDC-free synthetic matrix passed on hardware on 2026-09-22 with
+test host UF2
+`b17c6e59ae7964168dbb286d777a7974a99e27fbceef2f65d9cad09d41745997`,
+emulator UF2
+`daee91a028ec4089d2e249048fc45dbcb52946a71d986cd59d36eeb92e2dcb35`,
+and main-host log
+`dfb72561c3bb5201c3465e9a66a501a53f29490707fa9f916ff134f21daa8d69`.
+All 28 target generations reached their marker, including reconnects, the
+Rapoo managed secondary input, exact and negative Sony descriptor predicates,
+legacy Logitech mappings, Kysona polling/retry/publication, and balanced
+teardown. The log had no failure marker, `ERR`, `WARN`, OOM, or zero task
+watermark. This qualifies the exercised host paths and synthetic descriptors;
+it does not claim retail descriptor fidelity, the full S510 range at 675
+usages, LED/LCD behavior, or external presentation of battery snapshots.
+
+Capacity and evidence are separate from the product exclusions above.
+`HID_MAX_FIELDS=64` and `HID_MAX_USAGES=675` deliberately bound the Linux data
+model on RP2040; raising those same build-time limits on a larger-memory target
+increases descriptor coverage without introducing another parser. Logitech
+`c52f/c534`, the synthetic `c539` child, Lenovo `60ee`, Cherry Cymotion, and
+Huawei CD30 have documented capacity constraints. Production rejects wildcard
+Wacom descriptors requiring paired Pen/Touch mode-change; the full sibling
+implementation remains only on its WIP branch and still needs the two-device
+hub qualification. Synthetic fixtures prove the exercised host branches, not
+unobserved retail-device details.
+
 ## Current Safe Boundary
 
 The current build may include drivers that only need one of these patterns:
@@ -263,7 +403,7 @@ without a device or internal consumer that defines their exact contract.
 
 Direct HID++ does not depend on HIDRAW. The hardware-tested request/reply
 foundation came from a narrow slice of pinned upstream `hid-logitech-hidpp.c`.
-The current uncommitted expansion restores its common USB/DJ flow:
+Committed host change `27bf73e` restores its common USB/DJ flow:
 
 - direct USB `046d:c081/c082/c086/c087/c088/c08a/c08d/c090/c091/c094/c09a/
   c09b/c343` are selected; the source retains pinned table order;
@@ -338,11 +478,13 @@ Hardware testing at the retained `64/675` policy showed that standalone and
 simultaneous M705 and ordinary DJ keyboard children work. The combined graph
 leaves `free=5160`, `min=4008`, and no new OOM. The complete HID++ eQuad
 keyboard connection profile does not fit as a standalone child and adds the
-run's only OOM count. Cleanup recovers, and subsequent M705, ordinary keyboard,
-and direct HID++ phases continue to work. The earlier two-OOM result used the
-upstream-sized 256-field table rather than the retained 64-field table. Pinned
-upstream supplies protocol-version detection but no generic version query for
-Logitech firmware entities.
+only OOM count in that earlier run. Cleanup recovers, and subsequent M705,
+ordinary keyboard, and direct HID++ phases continue to work. The later
+13-generation production attempt also exhausted heap at the synthetic `c539`
+child and did not reach `c547`; both branches passed at temporary 256 usages.
+The still earlier two-OOM result used the upstream-sized 256-field table rather
+than the retained 64-field table. Pinned upstream supplies protocol-version
+detection but no generic version query for Logitech firmware entities.
 
 The staged order from here is:
 
@@ -672,7 +814,8 @@ The retained input/devres layer restores pinned Linux's
 `void devm_release_action()`, `devres_destroy()` `0/-ENOENT`, and separate
 allocation/unregister resources for managed inputs. The generic evdev client
 uses `input_dev->id` and leaves Wacom's opaque `struct wacom *` driver data
-untouched. The separate Rapoo managed extra-input regression remains pending.
+untouched. The separate Rapoo managed extra-input regression passed in the
+2026-09-22 matrix.
 
 Those historical images excluded Wacom product IDs outside their exact table.
 The current candidate instead uses the explicit unfinished-profile quirk list
@@ -895,20 +1038,21 @@ sync-over-async transport:
 The Linux-shaped caller may block only in a task; TinyUSB callbacks must remain
 bounded publishers.
 
-## Examples To Keep Deferred Until Their Dependencies Exist
+## Deferred Dependency Examples
 
-These are examples from upstream classes that still need a driver-by-driver
-subsystem/lifecycle audit before they can be trusted. Synchronous raw GET/SET
-by itself is no longer a transport blocker:
+The decision register above supersedes a broad family-level allowlist.
+Synchronous raw GET/SET by itself is no longer a transport blocker:
 
-- `hid-lg.c` / `hid-lg4ff.c`: feature/raw transport is present, but FF and
-  wait-style init dependencies remain unaudited.
+- the non-FF keyboard/mouse part of `hid-lg.c` is active; its 3Dconnexion
+  descriptor paths remain deferred, while `hid-lg*ff.c` stays in the excluded
+  controller/FF scope;
 - remaining `hid-logitech-hidpp.c` force-feedback, headset, Bluetooth, and
-  legacy proxy/27 MHz classes outside the USB/DJ boundary above.
-- `hid-ntrig.c`: USB control-message firmware/query path.
-- `hid-sony.c`, `hid-nintendo.c`, `hid-playstation.c`: controller init uses
-  request/response and worker-style state.
+  legacy proxy/27 MHz classes stay outside the active USB/DJ boundary;
+- `hid-ntrig.c` still needs a focused USB control-message firmware/query audit;
+- controller portions of `hid-sony.c`, `hid-nintendo.c`, and
+  `hid-playstation.c` remain excluded even though their request/work paths
+  could be ported.
 
-This list is not exhaustive. Reimport one driver at a time and record the
-specific upstream wait/request site and the hardware/emulator check that makes
-it safe under the firmware transport layer.
+For any reopened row, record the exact upstream behavior, dependencies,
+memory cost, and hardware/emulator evidence. Do not infer support merely from
+generic HID fallback or from a source file being present in the tree.

@@ -724,6 +724,7 @@ claims for unrelated drivers.
 | 2026-08-03 | focused `device/wacom-receiver-lifecycle`, test host `068194df…`, emulator `e0710149…` | `f13, f14, f10` completes without a failure marker, host `ERR`, timeout, input drop, or OOM; test-only `033c` proves both child stop paths after the second-child post-start error, and exactly three `0027` generations produce real Finger then Pen events across two logical rebinds, proving both shared arbitration fields are reset |
 | 2026-08-04 | focused `device/wacom-wired-matrix`, production host `72a83e26…`, emulator `d675aee2…` | two unknown-tool `033b` packets force two Feature GET 8 callbacks before enter or disconnect; the second callback proves parsing/retirement of the first GET and CTRL progress, then balanced Pen/Pad removal and alert markers `f15, f10` complete without `f12`, host `ERR`, timeout, input drop, report-memory warning, or OOM |
 | 2026-09-17 | `device/letsketch-wp9620n`, test host `98bf2d4d…`, emulator `39cd84c9…`, log `4026ee47…` | exact string retry/failure sequence, parse rejection, raw-event branches, Pen, all five Pad buttons, timer expiry, pending-timer disconnect, and same-PID reconnect complete `f1` through `f10`; 29 expected `HID_IGNORED`, six balanced Tablet/Pad adds/removes, 32 `oom=0` snapshots, stable `61744` detached heap, and no `f12`, host `ERR`, drop, timeout, or unexpected warning |
+| 2026-09-22 | Logitech G/legacy, Rapoo, Sony and Kysona/VXE matrix; test host `b17c6e59…`, emulator `daee91a0…`, log `dfb72561…` | all 28 target generations complete `f1`, 28 `f11` pairs, and terminal `f10` without `f12`, `ERR`, `WARN`, OOM, or zero task watermarks; exact startup control, mappings, REL/ABS values, two-interface Rapoo lifecycle, Sony exact/negative predicates, ten Kysona SET completions, five-second retry, snapshot reads, reconnects and teardown pass for the synthetic fixture scope |
 
 ## Recorded Emulator Branches
 
@@ -2305,6 +2306,32 @@ fixup, mapping, mapped, event, simple probe, or raw event.
 Use this checklist when logs come back from hardware. Paste the relevant host
 and emulator CDC lines under each item.
 
+- [x] current Logitech G/legacy, Rapoo, Sony VAIO and Kysona/VXE matrix
+  - single-Pico fixture phases 01--24 cover the pending G13/G11/G15/G510,
+    Rapoo, S510/UltraX/diNovo/Elite/LX500 and Sony paths; phases 25--28 add all
+    four exact Kysona/VXE rows without changing the battery scaffold
+  - require `f1`, 28 `f11` pairs, terminal `f10`, no `f12`, balanced target
+    lifetimes, stable marker heap plateaus, `oom=0`, and nonzero watermarks
+  - Kysona requires ten exact interface-1 control SET completions, ordinary
+    interface-0 mouse input, initial/default plus response-state
+    `KYSONA_POWER` snapshot-worker traces, five-second retry recovery in phase
+    28, and no request after removal
+  - passed 2026-09-22 with test host
+    `b17c6e59ae7964168dbb286d777a7974a99e27fbceef2f65d9cad09d41745997`,
+    emulator
+    `daee91a028ec4089d2e249048fc45dbcb52946a71d986cd59d36eeb92e2dcb35`,
+    and 1882-line main-host log
+    `dfb72561c3bb5201c3465e9a66a501a53f29490707fa9f916ff134f21daa8d69`
+  - all required markers, exact trace values, control completions and teardown
+    checks passed; all 29 marker-add heap plateaus were `free=54808 oom=0`
+    and every recorded task watermark remained nonzero
+  - emulator CDC was absent; this is evidence for the exercised synthetic
+    paths, not retail descriptors, full S510-range RAM fit, or compilation alone
+  - after removing the three temporary host trace points, the production host
+    rebuilt as
+    `cab396fc8bffe76c24d8018d65f2bd74d094281b30b623b026a694ab8b4200f9`;
+    that cleanup artifact was not separately flashed and does not inherit the
+    test-host hash-specific hardware verdict
 - [x] full direct HID++/battery/DJ lifecycle at temporary RP2040 limits
   - `HID_MAX_FIELDS=8`, `HID_MAX_USAGES=256`
   - verdict: all current automatic device graphs completed with stable cleanup

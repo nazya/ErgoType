@@ -1,6 +1,6 @@
 # Upstream Porting Audit
 
-Updated: 2026-09-21
+Updated: 2026-09-22
 
 Rules: `usb_host/upstream-porting-rules.md`.
 
@@ -23,12 +23,19 @@ The retained native HID-BPF/Rakk ports additionally use Frego commit
 programs use the baseline above. Huion string-mode glue follows
 `huion-switcher` commit `7f63cd48aed5362b073b3c876d98228b3e3a6e90`.
 
+The current product-selection and remaining-gap register is maintained in
+[`deferred-hid-drivers.md`](deferred-hid-drivers.md). It distinguishes active
+support, retained default-off ports, concrete input gaps, memory/evidence
+limits, and device classes deliberately outside the current wired-remapper
+scope. That register was re-audited at host `27bf73e`; an older source-count or
+family-level statement in this chronology must not override it.
+
 ## Result
 
-The current batch retains 22 wired VID:PIDs through 17 native
-HID-BPF programs plus Rakk. Their 18 source entries are commented out in the
-default CMake build and can be enabled individually. Exact source comparison
-retains the selected upstream descriptor/event branches and tables. BPF
+The preceding native HID-BPF/Rakk batch retains 22 wired VID:PIDs through 17
+native HID-BPF programs plus Rakk. Their 18 source entries are commented out
+in the default CMake build and can be enabled individually. Exact source
+comparison retains the selected upstream descriptor/event branches and tables. BPF
 loader/maps are replaced by immutable registration and per-HID private state;
 the firmware adapter exposes only the retained native contracts while the
 imported helper headers remain untouched. Huion uses standard USB string mode
@@ -104,7 +111,8 @@ backlight/NKEY/Ally, I2C, and Bluetooth paths remain gated for their stated
 platform or bus dependencies. The expanded 2026-09-18 CDC-free hardware pass
 qualifies the Claymore, exact/neighboring G752, two-interface Medion, and AK1D
 paths. The other zero-quirk aliases are source-audited but were not enumerated.
-The separate Rapoo managed extra-input regression remains pending.
+The separate Rapoo managed extra-input regression passed as part of the
+2026-09-22 Logitech G/legacy, Sony, Rapoo, and Kysona/VXE matrix.
 The port is not byte-identical: Linux-only presentation subsystems and the
 TinyUSB/FreeRTOS ownership boundary remain explicit structural exceptions.
 This is a porting audit, not a runtime safety certification.
@@ -196,7 +204,8 @@ porting-rule hygiene, not a runtime blocker. The input/devres and identity
 contracts first passed the exact 32-reconnect CTL-472 artifact and then the
 five-profile wired plus AES/receiver matrices with real `056a:*` identities,
 balanced teardown, `oom=0`, and no host `ERR`. The separate Rapoo managed
-extra-input regression remains pending.
+extra-input regression passed in two synthetic two-interface generations of
+the 2026-09-22 matrix.
 
 ## Current USB Wacom Contract Result
 
@@ -645,8 +654,10 @@ that adjacent immutable-descriptor replacement are: `hid-accutouch`,
 `hid-sigmamicro`, `hid-speedlink`, `hid-sunplus`, `hid-tivo`, `hid-topseed`,
 `hid-twinhan`, `hid-viewsonic`, `hid-vivaldi`, `hid-vrc2`, `hid-waltop`,
 `hid-xiaomi`, and `hid-xinmo`. `hid-vivaldi-common.c` is byte-for-byte baseline.
-Together with `hid-cmedia.c`, `hid-google-stadiaff.c`, and hiddev, this accounts
-for all 42 unlinked HID `.c` files.
+Together with `hid-cmedia.c`, `hid-google-stadiaff.c`, and hiddev, this
+accounted for the unlinked HID `.c` files present at that audit checkpoint;
+later imported and newly audited sources are classified in the selection
+register rather than by a brittle file count.
 
 The dormant `hid-core.c` `new_id` block is unreachable because firmware
 publishes no driver groups, but it remains a partial local parser/lockless
@@ -710,6 +721,10 @@ deferred FF sources so their enablement contract remains visible.
 | `hid-lenovo.c` | Complete pinned source with external USB `17ef:6009/6047` active; the full `60ee` row remains adjacent but is gated by the measured RP2040 heap limit, while Bluetooth, I2C, ScrollPoint, dock, tablet, and audio LED-class state/code/table rows remain behind the same narrow boundary; Legion is a separate unlinked driver family; two dense report-ID reads use the sparse registry and the driver descriptor is immutable. |
 | `hid-logitech-hidpp.c` | Full pinned common USB/DJ flow, wired mouse/keyboard rows, exact child quirks before the DJ-group wildcard, sparse report-ID lookup, cross-task response-state lock, exact-interface wait cancellation, and immutable driver metadata. Connect/reset workers stop before waiter unbind and mutex destruction. Bluetooth, legacy proxy/27 MHz, headsets, and wheel FF stay gated. The 13-generation protocol/lifecycle matrix passed on 2026-09-22 at temporary `64/256`, not as a production `64/675` RAM-fit verdict. |
 | `hid-logitech-dj.c` | Full pinned source with receivers `046d:c52b/c532` and gaming/Lightspeed/Powerplay `c531/c537/c539/c53a/c53f/c543/c547/c54d` active. Memory-gated `c52f/c534`, legacy 27 MHz, Bluetooth-proxy, and Dinovo rows remain in order behind `CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS`. Firmware work/lifecycle integration, final evdev activation, sparse report-ID lookup, immutable metadata, and physical-receiver raw routing retain the upstream multi-slot child model. |
+| `hid-lg-g15.c` | Pinned G13/G11/G15/G15v2/G510 input and G-key startup-control paths are active; LED/backlight blocks and the Z-10 speaker row remain adjacent but compile-disabled. The upstream report parsing, managed G13 dual-input lifetime, interrupt-OUT/Feature-SET startup, and failure branches are unchanged. Post-baseline fix `7705b4140d188` cancels LED work, which this input-only build never initializes or schedules. The driver descriptor is immutable. The 2026-09-22 synthetic matrix passed every active PID, both startup transports, G13 secondary-input teardown, held-state removal, and same-PID reconnect. |
+| `hid-lg.c`, `hid-lg.h`, `hid-lg4ff.h` | Pinned S510 `046d:c50c`, UltraX `c101`, diNovo `c704`, Elite `c30a`, and LX500 `c512` non-FF paths are active. Their descriptor fixup, complete S510 wireless mapping, relative-key correction, duplicate-usage handling, expanded keymap, doubled-wheel suppression, no-op raw callback, probe, and teardown retain upstream flow. Wheel/joystick/FF/Wii/SpaceNavigator code and rows remain adjacent but gated. The two headers are byte-identical to pinned Linux; the driver descriptor is immutable. The 2026-09-22 synthetic matrix passed exact and negative fixup predicates, mappings, axis/wheel events, teardown, and reconnect. Full retail S510 coverage is controlled only by `HID_MAX_USAGES` and available heap, not by a reduced driver mapping or by that narrowed-range fixture. |
+| `hid-kysona.c` | Complete pinned Kysona M600/VXE R1 Pro USB driver for `3554:f57c/f57d/f58a/f58c`: ordinary descriptor-driven mouse input on all matched interfaces, interface-1 online/battery SET_REPORT polling at probe and every five seconds, exact 17-byte INPUT decoding, managed power supply and synchronous delayed-work teardown. The reduced firmware power-supply boundary is unchanged. Because it has no Linux sysfs/class-device publication, the driver explicitly calls `power_supply_changed()` after registration and accepted replies; the original state updates remain adjacent. The driver descriptor is immutable. The 2026-09-22 synthetic matrix passed all four rows, ten exact control transfers, ordinary pointer input, delayed retry, snapshot-worker reads, and pending/rearmed-work teardown; external UI presentation remains outside that verdict. |
+| `hid-sony.c` | The complete pinned source is retained with only wired VAIO RF mouse rows `054c:024b/0374` active. Their exact descriptor predicate and `0x07` to `0x06` Data/Variable/Relative correction, parse/start, claimed-input check, and stop flow are preserved. Controller, instrument, Bluetooth, LED, battery, FF, and URB paths remain visibly gated. Firmware omits upstream's unconditional remove-time `hid_hw_close()` because VAIO never owns the controller battery-open reference; `hid_hw_stop()` closes the evdev/input reference during disconnect. The 2026-09-22 synthetic matrix passed both exact rows, near-match and unmatched controls, held-state teardown, and reconnect. |
 | `wacom_sys.c`, `wacom_wac.c`, `wacom.h` | Full pinned Wacom flow under the USB boundary documented above: 134 active fixed rows (133 Wacom plus Lenovo `17ef:6004`), of which 19 retain prior hardware verdicts and the distinct paths exposed by the other 115 ran in the 2026-09-11 representative matrix; same-path PID aliases remain source-audited. Seventeen compile-gated Wacom PIDs are sent to unchanged `hid-generic` through upstream `HID_QUIRK_IGNORE_SPECIAL_DRIVER`; one final Wacom USB wildcard, receiver children selected from active exact fixed rows, and pre-bind wildcard mode-change rejection remain. Four report-ID hash reads use the sparse registry; existing parser and lifecycle behavior remains. The current selection/rejection paths passed the 2026-09-07 matrix; the independent descriptor-qualified `03ce` memory quirk and six-profile receiver rebind passed the 2026-09-10 temporary-64 matrix; the newly reachable fixed and modern representative paths plus normal-stack rejection ran at temporary 32 on 2026-09-11 with the marker caveat recorded in `hid-emulator-coverage.md`. Bluetooth, bootloader, I2C, PCI, Remote sysfs, and the broad all-devices policy remain disabled; the driver descriptor is immutable. |
 | linked vendor drivers | Local includes, immutable driver descriptors, and the required generic post-`hid_hw_start()` probe unwind; the Rapoo replacement retains both complete upstream return branches. |
 | `usbhid.c`, `hidraw.c`, `power_supply.c`, `leds.c`, `evdev.c`, host task files | Deliberate TinyUSB/FreeRTOS glue audited against the corresponding Linux lifecycle. The Wacom probe selects explicit-feature-usage compaction immediately before the full HID parse; `usbhid.c` remains descriptor transport and owns no Wacom matching policy. Raw GET/SET retain upstream report-ID offset/count semantics and use the HID-owned control path, so teardown can cancel an in-flight slot. HIDRAW is lifecycle-only; power, LED, evdev, and receiver-rebind adapters retain their documented lifetimes. Test-only coordinator markers and the Wacom-specific rejection diagnostic were removed; the ordinary probe path reports `HID_IGNORED`. |
@@ -957,11 +972,12 @@ it contains no callback, logging, allocation, or wait.
   routing remain present. Firmware adaptations provide task-owned work,
   lifecycle destruction, sparse report lookup, and final evdev activation.
   Hardware comparison proved the complete HID++ eQuad keyboard lifecycle at
-  temporary `8/256`. At retained `64/675`, standalone and simultaneous M705
-  and ordinary keyboard children work; only the standalone complete eQuad
-  keyboard profile reaches the RP2040 capacity boundary documented in
-  `pio-usb-memory.md`. The earlier simultaneous-child limit was measured with
-  the upstream-sized 256-field table. A later exact `64/256` fixture proved
+  temporary `8/256`. At retained `64/675`, in that earlier capacity run,
+  standalone and simultaneous M705 and ordinary keyboard children worked;
+  only the standalone complete eQuad keyboard profile reached the RP2040
+  capacity boundary documented in `pio-usb-memory.md`. The earlier
+  simultaneous-child limit was measured with the upstream-sized 256-field
+  table. A later exact `64/256` fixture proved
   `c52f/c534` startup, input, and teardown, but their two persistent wide fields
   need another 26,080 bytes at 675. They are disabled on RP2040 rather than
   inheriting that temporary capacity verdict; `c532` remains selected. Generic
