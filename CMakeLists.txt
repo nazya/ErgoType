@@ -760,6 +760,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         # need more RP2040 heap; legacy 27 MHz and Bluetooth proxy stay gated.
         # Enabled does not mean RAM fit: the c539 fixture exceeds heap at 675.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-logitech-dj.c
+        # G13/G11/G15/G510 input and G-key startup control; upstream LED and
+        # Z-10 speaker paths remain visibly disabled in the imported source.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lg-g15.c
+        # Legacy Logitech keyboard/mouse descriptor and input mappings; wheel,
+        # joystick, force-feedback and SpaceNavigator paths remain gated.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lg.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-alps.c
         # Pinned Apple driver, selected to external wired USB keyboards and
@@ -810,6 +816,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-jabra.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kensington.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-keytouch.c
+        # Kysona M600 and VXE R1 Pro wired/dongle battery polling; ordinary
+        # pointer input remains on the unchanged upstream HID input path.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kysona.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-kye.c
         # Complete pinned Lenovo driver for external USB TrackPoint keyboards
         # 6009/6047; full 60ee is retained but exceeds the RP2040 heap at 675.
@@ -840,6 +849,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-redragon.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-retrode.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-saitek.c
+        # Sony VAIO RF mouse descriptor correction only; controller and
+        # Bluetooth paths remain visibly disabled in the imported source.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-sony.c
         # Deferred: Samsung IrDA 184-byte path forces HIDDEV instead of normal
         # hidinput; keep out until firmware has a useful hiddev consumer/proxy.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-samsung.c

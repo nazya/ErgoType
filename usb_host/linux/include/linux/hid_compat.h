@@ -83,6 +83,9 @@ typedef long loff_t;
 #define CONFIG_HID_RAPOO 1
 #define CONFIG_HID_RAZER 1
 #define CONFIG_HID_SAITEK 1
+// The linked Sony driver selects only VAIO RF mice. Defining CONFIG_HID_SONY
+// would reserve unrelated controller and Bluetooth IDs for an absent path.
+// #define CONFIG_HID_SONY 1
 #define CONFIG_HID_TOPRE 1
 #define CONFIG_HID_UCLOGIC 1
 #define CONFIG_HID_ZYDACRON 1
@@ -95,6 +98,9 @@ typedef long loff_t;
 // #define CONFIG_HID_MICROSOFT_ALL_DEVICES 1
 #define CONFIG_HID_LOGITECH_HIDPP 1
 #define CONFIG_HID_LOGITECH_DJ 1
+// hid-lg.c and hid-lg-g15.c register exact linked tables. The broad upstream
+// symbol would also reserve the deliberately gated wheel/joystick IDs.
+// #define CONFIG_HID_LOGITECH 1
 // #define CONFIG_HID_LOGITECH_DJ_ALL_RECEIVERS 1
 // c52b/c532 and gaming/Lightspeed/Powerplay receivers use upstream dispatch.
 // Enabled IDs do not imply RAM fit: the c539 fixture exceeds heap at 675 usages.
