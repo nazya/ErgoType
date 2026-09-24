@@ -596,13 +596,14 @@ enum hid_type {
 
 struct hid_driver;
 struct hid_ll_driver;
-struct hid_bpf_static_device;
+// Native HID-BPF adapter is retained but excluded from the production build.
+// struct hid_bpf_static_device;
 
 struct hid_device {
 	const __u8 *dev_rdesc;						/* device report descriptor */
 	const __u8 *bpf_rdesc;						/* bpf modified report descriptor, if any */
-	/* Firmware native adapter state for selected upstream HID-BPF programs. */
-	struct hid_bpf_static_device *bpf_static;
+	// Firmware native adapter state for selected upstream HID-BPF programs.
+	// struct hid_bpf_static_device *bpf_static;
 	const __u8 *rdesc;						/* currently used report descriptor */
 	unsigned int dev_rsize;
 	unsigned int bpf_rsize;
@@ -1073,9 +1074,16 @@ int __hid_hw_output_report(struct hid_device *hdev, __u8 *buf, size_t len, u64 s
 			   bool from_bpf);
 // Upstream implements these hooks in the HID-BPF core. Firmware links selected
 // upstream programs as native callbacks without a BPF VM or userspace loader.
-u8 *dispatch_hid_bpf_device_event(struct hid_device *hid, enum hid_report_type type,
-				  u8 *data, size_t *buf_size, u32 *size,
-				  int interrupt, u64 source, bool from_bpf);
+// u8 *dispatch_hid_bpf_device_event(struct hid_device *hid, enum hid_report_type type,
+// 				  u8 *data, size_t *buf_size, u32 *size,
+// 				  int interrupt, u64 source, bool from_bpf);
+// Upstream !CONFIG_HID_BPF stubs preserve the ordinary HID call graph.
+static inline u8 *dispatch_hid_bpf_device_event(struct hid_device *hid, enum hid_report_type type,
+						u8 *data, size_t *buf_size, u32 *size,
+						int interrupt, u64 source, bool from_bpf)
+{
+	return data;
+}
 static inline int dispatch_hid_bpf_raw_requests(struct hid_device *hdev,
 						unsigned char reportnum, u8 *buf,
 						u32 size, enum hid_report_type rtype,
@@ -1083,12 +1091,23 @@ static inline int dispatch_hid_bpf_raw_requests(struct hid_device *hdev,
 						u64 source, bool from_bpf) { return 0; }
 static inline int dispatch_hid_bpf_output_report(struct hid_device *hdev, __u8 *buf, u32 size,
 						 u64 source, bool from_bpf) { return 0; }
-int hid_bpf_connect_device(struct hid_device *hdev);
-void hid_bpf_disconnect_device(struct hid_device *hdev);
-void hid_bpf_destroy_device(struct hid_device *hid);
-int hid_bpf_device_init(struct hid_device *hid);
-const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const u8 *rdesc,
-				   unsigned int *size);
+// The native adapter and selected programs are implemented and hardware-tested,
+// but production does not currently need any of their devices. To restore them,
+// uncomment the adapter source and required program sources in CMake, the
+// hid_bpf_static_device declaration/member above, and these active-hook
+// declarations; then comment out the corresponding !CONFIG_HID_BPF stubs.
+// int hid_bpf_connect_device(struct hid_device *hdev);
+// void hid_bpf_disconnect_device(struct hid_device *hdev);
+// void hid_bpf_destroy_device(struct hid_device *hid);
+// int hid_bpf_device_init(struct hid_device *hid);
+// const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const u8 *rdesc,
+// 				   unsigned int *size);
+static inline int hid_bpf_connect_device(struct hid_device *hdev) { return 0; }
+static inline void hid_bpf_disconnect_device(struct hid_device *hdev) {}
+static inline void hid_bpf_destroy_device(struct hid_device *hid) {}
+static inline int hid_bpf_device_init(struct hid_device *hid) { return 0; }
+static inline const u8 *call_hid_bpf_rdesc_fixup(struct hid_device *hdev, const u8 *rdesc,
+						 unsigned int *size) { return rdesc; }
 int hid_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, u32 size, int interrupt);
 int hid_safe_input_report(struct hid_device *hid, enum hid_report_type type, u8 *data, size_t bufsize, u32 size, int interrupt);
 /*

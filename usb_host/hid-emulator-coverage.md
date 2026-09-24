@@ -17,6 +17,82 @@ remains unlinked. Stadia/`ff-memless` is also outside the current CMake
 allowlist, but its retained mutex conversion was retested before deferral on
 2026-07-22.
 
+### Hardware-verified K90, Kone, Prodikeys, WALTOP, and ArtPen matrix
+
+The CDC-free single-Pico fixture passed all 14 target generations on
+2026-09-22. The exact trace-enabled host build ID is
+`d6f485f34e791daf58815ac0cb47ebb2912520b2`; artifact SHA-256 values are:
+
+```text
+host UF2  f84894b7b44d716b8765c52983147b50ea94ae92391cbdbd226ccb6a16c12d39
+emu UF2   18aad1253043cc1378968fb2aa2dd6e3f2a8154477242e034caf390edf7e768b
+host log  0442de75504040d1fa87d85f74b7a1123d6a71f6cbe19effaef792ac30da1498
+```
+
+The main-host log contains initial `f1`, fourteen `f11` press/release pairs,
+and terminal `f10`, with no `f12`. All 25 target input-device additions have
+matching removals across the 14 generations. The marker keyboard has 15
+additions/14 removals and intentionally remains attached. Emulator CDC is
+absent and is not an oracle.
+
+The temporary `HID_REMAINING_MATRIX_TRACE` build exposes the Linux
+input/evdev boundary through `HID_INPUT_TRACE type code value`. Review against
+the emulator README found the following exact input results, not just fixture
+progress:
+
+- K90 phases 01/02 publish all 23 `BTN_TRIGGER_HAPPY` codes `704--726`,
+  ordinary A, fresh G1/M3, and the held G1/B releases. The four ignored
+  usages produce no key events. Firmware's no-macro-mode-change policy is
+  source-audited; the fixture does not observe vendor SETUP requests.
+- Kone phases 03/04 publish respectively 11 and four positive horizontal
+  steps, each with `2 6 1` and `2 12 120`. Initial identical tails yield one
+  mouse-interface step versus three nonmouse steps; fresh mouse state,
+  changed-tail and non-12-byte controls, X/Y, wheel/button pulses, ordinary
+  keyboard input, and held-left release all match.
+- Prodikeys phases 05/06 emit one `PRODIKEYS_RDESC_FIXUP` each; the
+  already-correct 180-byte phase 07 emits none. All 19 office-key pairs,
+  Mail/WWW/Messenger continuation, independent Save/Print releases, and held
+  Save teardown match. Each generation completes the fixture-checked ordered
+  interface-1/report-6 OUTPUT payloads `01 c1`, `01 c5`, `01 c6`. The host
+  log has exactly nine `HID_REPORT_SET_Q` and nine `HID_REPORT_SET_OK` lines,
+  three of each per generation. Fn and ignored musical input add no key
+  events; the fixture rejects GETs or other SETs.
+- WALTOP phases 08/09 publish secondary barrel `332` for the initial
+  simultaneous gesture and preserve subsequent ordinary tip/barrel history.
+  Phase 08 pressure changes are `12,1224,1232,2047,0,120`; initial zero is
+  suppressed. Fresh phase 09 gives `120,0`. Both clamp the raw `+61/-61`
+  tilt probes to `+60/-60`. The 337-byte phase 10 retains ordinary initial
+  tip/barrel, raw pressure `1,102,103,2047,0`, and `+61/-61` tilt. Ordinary
+  mouse/keyboard/media reports and phase-08 held-tip release pass.
+- ArtPen phase 11 pressure changes are exactly
+  `50,100,150,200,150,100,600,250,400,0,300,600`; tool/report controls do not
+  advance interpolation history, X advances by ten, and Y remains 2000.
+  Fresh phase 12 gives `100,0,50,0`. Size/PID controls 13/14 each retain
+  `100,200,100,600,400,0,600,0`, with no interpolated values. Held tip state
+  is released on removal.
+
+All 83 heap snapshots have `oom=0`; the minimum-ever heap is 42,352 bytes.
+All 15 marker-only plateaus repeat exactly at 54,816 bytes free, largest
+block 54,768 bytes, and three free blocks. Minimum host stack margins are
+async/work/timer/lifecycle/report `378/330/330/212/748` words; USB host/KeyD
+are `265/400`. System minima are USB device/UI/keyscan/vkbd/pointing/RTOS
+timer/idle0/idle1 `3998/70/223/302/83/965/344/360` words; app reports 1,085
+words. No host warning, transport error, or zero watermark appears. The
+INFO-level unsupported KeyD codes are outside the input/evdev oracle and do
+not invalidate the observed input.
+
+This synthetic pass does not qualify retail timing, allocation failure,
+forced in-flight cancellation, K90 macro programming, LEDs, ALSA/MIDI, or
+downstream remapping. The hardware verdict belongs to the trace-enabled image
+above, not to a later production rebuild.
+
+After the run, temporary diagnostics were removed and the ArtPen/WALTOP source
+entries were commented out beside the other default-off programs. The native
+adapter source and declarations were also retained but commented out, with
+upstream `!CONFIG_HID_BPF` stubs left active. This final comment-only CMake
+selection has not been rebuilt or flashed, so no production artifact hash or
+runtime verdict is claimed for it. K90, Kone, and Prodikeys remain linked.
+
 ### USB HID++ expansion matrix — temporary `64/256` hardware pass
 
 The current CDC-free single-Pico fixture has 13 target generations: direct
