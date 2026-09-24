@@ -712,7 +712,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_timer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_devres.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_kfifo.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_bpf_static.c
+        # Native HID-BPF support is retained but excluded from production.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/hid_bpf_static.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/leds.c
         # CONFIG_USB_HIDDEV is disabled until the firmware has a hiddev consumer.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/usbhid/hiddev.c
@@ -732,6 +733,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-haptic.c
         # Hardware-qualified native HID-BPF programs, excluded from the default
         # build. Uncomment individual sources as their device support is needed.
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Wacom__ArtPen.bpf.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/WALTOP__Batteryless-Tablet.bpf.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Dial-2.bpf.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Inspiroy-2-M.bpf.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/bpf/progs/Huion__Inspiroy-2-S.bpf.c
@@ -787,12 +790,13 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Deferred: mixed driver file; CM6533 raw/hiddev path is disabled in
         # source, and HS100B-only enablement should be tested explicitly.
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cmedia.c
-        # Glaive/Scimitar descriptor repair and the K70 row with zero driver
-        # data are active; K90 and the separate Corsair headset driver remain
-        # outside this stage.
+        # Glaive/Scimitar descriptor repair, K70, and K90 keyboard/G-key input.
+        # K90 keeps its current macro mode; LED/sysfs controls remain omitted.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-corsair.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cougar.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-creative-sb0540.c
+        # Prodikeys office/Fn keyboard input; ALSA/MIDI publication is omitted.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-prodikeys.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-cypress.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-elan.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-elecom.c
@@ -846,6 +850,9 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rakk.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-razer.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-rapoo.c
+        # Original Roccat Kone duplicate-special-event correction; profile,
+        # sysfs, and character-device publication remain unavailable.
+        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-roccat-kone.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-redragon.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-retrode.c
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-saitek.c

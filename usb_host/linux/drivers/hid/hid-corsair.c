@@ -19,13 +19,16 @@
 #include <linux/hid.h>
 #include <linux/module.h>
 #include <linux/usb.h>
-#include <linux/leds.h>
+// #include <linux/leds.h>
+// K90 LED/backlight and sysfs controls are outside the input-only port.
 
 #include "hid-ids.h"
 
 #define CORSAIR_USE_K90_MACRO	(1<<0)
 #define CORSAIR_USE_K90_BACKLIGHT	(1<<1)
 
+#if 0
+// Upstream LED state is retained; the input-only port never registers LEDs.
 struct k90_led {
 	struct led_classdev cdev;
 	int brightness;
@@ -36,11 +39,15 @@ struct k90_led {
 struct k90_drvdata {
 	struct k90_led record_led;
 };
+#endif
 
 struct corsair_drvdata {
 	unsigned long quirks;
+#if 0
+	// Upstream LED/sysfs state is not needed by the input mapping.
 	struct k90_drvdata *k90;
 	struct k90_led *backlight;
+#endif
 };
 
 #define K90_GKEY_COUNT	18
@@ -121,6 +128,9 @@ MODULE_PARM_DESC(profilekey_codes, "Key codes for the profile buttons");
 #define CORSAIR_USAGE_LIGHT_BRIGHT 0xfd
 #define CORSAIR_USAGE_LIGHT_MAX 0xfd
 
+#if 0
+// Upstream LED/sysfs implementation is retained but not exposed by firmware.
+// Linux probe does not change macro mode; this port likewise leaves it intact.
 /* USB control protocol */
 
 #define K90_REQUEST_BRIGHTNESS 49
@@ -547,18 +557,20 @@ static void k90_cleanup_macro_functions(struct hid_device *dev)
 		kfree(k90);
 	}
 }
+#endif
 
 static int corsair_probe(struct hid_device *dev, const struct hid_device_id *id)
 {
 	int ret;
 	unsigned long quirks = id->driver_data;
 	struct corsair_drvdata *drvdata;
-	struct usb_interface *usbif;
+	// struct usb_interface *usbif;
+	// Only the omitted LED/sysfs setup needs the interface number.
 
 	if (!hid_is_usb(dev))
 		return -EINVAL;
 
-	usbif = to_usb_interface(dev->dev.parent);
+	// usbif = to_usb_interface(dev->dev.parent);
 
 	drvdata = devm_kzalloc(&dev->dev, sizeof(struct corsair_drvdata),
 			       GFP_KERNEL);
@@ -578,6 +590,8 @@ static int corsair_probe(struct hid_device *dev, const struct hid_device_id *id)
 		return ret;
 	}
 
+#if 0
+	// Input mapping is independent of upstream LED/sysfs initialization.
 	if (usbif->cur_altsetting->desc.bInterfaceNumber == 0) {
 		if (quirks & CORSAIR_USE_K90_MACRO) {
 			ret = k90_init_macro_functions(dev);
@@ -590,18 +604,22 @@ static int corsair_probe(struct hid_device *dev, const struct hid_device_id *id)
 				hid_warn(dev, "Failed to initialize K90 backlight.\n");
 		}
 	}
+#endif
 
 	return 0;
 }
 
 static void corsair_remove(struct hid_device *dev)
 {
-	k90_cleanup_macro_functions(dev);
-	k90_cleanup_backlight(dev);
+	// k90_cleanup_macro_functions(dev);
+	// k90_cleanup_backlight(dev);
+	// No LED/sysfs objects were created by the input-only probe.
 
 	hid_hw_stop(dev);
 }
 
+#if 0
+// This upstream event hook only mirrors record status to the omitted LED.
 static int corsair_event(struct hid_device *dev, struct hid_field *field,
 			 struct hid_usage *usage, __s32 value)
 {
@@ -623,6 +641,7 @@ static int corsair_event(struct hid_device *dev, struct hid_field *field,
 
 	return 0;
 }
+#endif
 
 static int corsair_input_mapping(struct hid_device *dev,
 				 struct hid_input *input,
@@ -719,12 +738,9 @@ static const __u8 *corsair_mouse_report_fixup(struct hid_device *hdev,
 }
 
 static const struct hid_device_id corsair_devices[] = {
-// K90 requires its vendor-control/LED boundary, so keep that upstream row gated.
-#if IS_ENABLED(CONFIG_HID_CORSAIR_KEYBOARDS)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR, USB_DEVICE_ID_CORSAIR_K90),
 		.driver_data = CORSAIR_USE_K90_MACRO |
 			       CORSAIR_USE_K90_BACKLIGHT },
-#endif
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR,
             USB_DEVICE_ID_CORSAIR_GLAIVE_RGB) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CORSAIR,
@@ -745,7 +761,8 @@ static const struct hid_driver corsair_driver = {
 	.name = "corsair",
 	.id_table = corsair_devices,
 	.probe = corsair_probe,
-	.event = corsair_event,
+	// .event = corsair_event,
+	// The upstream hook only updates the omitted record LED state.
 	.remove = corsair_remove,
 	.input_mapping = corsair_input_mapping,
 	.report_fixup = corsair_mouse_report_fixup,

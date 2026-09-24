@@ -60,8 +60,6 @@ typedef long loff_t;
 #define CONFIG_HID_CHICONY 1
 #define CONFIG_HID_CREATIVE_SB0540 1
 #define CONFIG_HID_CORSAIR 1
-// K90 vendor controls/LEDs stay visible in the complete source but gated.
-// #define CONFIG_HID_CORSAIR_KEYBOARDS 1
 #define CONFIG_HID_COUGAR 1
 #define CONFIG_HID_CYPRESS 1
 // #define CONFIG_HID_ELAN 1
@@ -78,10 +76,12 @@ typedef long loff_t;
 // deliberately still requires the separately unsupported Linux LED class.
 // #define CONFIG_HID_LENOVO_ALL_DEVICES 1
 #define CONFIG_HID_PRIMAX 1
+#define CONFIG_HID_PRODIKEYS 1
 #define CONFIG_HID_PXRC 1
 // #define CONFIG_HID_RAKK 1
 #define CONFIG_HID_RAPOO 1
 #define CONFIG_HID_RAZER 1
+#define CONFIG_HID_ROCCAT_KONE 1
 #define CONFIG_HID_SAITEK 1
 // The linked Sony driver selects only VAIO RF mice. Defining CONFIG_HID_SONY
 // would reserve unrelated controller and Bluetooth IDs for an absent path.
@@ -343,6 +343,12 @@ typedef int atomic_t;
 // Linux flexible-array allocation helper; keep upstream driver allocation
 // expressions such as struct_size(data, leds, n) unchanged.
 #define struct_size(p, member, count) (sizeof(*(p)) + sizeof((p)->member[0]) * (count))
+/* Preserve Linux struct_group()'s anonymous and named views of one layout. */
+#define struct_group(NAME, MEMBERS...) \
+	union { \
+		struct { MEMBERS }; \
+		struct { MEMBERS } NAME; \
+	}
 #define IS_BUILTIN(option) (option)
 #define IS_MODULE(option) 0
 #define IS_ENABLED(option) (option)

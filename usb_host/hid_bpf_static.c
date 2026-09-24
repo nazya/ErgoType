@@ -300,16 +300,12 @@ static int hid_bpf_static_attach(struct hid_device *hdev, const u8 *rdesc,
 			args->hdev = hdev;
 		}
 
-		args->retval = 0;
-		ret = program->probe(args);
-		if (ret || args->retval)
-			continue;
-		kfree(args);
-		args = NULL;
-
+		/* BPF data maps already exist when Linux runs probe(). Native
+		 * per-attachment globals must likewise be available to that hook. */
 		device = kzalloc(sizeof(*device) + program->private_size,
 				 GFP_KERNEL);
 		if (!device) {
+			kfree(args);
 			return -ENOMEM;
 		}
 		device->hdev = hdev;
@@ -317,6 +313,15 @@ static int hid_bpf_static_attach(struct hid_device *hdev, const u8 *rdesc,
 		INIT_DELAYED_WORK(&device->async_work,
 				  hid_bpf_static_async_work);
 		hdev->bpf_static = device;
+
+		args->retval = 0;
+		ret = program->probe(args);
+		if (ret || args->retval) {
+			hid_bpf_static_free(hdev);
+			continue;
+		}
+		kfree(args);
+		args = NULL;
 
 		if (program->flags & HID_BPF_STATIC_HUION_SWITCHER) {
 			ret = hid_bpf_huion_switch_mode(device);

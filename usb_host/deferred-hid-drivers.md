@@ -7,9 +7,8 @@ port.
 
 ## Product Decisions and Remaining Wired USB Gaps
 
-This is the authoritative selection register for the working tree based on
-host commit `27bf73e`, audited against pinned Linux
-`83f1454877cc292b88baf13c829c16ce6937d120`.
+This is the authoritative selection register for the current working tree,
+audited against pinned Linux `83f1454877cc292b88baf13c829c16ce6937d120`.
 Later sections explain individual implementations and measurements. Keep these
 states distinct:
 
@@ -48,6 +47,13 @@ remain absent. Scope ends at Linux input/evdev; KeyD policy is separate.
   retained, as is the G13 thumbstick input and the exact startup
   interrupt-OUT/Feature-SET flow.
   LED/backlight code and Z-10 remain adjacent but compile-disabled.
+- Corsair K90 `1b1c:1b02` now selects the upstream G1--G18, profile, and
+  record-key mapping. The port deliberately leaves the keyboard's current
+  macro mode unchanged, as Linux does until userspace requests a mode change;
+  LED/backlight/sysfs controls remain outside the input-only boundary.
+- Original Roccat Kone `1e7d:2ced` now retains the upstream firmware-1.38
+  duplicate tilt/special-event suppression. Profile/DPI configuration and the
+  `/dev/roccat*` publication path have no selected firmware consumer.
 - The pinned non-FF `hid-lg.c` paths are active for
   Logitech S510 `046d:c50c`, UltraX `c101`, diNovo `c704`, Elite `c30a`, and
   LX500 `c512`. The complete S510 `0x104d` descriptor expansion and mappings
@@ -80,12 +86,30 @@ remain absent. Scope ends at Linux input/evdev; KeyD policy is separate.
 
 | Device or family | Current gap | Decision |
 | --- | --- | --- |
-| 3Dconnexion SpaceNavigator `046d:c626` / SpaceTraveller `c623` | Six axes are declared REL instead of ABS. The old `hid-lg.c` fix covers only some offsets; pinned SpaceNavigator HID-BPF additionally covers descriptor sizes 202/217/228 and offsets 32/36/49/53. | Useful external CAD input; port the applicable `hid-lg` and BPF fixes together. |
-| Corsair K90 `1b1c:1b02` | Generic fallback keeps the ordinary keyboard, but the already-retained mapping for G1--G18, profile and record controls is not selected. Upstream changes hardware/software macro mode only through userspace control, not at probe. | An input-only enablement does not require LED support, but real G-key availability depends on an explicit macro-mode policy and corresponding test. |
-| Original Roccat Kone `1e7d:2ced` | Linux suppresses repeated tilt/special-button events emitted by firmware 1.38. | Genuine legacy mouse correction. Other Roccat families mostly add profile/DPI/configuration and `/dev/roccat*` streams with no selected firmware consumer. |
-| Wacom ArtPen on Intuos Pro 2 M `056a:0357`, tool `0804` | The absent pinned HID-BPF filter interpolates every other repeated pressure sample. Base Wacom input remains active. | Specialized pen-quality gap, independent of Wacom transport support. |
-| WALTOP Batteryless Tablet `172f:0505` | The absent pinned HID-BPF program adds the second pen button, corrects tilt limits and pressure, and disambiguates tip/barrel input. Retained `hid-waltop.c` covers `0502`, not `0505`. | Specialized tablet candidate requiring its complete descriptor/event fix. |
-| Creative Prodikeys PC-MIDI `041e:2801` | Generic keyboard operation remains, but Linux adds MIDI plus office/media keys such as Messenger, Calendar, Documents, Send/Reply, and Open/Save/Undo/Redo. | Hybrid music-keyboard project, explicitly low priority rather than incorrectly described as MIDI-only. |
+| 3Dconnexion SpaceNavigator `046d:c626` / SpaceTraveller `c623` | Six axes are declared REL instead of ABS. The old `hid-lg.c` fix covers only some offsets; pinned SpaceNavigator HID-BPF additionally covers descriptor sizes 202/217/228 and offsets 32/36/49/53. | Explicitly deferred for now. If resumed, port and test the applicable `hid-lg` and HID-BPF fixes together. |
+
+### Hardware-qualified current input batch
+
+- Wacom ArtPen on Intuos Pro 2 M `056a:0357`, tool `0804`, and WALTOP
+  Batteryless Tablet `172f:0505` are retained through their pinned HID-BPF
+  descriptor/event programs. Their two source entries are commented out in
+  the default CMake build and can be restored individually. ArtPen keeps
+  per-HID interpolation state; WALTOP keeps per-HID button state and the
+  complete replacement descriptor.
+- Creative Prodikeys `041e:2801` links the upstream descriptor repair,
+  report-6 initialization, Fn state, and office/media keys. ALSA/raw-MIDI,
+  musical-note reports, and the MIDI launcher mode are deliberately omitted;
+  ordinary keyboard reports remain on the Linux HID input path.
+- K90 and original Kone use the active input boundaries described above.
+  The combined CDC-free synthetic fixture passed on 2026-09-22: all 14
+  generations matched the input/evdev oracle, including mapping/filter
+  branches, negative predicates, held-state removal, and same-device
+  reconnect. Initial `f1`, fourteen `f11` pairs, and terminal `f10` completed
+  without `f12`; all 25 target input lifetimes balanced. The two Prodikeys
+  fixups and nine ordered report-6 SETs matched, all 83 heap snapshots had
+  `oom=0`, and marker-only heap plateaus were identical. Exact artifact
+  hashes, event values, watermarks, and synthetic-test limits are recorded in
+  [`hid-emulator-coverage.md`](hid-emulator-coverage.md#hardware-verified-k90-kone-prodikeys-waltop-and-artpen-matrix).
 
 ### Explicitly outside the current stage
 
@@ -962,8 +986,9 @@ repair, and for the K70/K70 RAPIDFIRE row `1b1c:1b09`, whose driver-table data
 is zero. K70 reuses the already-linked Corsair callbacks and remains
 source-audited rather than separately enumerated; its extra-key usages are not
 a hardware-pass claim.
-K90 vendor control/LED support remains compile-gated, and its special-driver
-entry is gated with its driver row so generic HID fallback is unchanged.
+K90 input mapping is active for G1--G18, profile, and record keys. Firmware
+does not change the keyboard's current macro mode. The upstream vendor-control,
+LED, and sysfs implementation remains visible but compile-disabled.
 
 Pinned `hid-cougar.c` is linked for 500K `060b:500a` and 700K `060b:700a`.
 Its three-interface path retains the upstream mouse usage-count repair and
@@ -996,12 +1021,12 @@ intervals, and 15 target lifetimes matched, with `oom=0` and nonzero task
 watermarks. The remaining zero-quirk aliases are source-audited common-path
 rows and were not enumerated individually.
 
-## Retained Native HID-BPF and Rakk Support
+## Native HID-BPF and Rakk Support
 
-The tree retains 17 upstream HID-BPF programs as native callbacks and the
-ordinary `hid-rakk.c` driver. All 18 source entries are commented out in the
-default CMake build and can be enabled individually when their device support
-is needed. Together they cover these 22 wired VID:PIDs:
+The tree retains the earlier 17 upstream HID-BPF programs as native callbacks
+and the ordinary `hid-rakk.c` driver. Those 18 source entries remain commented
+out in the default CMake build and can be enabled individually when their
+device support is needed. Together they cover these 22 wired VID:PIDs:
 
 | Family | Retained USB IDs |
 | --- | --- |
@@ -1024,6 +1049,21 @@ and the default production build excludes these sources. This qualifies the
 selected synthetic executable paths, not every retail-device behavior; source
 revisions and coverage limits are recorded in `upstream-porting-audit.md` and
 `hid-emulator-coverage.md`.
+
+The ArtPen and WALTOP programs are separate retained additions whose source
+entries are commented out beside the earlier programs. The native adapter
+source, forward declaration, device state, and active hook declarations are
+also retained as comments; upstream `!CONFIG_HID_BPF` stubs preserve the
+ordinary HID call graph. This is implemented and hardware-qualified support,
+not unfinished work: it is disabled because no currently selected production
+device needs these native HID-BPF corrections. If ArtPen, WALTOP, or another
+retained device is needed, restore the commented adapter declarations/state
+and CMake source, disable the adjacent no-op stubs, and uncomment only the
+required program source. Their native per-attachment state requires the loader
+to make private storage available before `probe()`, matching Linux BPF data-map
+lifetime. The 2026-09-22 enabled-source matrix passed exact pressure/tilt/button
+values, fresh-state handling, and size/PID/report controls through input/evdev;
+it does not qualify every retail-device behavior or the default production image.
 
 ## Future Transport Work
 

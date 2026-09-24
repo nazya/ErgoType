@@ -27,10 +27,25 @@ The current product-selection and remaining-gap register is maintained in
 [`deferred-hid-drivers.md`](deferred-hid-drivers.md). It distinguishes active
 support, retained default-off ports, concrete input gaps, memory/evidence
 limits, and device classes deliberately outside the current wired-remapper
-scope. That register was re-audited at host `27bf73e`; an older source-count or
-family-level statement in this chronology must not override it.
+scope. That register is maintained for the current working tree; an older
+source-count or family-level statement in this chronology must not override it.
 
 ## Result
+
+The current input batch links pinned Corsair K90, original Roccat Kone, and
+Creative Prodikeys office/Fn input. K90 leaves the device's current macro mode
+unchanged; Prodikeys omits ALSA/raw-MIDI while retaining keyboard report 6 and
+Fn output. The retained ArtPen and WALTOP `172f:0505` programs use per-HID
+native BPF state, but their program sources and the native adapter are excluded
+by the default comment-only CMake selection. The enabled-source CDC-free
+hardware fixture passed all 14 generations on 2026-09-22: exact
+input/evdev values, negative predicates,
+held-state removal, fresh-state reconnect, two Prodikeys fixups, and nine
+ordered report-6 SETs matched. All 25 target input lifetimes balanced; the
+complete `f1`, fourteen `f11` pairs, and terminal `f10` sequence had no failure
+marker, host error, OOM, or zero task watermark. The SHA-pinned trace-enabled
+artifacts and coverage limits are recorded in
+[`hid-emulator-coverage.md`](hid-emulator-coverage.md#hardware-verified-k90-kone-prodikeys-waltop-and-artpen-matrix).
 
 The preceding native HID-BPF/Rakk batch retains 22 wired VID:PIDs through 17
 native HID-BPF programs plus Rakk. Their 18 source entries are commented out
@@ -707,11 +722,13 @@ deferred FF sources so their enablement contract remains visible.
 | `hid-google-stadiaff.c` | Upstream spinlock sections use the compatibility task-context PI mutex, which is checked and destroyed because its firmware backing is heap-owned; no direct FreeRTOS API remains in the driver. |
 | `hid-core.c` | Sparse full-range report-ID lookup, heap-backed parser locals, constrained INPUT-array value storage, exact field-allocation OOM marker, generic explicit-feature-usage compaction branch, restored reduced HIDRAW lifecycle/report calls, raw-event-only protocol ingress before final evdev activation, mutable runtime state beside flash-resident driver descriptors, and idempotent report-lifetime field ordering for reversible Wacom rebind. |
 | `hid-rakk.c` | Complete `15a0449c955c` descriptor fixup with both USB rows retained; its source is excluded by default CMake, the Bluetooth match remains commented, and driver metadata is immutable. |
-| `bpf/progs/*.bpf.c`, `hid_bpf_static.c` | Seventeen selected upstream programs retain descriptor/event logic and tables; their sources are excluded by default CMake. The three imported `hid_bpf*.h` helper headers remain byte-for-byte baseline; generated `vmlinux.h` reaches the firmware adapter first, where the deliberately selected native ABI suppresses their unavailable VM/map definitions. Native registration replaces BPF sections, private attachment storage replaces mutable BPF globals, and the Huion property comes from public USB string requests. ACK05's probe output runs after transport start with original-descriptor fallback. `i32()` uses signed 64-bit bounds for the RP2 ILP32 compiler. No VM/userspace-loader or runtime program mutation is provided. |
+| `bpf/progs/*.bpf.c`, `hid_bpf_static.c` | Nineteen selected upstream programs retain descriptor/event logic and tables. The native adapter and all program source entries, including ArtPen and WALTOP `172f:0505`, are individually commented out by default; its forward declaration, device state, and active hook declarations remain adjacent as comments while the exact upstream `!CONFIG_HID_BPF` stubs preserve the ordinary call graph. This is implemented and hardware-qualified support, disabled because no currently selected production device needs it. Enabling one of these devices means restoring the commented adapter declarations/state and CMake source, disabling the adjacent stubs, and uncommenting only its program source. ArtPen/WALTOP retain exact upstream predicates, descriptor/event calculations, and per-HID mutable state. Native private storage is assigned before `probe()`, matching Linux BPF data-map availability; rejected candidates are synchronously freed. ArtPen narrows the otherwise unreachable upstream GENERIC metadata to the already-classified Wacom group, with the original line retained. The three imported `hid_bpf*.h` helper headers remain byte-for-byte baseline; generated `vmlinux.h` reaches the firmware adapter first, where the deliberately selected native ABI suppresses their unavailable VM/map definitions. Native registration replaces BPF sections, and the Huion property comes from public USB string requests. ACK05's probe output runs after transport start with original-descriptor fallback. `i32()` uses signed 64-bit bounds for the RP2 ILP32 compiler. No VM/userspace-loader or runtime program mutation is provided. The 2026-09-22 enabled-source ArtPen/WALTOP matrix passed pressure/tilt/button values, fresh state, held removal, and negative size/PID/report predicates. |
 | `input.c` | Task-context input event mutex; pinned two-resource managed-input lifetime and `input_put_device()` final release through the reduced device refcount; Linux presentation/PM/userspace code retained under `#if 0` around the active upstream `input_dev_release()` callback. |
 | `hid-alps.c` | Complete pinned source active for `044e:120b/120c/1215/121e`; only the offset-6 `u32` and offset-13 `u16` loads use unaligned LE helpers, the DualPoint secondary input is device-managed for the reduced device core, and the driver descriptor is immutable. The no-CDC U1/T4 matrix passed on 2026-09-18; `121e` is a source-audited same-path alias. |
 | `hid-asus.c`, `platform_data/x86/asus-wmi.h` | Complete pinned source active for nine wired USB rows: Claymore II `0b05:196b`; zero-quirk XGM 2022/2023, AK1D, MD-5110/5112, and T101HA; G752 `0b05:1822`; and Medion E1239T `048d:ce50`. Active paths preserve the upstream common handshake/mapping graph, exact Claymore filter, exact G752 fixup, and Medion multi-input touchpad/toggle/mute graph. T100 remains gated for unavailable DMI model qualification; backlight/NKEY/Ally, I2C, and Bluetooth paths remain adjacent behind `CONFIG_HID_ASUS_ALL_DEVICES`. Matching special-driver rows follow the same boundary; the driver descriptor is immutable. The expanded 2026-09-18 CDC-free hardware pass qualifies Claymore, exact/neighboring G752, two-interface Medion, and AK1D; the other zero-quirk aliases are source-audited only. |
-| `hid-corsair.c` | Complete pinned source with wired Glaive `1b1c:1b34`, Scimitar Pro `1b1c:1b3e`, and the K70/K70 RAPIDFIRE row `1b1c:1b09` active with zero driver-table data. K70 reuses the already-linked callback graph and is source-audited rather than separately enumerated. K90 vendor-control/LED remains adjacent behind `CONFIG_HID_CORSAIR_KEYBOARDS`; its special-driver row uses the same gate so generic fallback remains available. The driver descriptor is immutable; the 2026-09-18 hardware run passed the exact and rejected mouse-descriptor predicates and target input, not K70 extra-key usages. |
+| `hid-corsair.c` | Complete pinned source with wired Glaive `1b1c:1b34`, Scimitar Pro `1b1c:1b3e`, K70/K70 RAPIDFIRE `1b1c:1b09`, and K90 `1b1c:1b02` active. K90 retains the upstream G1--G18, record, and profile mapping while its LED/sysfs implementation remains adjacent and disabled; firmware issues no macro-mode change and therefore preserves the keyboard's current mode. The driver descriptor is immutable. The 2026-09-18 hardware run passed the mouse predicates and target input; the 2026-09-22 synthetic K90 run passed all 23 special keys, ignored usages, ordinary input, held G1/B removal, and fresh G1/M3. Macro-mode policy remains source-audited rather than fixture-observed. |
+| `hid-prodikeys.c` | Complete pinned source with `041e:2801` descriptor correction, office/Fn mappings, report-6 lookup, initial `c1`, and Fn `c5/c6` SETs active. Upstream ALSA/raw-MIDI state, note handling, sustain timers, and launcher mode change remain adjacent but disabled by the selected keyboard-only scope. Ordinary report-1 keyboard input remains on generic HID parsing; the driver descriptor is immutable. The 2026-09-22 synthetic run passed both exact-size fixups, the nonmatching-size control, all 19 office keys, independent/held releases, ordinary input, and nine ordered report-6 SETs across three generations. |
+| `hid-roccat-kone.c`, `hid-roccat-kone.h` | Complete pinned original-Kone source and layout with the exact 12-byte duplicate tilt/special-event suppression active only on the mouse-protocol interface. Profile/DPI USB transfers, sysfs, and Roccat character-device publication remain adjacent but disabled. A narrow firmware config gate reserves only `1e7d:2ced`, not the rest of the unlinked Roccat family. The driver descriptor is immutable. The 2026-09-22 synthetic run passed mouse/nonmouse filtering, changed-tail and non-12-byte controls, ordinary input, held-left release, and fresh state, with exactly 11/four horizontal steps in the two generations. |
 | `hid-cougar.c` | Complete pinned source active for wired 500K `060b:500a` and 700K `060b:700a`. Firmware explicitly initializes the heap-backed static mutex before driver registration and moves the shared-state devres action after releasing that mutex, correcting the inherited lock/cleanup ordering because `_or_reset` invokes the action immediately when registration fails. The upstream composite sibling, kref, report-fixup, and raw-event flow otherwise remains intact; the driver descriptor is immutable. The 2026-09-18 hardware run passed both probe orders, vendor-key routing, reconnect, and target teardown. |
 | `hid-elan.c` | Complete pinned source retained outside the active CMake allowlist, with its `CONFIG_HID_ELAN` gate inactive. Wired USB `04f3:074d/0755`, upstream I2C rows, immutable driver descriptor, and exact `ENAVAIL` compatibility value remain ready for a future enablement stage; no build or hardware verdict is claimed. |
 | `hid-letsketch.c` | Complete pinned source plus upstream `46c8beeccd8a`, wired USB `6161:4d15`, and an immutable driver descriptor. The active path keeps the 255-read string initialization, raw Pen/Pad parser, and permanent timer shutdown; its no-CDC fixture passed the failure/input/reconnect matrix on 2026-09-17. |
@@ -1437,14 +1454,18 @@ contains a hypothetical NULL check that no current caller can exercise.
   no debugfs sink is linked. Both reductions are documented at their active
   compatibility definitions; enabling PM or a debug proxy requires replacing
   the corresponding stub, not inheriting it silently.
-- The kernel BPF VM/loader remains absent. When a retained program source is
-  enabled, descriptor/event and lifecycle hooks dispatch to that static native
-  upstream program. The descriptor-rescan branch then becomes reachable and
-  propagates `hid_set_group()`'s firmware `-ENOMEM` result.
+- The kernel BPF VM/loader remains absent. The native adapter source and active
+  declarations remain adjacent as comments; exact upstream `!CONFIG_HID_BPF`
+  stubs preserve the ordinary HID call graph. The adapter is implemented and
+  hardware-qualified but default-off because none of its devices is currently
+  selected for production. When the adapter and a retained program source are
+  restored, descriptor/event and lifecycle hooks dispatch to that static native
+  upstream program. The descriptor-rescan branch then
+  becomes reachable and propagates
+  `hid_set_group()`'s firmware `-ENOMEM` result.
   `hid_close_report()` is exposed to the adapter for ACK05's pre-input-connect
   fallback to the original descriptor. These two core adaptations retain their
-  original lines and reasons. The current default registry contains only an
-  empty sentinel, so it selects no program. Raw-request and output-interception
+  original lines and reasons. Raw-request and output-interception
   hooks remain no-ops because no retained program implements them; helpers for
   unsupported BPF operations are not exposed. Dynamic program loading or
   runtime driver mutation is not implemented.
