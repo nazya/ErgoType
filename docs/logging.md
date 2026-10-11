@@ -10,10 +10,10 @@
 ## Where logs go (code map)
 
 - Logging macros live in `log.h` and call `_msg()`.
-- `_msg()` in `log.c` formats the line (including ANSI colors) and writes bytes into the CDC backend (`stdio_tusb_cdc_write()`).
+- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_tusb_cdc_write_rendered()`).
 - The USB device task (`tusb_device_task.c`) drains TinyUSB events and then runs `stdio_tusb_cdc_poll()`.
 - `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
-- `stdio_tusb_cdc_write()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
+- `stdio_tusb_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
 ## Viewing logs
 
@@ -51,19 +51,15 @@ Windows:
 
 ## Buffering, drops, and “garbled” ANSI
 
-- There are **two** relevant buffers (both use `BUFSIZE` from `stdio_tusb_cdc.h`, currently `2048`):
-  - `_msg()` (`log.c`) formats a log line into a per-call staging buffer and flushes it on `\n` (it writes `\r\n` to CDC).
-  - `stdio_tusb_cdc_write()` (`stdio_tusb_cdc.c`) appends bytes into a `BUFSIZE` ring buffer while the port is closed or the host is slow.
+- There is one `BUFSIZE` byte ring buffer in `stdio_tusb_cdc.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
 
-- **Max write size:** `stdio_tusb_cdc_write()` clamps each call to at most `BUFSIZE` bytes. If some caller tries to write more than that in one call, the tail is dropped.
+- **Max write size:** if one rendered line exceeds `BUFSIZE`, the whole line is dropped.
 
-- **Very long lines:** if a *single formatted line* exceeds the `_msg()` staging buffer (roughly `BUFSIZE-2` bytes before the newline), the logger forces a `\r\n` flush and starts a new line. The byte that overflowed is dropped. Practically: very long log lines will be split/truncated and are not reliable.
-
-- **Producer throttling (bounded wait):** after the TinyUSB device stack has started, an incoming write that does not fit kicks the USB device task through `usbd_defer_func()`, waits two ticks, and rechecks the ring. The first such wait may continue for up to 1024ms even before DTR: this deliberately gives Linux time to create `/dev/ttyACM*` and the operator time to open minicom, while exercising that the delay does not stall USB. Later waits are limited to 16 ticks while DTR is high and are skipped while it is low.
+- **Producer throttling (bounded wait):** after the TinyUSB device stack has started, a rendered line that does not fit kicks the USB device task through `usbd_defer_func()`, waits two ticks, and rechecks the ring. The first such wait may continue for up to 1024ms even before DTR: this deliberately gives Linux time to create `/dev/ttyACM*` and the operator time to open minicom, while exercising that the delay does not stall USB. Later waits are limited to 16 ticks while DTR is high and are skipped while it is low. The logger then renders the line again into the newly available space.
 
 - **Pre-TUD startup limitation (deferred):** a short logging window exists before `main` creates the higher-priority TUD task and `tusb_init()` creates TinyUSB's device event queue. The normal hardware-tested boot fits in the ring, but a verbose startup overflow or early `async_msg()` cannot safely use `usbd_defer_func()` yet. Keep this policy unchanged here until the equivalent logger/startup interaction is fixed and hardware-tested in the main repository.
 
-- **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped.
+- **Ring buffer overflow (drop):** if the line still doesn’t fit after throttling (or throttling is skipped), the rendered line is dropped.
   - If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
   - If `ssd1306` is configured, the SSD1306 screen is updated to show drop statistics (`W=` writes, `B=` bytes).
 
