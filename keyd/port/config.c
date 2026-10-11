@@ -785,7 +785,8 @@ static int parse_descriptor(char *s,
 		}
 
 		if (layer) {
-			warn("You should use b{layer(%s)} instead of assigning to b{%s} directly.", layer, KEY_NAME(code));
+			warn("You should use layer(%s) instead of assigning to %s directly.",
+			     layer, KEY_NAME(code));
 			d->op = OP_LAYER;
 			d->args[0].idx = config_get_layer_index(config, layer);
 
