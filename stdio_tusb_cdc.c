@@ -20,7 +20,7 @@ extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
 // Delay the first transmit a little after a connect edge so the host has time to settle.
 #define CDC_SETTLE_MS 50u
 
-#define POLL_TMP_BUFSIZE 256u
+#define POLL_WRITE_MAX 256u
 
 // Optional producer throttling when the pending ring is close to full.
 // Helps slow producer a bit so USB task can drain, reducing drops.
@@ -42,7 +42,32 @@ static char async_msgbuf[ASYNC_MSG_BUFSIZE];
 static size_t async_msg_len;
 static volatile uint8_t async_msg_pending;
 
+typedef struct {
+    uint32_t cursor;
+    size_t capacity;
+    size_t length;
+} ring_write_t;
+
 static void stdio_tusb_cdc_kick_cb(void *);
+
+static void ring_write_character(char character, void *context)
+{
+    ring_write_t *write = context;
+
+    if (write->length < write->capacity) {
+        pending_buf[write->cursor] = (uint8_t)character;
+        write->cursor = (write->cursor + 1u) % BUFSIZE;
+    }
+
+    write->length++;
+}
+
+static void stdio_tusb_cdc_drop(size_t length)
+{
+    ui_notify_cdc_drop(length);
+    if (tud_cdc_connected())
+        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+}
 
 /*
  * TODO: usbd_defer_func() is valid only after tusb_init() has created the
@@ -129,39 +154,59 @@ static void stdio_tusb_cdc_kick_cb(void *arg)
 	// immediately after `tud_task()` returns (see `tusb_device_task.c`).
 }
 
-void stdio_tusb_cdc_write(const void *buf, size_t length)
+void stdio_tusb_cdc_write_rendered(stdio_tusb_cdc_render_fn render,
+                                   void *context)
 {
-    const uint8_t *src = (const uint8_t *)buf;
+    xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+    ring_write_t write = {
+        .cursor = pending_wr,
+        .capacity = BUFSIZE - pending_count,
+    };
+    render(ring_write_character, &write, context);
 
-    if (length > BUFSIZE)
-        length = BUFSIZE;
-
-    if ((BUFSIZE - pending_count) < length) {
-        stdio_tusb_cdc_throttle_until_free(length);
-    }
-
-    // If chunk still doesn't fit, drop the freshest bytes (the incoming chunk) and signal a drop.
-    if ((BUFSIZE - pending_count) < length) {
-        ui_notify_cdc_drop(length);
+    if (write.length <= write.capacity) {
+        pending_wr = write.cursor;
+        pending_count += write.length;
+        xSemaphoreGive(stdio_tusb_cdc_mutex);
         if (tud_cdc_connected())
             usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
         return;
     }
 
-    xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
-    for (size_t i = 0; i < length; ++i) {
-        pending_buf[pending_wr] = src[i];
-        pending_wr = (pending_wr + 1u) % BUFSIZE;
-        if (pending_count < BUFSIZE)
-            pending_count++;
-    }
     xSemaphoreGive(stdio_tusb_cdc_mutex);
 
-    // Wake the TinyUSB device task (blocked in `tud_task()`) so it can run stdio_tusb_cdc_poll().
-    // Do this through TinyUSB's own event queue (USBD_EVENT_FUNC_CALL) to avoid RTOS cross-signals here.
-    if (tud_cdc_connected()) {
-        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+    const size_t length = write.length;
+    if (length > BUFSIZE) {
+        stdio_tusb_cdc_drop(length);
+        return;
     }
+
+    stdio_tusb_cdc_throttle_until_free(length);
+
+    xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+    if ((BUFSIZE - pending_count) < length) {
+        xSemaphoreGive(stdio_tusb_cdc_mutex);
+        stdio_tusb_cdc_drop(length);
+        return;
+    }
+
+    write = (ring_write_t) {
+        .cursor = pending_wr,
+        .capacity = length,
+    };
+    render(ring_write_character, &write, context);
+    if (write.length != length) {
+        xSemaphoreGive(stdio_tusb_cdc_mutex);
+        stdio_tusb_cdc_drop(write.length);
+        return;
+    }
+
+    pending_wr = write.cursor;
+    pending_count += write.length;
+    xSemaphoreGive(stdio_tusb_cdc_mutex);
+
+    if (tud_cdc_connected())
+        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
 }
 
 void stdio_tusb_cdc_poll(void)
@@ -228,20 +273,17 @@ void stdio_tusb_cdc_poll(void)
             return;
         }
 
-        uint8_t tmp[POLL_TMP_BUFSIZE];
-        if (n > POLL_TMP_BUFSIZE)
-            n = POLL_TMP_BUFSIZE;
+        if (n > POLL_WRITE_MAX)
+            n = POLL_WRITE_MAX;
 
         if (n > pending_count)
             n = pending_count;
 
-        uint32_t rd = pending_rd;
-        for (uint32_t i = 0; i < n; ++i) {
-            tmp[i] = pending_buf[rd];
-            rd = (rd + 1u) % BUFSIZE;
-        }
+        const uint32_t contiguous = BUFSIZE - pending_rd;
+        if (n > contiguous)
+            n = contiguous;
 
-        const uint32_t written = tud_cdc_write(tmp, n);
+        const uint32_t written = tud_cdc_write(pending_buf + pending_rd, n);
         wrote_bytes += written;
 
         pending_rd = (pending_rd + written) % BUFSIZE;
