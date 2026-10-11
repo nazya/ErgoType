@@ -69,6 +69,8 @@ set(TINYUSB_OPT_OS OPT_OS_FREERTOS)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})
 

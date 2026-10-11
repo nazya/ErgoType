@@ -82,6 +82,7 @@ idf_component_register(
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
+    -fmacro-prefix-map=${ERGOTYPE_ROOT}/=
     -Wno-error=switch
     -Wno-error=format-truncation
     -Wno-error=comment

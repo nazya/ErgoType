@@ -9,7 +9,7 @@
 #include "ui/ui.h"
 
 #define CDC_SETTLE_MS 50u
-#define POLL_TMP_BUFSIZE 256u
+#define POLL_WRITE_MAX 256u
 
 #define THROTTLE_FIRST_WAIT_TICKS (pdMS_TO_TICKS(1024u))
 #define THROTTLE_MAX_WAIT_TICKS 16u
@@ -26,11 +26,36 @@ static bool cdc_settled;
 static bool cdc_settled_once;
 static TimerHandle_t cdc_settle_timer;
 
+typedef struct {
+    uint32_t cursor;
+    size_t capacity;
+    size_t length;
+} ring_write_t;
+
 static void platform_cdc_kick_cb(void *);
 
 void platform_cdc_init(void)
 {
     cdc_mutex = xSemaphoreCreateMutex();
+}
+
+static void ring_write_character(char character, void *context)
+{
+    ring_write_t *write = context;
+
+    if (write->length < write->capacity) {
+        pending_buf[write->cursor] = (uint8_t)character;
+        write->cursor = (write->cursor + 1u) % PLATFORM_CDC_BUFFER_SIZE;
+    }
+
+    write->length++;
+}
+
+static void platform_cdc_drop(size_t length)
+{
+    ui_notify_cdc_drop(length);
+    if (tud_cdc_connected())
+        usbd_defer_func(platform_cdc_kick_cb, NULL, false);
 }
 
 static void platform_cdc_throttle_until_free(size_t free_target)
@@ -87,39 +112,61 @@ static void platform_cdc_kick_cb(void *arg)
     (void)arg;
 }
 
-void platform_cdc_write(const void *buf, size_t length)
+void platform_cdc_write_rendered(platform_cdc_render_fn render, void *context)
 {
-    const uint8_t *src = (const uint8_t *)buf;
-
     if (!cdc_mutex)
         return;
 
-    if (length > PLATFORM_CDC_BUFFER_SIZE)
-        length = PLATFORM_CDC_BUFFER_SIZE;
+    xSemaphoreTake(cdc_mutex, portMAX_DELAY);
+    ring_write_t write = {
+        .cursor = pending_wr,
+        .capacity = PLATFORM_CDC_BUFFER_SIZE - pending_count,
+    };
+    render(ring_write_character, &write, context);
 
-    if ((PLATFORM_CDC_BUFFER_SIZE - pending_count) < length) {
-        platform_cdc_throttle_until_free(length);
-    }
-
-    if ((PLATFORM_CDC_BUFFER_SIZE - pending_count) < length) {
-        ui_notify_cdc_drop(length);
+    if (write.length <= write.capacity) {
+        pending_wr = write.cursor;
+        pending_count += write.length;
+        xSemaphoreGive(cdc_mutex);
         if (tud_cdc_connected())
             usbd_defer_func(platform_cdc_kick_cb, NULL, false);
         return;
     }
 
-    xSemaphoreTake(cdc_mutex, portMAX_DELAY);
-    for (size_t i = 0; i < length; ++i) {
-        pending_buf[pending_wr] = src[i];
-        pending_wr = (pending_wr + 1u) % PLATFORM_CDC_BUFFER_SIZE;
-        if (pending_count < PLATFORM_CDC_BUFFER_SIZE)
-            pending_count++;
-    }
     xSemaphoreGive(cdc_mutex);
 
-    if (tud_cdc_connected()) {
-        usbd_defer_func(platform_cdc_kick_cb, NULL, false);
+    const size_t length = write.length;
+    if (length > PLATFORM_CDC_BUFFER_SIZE) {
+        platform_cdc_drop(length);
+        return;
     }
+
+    platform_cdc_throttle_until_free(length);
+
+    xSemaphoreTake(cdc_mutex, portMAX_DELAY);
+    if ((PLATFORM_CDC_BUFFER_SIZE - pending_count) < length) {
+        xSemaphoreGive(cdc_mutex);
+        platform_cdc_drop(length);
+        return;
+    }
+
+    write = (ring_write_t) {
+        .cursor = pending_wr,
+        .capacity = length,
+    };
+    render(ring_write_character, &write, context);
+    if (write.length != length) {
+        xSemaphoreGive(cdc_mutex);
+        platform_cdc_drop(write.length);
+        return;
+    }
+
+    pending_wr = write.cursor;
+    pending_count += write.length;
+    xSemaphoreGive(cdc_mutex);
+
+    if (tud_cdc_connected())
+        usbd_defer_func(platform_cdc_kick_cb, NULL, false);
 }
 
 void platform_cdc_poll(void)
@@ -170,20 +217,17 @@ void platform_cdc_poll(void)
             return;
         }
 
-        uint8_t tmp[POLL_TMP_BUFSIZE];
-        if (n > POLL_TMP_BUFSIZE)
-            n = POLL_TMP_BUFSIZE;
+        if (n > POLL_WRITE_MAX)
+            n = POLL_WRITE_MAX;
 
         if (n > pending_count)
             n = pending_count;
 
-        uint32_t rd = pending_rd;
-        for (uint32_t i = 0; i < n; ++i) {
-            tmp[i] = pending_buf[rd];
-            rd = (rd + 1u) % PLATFORM_CDC_BUFFER_SIZE;
-        }
+        const uint32_t contiguous = PLATFORM_CDC_BUFFER_SIZE - pending_rd;
+        if (n > contiguous)
+            n = contiguous;
 
-        const uint32_t written = tud_cdc_write(tmp, n);
+        const uint32_t written = tud_cdc_write(pending_buf + pending_rd, n);
         wrote_bytes += written;
 
         pending_rd = (pending_rd + written) % PLATFORM_CDC_BUFFER_SIZE;

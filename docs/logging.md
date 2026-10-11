@@ -10,10 +10,10 @@
 ## Where logs go (code map)
 
 - Logging macros live in `log.h` and call `_msg()`.
-- `_msg()` in `log.c` formats the line (including ANSI colors) and writes bytes into the CDC backend (`platform_cdc_write()`).
+- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`platform_cdc_write_rendered()`).
 - The USB device task (`platform/rp2/usb_tinyusb.c` or `platform/esp-idf/common/usb_tinyusb.c`) runs `tud_task(); platform_cdc_poll();`.
 - `platform_cdc_poll()` (`platform/tinyusb/cdc_tinyusb.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
-- `platform_cdc_write()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
+- `platform_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
 ## Viewing logs
 
@@ -51,17 +51,13 @@ Windows:
 
 ## Buffering, drops, and “garbled” ANSI
 
-- There are **two** relevant buffers (both use `PLATFORM_CDC_BUFFER_SIZE` from `platform/cdc.h`, currently `2048`):
-  - `_msg()` (`log.c`) formats a log line into a per-call staging buffer and flushes it on `\n` (it writes `\r\n` to CDC).
-  - `platform_cdc_write()` (`platform/tinyusb/cdc_tinyusb.c`) appends bytes into a ring buffer while the port is closed or the host is slow.
+- There is one `PLATFORM_CDC_BUFFER_SIZE` byte ring buffer in `platform/tinyusb/cdc_tinyusb.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
 
-- **Max write size:** `platform_cdc_write()` clamps each call to at most `PLATFORM_CDC_BUFFER_SIZE` bytes. If some caller tries to write more than that in one call, the tail is dropped.
+- **Max write size:** if one rendered line exceeds `PLATFORM_CDC_BUFFER_SIZE`, the whole line is dropped.
 
-- **Very long lines:** if a *single formatted line* exceeds the `_msg()` staging buffer (roughly `PLATFORM_CDC_BUFFER_SIZE-2` bytes before the newline), the logger forces a `\r\n` flush and starts a new line. The byte that overflowed is dropped. Practically: very long log lines will be split/truncated and are not reliable.
+- **Producer throttling (bounded wait):** if the port is open (DTR=1) and a rendered line doesn’t fit into the CDC ring buffer, `platform_cdc_write_rendered()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring. It then renders the line again into the newly available space.
 
-- **Producer throttling (bounded wait):** if the port is open (DTR=1) and an incoming write doesn’t fit into the CDC ring buffer, `platform_cdc_write()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring.
-
-- **Ring buffer overflow (drop):** if the chunk still doesn’t fit after throttling (or throttling is skipped), the incoming chunk is dropped.
+- **Ring buffer overflow (drop):** if the line still doesn’t fit after throttling (or throttling is skipped), the rendered line is dropped.
   - If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.
   - If `ssd1306` is configured, the SSD1306 screen is updated to show drop statistics (`W=` writes, `B=` bytes).
 
