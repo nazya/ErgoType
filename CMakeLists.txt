@@ -679,6 +679,8 @@ set_source_files_properties("${TINYUSB_PIO_HCD_PORT_SOURCE}" PROPERTIES
                             COMPILE_FLAGS
                             "-Wno-conversion -Wno-cast-qual -Wno-attributes")
 
+add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME})
 
