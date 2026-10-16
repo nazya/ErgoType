@@ -7,3 +7,5 @@ dependencies.lock
 platform/esp-idf/*/firmware/
 tools/
 .codex
+.claude/settings.local.json
+/FreeRTOS-Kernel/
