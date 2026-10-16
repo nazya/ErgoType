@@ -419,6 +419,7 @@ static int hid_add_field(struct hid_parser *parser, unsigned report_type, unsign
 	struct hid_field *field;
 	unsigned int max_buffer_size = HID_MAX_BUFFER_SIZE;
 	unsigned int usages;
+	// Port: cached-value count, separate from the RAM-bounded usage table.
 	unsigned int value_count;
 	unsigned int offset;
 	unsigned int i;
@@ -683,6 +684,7 @@ static int hid_parser_local(struct hid_parser *parser, struct hid_item *item)
 	__u32 data;
 	unsigned n;
 	__u32 count;
+	// Port: carries -ENOMEM from the dynamic local usage storage below.
 	int ret;
 
 	data = item_udata(item);
@@ -1174,6 +1176,7 @@ static int hid_scan_report(struct hid_device *hid)
 	};
 
 	struct hid_parser *parser __free(kvfree) = vzalloc(sizeof(*parser));
+	// Port: carries -ENOMEM from dynamic parser storage, see the loop below.
 	int ret = 0;
 	if (!parser)
 		return -ENOMEM;
@@ -2077,6 +2080,9 @@ static void hid_report_process_ordering(struct hid_device *hid,
 	unsigned int a, u, usages;
 	unsigned int count = 0;
 
+	// Downstream fix: Wacom receiver rebind reuses the same reports across
+	// stop/start. Keep the existing ordering graph instead of overwriting it;
+	// hid_free_report() releases it.
 	if (report->field_entries)
 		return;
 
@@ -3420,10 +3426,10 @@ int hid_add_device(struct hid_device *hdev)
 	/*
 	 * Check for the mandatory transport channel.
 	 */
-	if (!hdev->ll_driver->raw_request) {
+	 if (!hdev->ll_driver->raw_request) {
 		hid_err(hdev, "transport driver missing .raw_request()\n");
 		return -EINVAL;
-	}
+	 }
 
 	/*
 	 * Read the device report descriptor once and use as template
@@ -3517,6 +3523,8 @@ out_err:
 	hid_destroy_device(hdev);
 	return ERR_PTR(ret);
 
+// Port: the FreeRTOS-backed primitives above can fail to allocate. Release
+// them directly, before the device is fully initialized.
 out_sync_err:
 	mutex_destroy(&hdev->ll_open_lock);
 	sema_destroy(&hdev->driver_input_lock);

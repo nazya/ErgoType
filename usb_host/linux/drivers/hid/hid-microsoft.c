@@ -28,6 +28,11 @@
 #define MS_SURFACE_DIAL		BIT(6)
 #define MS_QUIRK_FF		BIT(7)
 
+/*
+ * Port note: every CONFIG_HID_MICROSOFT_ALL_DEVICES gate in this file keeps
+ * the pinned SideWinder, Bluetooth and force-feedback paths compiled out of
+ * the default wired Microsoft selection; see hid_compat.h.
+ */
 struct ms_data {
 	unsigned long quirks;
 	unsigned int last_key; /* Upstream static crosses HID device ownership. */
@@ -283,8 +288,10 @@ static int ms_event(struct hid_device *hdev, struct hid_field *field,
 		}
 		if (key) {
 			input_event(input, usage->type, key, 1);
+			// last_key = key;
 			ms->last_key = key;
 		} else
+			// input_event(input, usage->type, last_key, 0);
 			input_event(input, usage->type, ms->last_key, 0);
 
 		return 1;

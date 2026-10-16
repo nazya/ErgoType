@@ -211,6 +211,9 @@ Together these cover every distinct descriptor-length/signature arm of the
 explicit-Feature-usage quirk. The same-body `03ed/03ec/03f9/03c4/03d0`
 aliases remain source-audited. The modern success markers are
 `t,f12,1,3,8,9,a,b,d,e`, followed by alert `l`.
+The six captured Pen+Touch composites `03c0/03c4/03cb/03d0/03ec/03f0` ran
+only as standalone interfaces: their two simultaneous HID graphs plus device
+state exceed the RP2040 heap even at this near-minimal usage cap.
 
 A compact `056a:0333` profile then checks unchanged `hid-generic` fallback
 and emits `p`. The final exact `056a:0350` profile must not produce a Wacom
@@ -579,8 +582,9 @@ Repeated hot-plug and cold-start runs on 2026-07-23 verified:
 
 The runs completed with `oom=0` and a stable removal heap plateau. The
 automatic compatibility pass below separately verifies unplug while the mode
-SET is pending. Still unverified are accepted `-EIO` during that SET,
-high-contact queue saturation/contact ID 32, and a real physical touchpad.
+SET is pending. Still unverified are accepted `-EIO` during that SET and a real
+physical touchpad. Contact ID 32 is tracked separately as a generic
+`hid-multitouch` parser boundary.
 
 ### Hardware-verified automatic USB keyboard compatibility pass
 
@@ -677,8 +681,7 @@ unsupported interface. A single `ERR: HID_RX_XFER_FAIL` immediately adjacent
 to physical removal can be the endpoint abort winning before REMOVE is
 processed; repetition while the device remains attached, missing resumed
 input, or a falling removal plateau is a failure. Normal traffic must not
-produce `ERR: HID_WAIT_TIMEOUT`, `ERR: HID_WAIT_UNLINK`,
-`ERR: HID_TEARDOWN_WAIT`,
+produce `ERR: HID_WAIT_TIMEOUT`, `ERR: HID_TEARDOWN_WAIT`,
 `ERR: HID_ASYNC_XFER_TUPLE`, `ERR: HID_ASYNC_HUB_PIN`, probe/allocation errors,
 or a nonzero OOM counter. The old aggregate name
 `ERR: HID_ASYNC_INVARIANT` is not a current diagnostic; use the two specific
@@ -922,7 +925,7 @@ drivers are not counted here.
 | Hook / behavior | Active examples | Emulator coverage |
 | --- | --- | --- |
 | plain generic HID parser/input path | `hid-generic`, `hid-core`, `hid-input` | every emulator branch |
-| `report_fixup` | `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cougar`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote`, Corsair/Cougar, Claymore, and the exact/neighboring G752 predicates are verified; `holtek-mouse` remains pending |
+| `report_fixup` | `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cougar`, `hid-elecom`, `hid-evision`, `hid-microsoft`, `hid-topre`, `hid-holtek-kbd`, `hid-holtek-mouse`, `hid-kye`, `hid-pxrc`, `hid-zydacron`, and other active lightweight fixups | `work-input-drivers`, `microsoft-usb`, `apple-external-usb`, `holtek-kbd-a055`, `kye-easypen-m406`, `pxrc-phoenixrc`, `zydacron-remote`, Corsair/Cougar, Claymore, and the exact/neighboring G752 predicates verify this hook class; the two Holtek mouse descriptor-offset families are source-audited aliases of the same parser/input/teardown graph and do not need a separate hardware pass |
 | `input_mapping` / `input_mapped` | `hid-a4tech`, `hid-alps`, `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cypress`, `hid-evision`, `hid-ite`, `hid-kensington`, `hid-microsoft`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies the ALPS mapping suppression; Claymore declares every ASUS/MS switch usage and its run passed representative mappings; the Corsair mouse fixture reaches only the unchanged fallthrough, while the active K70 usage mappings are source-audited rather than hardware-enumerated |
 | driver `.event` hooks | `hid-a4tech`, `hid-apple`, `hid-asus`, `hid-corsair`, `hid-cypress`, `hid-ite`, `hid-microsoft`, `hid-saitek` | `a4tech-x5-005d`, `apple-external-usb`, `cypress-mouse`, `ite8595-rfkill`, `microsoft-usb`, `saitek-rat7`, and Claymore illumination-key forwarding verified; the Corsair mouse report reaches the non-K90 fallthrough |
 | `raw_event` hooks | `hid-alps`, `hid-asus`, `hid-chicony`, `hid-cougar`, `hid-creative-sb0540`, `hid-letsketch`, `hid-primax`, `hid-pxrc`, `hid-rapoo`, `hid-saitek`, `hid-zydacron` | Existing fixtures verify this hook class; `alps-matrix` verifies U1/T4 touch, button, palm, release, and stick branches; ASUS verifies Claymore filtering plus Medion mute/toggle/touchpad paths and rejection neighbors; `letsketch-wp9620n` verifies LetSketch; the Cougar sibling-routing matrix passed on hardware |
@@ -948,7 +951,8 @@ drivers are not counted here.
 The current emulator replaces the committed ASUS fixture in place with
 `hid_bpf_wired_test.c`: 44 generations exercise 17 native upstream HID-BPF
 programs plus Rakk, covering the new descriptor/event/mode/lifecycle paths.
-The 22-ID host scope is listed in `deferred-hid-drivers.md`; Kamvas Pro27
+The 22 IDs are listed with their programs in the device tables under
+`docs/hid-host/vendors/`; Kamvas Pro27
 `256c:006c` is a same-program alias rather than a separate generation.
 The fixture exposes at most two target HID interfaces plus a marker keyboard,
 has no CDC, and uses only public TinyUSB APIs. The main host log was the sole
@@ -1006,18 +1010,19 @@ separately flashed as a repetition of the instrumented run.
 ### Other pending or retained boundaries
 
 `hid-holtek-mouse` is active so `CONFIG_HID_HOLTEK` no longer marks six mouse
-IDs as special without linking their report fixup. Its unverified
-`device/holtek-mouse` fixture preserves the broken `0x7fff` descriptor fields,
-checks the repaired `0x2fff` boundary, pointer input, and reconnect. The normal
-USB Magic Trackpad 2 route is hardware-verified above; accepted mode-SET
-`-EIO`, disconnect during that SET, and queue saturation remain targeted fault
-passes rather than normal-driver gaps.
+IDs as special without linking their report fixup. Its two descriptor-offset
+families feed the already verified generic parser/input/teardown graph, so the
+retained `device/holtek-mouse` fixture is not a separate qualification gate.
+The normal USB Magic Trackpad 2 route is hardware-verified above; accepted
+mode-SET `-EIO` remains a targeted fault pass. Disconnect during that SET is
+already covered, and contact ID 32 belongs to the separate generic
+`hid-multitouch` boundary described below.
 ELAN USB `04f3:074d/0755` remains in retained source, but its CMake entry and
 `CONFIG_HID_ELAN` gate are inactive. It is not part of this active-hook audit
 and has no firmware build or hardware verdict.
-LetSketch USB `6161:4d15` is active with a hardware-verified no-CDC fixture for
+LetSketch USB `6161:4d15` is retained default-off with a hardware-verified no-CDC fixture for
 its string sequence, raw reports, timer expiry/shutdown, and reconnect graph.
-ALPS USB `044e:120b/120c/1215/121e` is active; the no-CDC U1/T4 matrix verifies
+ALPS USB `044e:120b/120c/1215/121e` is retained default-off; the no-CDC U1/T4 matrix verifies
 its request/reply, raw input, managed secondary input, reconnect, and teardown
 graph. The `121e` alias remains source-audited.
 Corsair Glaive/Scimitar, the zero-driver-data K70/K70 RAPIDFIRE row
@@ -1075,20 +1080,22 @@ Logitech/Lenovo fixtures covers the long-enumeration success path, normal USB
 Magic Trackpad 2 path, selected Wacom CTL-472/CTL-672/PTK-450/CTH-470/PTH-650/
 Yoga 260 AES/USB receiver plus external wired Intuos and Cintiq 13HD
 `056a:0304` flows, UC-Logic Star G640 Rev A `28bd:0094`, active Logitech
-`c532`, and Lenovo
-`6009/6047`. The non-Wacom active allowlist has hardware coverage except for
-the Holtek mouse result. The current Wacom
+`c532`, and Lenovo `6009/6047`. The active non-Wacom allowlist has hardware
+coverage for every distinct execution graph. The current Wacom
 quirk-list/wildcard/receiver boundary passed the single-Pico matrix. The later
 temporary-64 matrix exercised its descriptor-qualified `03ce` branch and
 report-lifetime field-ordering guard on firmware hardware. Memory-gated
 `c52f/c534/60ee` have logic coverage at temporary `64/256`, not RP2040 support
-at retained `64/675`.
+at retained `64/675`. Lenovo `6009/6047` remain below 256 usages, so that
+retained ceiling does not alter their verified graphs. The selected `c532`
+logic passed at `64/256`; only its focused `64/675` capacity smoke remains.
 Stadia's existing fixture covers its deferred mutex-conversion path if it is
 relinked later. Earlier Wacom fixtures also passed the working input/devres and
 evdev identity correction. The later fixture certifies the selected
 receiver rebind and AES control/input paths, but not exact detached
-power-snapshot values or ordering, elapsed AES expiry, the generic delayed-work
-branches listed below, or the separate Rapoo managed extra-input path.
+power-snapshot values or ordering, elapsed AES expiry, or the generic
+delayed-work branches listed below. The later 2026-09-22 matrix verified the
+separate Rapoo managed extra-input path.
 
 Reasoning:
 
@@ -1257,37 +1264,15 @@ Hardware Verified until their signals are observed.
     observed SET_REPORT ID 5 plus the ff-memless timer stop.
   - a temporary linked/instrumented host image was tested with a targeted
     `FF_RUMBLE` trigger before the pair returned to the deferred CMake set; its
-    exact SHA256 is recorded in Hardware Test Identity below. The ordinary
+    exact SHA256 is recorded in Earlier Checkpoint Records below. The ordinary
     layout-change hook still emits the unrelated `FF_HAPTIC` type.
   - expected device-side signal: emulator CDC log reports SET_REPORT for
     report ID 5, with its pointer marker moving on rumble start and stop.
 
-### Future FF client boundary
-
-The concise client recipe and lifetime rules are in the
-`Future firmware FF client hook` section of `hid-host-bringup.md`. The
-historical temporary Stadia client exercised this conceptual sequence:
-
-```text
-upload FF_RUMBLE id=-1  -> assigned effect ID
-write EV_FF(id, 1)      -> play
-ff-memless timer        -> automatic stop at replay.length
-write EV_FF(id, 1)      -> replay the same uploaded slot
-write EV_FF(id, 0)      -> optional explicit stop
-erase effect ID         -> release the slot
-```
-
-The targeted Stadia run exercised upload, play, automatic timer stop, and
-same-ID replay. It did not issue the explicit stop or erase calls in this
-generic future-client sequence.
-
-All calls belong to a task-owned client. Never make them from a TinyUSB
-callback. An effect ID dies with its `struct device`: clear it on
-`EV_DEV_REMOVE` and upload a new `id = -1` effect after reconnect. The
-temporary raw helpers are not part of the current API; an immediate writer
-result was not USB completion. The `EV_FF` echo may reach the current KeyD reader as
-`unrecognized evdev event type: 21`; that message is a downstream-consumer gap,
-not a failed FF request.
+The targeted Stadia run exercised upload, play, automatic timer stop, same-ID
+replay, unplug during the running work item, clean removal, and reconnect. It
+did not exercise explicit stop or erase. The temporary client used for that
+run is not part of the current firmware.
 
 ## Remaining Gaps
 
@@ -1323,8 +1308,8 @@ without a stale writer or post-detach publication.
 For fixtures that queue a mode SET during probe (`haptic-touchpad` and the Kye
 tablet-mode cases), its completion must precede the first published input. Also
 unplug once while that SET is pending; lifecycle must leave through the normal
-fenced teardown without `ERR: HID_WAIT_TIMEOUT`, `ERR: HID_WAIT_UNLINK`,
-`ERR: HID_TEARDOWN_WAIT`, or a stalled board. The
+fenced teardown without `ERR: HID_WAIT_TIMEOUT`, `ERR: HID_TEARDOWN_WAIT`,
+or a stalled board. The
 former `HID_WAIT_BUSY`/`HID_WAIT_OWNER` names belonged to the retired
 polling/owner implementation and are not emitted by the current artifact.
 
@@ -1345,6 +1330,63 @@ The older `device/haptic-touchpad` descriptor uses only numbered output report
 ID 6. The lifecycle pass hardware-verified the generic unnumbered-report
 convention on both interrupt OUT and EP0 fallback: byte zero is transport
 padding for report ID 0 and does not replace the first haptic payload byte.
+
+### Remaining transport and parser qualification
+
+- Run one focused `046d:c532` receiver smoke at the retained
+  `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=675` policy: DJ startup, one ordinary
+  virtual mouse child, input, unpair/reconnect, balanced teardown, stable heap,
+  and `oom=0`. Its execution graph passed at temporary `64/256`; Lenovo
+  `6009/6047` do not need another limit-only pass because their descriptors
+  remain below 256 usages.
+- Verify generic probe control ordering: exactly one SET_IDLE before report-
+  descriptor GET, a SET_IDLE STALL remains nonfatal, and generic probe emits no
+  SET_PROTOCOL. The ll-driver `.idle` implementation is already present; its
+  sole imported driver caller belongs to the currently dormant Linux PM path.
+- Extend the long-configuration fixture with REMOVE and a foreign ATTACH while
+  its 100-ms retry deadline is armed. Exact 512/513/4096-byte configurations,
+  4097-byte and malformed-header rejection, and the ordinary retry already
+  passed.
+- Exercise a short full-configuration read above 512 bytes and a deterministic
+  transient allocation failure. These require a bounded host hook or internal
+  harness; an ordinary USB emulator cannot force allocator failure reliably.
+- Narrow report-descriptor and parser faults before adding fixtures. Map the
+  remaining `usbhid_parse()`/`hid_open_report()` error labels (descriptor GET
+  shorter than its declared size, malformed descriptor, temporary-buffer or
+  parser allocation failure, `HID_MAX_FIELDS` exhaustion) against existing
+  logs, and add a fixture only for a cleanup transition no run has reached.
+  Already covered: the 4096-byte descriptor, the Kamvas Pro 19 oversized INPUT
+  ARRAY rejection, Logitech persistent-field limits, and malformed descriptors
+  rejected in vendor matrices. Allocation failures need the same host hook or
+  harness as the configuration case above.
+- Inject an accepted `-EIO` result for the USB Magic Trackpad 2 mode SET.
+  Disconnect while that SET is pending is already covered.
+- Inject deterministic control failures for the standard haptic-touchpad
+  path. A real physical haptic touchpad is also still uncovered.
+- Exercise interrupt-IN FAILED/TIMEOUT retry. A normal TinyUSB NAK does not
+  prove it; this needs a lower-level no-response or bad-packet injector.
+- Unplug, and replug natively on the same port, during each terminal-reset
+  phase of a root device. Root clear-halt recovery itself already passed; the
+  hub-child, parent-hub and address-reuse variants belong to the hub gate
+  below.
+- If exact power publication becomes part of the product claim, add a bounded
+  task-context consumer oracle for `ADDED`/`CHANGED` values and a deterministic
+  startup-failure case. Current runs prove only ordinary queue cleanup through
+  recovered heap plateaus.
+- Keep delayed-work promotion-window cancellation, simultaneous synchronous
+  cancellation, callback self-requeue, delayed-queue destruction, and tick
+  rollover as source-audited common-layer cases unless a dedicated internal
+  harness is selected. Existing fixtures already cover the reachable pending,
+  running, rearmed, and teardown graphs of their real callers.
+
+### Blocked on a common USB hub
+
+A real common hub is still required to qualify hub-child terminal recovery,
+child removal, parent-hub removal, USB-address reuse, and at least two
+overlapping retiring cache generations. The same setup is required for paired
+Wacom `056a:0333/0335`, `032b/032c`, and captured `0354/0350` mode-change
+lifecycle. One composite Pico cannot prove independent sibling identity,
+shared-parent matching, or both arrival and removal orders.
 
 ## Direct HID++ Request/Reply Diagnostic Checkpoint
 
@@ -1472,7 +1514,8 @@ This is a bounded allocation-capacity result rather than cumulative heap loss
 or a broken DJ lifecycle. Other devices with similarly wide usage arrays, many
 fields, multiple live receiver children, or large composite HID graphs may
 reach the same boundary and need individual measurement or a larger-RAM target.
-See [`pio-usb-memory.md`](pio-usb-memory.md) for the allocation breakdown.
+See [`RP2 USB HID host memory and capacity`](../docs/hid-host/rp2.md) for the
+allocation breakdown.
 
 ## Hardware-verified practical HID++/Unifying matrix
 
@@ -2358,24 +2401,347 @@ Heavier FF drivers should stay deferred for now:
 Those drivers mix FF with larger request/response protocols, LEDs, sysfs,
 device state, or controller-specific workers.
 
-## More Useful Emulator Targets
+## Earlier Checkpoint Records
 
-The current emulator set gives good architectural coverage, but not complete
-per-driver coverage. The next useful targets are:
+These records were moved verbatim on 2026-10-16 from the retired
+`async-hid-progress.md` (Manual Test Notes) and `pio-usb-memory.md`, because
+their artifact identities or verdicts were recorded nowhere else. Some are
+negative or superseded results and are kept as such.
 
-1. one HID interface with `bulk IN, interrupt IN, bulk OUT, interrupt OUT`,
-   followed by a variant with two interrupt endpoints per direction. These
-   prove the new upstream-shaped first-interrupt-pair selection and PIO slot
-   conservation; the ordinary haptic fixture does not.
-2. a multi-device/hub sequence that creates at least two overlapping retiring
-   cache epochs before reconnect. It must prove deferred ATTACH resumes on the
-   final-release wake without `HID_USB_DEV_ALLOC_FAIL`.
-3. one generic `HID_QUIRK_MULTI_INPUT` device not already represented by KYE or
-   Chicony, only if multi-input behavior looks suspicious in hardware.
+### From async-hid-progress.md
 
-Most remaining active lightweight drivers do not need one emulator each before
-another broad hardware pass. They mostly reuse the same already-covered hook classes:
-fixup, mapping, mapped, event, simple probe, or raw event.
+- 2026-07-23: repeated hot-plug and cold-start runs completed all three haptic
+  transport profiles: numbered interrupt OUT,
+  unnumbered report ID 0 interrupt OUT, and unnumbered report ID 0 EP0
+  fallback. The run covered five-slot playback, same-ID replay, replacement,
+  erase/re-upload, HOST/DEVICE mode changes, queued-work unplug, remove, and
+  reconnect. The same image passed USB Magic Trackpad 2 mode SET, all four
+  interfaces, native low-contact/release/button parsing, and reconnect.
+  Minimum heap was 11,368 B on cold start and 11,376 B on hot plug; complete
+  removal repeatedly returned to 60,848 B free with `oom=0`.
+- 2026-07-22: before the audited Stadia/`ff-memless` pair was returned to the
+  deferred CMake set, a targeted two-Pico `FF_RUMBLE` test validated it. The
+  temporary linked/instrumented host image had SHA256
+  `8b188a595689102872e65ff7529ad3bbef3cb21b1d026e3378498688ba04bfbf`
+  (`text=520188`, `data=788`, `bss=245100`); emulator commit `f8f9a38` image
+  SHA256 was
+  `499f249c748e7f5eb82e791ac654c7a03e0c20dae1e96050476c568a8b9a1ac3`.
+  Two complete cycles separated by one reconnect observed upload, start, the
+  300-ms `ff-memless` timer stop, replay of the same effect ID, unplug while
+  that exact Stadia work was running, and clean removal. The post-remove heap
+  returned to 60,816 B in both cycles with `oom=0`.
+- 2026-07-22: the teardown-result fix, exact UF2 SHA256
+  `db3ecf506b16471149ba45c0b7ff8199983e0d03c05fa3de8d3cd8079659a242`,
+  is also the current rebuilt image after returning Stadia/ff-memless to the
+  deferred CMake set. It passed repeated automatic ELECOM, Kensington, Topre,
+  EVision, and
+  `cafe:1005` long-configuration cycles. Input continued and the former false
+  `HID_TEARDOWN_WAIT` diagnostic disappeared; the log contained no `ERR` or
+  `WARN`. Removal repeatedly returned to `free=60784..60800`, minimum observed
+  heap was 39,872 B, and `oom=0`. Host watermarks remained at least 265 words
+  for TinyUSB, 410 for async, 348 for work/timer, 226 for lifecycle, and 862
+  for report.
+- 2026-07-22: the combined simplification image, exact UF2 SHA256
+  `eabe0f7d200b51ccd0272303565391395e397b0885653c6e96e23c3b6c82087d`,
+  completed repeated automatic ELECOM, Kensington, Topre, EVision, and
+  `cafe:1005` long-configuration cycles. Input continued, removals returned to
+  a stable `free=60800..60816` plateau, the minimum observed heap was 39,888 B,
+  and `oom=0`. Every interface removal emitted the misleading
+  `ERR: HID_TEARDOWN_WAIT`: the fence had completed, but its common wait helper
+  returned `-ENODEV` because `transport_stopping` was true. The following
+  dirty candidate treats that required teardown state as success and is
+  hardware-verified above.
+
+- 2026-07-22: the long-configuration/retry checkpoint replaces TinyUSB's last blocking
+  100-ms enumeration retry with a host-owned deadline/continuation and adds
+  exact transient full configuration-descriptor storage for 513..4096 bytes.
+  Host UF2 SHA256
+  `63e935043eb04b95c8fe5c377024f6d7b7b9897b82ed04626a502bf9f98fca2f`
+  and emulator UF2 SHA256
+  `58d309156aa7fb4a8152f6623ff2a4a4e1e2c7c0fcebe44f90afcdc307eef496`
+  passed three repeated hardware cycles. The `cafe:1005` fixture deliberately
+  stalls its first full configuration GET, then reaches a working HID interface
+  at byte 575 of a 600-byte configuration after the one-shot retry. Removal
+  returns to stable `free=60936/60944` plateaus with `oom=0`. The ordinary
+  haptic/multitouch hot-plug regression also passed on the same host image.
+
+- 2026-07-20: edge-driven CLEAR_HALT checkpoint `usb: make clear-halt admission edge driven`, exact UF2 SHA256
+  `312a456a981ac2dcbe057ce8fe247673952106f6dcbb520b26e32f0c7a92beaa`,
+  clean-builds with `text=492388`, `data=708`, and `bss=243312`. The requested
+  normal boot/enumeration and emulator input regression pass was reported
+  working on hardware. This does not force CLEAR_HALT pool saturation or the
+  terminal device-reset path.
+- 2026-07-20: generic synchronous-request admission checkpoint `usb: make synchronous request admission waitable`,
+  exact UF2 SHA256
+  `b58404971ae20b6de376f8dc22ae9912a429a1d8b56086dfd852c8555cf87a64`,
+  clean-builds with `text=491156`, `data=708`, and `bss=243296`. Normal boot,
+  enumeration, emulator input, pointer movement, and wheel events were reported
+  working on hardware. The subsequent edge-driven CLEAR_HALT-admission change
+  is not part of that verified image.
+- 2026-07-20: SHA-pinned HID-open/report-ownership image, exact UF2 SHA256
+  `c0a58d7adf6d1bb8fac1d94d713f53443271235254dbe4cdd7ed5c8e923e6df2`,
+  was reported working for normal boot, enumeration, emulator input, and mouse
+  movement. This does not cover malformed interface extras, transient device-
+  descriptor reads, or dropped EP0 completion injection.
+- 2026-07-20: direct host-owner re-enumeration checkpoint, exact UF2 SHA256
+  `bea0614236dd6de396f1a74678243f7f3b056d46e1261b58198fd1f06a01e94b`,
+  builds with `text=492676`, `data=660`, and `bss=243308`. Normal boot,
+  enumeration, and input were reported working on hardware. This does not
+  exercise injected endpoint failure or root/hub reset recovery.
+- 2026-07-20: asynchronous device-reset checkpoint `hid: recover failed devices asynchronously`, exact UF2
+  SHA256 `fe3d0c717171499c1ad40a69d5d30cb1d5d6a8cc1525435fb1aa7566ceb362fb`,
+  was reported working on hardware for normal boot, enumeration, and input.
+  This is not fault-injection coverage of terminal retry, root reset, hub-port
+  reset, or native re-enumeration races; those remain explicit checks below.
+- 2026-07-20: task-side exact report-descriptor fetch checkpoint, exact UF2
+  SHA256 `eaa95df9bfe2b39d84f9d6048c8c49a84df32cbc49073f39dc83b240a131572a`,
+  clean-builds with `text=482212`, `data=660`, and `bss=243308`. It removes
+  the TinyUSB enumeration-buffer limit from HID report descriptors and recovers
+  2,008 B of persistent heap_4 allocation. This exact image was reported
+  working on hardware. The larger-than-512-byte descriptor and hub-subtree
+  cases remain separate coverage items.
+- 2026-07-20: dynamic interrupt-IN checkpoint `hid: allocate interrupt input buffers per device`, exact UF2 SHA256
+  `13edb5b61ca9c57f8da59613eb65b05cb8944f78c4bfef74f6cc50357264bd37`,
+  builds with `text=477972`, `data=660`, and `bss=243308`. It removes the
+  fixed 64-byte RX ceiling and adds a post-HCD-close detach fence. Normal input
+  and reconnect behavior were reported working on hardware.
+- 2026-07-20: request buffer-ownership checkpoint `hid: give async requests explicit buffer ownership`, exact UF2 SHA256
+  `290ed22778c8905c49d2006bcb719ada1c3e8147cca4e4c41c8744025bde14e8`,
+  builds with `text=477444`, `data=916`, and `bss=243308`, and was reported
+  working on hardware. It is the baseline for the dynamic-IN step above.
+- 2026-07-20: physical-endpoint scheduling / generic clear-halt checkpoint
+  `hid: serialize requests by physical USB lane`, exact UF2 SHA256
+  `8c21c80630bcc857e381fff4d466eb9defc392f7c9e67a58e8743401986ff235`,
+  was reported working on hardware.
+- 2026-07-20: upstream raw/output helper checkpoint `hid: route synchronous usbhid helpers through generic bridge`, exact UF2
+  SHA256 `8e8402604678195e07980c211f541d87157a64a57d5e16f323d9d749c2560e8c`,
+  was reported working on hardware and is the baseline immediately before the
+  now-tested physical-endpoint lane / generic clear-halt consolidation.
+- 2026-07-20: generic USB-message checkpoint `hid: add generic asynchronous USB message bridge`, exact UF2 SHA256
+  `739e0d119cd2e5dd7e64051b75181dca5d7c90c411c7cc924c64e3ceac791e6d`,
+  was reported working on hardware and is the baseline immediately before the
+  now-tested upstream raw/output helper consolidation.
+- 2026-07-19: host checkpoint `hid: preserve exact interrupt output completion` booted with 43,008 B minimum free
+  heap, a 43,160 B largest free block, and 938 words free at the TinyUSB task
+  watermark. Repeated `c` press/release reports reached the input boundary.
+  This verifies exact interrupt OUT and is the baseline immediately before the
+  direct interrupt-IN checkpoint; direct IN still requires its own hardware
+  pass.
+- 2026-07-19: host checkpoint `hid: retire queued cancels outside callbacks` passed the strict hi-res wheel
+  emulator again after queued cancel retirement moved out of TinyUSB unmount
+  callbacks. Pointer events resumed normally after reconnect.
+- 2026-07-19: host checkpoint `hid: harden callback ingress and hub retirement` enumerated the current haptic-touchpad
+  emulator, delivered keyboard/pointer events, and retained at least 43,672 B
+  of FreeRTOS heap before the HID device was attached. This verifies the
+  callback-ingress checkpoint, not the output-routing change below.
+- 2026-07-19: host checkpoint `hid: route output reports like upstream usbhid` booted with 43,712 B minimum free heap
+  before HID attachment and 938 words free at the TinyUSB task watermark.
+  Repeated `c` press/release reports reached the input boundary. This is a
+  no-regression observation for the output-routing checkpoint; it does not yet
+  verify the direct-control/SET_IDLE checkpoint described above.
+- 2026-07-18: the strict hi-res wheel fixture verified a probe-time FEATURE
+  `GET_REPORT` returning `0xA0`, locked parser state preservation, and the
+  resulting raw `SET_REPORT` payload `0xA5` on hardware. Pointer events remain
+  gated unless that complete round trip succeeds.
+- Fixture: `../ErgoType-hid-devices`, branch
+  `device/hires-wheel`, commit `184429e`; host checkpoint `hid: preserve probe GET report state`.
+- 2026-07-10: Razer BlackWidow async raw SET_REPORT path was exercised with
+  the emulator and Pico host logs. This is an emulator/transport verification,
+  not a matching Razer hardware claim.
+- Fixture: `../ErgoType-hid-devices`, branch
+  `device/razer-blackwidow`, commit `4b2fc8f`, VID:PID `1532:010e`,
+  product `Razer BlackWidow Test`.
+- Laptop Linux sees the emulated Razer device under the Linux `razer` HID
+  driver and reports macro usage `0x68` as unsupported evdev code `0x290`.
+- ErgoType Pico host received the async Razer raw SET_REPORT path and then the
+  same macro usage as unsupported evdev code `0x290`.
+- The remaining `0x290` handling is consumer/keyd-side work, not an async HID
+  transport failure.
+- Callback-side mount and descriptor debug logs were removed. Sticky callback
+  fault bits are drained and logged by the lifecycle task; async timeout and
+  report-request status logs remain task-side.
+
+- 2026-07-31: the same unverified hardware stage now also imports complete
+  pinned `hid-lenovo.c` and selects only external USB
+  `17ef:6009/6047/60ee`. Bluetooth, I2C, ScrollPoint, dock, tablet, and Linux
+  audio LED-class paths remain gated; Legion is a separate unlinked family.
+  The combined candidate builds
+  as `text/data/bss=603504/788/245408`, with
+  `__bss_end__=0x2003fee8`, 280 bytes of main-bank headroom, and host UF2
+  SHA-256
+  `269e20807a5dcac4acbe8a9bf6fcd782a5633e4a193f7373cd4cb136078d918f`.
+  The active Lenovo state is 28 bytes per configured TrackPoint interface and
+  the static increase includes one 48-byte builtin-driver runtime. The compact
+  combined emulator builds as `text/data/bss=62244/0/254452`, with UF2
+  SHA-256
+  `1f8903038ff59a2f9f849b3ea85b8351fc1e98c631854674efd131bd274721f6`.
+  The first combined run failed in the broad c532 phase before child
+  publication. The rebuilt emulator emits a `1` through `7` after `f12,a` to
+  identify the exact c532 predicate; that diagnostic artifact has no hardware
+  verdict yet.
+
+- 2026-08-04: a source audit found that the external Intuos fixture did not
+  cover the non-waiting GET queued by `INTUOSHT2` `raw_event`. Its first
+  unknown-tool general packet reached the emulator's Feature report 8 callback,
+  but the fixture stored only a boolean, then sent an enter packet which gave
+  Wacom a known tool ID. The later general packet therefore queued no second
+  GET, and disconnect could retire a first request whose completion had never
+  been parsed. The transport now assigns `parser_owner` only to the lifecycle
+  task; a report-task GET returns to the ordinary control-report queue. A
+  focused `056a:033b` fixture therefore sends a second unknown-tool packet
+  before any enter packet, requires a second Feature report 8 callback, and
+  only then emits `f15, f10`.
+  The first hardware attempt used host
+  `72a83e26774db01425594d99945712dfbda7e4010bfcb088d93e453d9dfe2786`
+  and emulator
+  `fb49f90a3bb283d1808c6ce5bf4d3f8f4d19f8cd7c6e8e7c164d282da129f355`.
+  It published Pen/Pad, reached the gated Pen smoke, removed both devices with
+  `oom=0`, and then produced no alert profile. The emulator incorrectly
+  required its callback-owned `usb_mounted` flag to clear after
+  `tud_disconnect()`, but RP2040 software detach only removes the pull-up and
+  does not generate a local unmount callback. The same guard also suppressed
+  the failure markers. That attempt is not recorded as a complete hardware
+  pass. After removing the guard, the corrected fixture
+  `d675aee258df5ecf0a5af30e2b77cafd2076e449e77f44906c1e8b30453f5020`
+  completed on the same host: the two `033b` input lifetimes balanced, exactly
+  one compatibility interface produced `HID_IGNORED`, post-GET Pen smoke ran,
+  and the alert keyboard emitted `f15, f10`. All nine heap snapshots had
+  `oom=0`; minimum-ever free heap was 18,024 B, and minimum task watermarks
+  were TinyUSB 265, KeyD 658, async 389, work 217, timer 348, lifecycle 218,
+  and report 857 words. No `f12`, host `ERR`, timeout, input-drop,
+  control-queue, or report-memory warning appeared. This is the focused hardware pass
+  for non-waiting report-task GET parsing and subsequent CTRL-lane progress.
+
+### From pio-usb-memory.md
+
+#### Native HID-BPF/Rakk hardware-test checkpoint
+
+The instrumented RP2040 image enabled all 17 programs and Rakk and used the
+temporary observer:
+
+```text
+firmware build ID            7a15c6ff79e879ce4fcaafb362079d3f894340c9
+text/data/bss                661716 / 788 / 243652 B
+UF2 SHA-256                  5aae7b0ec6b9d24d46f57b77f8a578b2baa46f5c04a596197861e1e39941c5b1
+hardware coverage           two runs with overlapping captures cover 1--44
+```
+
+Together the two runs confirm 55 successful target verdicts, the expected bounded
+generation-21 verdict, 78 ordered report checks, all progress markers, and no
+OOM or zero task watermark. Minimum-ever free heap was 21,744 bytes; the final
+detached snapshot was 61,640 bytes. The observer was then removed and the
+then-default-off production image rebuilt. Compilation and size alone are not
+runtime evidence; exact log hashes and scope limits are in
+`hid-emulator-coverage.md`.
+
+#### Earlier Corsair/Cougar hardware checkpoint
+
+The current RP2040 build uses the default `HID_MAX_USAGES=675`. The retained
+ELAN source is excluded by CMake and `CONFIG_HID_ELAN`; hardware-verified
+LetSketch USB `6161:4d15` and ALPS USB `044e:120b/120c/1215/121e` remain
+linked. The Corsair/Cougar hardware-test image is:
+
+```text
+text/data/bss                 634320 / 788 / 243556 B
+__bss_end__                   0x2003f7cc
+main-bank headroom            2100 B to 0x20040000
+HID_MAX_FIELDS/USAGES         64 / 675
+UF2 SHA-256                   e1119fc83351722ac89c30fc5e5426e8314cc7e8ca2aab7f9162921b5ad72be4
+hardware coverage             LetSketch and ALPS retain their recorded passes;
+                              Corsair/Cougar target matrix passed 2026-09-18;
+                              undelayed initial alert f1 was absent
+```
+
+Compilation and size alone are not runtime evidence. The LetSketch and ALPS
+test images exercised their recorded logic. The Corsair/Cougar run produced
+all target events, exactly two expected HID_IGNORED warnings, `oom=0`, and
+nonzero task watermarks; it did not produce the early `f1` alert marker.
+The ALPS test image was `632676/788/243456`, host UF2
+`9e294a563db0176686a63af160c39e0f69d668408f7e1df057299ac192dfedc4`.
+Emulator UF2
+`b307c1fb9f5446a529c713071d41a4b47540a9db42264c2c698be9e55d0e89f9`
+and host log
+`76dba757d357a0cdc8e902ee23301d02889845177f486d287fc54e4a586fdee6`
+completed all U1/T4 phases. All 30 snapshots had `oom=0`; minimum-ever free
+heap was 48,584 B. Minimum host stack watermarks were async/work/timer/
+lifecycle/report `389/346/348/157/873` words, and every system-task watermark
+remained nonzero.
+
+The 2026-07-23 checkpoint excluded Stadia/`ff-memless` from the link. It used
+the fixed 218.5 KiB (`223744`-byte) FreeRTOS heap and clean-built as:
+
+```text
+text/data/bss                 514752 / 788 / 245040 B
+__bss_end__                   0x2003fd38
+main-bank headroom            712 B to 0x20040000
+scratch X                     788 B (0x20040000..0x20040314)
+scratch X / core-1 gap        1260 B to 0x20040800
+hardware verdict              passed 2026-07-23; stable removal heap, oom=0
+```
+
+The combined diagnostic checkpoint adds direct HID++ battery, reduced HIDRAW
+lifecycle, a dedicated lifecycle work queue, and the first DJ receiver
+checkpoint (`046d:c52b` to at most one generic M705 child) on top of identity:
+
+```text
+host text/data/bss            529768 / 788 / 245160 B
+host __bss_end__              0x2003fdc0
+host main-bank headroom       576 B to 0x20040000
+host UF2 SHA-256              ee14a1aac2b8e65ef84ef977c41f0efed58b18209196a1937ba35960a0634911
+emulator UF2 SHA-256          e391ef3c3bab809076e86c415e07e213a668b5bcaa243fb2218069b803051872
+hardware verdict              passed 2026-07-25; complete combined sequence
+```
+
+Relative to the identity-only candidate above, this adds 11,224 bytes of text
+and 72 bytes of BSS; data is unchanged. Power events do not enter the ordinary
+devmon/KeyD path. Devmon owns a separate four-member QueueSet, and each live
+supply owns one length-one value queue. Full `ADDED`/`CHANGED` snapshots
+coalesce by overwrite; the UI task currently ignores their values and removes
+the queue after consuming terminal `REMOVED`.
+
+Static sections do not include the runtime HIDRAW object, HID++ power-supply
+object/queue, power QueueSet, receiver mutex, guaranteed HID-mode UI task/timer,
+or virtual HID/parser/input/evdev/devmon graph. The combined run must therefore
+show a stable free/min/largest/blocks heap plateau and all task stack watermarks
+across battery changes, repeated pair/unpair, link loss, hot receiver unplug
+during input, and fresh reconnect.
+
+The run reached `f10` without an `f12` marker. Direct HID++ returned to the
+same attached `free/blocks = 32152/5` state four times and the same removed
+`60144/7` state three times. The DJ child returned to `28800/2` while attached
+and `33648/8` after unpair; full receiver removal returned to `60400/8`.
+`oom=0`; minimum remaining stack watermarks were `tuh=265`, `keyd=658`,
+`async=414`, `work=163`, `timer=348`, `lifecycle=196`, and `report=838` words.
+The noop UI provides no value-level power snapshot acknowledgement, so the
+stable repeated removal plateau is the observable power lifetime evidence.
+
+Removing only the three test-progress messages `DJ_RESYNC`, `DJ_READY`, and
+`DJ_RECEIVER_GONE` produces the production-clean host:
+
+```text
+host text/data/bss            529696 / 788 / 245160 B
+host __bss_end__              0x2003fdc0
+host main-bank headroom       576 B to 0x20040000
+host UF2 SHA-256              a650da20f755f84640c97e8933efdb17d47b368b1252c3fe6eae4a353f98bfd6
+hardware verdict              accepted post-test cleanup; no separate run
+```
+
+This removes 72 bytes of text and changes no data, BSS, allocation, timing, or
+driver control flow. The exact diagnostic host/emulator pair above remains the
+hardware evidence.
+
+The same retained Stadia/ff-memless source was hardware-tested before deferral
+with a temporary targeted trigger and deterministic workqueue teardown window,
+not by flashing the build-only candidate above unchanged:
+
+```text
+text/data/bss                 520188 / 788 / 245100 B
+__bss_end__                   0x2003fd7c
+main-bank headroom            644 B to 0x20040000
+temporary test UF2 SHA-256    8b188a595689102872e65ff7529ad3bbef3cb21b1d026e3378498688ba04bfbf
+hardware verdict              two full cycles separated by reconnect passed
+post-remove free heap         60816 B in both cycles; oom=0
+```
 
 ## Hardware Result Template
 

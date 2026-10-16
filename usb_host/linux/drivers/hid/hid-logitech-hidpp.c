@@ -368,9 +368,11 @@ static int __do_hidpp_send_message_sync(struct hidpp_device *hidpp,
 	ret = 0;
 
 out:
+	// Port: unpublish the buffer under the state lock that raw_event takes.
 	hid_compat_waitqueue_state_lock(&hidpp->wait);
 	hidpp->send_receive_buf = NULL;
 	hid_compat_waitqueue_state_unlock(&hidpp->wait);
+	// The upstream memset deferred above, now that no report task owns it.
 	if (discard_response)
 		memset(response, 0, sizeof(struct hidpp_report));
 	return ret;
@@ -3956,6 +3958,8 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 
 			return 1;
 		}
+		// Port: release the state lock taken above when the report is not
+		// the pending answer.
 		hid_compat_waitqueue_state_unlock(&hidpp->wait);
 	}
 

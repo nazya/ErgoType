@@ -56,6 +56,8 @@ static void wacom_wac_queue_insert(struct hid_device *hdev,
 {
 	bool warned = false;
 
+	// while (kfifo_avail(fifo) < size) {
+	// Upstream 6b3014ec never calls kfifo_skip() on an empty FIFO.
 	while (kfifo_avail(fifo) < size && !kfifo_is_empty(fifo)) {
 		if (!warned)
 			hid_warn(hdev, "%s: kfifo has filled, starting to drop events\n", __func__);
@@ -64,6 +66,8 @@ static void wacom_wac_queue_insert(struct hid_device *hdev,
 		kfifo_skip(fifo);
 	}
 
+	// kfifo_in(fifo, raw_data, size);
+	// Upstream 6b3014ec rejects a report that is larger than the FIFO.
 	if (!kfifo_in(fifo, raw_data, size))
 		hid_warn_ratelimited(hdev, "%s: report is too large (%d)\n",
 				     __func__, size);
@@ -74,10 +78,14 @@ static void wacom_wac_queue_flush(struct hid_device *hdev,
 {
 	while (!kfifo_is_empty(fifo)) {
 		int size = kfifo_peek_len(fifo);
+		// u8 *buf;
+		// Upstream 55f1ad57 allocates atomically because raw_event reaches
+		// this flush; upstream cb605d48 frees the buffer through __free().
 		u8 *buf __free(kfree) = kzalloc(size, GFP_ATOMIC);
 		unsigned int count;
 		int err;
 
+		// buf = kzalloc(size, GFP_KERNEL);
 		if (!buf) {
 			kfifo_skip(fifo);
 			continue;
@@ -90,6 +98,7 @@ static void wacom_wac_queue_flush(struct hid_device *hdev,
 			// to flush seems reasonable enough, however.
 			hid_warn(hdev, "%s: removed fifo entry with unexpected size\n",
 				 __func__);
+			// kfree(buf);
 			continue;
 		}
 		err = hid_report_raw_event(hdev, HID_INPUT_REPORT, buf, size, size, false);
@@ -97,6 +106,8 @@ static void wacom_wac_queue_flush(struct hid_device *hdev,
 			hid_warn(hdev, "%s: unable to flush event due to error %d\n",
 				 __func__, err);
 		}
+
+		// kfree(buf);
 	}
 }
 
@@ -1058,6 +1069,8 @@ out:
 }
 
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// Linux sysfs LED controls; firmware has no sysfs, so only the broad
+// configuration compiles these attribute handlers and groups.
 static ssize_t wacom_led_select_store(struct device *dev, int set_id,
 				      const char *buf, size_t count)
 {
@@ -2007,6 +2020,8 @@ static int wacom_remote_create_attr_group(struct wacom *wacom, __u32 serial,
 }
 
 #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
+// Linux sysfs Remote unpair control; firmware has no sysfs, so only the broad
+// configuration compiles this command and its attribute.
 static int wacom_cmd_unpair_remote(struct wacom *wacom, unsigned char selector)
 {
 	const size_t buf_size = 2;
@@ -2574,10 +2589,15 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 
 	error = wacom_register_inputs(wacom);
 	if (error)
+		// goto fail;
+		// Upstream ec2612b8 stops HID hardware after post-start failures.
 		goto fail_hw_stop;
+
 	if (wacom->wacom_wac.features.device_type & WACOM_DEVICETYPE_PAD) {
 		error = wacom_initialize_leds(wacom);
 		if (error)
+			// goto fail;
+			// Upstream ec2612b8 stops HID hardware after post-start failures.
 			goto fail_hw_stop;
 
 		// #if IS_ENABLED(CONFIG_HID_WACOM_ALL_DEVICES)
@@ -2585,6 +2605,8 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 		// without enabling the broad cross-bus Wacom configuration.
 		error = wacom_initialize_remotes(wacom);
 		if (error)
+			// goto fail;
+			// Upstream ec2612b8 stops HID hardware after post-start failures.
 			goto fail_hw_stop;
 		// #else
 		// error = wacom_initialize_remotes(wacom);
@@ -2606,6 +2628,8 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 		cancel_delayed_work_sync(&wacom->init_work);
 		_wacom_query_tablet_data(wacom);
 		error = -ENODEV;
+		// goto fail_quirks;
+		// Upstream ec2612b8 renames fail_quirks to fail_hw_stop.
 		goto fail_hw_stop;
 	}
 
@@ -2613,6 +2637,8 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 		error = hid_hw_open(hdev);
 		if (error) {
 			hid_err(hdev, "hw open failed\n");
+			// goto fail_quirks;
+			// Upstream ec2612b8 renames fail_quirks to fail_hw_stop.
 			goto fail_hw_stop;
 		}
 	}
@@ -2622,6 +2648,8 @@ static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
 
 	return 0;
 
+// fail_quirks:
+// Upstream ec2612b8 routes every post-start failure through this label.
 fail_hw_stop:
 	hid_hw_stop(hdev);
 fail:

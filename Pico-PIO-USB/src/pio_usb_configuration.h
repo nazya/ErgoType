@@ -45,8 +45,8 @@ typedef struct {
 
 #define PIO_USB_EP_POOL_CNT 8 // Pico-PIO-USB default is 32. Max low-level USB endpoints opened by connected devices. Too low means a composite device enumerates but some interfaces/endpoints, for example mouse or WebHID, do not start. 32->8 saves about 4.5 KB.
 #define PIO_USB_DEV_EP_CNT 16 // Endpoint-id table entries inside each pio_usb_device record. Low memory impact: one byte per entry per PIO_USB_DEVICE_CNT.
-#define PIO_USB_DEVICE_CNT 4 // PIO-USB device records. One direct host device needs 1; 4->1 saves roughly 250-300 B, but hub children/multiple devices stop fitting.
-#define PIO_USB_HUB_PORT_CNT 8 // Child-device slots inside each pio_usb_device record. Low direct cost, but only useful with hub support.
+#define PIO_USB_DEVICE_CNT 4 // PIO-USB device records (76 B each). The TinyUSB PIO HCD overrides the weak IRQ handler that scans them and does not use records 1..3 for hub children; 4->1 would save 228 B but changes shared host/device storage and needs an audit and hardware regression.
+#define PIO_USB_HUB_PORT_CNT 8 // Size of child_devices[] inside each pio_usb_device record. Nothing reads or writes it, so it does not limit TinyUSB hub support.
 #define PIO_USB_ROOT_PORT_CNT 1 // Physical PIO root ports. One D+/D- pair needs 1; 2->1 saves roughly one root_port_t, about 50 B.
 
-#define PIO_USB_EP_SIZE 64 // Max USB endpoint packet payload used to size endpoint_t encoded buffers. Lowering saves per endpoint but breaks normal full-speed 64-byte packets; do not reduce for HID host.
+#define PIO_USB_EP_SIZE 64 // Sizes only the temporary TX packet buffer in pio_usb.c; endpoint_t::buffer is fixed for 64-byte payloads in usb_definitions.h. Lowering it saves no endpoint memory and breaks normal full-speed 64-byte packets; do not reduce for HID host.

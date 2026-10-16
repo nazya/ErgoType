@@ -770,7 +770,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # joystick, force-feedback and SpaceNavigator paths remain gated.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lg.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-accutouch.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-alps.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-alps.c
         # Pinned Apple driver, selected to external wired USB keyboards and
         # Mighty Mouse; legacy, Bluetooth, internal, Touch Bar, and
         # backlight-only devices remain gated in the source.
@@ -827,7 +827,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         # Complete pinned Lenovo driver for external USB TrackPoint keyboards
         # 6009/6047; full 60ee is retained but exceeds the RP2040 heap at 675.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lenovo.c
-        ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-letsketch.c
+        # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-letsketch.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-lcpower.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-macally.c
         # ${CMAKE_CURRENT_LIST_DIR}/usb_host/linux/drivers/hid/hid-maltron.c

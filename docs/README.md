@@ -12,4 +12,5 @@
 - [Logging / console IO](logging.md)
 - [Boot modes (MSC vs HID)](modes.md)
 - [Runtime architecture](runtime.md)
+- [USB HID host support](hid-host/README.md)
 - [WebHID editor](webhid/README.md)

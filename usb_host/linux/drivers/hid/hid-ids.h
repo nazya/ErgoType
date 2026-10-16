@@ -1406,6 +1406,7 @@
 #define USB_DEVICE_ID_SYNAPTICS_ACER_SWITCH5_017	0x73f6
 #define USB_DEVICE_ID_SYNAPTICS_ACER_SWITCH5	0x81a7
 
+// Post-baseline upstream 15a0449c adds these IDs together with hid-rakk.c.
 #define USB_VENDOR_ID_TELINK				0x248a
 #define USB_DEVICE_ID_TELINK_RAKK_DASIG_X		0xfb01
 #define USB_DEVICE_ID_TELINK_RAKK_DASIG_X_DONGLE	0xfa02
