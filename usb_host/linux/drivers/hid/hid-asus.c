@@ -414,6 +414,7 @@ static int asus_raw_event(struct hid_device *hdev,
 	 */
 	if (report->id == FEATURE_KBD_LED_REPORT_ID1 || report->id == FEATURE_KBD_LED_REPORT_ID2)
 		return -1;
+	// ROG laptop Fn keys reach the unported asus-wmi driver.
 #if IS_ENABLED(CONFIG_HID_ASUS_ALL_DEVICES)
 	if (drvdata->quirks & QUIRK_ROG_NKEY_KEYBOARD) {
 		if (report->id == FEATURE_KBD_REPORT_ID) {
@@ -748,6 +749,7 @@ static bool asus_has_report_id(struct hid_device *hdev, u16 report_id)
 	return false;
 }
 
+// Laptop keyboard backlight registration requires the unported WMI boundary.
 #if IS_ENABLED(CONFIG_HID_ASUS_ALL_DEVICES)
 static int asus_kbd_register_leds(struct hid_device *hdev)
 {
@@ -1380,7 +1382,7 @@ err_stop_hw:
 static void asus_remove(struct hid_device *hdev)
 {
 	struct asus_drvdata *drvdata = hid_get_drvdata(hdev);
-#if IS_ENABLED(CONFIG_HID_ASUS_ALL_DEVICES)
+#if IS_ENABLED(CONFIG_HID_ASUS_ALL_DEVICES) /* Gated laptop backlight teardown. */
 	unsigned long flags;
 
 	if (drvdata->kbd_backlight) {

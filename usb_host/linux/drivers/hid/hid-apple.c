@@ -1023,6 +1023,7 @@ static const struct hid_device_id apple_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_APPLE, USB_DEVICE_ID_APPLE_MIGHTYMOUSE),
 		.driver_data = APPLE_MIGHTYMOUSE | APPLE_INVERT_HWHEEL },
 
+// Built-in PowerBook and MacBook keyboards stay outside the external USB scope.
 #if IS_ENABLED(CONFIG_HID_APPLE_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_APPLE, USB_DEVICE_ID_APPLE_FOUNTAIN_ANSI),
 		.driver_data = APPLE_NUMLOCK_EMULATION | APPLE_HAS_FN },
@@ -1063,6 +1064,7 @@ static const struct hid_device_id apple_devices[] = {
 		.driver_data = APPLE_HAS_FN },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_APPLE, USB_DEVICE_ID_APPLE_ALU_JIS),
 		.driver_data = APPLE_HAS_FN },
+// Built-in MacBook keyboards stay outside the external USB scope.
 #if IS_ENABLED(CONFIG_HID_APPLE_ALL_DEVICES)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_APPLE, USB_DEVICE_ID_APPLE_GEYSER4_HF_ANSI),
 		.driver_data = APPLE_NUMLOCK_EMULATION | APPLE_HAS_FN },

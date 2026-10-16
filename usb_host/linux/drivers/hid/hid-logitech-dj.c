@@ -1097,6 +1097,8 @@ static void logi_hidpp_dev_conn_notif_equad(struct hid_device *hdev,
 	workitem->quad_id_lsb = hidpp_report->params[HIDPP_PARAM_EQUAD_LSB];
 	switch (workitem->device_type) {
 	case REPORT_TYPE_KEYBOARD:
+		// Port diagnostic: this child is parsed with the firmware's
+		// 675-usage table instead of Linux's 12,288.
 		async_msg("INFO: HID_USAGES675_UP_12288");
 		workitem->reports_supported |= STD_KEYBOARD | MULTIMEDIA |
 					       POWER_KEYS | MEDIA_CENTER |
@@ -1735,6 +1737,7 @@ static const struct hid_ll_driver logi_dj_ll_driver = {
 	.close = logi_dj_ll_close,
 	.raw_request = logi_dj_ll_raw_request,
 	.may_wakeup = logi_dj_ll_may_wakeup,
+	// Port: firmware ll_driver hook, see logi_dj_ll_set_probe_raw_event().
 	.set_probe_raw_event = logi_dj_ll_set_probe_raw_event,
 };
 

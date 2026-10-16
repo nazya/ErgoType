@@ -39,6 +39,13 @@
 /* Userspace expects F20 for mic-mute KEY_MICMUTE does not work */
 #define LENOVO_KEY_MICMUTE KEY_F20
 
+/*
+ * Port note: every CONFIG_HID_LENOVO_ALL_DEVICES gate in this file keeps the
+ * pinned tablet, dock, ScrollPoint, 60ee, Bluetooth and I2C paths and their
+ * LED/work code compiled out of the default wired USB selection. hid_compat.h
+ * explains the switch and its CONFIG_LEDS_CLASS dependency.
+ */
+
 /* HID raw events for ThinkPad X12 Tabs*/
 #if IS_ENABLED(CONFIG_HID_LENOVO_ALL_DEVICES)
 #define TP_X12_RAW_HOTKEY_FN_F4		0x00020003

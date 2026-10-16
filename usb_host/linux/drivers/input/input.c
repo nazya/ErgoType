@@ -90,15 +90,6 @@ static inline int is_event_supported(unsigned int code,
 	return code <= max && test_bit(code, bm);
 }
 
-static void input_disconnect_device(struct input_dev *dev);
-static int input_default_getkeycode(struct input_dev *dev,
-				    struct input_keymap_entry *ke);
-int input_default_setkeycode(struct input_dev *dev,
-			     const struct input_keymap_entry *ke,
-			     unsigned int *old_keycode);
-static void input_event_dispose(struct input_dev *dev, int disposition,
-				unsigned int type, unsigned int code, int value);
-
 static int input_defuzz_abs_event(int value, int old_val, int fuzz)
 {
 	if (fuzz) {
@@ -232,7 +223,7 @@ static int input_handle_abs_event(struct input_dev *dev,
 
 	if (pold) {
 		*pval = input_defuzz_abs_event(*pval, *pold,
-					       dev->absinfo[code].fuzz);
+						dev->absinfo[code].fuzz);
 		if (*pold == *pval)
 			return INPUT_IGNORE_EVENT;
 
@@ -249,7 +240,7 @@ static int input_handle_abs_event(struct input_dev *dev,
 }
 
 static int input_get_disposition(struct input_dev *dev,
-				 unsigned int type, unsigned int code, int *pval)
+			  unsigned int type, unsigned int code, int *pval)
 {
 	int disposition = INPUT_IGNORE_EVENT;
 	int value = *pval;

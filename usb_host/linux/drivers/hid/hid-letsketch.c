@@ -296,18 +296,25 @@ static int letsketch_probe(struct hid_device *hdev, const struct hid_device_id *
 
 	ret = letsketch_setup_input_tablet(data);
 	if (ret)
+		// return ret;
+		// Upstream 46c8beec shuts the in-range timer down on probe failure.
 		goto err_shutdown_timer;
 
 	ret = letsketch_setup_input_tablet_pad(data);
 	if (ret)
+		// return ret;
+		// Upstream 46c8beec shuts the in-range timer down on probe failure.
 		goto err_shutdown_timer;
 
+	// return hid_hw_start(hdev, HID_CONNECT_HIDRAW);
+	// Upstream 46c8beec also covers a failed hid_hw_start().
 	ret = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
 	if (ret)
 		goto err_shutdown_timer;
 
 	return 0;
 
+// Upstream 46c8beec: probe-failure timer shutdown and the .remove callback.
 err_shutdown_timer:
 	/*
 	 * Drain any pending callback and permanently disable the timer
@@ -346,6 +353,7 @@ static const struct hid_driver letsketch_driver = {
 	.name = "letsketch",
 	.id_table = letsketch_devices,
 	.probe = letsketch_probe,
+	// Upstream 46c8beec drains the in-range timer at unbind.
 	.remove = letsketch_remove,
 	.raw_event = letsketch_raw_event,
 };
