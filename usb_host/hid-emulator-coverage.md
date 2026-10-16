@@ -1331,62 +1331,12 @@ ID 6. The lifecycle pass hardware-verified the generic unnumbered-report
 convention on both interrupt OUT and EP0 fallback: byte zero is transport
 padding for report ID 0 and does not replace the first haptic payload byte.
 
-### Remaining transport and parser qualification
+### Remaining qualification
 
-- Run one focused `046d:c532` receiver smoke at the retained
-  `HID_MAX_FIELDS=64`, `HID_MAX_USAGES=675` policy: DJ startup, one ordinary
-  virtual mouse child, input, unpair/reconnect, balanced teardown, stable heap,
-  and `oom=0`. Its execution graph passed at temporary `64/256`; Lenovo
-  `6009/6047` do not need another limit-only pass because their descriptors
-  remain below 256 usages.
-- Verify generic probe control ordering: exactly one SET_IDLE before report-
-  descriptor GET, a SET_IDLE STALL remains nonfatal, and generic probe emits no
-  SET_PROTOCOL. The ll-driver `.idle` implementation is already present; its
-  sole imported driver caller belongs to the currently dormant Linux PM path.
-- Extend the long-configuration fixture with REMOVE and a foreign ATTACH while
-  its 100-ms retry deadline is armed. Exact 512/513/4096-byte configurations,
-  4097-byte and malformed-header rejection, and the ordinary retry already
-  passed.
-- Exercise a short full-configuration read above 512 bytes and a deterministic
-  transient allocation failure. These require a bounded host hook or internal
-  harness; an ordinary USB emulator cannot force allocator failure reliably.
-- Narrow report-descriptor and parser faults before adding fixtures. Map the
-  remaining `usbhid_parse()`/`hid_open_report()` error labels (descriptor GET
-  shorter than its declared size, malformed descriptor, temporary-buffer or
-  parser allocation failure, `HID_MAX_FIELDS` exhaustion) against existing
-  logs, and add a fixture only for a cleanup transition no run has reached.
-  Already covered: the 4096-byte descriptor, the Kamvas Pro 19 oversized INPUT
-  ARRAY rejection, Logitech persistent-field limits, and malformed descriptors
-  rejected in vendor matrices. Allocation failures need the same host hook or
-  harness as the configuration case above.
-- Inject an accepted `-EIO` result for the USB Magic Trackpad 2 mode SET.
-  Disconnect while that SET is pending is already covered.
-- Inject deterministic control failures for the standard haptic-touchpad
-  path. A real physical haptic touchpad is also still uncovered.
-- Exercise interrupt-IN FAILED/TIMEOUT retry. A normal TinyUSB NAK does not
-  prove it; this needs a lower-level no-response or bad-packet injector.
-- Unplug, and replug natively on the same port, during each terminal-reset
-  phase of a root device. Root clear-halt recovery itself already passed; the
-  hub-child, parent-hub and address-reuse variants belong to the hub gate
-  below.
-- If exact power publication becomes part of the product claim, add a bounded
-  task-context consumer oracle for `ADDED`/`CHANGED` values and a deterministic
-  startup-failure case. Current runs prove only ordinary queue cleanup through
-  recovered heap plateaus.
-- Keep delayed-work promotion-window cancellation, simultaneous synchronous
-  cancellation, callback self-requeue, delayed-queue destruction, and tick
-  rollover as source-audited common-layer cases unless a dedicated internal
-  harness is selected. Existing fixtures already cover the reachable pending,
-  running, rearmed, and teardown graphs of their real callers.
-
-### Blocked on a common USB hub
-
-A real common hub is still required to qualify hub-child terminal recovery,
-child removal, parent-hub removal, USB-address reuse, and at least two
-overlapping retiring cache generations. The same setup is required for paired
-Wacom `056a:0333/0335`, `032b/032c`, and captured `0354/0350` mode-change
-lifecycle. One composite Pico cannot prove independent sibling identity,
-shared-parent matching, or both arrival and removal orders.
+This file records completed hardware evidence. The single current checklist,
+including the focused `046d:c532` run, transport/parser faults, PM lifecycle,
+power-supply lifetime, and tests blocked on a common USB hub, is maintained in
+[`linux-hid-remaining-work.md`](linux-hid-remaining-work.md).
 
 ## Direct HID++ Request/Reply Diagnostic Checkpoint
 

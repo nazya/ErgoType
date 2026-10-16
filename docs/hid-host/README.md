@@ -57,6 +57,15 @@ input devices and releasing the HID graph. A fast reconnect receives a new
 device generation, so a late completion from the old attachment cannot be
 delivered to the new one.
 
+The current host does not suspend and resume a live USB device generation.
+Linux PM callbacks for generic HID, multitouch, ALPS, ASUS, Lenovo, Logitech
+DJ, UC-Logic, and Wacom are retained in source but are not dispatched. Normal
+operation, hotplug, and error recovery are supported; recovery tears the old
+generation down and enumerates a fresh one. The support symbols in the device
+tables therefore do not claim sleep or remote-wakeup continuity. The remaining
+host PM work is tracked in
+[`linux-hid-remaining-work.md`](../../usb_host/linux-hid-remaining-work.md#stage-3-usb-suspend-and-resume).
+
 OUTPUT reports use interrupt OUT when the interface provides it and otherwise
 use EP0. FEATURE reports and raw control requests use EP0. The exact request,
 cancellation, enumeration, and ownership contracts are documented in

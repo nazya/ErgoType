@@ -840,6 +840,12 @@ contains a hypothetical NULL check that no current caller can exercise.
   unreachable without the missing PM dispatcher. Imported generic, ALPS, ASUS,
   Lenovo, Logitech DJ, multitouch, UC-Logic, and Wacom PM callbacks remain
   dormant for the same reason; the Sony controller block is separately gated.
+  This is a device-family boundary, not an active-CMake boundary:
+  `hid-multitouch` covers its complete imported USB table plus the generic
+  multitouch and Windows 8 wildcards, while the other callbacks restore generic
+  input resolution, ALPS U1/T4 modes, ASUS multitouch/backlight state, Lenovo
+  Compact/TPII TrackPoint settings, Logitech receiver DJ mode, UC-Logic tablet
+  parameters, and Wacom mode/LED state.
   Any future sleep/resume stage must add host-backend quiesce, wake policy,
   report-producer fencing, and ordered driver callback dispatch together rather
   than defining `CONFIG_PM` in isolation.

@@ -1,9 +1,10 @@
 # Linux HID Drivers
 
 This page lists every HID driver and HID-BPF program in the pinned Linux
-source `83f1454877cc292b88baf13c829c16ce6937d120` and says whether the firmware
-ports it. The device tables say how well each device works; this page answers
-only which Linux code exists in the firmware.
+source `83f1454877cc292b88baf13c829c16ce6937d120`, plus the explicitly retained
+post-baseline Rakk and Huion Frego ports, and says whether the firmware ports
+it. The device tables say how well each device works; this page answers only
+which Linux code exists in the firmware.
 
 **Ported** means the driver's source is in the firmware. It may still be
 disabled in the default build; the device pages say how to enable it.
@@ -103,6 +104,7 @@ disabled in the default build; the device pages say how to enable it.
 | `hid-primax` | Ported. | [Various](vendors/various.md) |
 | `hid-prodikeys` | Ported. | [Various](vendors/various.md) |
 | `hid-pxrc` | Ported. | [Various](vendors/various.md) |
+| `hid-rakk` | Ported. | [Various](vendors/various.md) |
 | `hid-rapoo` | Ported. | [Various](vendors/various.md) |
 | `hid-razer` | Ported. | [Various](vendors/various.md) |
 | `hid-redragon` | Ported. | [Various](vendors/various.md) |
@@ -164,6 +166,7 @@ program.
 | `Huion__Dial-2.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
 | `Huion__Inspiroy-2-M.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
 | `Huion__Inspiroy-2-S.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
+| `Huion__Inspiroy-Frego-M.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
 | `Huion__Kamvas-Pro-19.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
 | `Huion__Kamvas13Gen3.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
 | `Huion__Kamvas16Gen3.bpf.c` | Ported. | [Huion, XP-Pen and UC-Logic](vendors/uclogic.md) |
