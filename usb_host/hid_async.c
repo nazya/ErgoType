@@ -12,7 +12,7 @@
 
 #include "hid_async.h"
 #include "hid_transport_sync.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 #include "usbhid_backend.h"
 #include "usbhid_private.h"
 #include "usbhid_report.h"

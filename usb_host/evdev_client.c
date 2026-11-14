@@ -16,7 +16,7 @@
 #include "devmon.h"
 #include "evdev.h"
 #include "linux/include/linux/hid.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 #include <linux/input-event-codes.h>
 
 #define EVDEV_QUEUE_REMOVE_RESERVE 1u

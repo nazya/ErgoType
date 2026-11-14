@@ -10,10 +10,10 @@
 ## Where logs go (code map)
 
 - Logging macros live in `log.h` and call `_msg()`.
-- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_tusb_cdc_write_rendered()`).
-- The USB device task (`tusb_device_task.c`) runs `tud_task(); tusb_hid_handle(); stdio_tusb_cdc_poll();`.
-- `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
-- `stdio_tusb_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
+- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_cdc_write_rendered()`).
+- The USB device task (`tusb/device.c`) runs `tud_task(); hid_handle(); stdio_cdc_handle();`.
+- `stdio_cdc_handle()` (`tusb/stdio_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
+- `stdio_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
 ## Viewing logs
 
@@ -51,7 +51,7 @@ Windows:
 
 ## Buffering, drops, and “garbled” ANSI
 
-- There is one `BUFSIZE` byte ring buffer in `stdio_tusb_cdc.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
+- There is one `BUFSIZE` byte ring buffer in `tusb/stdio_cdc.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
 
 - **Max write size:** if one rendered line exceeds `BUFSIZE`, the whole line is dropped.
 
