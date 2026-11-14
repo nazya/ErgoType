@@ -861,7 +861,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_webhid.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/sof_fix.c
 )
+
+# Route TinyUSB's dcd_remote_wakeup() through tusb/sof_fix.c.
+target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--wrap=dcd_remote_wakeup")
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC

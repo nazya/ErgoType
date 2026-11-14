@@ -6,12 +6,15 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 
 #include "tusb.h"
+#include "device/usbd_pvt.h"
+#include "usb_device.h"
 #include "usb_descriptors.h"
 
 #include "log.h"
@@ -320,28 +323,6 @@ static uint8_t mods;
 static uint8_t keys[6];
 static uint8_t mouse_buttons;
 static uint8_t nkro_keys[HID_NKRO_KEY_BYTES];
-static TaskHandle_t vkbd_hid_task_handle;
-
-/*
- * TODO: Filter wakeups by HID instance if vkbd gains multiple waiters or
- * profiling shows meaningful cross-endpoint wakeups. A shared notification is
- * intentional while the sole vkbd task always rechecks the requested instance.
- */
-void vkbd_hid_notify_recheck(void)
-{
-	TaskHandle_t task = __atomic_load_n(&vkbd_hid_task_handle,
-					  __ATOMIC_ACQUIRE);
-
-	if (task)
-		(void)xTaskNotifyGive(task);
-}
-
-static void vkbd_hid_wait_ready(uint8_t instance)
-{
-	/* A pending notification closes the race between this check and sleep. */
-	while (!tud_hid_n_ready(instance))
-		(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-}
 
 static uint8_t get_modifier(int code)
 {
@@ -425,20 +406,41 @@ static int update_key_state(uint16_t code, int state, uint8_t page)
 	return 0;
 }
 
-static void send_boot_keyboard_report(void)
+/* Prepared once per input event; retained until TinyUSB can copy it. */
+static struct {
+	uint8_t data[HID_NKRO_KEY_BYTES];
+	uint16_t len;
+	uint8_t instance;
+	uint8_t report_id;
+} pending_report;
+
+void tusb_hid_notify(void)
 {
-	uint8_t usages[6];
+	/* A NULL function only wakes tud_task(); tusb_hid_handle() runs after it. */
+	usbd_defer_func(NULL, NULL, false);
+}
+
+static void prepare_report(uint8_t instance, uint8_t report_id,
+			   const void *report, uint16_t len)
+{
+	memcpy(pending_report.data, report, len);
+	pending_report.len = len;
+	pending_report.instance = instance;
+	pending_report.report_id = report_id;
+}
+
+static void prepare_boot_keyboard_report(void)
+{
+	hid_keyboard_report_t report = { .modifier = mods };
 
 	for (int i = 0; i < 6; i++) {
 		if (keys[i] == 0)
-			usages[i] = 0;
+			report.keycode[i] = 0;
 		else
-			usages[i] = keyd_hid_table[keys[i]].usage;
+			report.keycode[i] = keyd_hid_table[keys[i]].usage;
 	}
 
-	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
-
-	tud_hid_n_keyboard_report(HID_KEYBOARD_INSTANCE, 0, mods, usages);
+	prepare_report(HID_KEYBOARD_INSTANCE, 0, &report, sizeof(report));
 }
 
 static int update_nkro_key_state(uint16_t code, int state, uint8_t page)
@@ -460,14 +462,13 @@ static int update_nkro_key_state(uint16_t code, int state, uint8_t page)
 	return 0;
 }
 
-static void send_nkro_report(void)
+static void prepare_nkro_report(void)
 {
-	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
-
-	tud_hid_n_report(HID_KEYBOARD_INSTANCE, REPORT_ID_KEYBOARD, nkro_keys, sizeof(nkro_keys));
+	prepare_report(HID_KEYBOARD_INSTANCE, REPORT_ID_KEYBOARD,
+		       nkro_keys, sizeof(nkro_keys));
 }
 
-static void send_consumer_report(void)
+static void prepare_consumer_report(void)
 {
 	uint16_t usages[6];
 
@@ -478,9 +479,8 @@ static void send_consumer_report(void)
 			usages[i] = keyd_hid_table[keys[i]].usage;
 	}
 
-	vkbd_hid_wait_ready(HID_KEYBOARD_INSTANCE);
-
-	tud_hid_n_report(HID_KEYBOARD_INSTANCE, REPORT_ID_CONSUMER, usages, sizeof(usages));
+	prepare_report(HID_KEYBOARD_INSTANCE, REPORT_ID_CONSUMER,
+		       usages, sizeof(usages));
 }
 
 static void mouse_scroll(int16_t x, int16_t y)
@@ -491,10 +491,8 @@ static void mouse_scroll(int16_t x, int16_t y)
 		.pan = x,
 	};
 
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
-
 	/* TinyUSB: wheel=vertical, pan=horizontal. */
-	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_move(int16_t x, int16_t y)
@@ -505,9 +503,7 @@ static void mouse_move(int16_t x, int16_t y)
 		.y = y,
 	};
 
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
-
-	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_button(uint8_t buttons, int state)
@@ -521,39 +517,29 @@ static void mouse_button(uint8_t buttons, int state)
 		.buttons = mouse_buttons,
 	};
 
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
-
-	tud_hid_n_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_scroll_boot(int16_t x, int16_t y)
 {
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
+	hid_mouse_report_t report = {
+		.buttons = mouse_buttons,
+		.wheel = clamp_i16_to_i8(y),
+		.pan = clamp_i16_to_i8(x),
+	};
 
-	tud_hid_n_mouse_report(
-		HID_MOUSE_INSTANCE,
-		0,
-		mouse_buttons,
-		0,
-		0,
-		clamp_i16_to_i8(y),
-		clamp_i16_to_i8(x)
-	);
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_move_boot(int16_t x, int16_t y)
 {
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
+	hid_mouse_report_t report = {
+		.buttons = mouse_buttons,
+		.x = clamp_i16_to_i8(x),
+		.y = clamp_i16_to_i8(y),
+	};
 
-	tud_hid_n_mouse_report(
-		HID_MOUSE_INSTANCE,
-		0,
-		mouse_buttons,
-		clamp_i16_to_i8(x),
-		clamp_i16_to_i8(y),
-		0,
-		0
-	);
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
 static void mouse_button_boot(uint8_t buttons, int state)
@@ -563,95 +549,138 @@ static void mouse_button_boot(uint8_t buttons, int state)
 	else
 		mouse_buttons &= (uint8_t)~buttons;
 
-	vkbd_hid_wait_ready(HID_MOUSE_INSTANCE);
+	hid_mouse_report_t report = { .buttons = mouse_buttons };
 
-	tud_hid_n_mouse_report(HID_MOUSE_INSTANCE, 0, mouse_buttons, 0, 0, 0, 0);
+	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
 }
 
-void vkbd_hid_nkro_task(void *pvParameters)
+static bool process_nkro_event(const vkbd_event_t *event)
 {
-	(void)pvParameters;
-	__atomic_store_n(&vkbd_hid_task_handle, xTaskGetCurrentTaskHandle(),
-			 __ATOMIC_RELEASE);
-
-	vkbd_event_t event;
-
-	while (1) {
-		if (xQueueReceive(vkbd_event_queue, &event, portMAX_DELAY) != pdPASS)
-			continue;
-
-		switch (event.type) {
-		case KEY_EVENT_MOUSE_BUTTON:
-			mouse_button(event.buttons, event.state);
-			continue;
-		case KEY_EVENT_MOUSE_SCROLL:
-			mouse_scroll(event.x, event.y);
-			continue;
-		case KEY_EVENT_MOUSE_MOVE_ABS:
-			/*
-			 * TODO: absolute mouse mode backend.
-			 * For now treat as relative deltas.
-			 */
-			/* fallthrough */
-		case KEY_EVENT_MOUSE_MOVE:
-			mouse_move(event.x, event.y);
-			continue;
-		case KEY_EVENT_KEY: {
-			if (update_nkro_key_state(event.code, event.state, HID_USAGE_PAGE_KEYBOARD) == 0) {
-				send_nkro_report();
-				continue;
-			}
-			if (update_key_state(event.code, event.state, HID_USAGE_PAGE_CONSUMER) == 0) {
-				send_consumer_report();
-				continue;
-			}
+	switch (event->type) {
+	case KEY_EVENT_MOUSE_BUTTON:
+		mouse_button(event->buttons, event->state);
+		return true;
+	case KEY_EVENT_MOUSE_SCROLL:
+		mouse_scroll(event->x, event->y);
+		return true;
+	case KEY_EVENT_MOUSE_MOVE_ABS:
+		/*
+		 * TODO: absolute mouse mode backend.
+		 * For now treat as relative deltas.
+		 */
+		/* fallthrough */
+	case KEY_EVENT_MOUSE_MOVE:
+		mouse_move(event->x, event->y);
+		return true;
+	case KEY_EVENT_KEY: {
+		if (update_nkro_key_state(event->code, event->state, HID_USAGE_PAGE_KEYBOARD) == 0) {
+			prepare_nkro_report();
+			return true;
 		}
-		default:
-			continue;
+		if (update_key_state(event->code, event->state, HID_USAGE_PAGE_CONSUMER) == 0) {
+			prepare_consumer_report();
+			return true;
 		}
+		return false;
+	}
+	default:
+		return false;
 	}
 }
 
-void vkbd_hid_boot_task(void *pvParameters)
+static bool process_boot_event(const vkbd_event_t *event)
 {
-	(void)pvParameters;
-	__atomic_store_n(&vkbd_hid_task_handle, xTaskGetCurrentTaskHandle(),
-			 __ATOMIC_RELEASE);
-
-	vkbd_event_t event;
-
-	while (1) {
-		if (xQueueReceive(vkbd_event_queue, &event, portMAX_DELAY) != pdPASS)
-			continue;
-
-		switch (event.type) {
-		case KEY_EVENT_MOUSE_BUTTON:
-			mouse_button_boot(event.buttons, event.state);
-			continue;
-		case KEY_EVENT_MOUSE_SCROLL:
-			mouse_scroll_boot(event.x, event.y);
-			continue;
-		case KEY_EVENT_MOUSE_MOVE_ABS:
-			/*
-			 * TODO: absolute mouse mode backend.
-			 * For now treat as relative deltas.
-			 */
-			/* fallthrough */
-		case KEY_EVENT_MOUSE_MOVE:
-			mouse_move_boot(event.x, event.y);
-			continue;
-		case KEY_EVENT_KEY: {
-			if (update_modifier_state(event.code, event.state) == 0) {
-				send_boot_keyboard_report();
-				continue;
-			}
-			if (update_key_state(event.code, event.state, HID_USAGE_PAGE_KEYBOARD) == 0) {
-				send_boot_keyboard_report();
-				continue;
-			}
+	switch (event->type) {
+	case KEY_EVENT_MOUSE_BUTTON:
+		mouse_button_boot(event->buttons, event->state);
+		return true;
+	case KEY_EVENT_MOUSE_SCROLL:
+		mouse_scroll_boot(event->x, event->y);
+		return true;
+	case KEY_EVENT_MOUSE_MOVE_ABS:
+		/*
+		 * TODO: absolute mouse mode backend.
+		 * For now treat as relative deltas.
+		 */
+		/* fallthrough */
+	case KEY_EVENT_MOUSE_MOVE:
+		mouse_move_boot(event->x, event->y);
+		return true;
+	case KEY_EVENT_KEY: {
+		if (update_modifier_state(event->code, event->state) == 0) {
+			prepare_boot_keyboard_report();
+			return true;
 		}
-		default:
-			continue;
+		if (update_key_state(event->code, event->state, HID_USAGE_PAGE_KEYBOARD) == 0) {
+			prepare_boot_keyboard_report();
+			return true;
 		}
+		return false;
+	}
+	default:
+		return false;
+	}
+}
+
+static bool process_event(const vkbd_event_t *event)
+{
+	if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE)
+		return process_nkro_event(event);
+	return process_boot_event(event);
+}
+
+void tusb_hid_handle(void)
+{
+	/* USB starts before the HID queue exists; MSC never creates it. */
+	if (!vkbd_event_queue)
+		return;
+
+	/*
+	 * tud_task() drains queued input notifications before we run. Keep
+	 * consuming input here: a skipped event sends no report and therefore
+	 * generates no transfer-complete event to resume processing.
+	 *
+	 * Yield to queued USB completions/reset before advancing input. When an
+	 * IN transfer completes, the DCD IRQ queues DCD_EVENT_XFER_COMPLETE;
+	 * tud_task() clears the endpoint's busy flag, then tusb_device_task()
+	 * calls us again to send the retained report.
+	 *
+	 * With successful submissions, keyboard (including consumer keys) and
+	 * mouse each accept one report before their completion is processed.
+	 * We can consume up to two report-producing events for one endpoint,
+	 * or three when mixed: one report per endpoint plus one retained report.
+	 * Busy/suspend returns immediately; this loop does not wait.
+	 *
+	 * Skipped inputs may drain all 256 queue entries. That path only reads
+	 * the queue without blocking and checks mappings; no USB transfer or
+	 * logging. keyd is the sole producer, with lower priority on the same
+	 * core, so it cannot refill the queue on that path. This bounds work by
+	 * event count, not by a measured execution-time guarantee.
+	 */
+	while (!tud_task_event_ready()) {
+		if (!pending_report.len) {
+			vkbd_event_t event;
+
+			if (xQueueReceive(vkbd_event_queue, &event, 0) != pdPASS)
+				return;
+
+			if (!process_event(&event))
+				continue;
+		}
+
+		if (usb_device_is_suspended()) {
+			usb_device_request_wakeup();
+			return;
+		}
+
+		/* Also false between the suspend IRQ and tud_suspend_cb(). */
+		if (!tud_hid_n_ready(pending_report.instance))
+			return;
+
+		if (!tud_hid_n_report(pending_report.instance, pending_report.report_id,
+				      pending_report.data, pending_report.len))
+			warn("vkbd: HID report rejected");
+
+		pending_report.len = 0;
 	}
 }
