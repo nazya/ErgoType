@@ -4,6 +4,7 @@
 
 #include "jconfig.h"
 #include "usb_descriptors.h"
+#include "vkbd/vkbd_event.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -35,8 +36,10 @@ void tusb_device_task(void *pvParameters)
     }
 
     while (1) {
-        // Wait for USB events (or a deferred "kick" from the CDC logger).
+        // Wait for USB events or deferred HID/CDC work.
         tud_task();
+        /* Also covers clear-halt, which has no HID completion callback. */
+        tusb_hid_handle();
         stdio_tusb_cdc_poll();
     }
 }

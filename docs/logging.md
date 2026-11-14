@@ -11,7 +11,7 @@
 
 - Logging macros live in `log.h` and call `_msg()`.
 - `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_tusb_cdc_write_rendered()`).
-- The USB device task (`tusb_device_task.c`) drains TinyUSB events and then runs `stdio_tusb_cdc_poll()`.
+- The USB device task (`tusb_device_task.c`) runs `tud_task(); tusb_hid_handle(); stdio_tusb_cdc_poll();`.
 - `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
 - `stdio_tusb_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 

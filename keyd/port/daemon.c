@@ -49,7 +49,6 @@ static void log_memory_watermarks(void)
 	UBaseType_t tud_stack_words = task_stack_watermark("tud");
 	UBaseType_t ui_stack_words = task_stack_watermark("ui");
 	UBaseType_t keyscan_stack_words = task_stack_watermark("keyscan");
-	UBaseType_t vkbd_stack_words = task_stack_watermark("vkbd");
 	UBaseType_t pointing_stack_words = task_stack_watermark("pointing");
 	UBaseType_t rtos_timer_stack_words = task_stack_watermark("Tmr Svc");
 	UBaseType_t idle0_stack_words = uxTaskGetStackHighWaterMark(
@@ -72,11 +71,10 @@ static void log_memory_watermarks(void)
 	     (unsigned int)timer_stack_words,
 	     (unsigned int)lifecycle_stack_words,
 	     (unsigned int)report_stack_words);
-	dbg2("system stacks min free: tud=%u ui=%u keyscan=%u vkbd=%u pointing=%u timer=%u idle0=%u idle1=%u words",
+	dbg2("system stacks min free: tud=%u ui=%u keyscan=%u pointing=%u timer=%u idle0=%u idle1=%u words",
 	     (unsigned int)tud_stack_words,
 	     (unsigned int)ui_stack_words,
 	     (unsigned int)keyscan_stack_words,
-	     (unsigned int)vkbd_stack_words,
 	     (unsigned int)pointing_stack_words,
 	     (unsigned int)rtos_timer_stack_words,
 	     (unsigned int)idle0_stack_words,
