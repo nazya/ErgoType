@@ -16,7 +16,7 @@
 #include "pmw3360.h"
 #include "pmw3389.h"
 #include "pointer.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 
 static TaskHandle_t motion_task_handle = NULL;
 static bool mot_irq_callback_installed = false;

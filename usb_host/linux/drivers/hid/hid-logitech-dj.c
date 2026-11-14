@@ -15,7 +15,7 @@
 #include <linux/usb.h> /* For to_usb_interface for kvm extra intf check */
 #include <linux/unaligned.h>
 #include "hid-ids.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 // Upstream Linux: no equivalent; virtual children need firmware evdev activation.
 #include "usb_host/evdev.h"
 // Upstream Linux workqueues do not own the firmware HID device registry.

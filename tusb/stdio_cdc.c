@@ -1,4 +1,4 @@
-#include "stdio_tusb_cdc.h"
+#include "stdio_cdc.h"
 
 #include <string.h>
 
@@ -13,7 +13,7 @@
 
 #include "ui/ui.h"
 
-extern SemaphoreHandle_t stdio_tusb_cdc_mutex;
+extern SemaphoreHandle_t stdio_cdc_mutex;
 
 // Some host terminals/drivers drop the first bytes right after they open the CDC port
 // (DTR goes high).
@@ -48,7 +48,7 @@ typedef struct {
     size_t length;
 } ring_write_t;
 
-static void stdio_tusb_cdc_kick_cb(void *);
+static void stdio_cdc_kick_cb(void *);
 
 static void ring_write_character(char character, void *context)
 {
@@ -62,11 +62,11 @@ static void ring_write_character(char character, void *context)
     write->length++;
 }
 
-static void stdio_tusb_cdc_drop(size_t length)
+static void stdio_cdc_drop(size_t length)
 {
     ui_notify_cdc_drop(length);
     if (tud_cdc_connected())
-        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+        usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
 }
 
 /*
@@ -90,7 +90,7 @@ void _async_msg(const char *s)
 	async_msgbuf[async_msg_len++] = '\n';
 	async_msg_pending = 1;
 
-	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+	usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
 }
 
 /*
@@ -99,7 +99,7 @@ void _async_msg(const char *s)
  * but must preserve the first 1024-ms minicom grace and 50-ms DTR settle.
  * The bounded policy below is the current hardware-tested behavior.
  */
-static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
+static void stdio_cdc_throttle_until_free(size_t free_target)
 {
     static bool first_throttle = true;
     TickType_t max_wait_ticks = THROTTLE_MAX_WAIT_TICKS;
@@ -112,13 +112,13 @@ static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
     }
 
     // After the first throttle, avoid waiting when the host hasn't opened CDC (DTR=0).
-    // stdio_tusb_cdc_poll() will not drain pending_buf until then.
+    // stdio_cdc_handle() will not drain pending_buf until then.
     TickType_t waited = 0;
 
     while (1) {
-        xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+        xSemaphoreTake(stdio_cdc_mutex, portMAX_DELAY);
         size_t free_bytes = BUFSIZE - pending_count;
-        xSemaphoreGive(stdio_tusb_cdc_mutex);
+        xSemaphoreGive(stdio_cdc_mutex);
 
         if (free_bytes >= free_target)
             return;
@@ -126,17 +126,17 @@ static void stdio_tusb_cdc_throttle_until_free(size_t free_target)
         if (waited >= max_wait_ticks)
             break;
 
-        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+        usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
         vTaskDelay(THROTTLE_WAIT_TICKS);
         waited += THROTTLE_WAIT_TICKS;
     }
 
-    usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+    usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
 }
 
-static void stdio_tusb_cdc_settle_timer_cb(TimerHandle_t)
+static void stdio_cdc_settle_timer_cb(TimerHandle_t)
 {
-    // Wake the TinyUSB device task so it can re-run stdio_tusb_cdc_poll()
+    // Wake the TinyUSB device task so it can re-run stdio_cdc_handle()
     // after the settle delay, even if there are no new USB events.
 	if (!tud_cdc_connected())
 		return;
@@ -144,20 +144,20 @@ static void stdio_tusb_cdc_settle_timer_cb(TimerHandle_t)
 	cdc_settled = true;
 	cdc_settled_once = true;
 
-	usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+	usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
 }
 
-static void stdio_tusb_cdc_kick_cb(void *arg)
+static void stdio_cdc_kick_cb(void *arg)
 {
 	(void)arg;
-	// No-op: waking `tud_task()` is enough. The USB task calls `stdio_tusb_cdc_poll()`
-	// immediately after `tud_task()` returns (see `tusb_device_task.c`).
+	// No-op: waking `tud_task()` is enough. The USB task calls `stdio_cdc_handle()`
+	// immediately after `tud_task()` returns (see `tusb/device.c`).
 }
 
-void stdio_tusb_cdc_write_rendered(stdio_tusb_cdc_render_fn render,
+void stdio_cdc_write_rendered(stdio_cdc_render_fn render,
                                    void *context)
 {
-    xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+    xSemaphoreTake(stdio_cdc_mutex, portMAX_DELAY);
     ring_write_t write = {
         .cursor = pending_wr,
         .capacity = BUFSIZE - pending_count,
@@ -167,26 +167,26 @@ void stdio_tusb_cdc_write_rendered(stdio_tusb_cdc_render_fn render,
     if (write.length <= write.capacity) {
         pending_wr = write.cursor;
         pending_count += write.length;
-        xSemaphoreGive(stdio_tusb_cdc_mutex);
+        xSemaphoreGive(stdio_cdc_mutex);
         if (tud_cdc_connected())
-            usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+            usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
         return;
     }
 
-    xSemaphoreGive(stdio_tusb_cdc_mutex);
+    xSemaphoreGive(stdio_cdc_mutex);
 
     const size_t length = write.length;
     if (length > BUFSIZE) {
-        stdio_tusb_cdc_drop(length);
+        stdio_cdc_drop(length);
         return;
     }
 
-    stdio_tusb_cdc_throttle_until_free(length);
+    stdio_cdc_throttle_until_free(length);
 
-    xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+    xSemaphoreTake(stdio_cdc_mutex, portMAX_DELAY);
     if ((BUFSIZE - pending_count) < length) {
-        xSemaphoreGive(stdio_tusb_cdc_mutex);
-        stdio_tusb_cdc_drop(length);
+        xSemaphoreGive(stdio_cdc_mutex);
+        stdio_cdc_drop(length);
         return;
     }
 
@@ -196,20 +196,20 @@ void stdio_tusb_cdc_write_rendered(stdio_tusb_cdc_render_fn render,
     };
     render(ring_write_character, &write, context);
     if (write.length != length) {
-        xSemaphoreGive(stdio_tusb_cdc_mutex);
-        stdio_tusb_cdc_drop(write.length);
+        xSemaphoreGive(stdio_cdc_mutex);
+        stdio_cdc_drop(write.length);
         return;
     }
 
     pending_wr = write.cursor;
     pending_count += write.length;
-    xSemaphoreGive(stdio_tusb_cdc_mutex);
+    xSemaphoreGive(stdio_cdc_mutex);
 
     if (tud_cdc_connected())
-        usbd_defer_func(stdio_tusb_cdc_kick_cb, NULL, false);
+        usbd_defer_func(stdio_cdc_kick_cb, NULL, false);
 }
 
-void stdio_tusb_cdc_poll(void)
+void stdio_cdc_handle(void)
 {
     // Only send when host has opened the port (DTR=1).
     // Until then we keep buffering (no truncation, no overwritable TinyUSB FIFO).
@@ -232,7 +232,7 @@ void stdio_tusb_cdc_poll(void)
                                             settle_ticks,
                                             pdFALSE,
                                             NULL,
-                                            stdio_tusb_cdc_settle_timer_cb);
+                                            stdio_cdc_settle_timer_cb);
         }
 
         if (cdc_settle_timer) {
@@ -264,10 +264,10 @@ void stdio_tusb_cdc_poll(void)
         if (!n)
             break;
 
-        xSemaphoreTake(stdio_tusb_cdc_mutex, portMAX_DELAY);
+        xSemaphoreTake(stdio_cdc_mutex, portMAX_DELAY);
 
         if (!pending_count) {
-            xSemaphoreGive(stdio_tusb_cdc_mutex);
+            xSemaphoreGive(stdio_cdc_mutex);
             return;
         }
 
@@ -286,7 +286,7 @@ void stdio_tusb_cdc_poll(void)
         pending_rd = (pending_rd + written) % BUFSIZE;
         pending_count -= written;
 
-        xSemaphoreGive(stdio_tusb_cdc_mutex);
+        xSemaphoreGive(stdio_cdc_mutex);
 
         tud_cdc_write_flush();
 

@@ -4,7 +4,7 @@
  * © 2024 Nazarii Tupitsa (see also: LICENSE-ErgoType).
  */
 #include "tusb.h"
-#include "usb_descriptors.h"
+#include "descriptors.h"
 #include <stdint.h>
 #include <string.h>
 

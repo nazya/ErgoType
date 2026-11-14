@@ -4,7 +4,7 @@
 #include "queue.h"
 
 #include "devmon.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 
 QueueSetHandle_t devmon_event_set;
 QueueSetHandle_t power_supply_event_set;

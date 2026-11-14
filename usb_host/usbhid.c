@@ -19,7 +19,7 @@
 #include "usbhid_backend.h"
 #include "usbhid_private.h"
 #include "usbhid_report.h"
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 #include "linux/include/linux/delay.h"
 #include "linux/include/linux/hiddev.h"
 #include "linux/include/linux/usb.h"

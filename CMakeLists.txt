@@ -629,6 +629,7 @@ bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
   uint8_t const pio_rhport = RHPORT_PIO(rhport);
   return pio_usb_host_endpoint_reset_data_toggle(pio_rhport, dev_addr, ep_addr);
 }
+
 ]=])
 string(FIND "${TINYUSB_PIO_HCD_CONTENT}"
        "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
@@ -699,7 +700,8 @@ target_sources(${PROJECT_NAME} PUBLIC
         # ${CMAKE_CURRENT_LIST_DIR}/test.c
         ${CMAKE_CURRENT_LIST_DIR}/main.c
         ${CMAKE_CURRENT_LIST_DIR}/devmon.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/device.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/hid.c
         # TinyUSB/FreeRTOS host transport glue. The hybrid usbhid adapters
         # identify retained Linux semantics and structural boundaries in source.
         ${CMAKE_CURRENT_LIST_DIR}/usb_host/task.c
@@ -915,7 +917,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         ${CMAKE_CURRENT_LIST_DIR}/log.c
-        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/stdio_cdc.c
         ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
         ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
@@ -926,11 +928,11 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-custom.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-flat.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_webhid.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/device_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/hid_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/webhid.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/msc_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/sof_fix.c
 )
 

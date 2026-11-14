@@ -42,7 +42,7 @@
 #include "../../include/linux/hidraw.h"
 #include "../../include/uapi/linux/input-event-codes.h"
 #include "hid-ids.h"
-#include "../../../../stdio_tusb_cdc.h"
+#include "../../../../tusb/stdio_cdc.h"
 
 /*
  * Version Information

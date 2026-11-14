@@ -13,7 +13,7 @@
 
 #include <linux/usb.h>
 
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 
 struct hid_bpf_static_device {
 	struct hid_device *hdev;

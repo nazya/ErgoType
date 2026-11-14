@@ -2,8 +2,8 @@
 
 #include "devmon.h"
 #include "ui/ui.h"
-#include "usb_descriptors.h"
-#include "usb_webhid.h"
+#include "descriptors.h"
+#include "webhid.h"
 
 // Invoked when received GET_REPORT control request
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type,
