@@ -12,7 +12,7 @@
 #include "timers.h"
 
 #include "jconfig.h"
-#include "usb_descriptors.h"
+#include "tusb/descriptors.h"
 
 #include "led/led.h"
 #include "led/ws2812.h"

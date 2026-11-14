@@ -9,9 +9,9 @@
 
 #include "tusb.h"
 #include "ff.h"
-#include "usb_descriptors.h"
+#include "tusb/descriptors.h"
 
-#include "stdio_tusb_cdc.h"
+#include "tusb/stdio_cdc.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -40,7 +40,7 @@
 uint8_t mode; // read by USB descriptor callbacks
 uint8_t hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
 SemaphoreHandle_t log_mutex;
-SemaphoreHandle_t stdio_tusb_cdc_mutex;
+SemaphoreHandle_t stdio_cdc_mutex;
 SemaphoreHandle_t fatfs_mutex;
 QueueHandle_t vkbd_event_queue;
 QueueHandle_t input_event_queue;
@@ -48,7 +48,7 @@ QueueHandle_t input_event_queue;
 static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOUSE;
 
 // FreeRTOS tasks
-void tusb_device_task(void* pvParameters); // tusb_device_task.c
+void tusb_device_task(void *pvParameters); // tusb/device.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
@@ -231,7 +231,7 @@ int main()
 {
     board_init();
     log_mutex = xSemaphoreCreateMutex();
-    stdio_tusb_cdc_mutex = xSemaphoreCreateMutex();
+    stdio_cdc_mutex = xSemaphoreCreateMutex();
     xTaskCreateAffinitySet(app_task, NULL, 4*MIN_STACK_SIZE, NULL, TUSB_PRIORITY - 1, CORE0, NULL);
     vTaskStartScheduler(); // block thread and pass control to FreeRTOS
     // main(): no logging here. Start scheduler ASAP, do init/logging from tasks.

@@ -10,10 +10,10 @@
 ## Where logs go (code map)
 
 - Logging macros live in `log.h` and call `_msg()`.
-- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_tusb_cdc_write_rendered()`).
-- The USB device task (`tusb_device_task.c`) runs `tud_task(); tusb_hid_handle(); stdio_tusb_cdc_poll();`.
-- `stdio_tusb_cdc_poll()` (`stdio_tusb_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
-- `stdio_tusb_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
+- `_msg()` in `log.c` renders one complete line (including ANSI colors) directly into the CDC backend (`stdio_cdc_write_rendered()`).
+- The USB device task (`tusb/device.c`) runs `tud_task(); hid_handle(); stdio_cdc_handle();`.
+- `stdio_cdc_handle()` (`tusb/stdio_cdc.c`) only flushes when `tud_cdc_connected()` is true (host has asserted DTR).
+- `stdio_cdc_write_rendered()` is designed to be called from FreeRTOS task context (after the scheduler starts) and must not be called from an ISR.
 
 ## Viewing logs
 
@@ -51,11 +51,11 @@ Windows:
 
 ## Buffering, drops, and “garbled” ANSI
 
-- There is one `BUFSIZE` byte ring buffer in `stdio_tusb_cdc.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
+- There is one `BUFSIZE` byte ring buffer in `tusb/stdio_cdc.c` (currently `2048`). `_msg()` streams each complete rendered line into it without a second line-sized staging buffer.
 
 - **Max write size:** if one rendered line exceeds `BUFSIZE`, the whole line is dropped.
 
-- **Producer throttling (bounded wait):** if the port is open (DTR=1) and a rendered line doesn’t fit into the CDC ring buffer, `stdio_tusb_cdc_write_rendered()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring. It then renders the line again into the newly available space.
+- **Producer throttling (bounded wait):** if the port is open (DTR=1) and a rendered line doesn’t fit into the CDC ring buffer, `stdio_cdc_write_rendered()` does a short, bounded `vTaskDelay()` loop and “kicks” the USB device task so it can drain the ring. It then renders the line again into the newly available space.
 
 - **Ring buffer overflow (drop):** if the line still doesn’t fit after throttling (or throttling is skipped), the rendered line is dropped.
   - If `ws2812_pin` is configured, the firmware emits a brief **red** blink as a drop indicator.

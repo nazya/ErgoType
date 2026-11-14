@@ -1,6 +1,6 @@
 add_library(tusb_glue STATIC
-        usb_descriptors.c
-        usb_descriptors.h
+        descriptors.c
+        descriptors.h
         tusb_config.h
 )
 
