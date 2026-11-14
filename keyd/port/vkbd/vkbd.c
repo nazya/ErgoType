@@ -10,7 +10,6 @@
 #include <stdio.h>
 
 #include "FreeRTOS.h"
-#include "queue.h"
 #include "task.h"
 
 #include "log.h"
@@ -19,22 +18,9 @@
 #include "vkbd.h"
 #include "ui/ui.h"
 
-#define QUEUE_SEND_TIMEOUT_TICKS 3
-
 struct vkbd {
 	uint8_t unused;
 };
-
-static void enqueue_event(const vkbd_event_t *event)
-{
-	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
-
-	/* Notify after enqueue, including failure so queued input can progress. */
-	tusb_hid_notify();
-
-	if (result != pdPASS)
-		warn("vkbd: enqueue failed (queue full)");
-}
 
 struct vkbd *vkbd_init(const char *name)
 {
@@ -54,7 +40,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 	event.x = (int16_t)x;
 	event.y = (int16_t)y;
 
-	enqueue_event(&event);
+	vkbd_event_send(&event);
 }
 
 void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
@@ -66,7 +52,7 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 	event.x = (int16_t)x;
 	event.y = (int16_t)y;
 
-	enqueue_event(&event);
+	vkbd_event_send(&event);
 }
 
 void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
@@ -79,7 +65,7 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 	event.x = (int16_t)x; // horizontal (pan)
 	event.y = (int16_t)y; // vertical (wheel)
 
-	enqueue_event(&event);
+	vkbd_event_send(&event);
 }
 
 static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)
@@ -137,7 +123,7 @@ static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)
 		event.state = (uint8_t)!!state;
 	}
 
-	enqueue_event(&event);
+	vkbd_event_send(&event);
 }
 
 void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)

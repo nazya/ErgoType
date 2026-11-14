@@ -77,14 +77,12 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${JSON_SOURCES}
         # ${CMAKE_CURRENT_LIST_DIR}/test.c
         ${CMAKE_CURRENT_LIST_DIR}/main.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb_device_task.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
         ${CMAKE_CURRENT_LIST_DIR}/led/ws2812.c
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         ${CMAKE_CURRENT_LIST_DIR}/log.c
-        ${CMAKE_CURRENT_LIST_DIR}/stdio_tusb_cdc.c
         ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
         ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
@@ -95,11 +93,14 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-custom.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-flat.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_cdc_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_device_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_hid_callbacks.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_webhid.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/usb_msc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/device.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/stdio_cdc.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/hid.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/device_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/hid_callbacks.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/webhid.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/msc_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/sof_fix.c
 )
 
