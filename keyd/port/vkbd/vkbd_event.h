@@ -2,7 +2,7 @@
  * ErgoType - vkbd event queue.
  *
  * This is a port-specific interface between keyd output (vkbd.c)
- * and the USB HID backend task (tusb_hid.c).
+ * and the USB HID backend (tusb_hid.c).
  */
 #ifndef VKBD_EVENT_H
 #define VKBD_EVENT_H
@@ -31,5 +31,11 @@ enum vkbd_event_type {
 	// Mouse wheel/pan (HID: wheel=vertical, pan=horizontal). Uses x=pan, y=wheel.
 	KEY_EVENT_MOUSE_SCROLL = 4,
 };
+
+/* Called only from TinyUSB's device task. */
+void tusb_hid_handle(void);
+
+/* Called by the input producer after each enqueue attempt. */
+void tusb_hid_notify(void);
 
 #endif

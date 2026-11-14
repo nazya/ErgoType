@@ -51,8 +51,6 @@ static const uint8_t default_hid_output_profile = HID_OUTPUT_PROFILE_NKRO_KB_MOU
 void tusb_device_task(void* pvParameters); // tusb_device_task.c
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
-void vkbd_hid_boot_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
-void vkbd_hid_nkro_task(void *pvParameters); // keyd/port/vkbd/tusb_hid.c
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
 bool uart_stdio_init(const config_t *config); // uart_stdio.c
 extern const char *keyd_overlay_conf;
@@ -211,13 +209,8 @@ static void app_task(void *pvParameters)
 
         xTaskCreateAffinitySet(keyscan_task,  NULL, MIN_STACK_SIZE, &config, IDLE_PRIORITY + 3, CORE1, NULL);
 
-        if (hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE) {
-            dbg("hid output profile: nkro");
-            xTaskCreateAffinitySet(vkbd_hid_nkro_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
-        } else {
-            dbg("hid output profile: boot");
-            xTaskCreateAffinitySet(vkbd_hid_boot_task, NULL, MIN_STACK_SIZE, NULL, IDLE_PRIORITY + 2, CORE0, NULL);
-        }
+        dbg("hid output profile: %s",
+            hid_output_profile == HID_OUTPUT_PROFILE_NKRO_KB_MOUSE ? "nkro" : "boot");
 
         if (config.nr_pmw3360 || config.nr_pmw3389) {
             TaskHandle_t pointing_task_handle = NULL;
