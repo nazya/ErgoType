@@ -5,7 +5,7 @@
 #include "pio_usb.h"
 #include "tusb.h"
 
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 #include "evdev.h"
 #include "hid_async.h"
 

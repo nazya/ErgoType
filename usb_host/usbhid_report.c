@@ -7,7 +7,7 @@
 #include "tusb.h"
 #include "host/hcd.h"
 #include "host/usbh_pvt.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 #include "linux/include/linux/hid.h"
 #include "hid_async.h"

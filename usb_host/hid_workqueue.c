@@ -6,7 +6,7 @@
 #include "task.h"
 
 #include "linux/include/linux/hid_compat.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 #define HID_WORKQUEUE_NOTIFY_INDEX 0u
 

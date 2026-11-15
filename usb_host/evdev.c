@@ -11,7 +11,7 @@
 // Firmware post-probe activation groups handles by their owning HID device.
 #include "linux/include/linux/hid.h"
 #include "evdev.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 struct evdev {
 	// int open;

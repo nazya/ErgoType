@@ -847,10 +847,10 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/keyscan.c
         ${CMAKE_CURRENT_LIST_DIR}/jconfig.c
         ${CMAKE_CURRENT_LIST_DIR}/log.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/stdio_cdc.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc.c
         ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
-        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
+        ${CMAKE_CURRENT_LIST_DIR}/ui.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-adaptive.c
         ${CMAKE_CURRENT_LIST_DIR}/accel/filter-adaptive-high-dpi.c

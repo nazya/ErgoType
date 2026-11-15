@@ -1,5 +1,5 @@
-#ifndef ERGOTYPE_UI_UI_H
-#define ERGOTYPE_UI_UI_H
+#ifndef ERGOTYPE_UI_H
+#define ERGOTYPE_UI_H
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -14,7 +14,7 @@
 #define WS2812_GREEN 0x00020000u
 #define WS2812_BLUE  0x00000002u
 
-// 32-step ring, advanced every UI_STEP_MS in ui/ui.c. Bit 0 is output first.
+// 32-step ring, advanced every UI_STEP_MS in ui.c. Bit 0 is output first.
 // With UI_STEP_MS=100ms, these approximate the old 250ms-step patterns.
 #define LED_PATTERN_FAST   0xCCCCCCCCu // 200ms toggle (2 on, 2 off)
 #define LED_PATTERN_MEDIUM 0xFF00FF00u // 800ms toggle (8 on, 8 off)
