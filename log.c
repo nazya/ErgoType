@@ -5,8 +5,8 @@
  */
 #include "log.h"
 
-#include "tusb/stdio_cdc.h"
-#include "ui/ui.h"
+#include "tusb/cdc.h"
+#include "ui.h"
 
 #include "pico/printf.h"
 
@@ -21,7 +21,7 @@ int use_colours = 1;
 extern SemaphoreHandle_t log_mutex;
 
 typedef struct {
-	stdio_cdc_write_char_fn write_character;
+	cdc_write_char_fn write_character;
 	void *context;
 } log_writer_t;
 
@@ -104,7 +104,7 @@ static void write_crlf_character(char character, void *context)
 	writer->write_character(character, writer->context);
 }
 
-static void render_log_line(stdio_cdc_write_char_fn write_character,
+static void render_log_line(cdc_write_char_fn write_character,
 			    void *write_context, void *render_context)
 {
 	log_entry_t *entry = render_context;
@@ -154,7 +154,7 @@ void _msg(int level, log_kind_t kind, const char *file, unsigned int line,
 	};
 
 	xSemaphoreTake(log_mutex, portMAX_DELAY);
-	stdio_cdc_write_rendered(render_log_line, &entry);
+	cdc_write_rendered(render_log_line, &entry);
 	xSemaphoreGive(log_mutex);
 	va_end(format_args);
 }

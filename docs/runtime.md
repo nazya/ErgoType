@@ -17,8 +17,8 @@ This page describes the high-level runtime wiring (tasks + queues) as implemente
 `tusb/device.c` runs:
 
 - `tud_task()` (TinyUSB device processing)
-- `hid_handle()` (advances queued HID output without blocking)
-- `stdio_cdc_handle()` (flushes buffered log output to CDC when host is connected)
+- `hid_work()` (advances queued HID output without blocking)
+- `cdc_work()` (flushes buffered log output to CDC when host is connected)
 
 `tusb/device.c` also owns suspend state and remote-wakeup attempts.
 `tusb/device_callbacks.c` forwards suspend/resume events and handles the
@@ -32,7 +32,7 @@ In HID mode:
 1. `keyscan_task` (`keyscan.c`) scans the matrix periodically and sends `struct device_event` into `input_event_queue`.
 2. `keyd` event loop (`keyd/port/evloop.c`) receives `device_event` entries and feeds them into the keyd engine (`kbd_process_events` in `keyd/port/keyboard.c`).
 3. The USB HID backend (`tusb/hid.c`) implements keyd's `vkbd.h` interface directly. Output calls queue events and wake the USB device task. The global queue is owned by `main.c` and created in `app_task()` in HID mode before keyd starts; capacity remains 256 events with a 3-tick enqueue timeout.
-4. `hid_handle()` consumes those events in the USB device task and retains a prepared report while suspended or while its endpoint is busy. There is no separate HID output task. A USB completion, lifecycle event, or input notification lets processing continue.
+4. `hid_work()` consumes those events in the USB device task and retains a prepared report while suspended or while its endpoint is busy. There is no separate HID output task. A USB completion, lifecycle event, or input notification lets processing continue.
 
 ## Pointing pipeline (PMW33xx → keyd → HID)
 
