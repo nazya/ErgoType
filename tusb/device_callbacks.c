@@ -1,7 +1,7 @@
 #include "tusb.h"
 #include "device.h"
 #include "webhid.h"
-#include "ui/ui.h"
+#include "ui.h"
 
 //--------------------------------------------------------------------+
 // Device callbacks

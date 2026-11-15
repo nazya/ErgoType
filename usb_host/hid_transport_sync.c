@@ -5,7 +5,7 @@
 #include "tusb.h"
 
 #include "hid_transport_sync.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 static SemaphoreHandle_t hid_transport_mutex;
 

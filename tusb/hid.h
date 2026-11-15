@@ -19,6 +19,6 @@ typedef struct {
 extern QueueHandle_t vkbd_event_queue;
 
 /* Called only from TinyUSB's device task, after tud_task(). */
-void hid_handle(void);
+void hid_work(void);
 
 #endif /* ERGOTYPE_TUSB_HID_H */

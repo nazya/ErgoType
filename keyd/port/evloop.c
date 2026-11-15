@@ -21,7 +21,7 @@
 
 #include "keyd.h"
 #include "log.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 static long get_time_ms(void)
 {

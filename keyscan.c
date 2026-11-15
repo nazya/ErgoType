@@ -53,7 +53,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "jconfig.h"
 #include "devmon.h"
 #include "keys.h"
-#include "tusb/stdio_cdc.h"
+#include "tusb/cdc.h"
 
 // Debounce time in milliseconds
 static uint8_t debouncing_time; 
