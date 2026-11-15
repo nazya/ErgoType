@@ -85,7 +85,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/log.c
         ${CMAKE_CURRENT_LIST_DIR}/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
-        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
+        ${CMAKE_CURRENT_LIST_DIR}/ui.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-adaptive.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-adaptive-high-dpi.c
@@ -94,7 +94,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-flat.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/pointer.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/device.c
-        ${CMAKE_CURRENT_LIST_DIR}/tusb/stdio_cdc.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/hid.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc_callbacks.c
         ${CMAKE_CURRENT_LIST_DIR}/tusb/device_callbacks.c

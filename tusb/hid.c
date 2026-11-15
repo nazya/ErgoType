@@ -22,7 +22,7 @@
 #include "log.h"
 #include "keyd.h"
 #include "vkbd.h"
-#include "ui/ui.h"
+#include "ui.h"
 
 #define QUEUE_SEND_TIMEOUT_TICKS 3
 
@@ -442,7 +442,7 @@ static void enqueue_event(const vkbd_event_t *event)
 	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
 
 	/* Notify after enqueue, including failure so queued input can progress.
-	 * A NULL callback only wakes tud_task(); hid_handle() runs after it. */
+	 * A NULL callback only wakes tud_task(); hid_work() runs after it. */
 	usbd_defer_func(NULL, NULL, false);
 
 	if (result != pdPASS)
@@ -772,7 +772,7 @@ static bool process_event(const vkbd_event_t *event)
 	return process_boot_event(event);
 }
 
-void hid_handle(void)
+void hid_work(void)
 {
 	/* USB starts before the HID queue exists; MSC never creates it. */
 	if (!vkbd_event_queue)

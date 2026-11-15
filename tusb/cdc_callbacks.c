@@ -1,6 +1,6 @@
 #include "tusb.h"
 
-#include "ui/ui.h"
+#include "ui.h"
 
 // Invoked when there is data available on CDC interface
 void tud_cdc_rx_cb(uint8_t itf)
