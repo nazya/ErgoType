@@ -21,7 +21,8 @@
 
 #include "log.h"
 #include "keyd.h"
-#include "vkbd/vkbd_event.h"
+#include "vkbd.h"
+#include "ui/ui.h"
 
 #define QUEUE_SEND_TIMEOUT_TICKS 3
 
@@ -52,20 +53,10 @@
 #define HID_USAGE_CAMERA(usage)          { HID_USAGE_PAGE_CAMERA,          (usage) }
 #define HID_USAGE_HP_VENDOR(usage)       HID_USAGE_NONE
 
-typedef struct {
+static const struct hid_usage {
 	uint8_t page;
 	uint16_t usage;
-} hid_usage_t;
-
-typedef struct TU_ATTR_PACKED {
-	uint8_t buttons;
-	int16_t x;
-	int16_t y;
-	int16_t wheel;
-	int16_t pan;
-} hid_mouse_report_16_t;
-
-static const hid_usage_t keyd_hid_table[256] = {
+} keyd_hid_table[256] = {
 	[KEYD_ESC]                   = HID_USAGE_KEYBOARD(0x29),
 	[KEYD_1]                     = HID_USAGE_KEYBOARD(0x1e),
 	[KEYD_2]                     = HID_USAGE_KEYBOARD(0x1f),
@@ -328,6 +319,29 @@ static uint8_t keys[6];
 static uint8_t mouse_buttons;
 static uint8_t nkro_keys[HID_NKRO_KEY_BYTES];
 
+enum vkbd_event_type {
+	KEY_EVENT_KEY = 0,
+	KEY_EVENT_MOUSE_MOVE = 1,
+	KEY_EVENT_MOUSE_MOVE_ABS = 2,
+	KEY_EVENT_MOUSE_BUTTON = 3,
+	// Mouse wheel/pan (HID: wheel=vertical, pan=horizontal). Uses x=pan, y=wheel.
+	KEY_EVENT_MOUSE_SCROLL = 4,
+};
+
+struct vkbd {
+	uint8_t unused;
+};
+
+typedef struct hid_usage hid_usage_t;
+
+typedef struct TU_ATTR_PACKED {
+	uint8_t buttons;
+	int16_t x;
+	int16_t y;
+	int16_t wheel;
+	int16_t pan;
+} hid_mouse_report_16_t;
+
 static uint8_t get_modifier(int code)
 {
 	switch (code) {
@@ -370,9 +384,8 @@ static int update_modifier_state(int code, int state)
 static int8_t clamp_i16_to_i8(int16_t v)
 {
 	/*
-	 * Our current HID mouse report (and TinyUSB's `tud_hid_mouse_report()`) uses
-	 * 8-bit relative X/Y deltas. Clamp int16_t deltas to avoid wrap-around when
-	 * the sensor reports large movements.
+	 * The boot-profile mouse report uses 8-bit movement and scroll deltas.
+	 * Clamp int16_t values to avoid wrap-around.
 	 */
 	if (v > 127)
 		return 127;
@@ -424,7 +437,7 @@ static struct {
 	uint8_t report_id;
 } pending_report;
 
-void vkbd_event_send(const vkbd_event_t *event)
+static void enqueue_event(const vkbd_event_t *event)
 {
 	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
 
@@ -434,6 +447,121 @@ void vkbd_event_send(const vkbd_event_t *event)
 
 	if (result != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
+}
+
+struct vkbd *vkbd_init(const char *name)
+{
+	static struct vkbd vkbd;
+
+	(void)name;
+
+	return &vkbd;
+}
+
+void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
+{
+	(void)vkbd;
+
+	vkbd_event_t event = {
+		.type = KEY_EVENT_MOUSE_MOVE,
+		.x = (int16_t)x,
+		.y = (int16_t)y,
+	};
+
+	enqueue_event(&event);
+}
+
+void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
+{
+	(void)vkbd;
+
+	vkbd_event_t event = {
+		.type = KEY_EVENT_MOUSE_MOVE_ABS,
+		.x = (int16_t)x,
+		.y = (int16_t)y,
+	};
+
+	enqueue_event(&event);
+}
+
+void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
+{
+	(void)vkbd;
+
+	vkbd_event_t event = {
+		.type = KEY_EVENT_MOUSE_SCROLL,
+		.x = (int16_t)x, // horizontal (pan)
+		.y = (int16_t)y, // vertical (wheel)
+	};
+
+	enqueue_event(&event);
+}
+
+static void write_key_event(uint8_t code, int state)
+{
+	uint8_t btn = 0;
+	int is_btn = 1;
+
+	switch (code) {
+	case KEYD_LEFT_MOUSE:
+		btn = 1u << 0;
+		break;
+	case KEYD_RIGHT_MOUSE:
+		btn = 1u << 1;
+		break;
+	case KEYD_MIDDLE_MOUSE:
+		btn = 1u << 2;
+		break;
+	case KEYD_MOUSE_1:
+	case KEYD_MOUSE_BACK:
+		btn = 1u << 3;
+		break;
+	case KEYD_MOUSE_2:
+	case KEYD_MOUSE_FORWARD:
+		btn = 1u << 4;
+		break;
+	default:
+		is_btn = 0;
+		break;
+	}
+
+	vkbd_event_t event = {
+		.type = is_btn ? KEY_EVENT_MOUSE_BUTTON : KEY_EVENT_KEY,
+		.code = is_btn ? 0 : code,
+		.state = (uint8_t)!!state,
+		.buttons = btn,
+	};
+
+	if (is_btn) {
+		/*
+		 * Give key events preceding a mouse click
+		 * a chance to propagate to avoid event
+		 * order transposition. A bit kludegy,
+		 * but better than waiting for all events
+		 * to propagate and then checking them
+		 * on re-entry.
+		 *
+		 * TODO: fixme (maybe)
+		 */
+		vTaskDelay(pdMS_TO_TICKS(1));
+	}
+
+	enqueue_event(&event);
+}
+
+void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
+{
+	(void)vkbd;
+
+	dbg("output %s %s", KEY_NAME(code), state == 1 ? "down" : "up");
+	ui_notify_output_event(KEY_NAME(code), state == 1);
+
+	write_key_event(code, state);
+}
+
+void free_vkbd(struct vkbd *vkbd)
+{
+	(void)vkbd;
 }
 
 static void prepare_report(uint8_t instance, uint8_t report_id, uint16_t len)

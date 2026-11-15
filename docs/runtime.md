@@ -31,9 +31,8 @@ In HID mode:
 
 1. `keyscan_task` (`keyscan.c`) registers the onboard keyboard as a `struct device` and sends `struct device_event` entries into that device queue.
 2. `keyd` event loop (`keyd/port/evloop.c`) waits on the device table, receives `device_event` entries, and feeds them into the keyd engine (`kbd_process_events` in `keyd/port/keyboard.c`).
-3. keyd outputs actions via the vkbd adapter (`keyd/port/vkbd/vkbd.c`), which sends `vkbd_event_t` through `vkbd_event_send()`.
-4. The HID output backend (`tusb/hid.c`) queues each event and wakes the USB device task. The global queue is owned by `main.c` and created in `app_task()` in HID mode before keyd starts; capacity remains 256 events with a 3-tick enqueue timeout.
-5. `hid_handle()` consumes those events in the USB device task and retains a prepared report while suspended or while its endpoint is busy. There is no separate HID output task. A USB completion, lifecycle event, or input notification lets processing continue.
+3. The USB HID backend (`tusb/hid.c`) implements keyd's `vkbd.h` interface directly. It queues output events and wakes the USB device task. The global queue stays in `main.c`, with 256 entries and a three-tick enqueue timeout.
+4. `hid_handle()` consumes those events after `tud_task()`. It retains a prepared report until the USB link is awake and the endpoint is ready; there is no separate HID output task.
 
 ## Pointing pipeline (PMW33xx → keyd → HID)
 

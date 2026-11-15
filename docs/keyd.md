@@ -59,7 +59,7 @@ Parsed options (all timeouts are interpreted as **milliseconds** in this port):
 
 ## Output differences vs upstream keyd
 
-ErgoType does not run a Linux daemon and does not emit `uinput` events. Instead, `keyd` output is translated into USB HID reports via the `vkbd` port layer (`keyd/port/vkbd/*`).
+ErgoType does not run a Linux daemon and does not emit `uinput` events. The USB HID backend (`tusb/hid.c`) implements keyd's `vkbd.h` interface directly and translates its output into USB HID reports.
 
 Practical implications:
 - You don’t get `keyd monitor`, `keyd reload`, `keyd listen`, app-specific mapper, or any other IPC-driven features.
