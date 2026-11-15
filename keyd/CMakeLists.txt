@@ -22,7 +22,6 @@ add_library(keyd
   ${KEYD_PORT_DIR}/hooks.c
   ${KEYD_PORT_DIR}/task.c
   ${KEYD_SRC_DIR}/unicode.c
-  ${KEYD_PORT_DIR}/vkbd/vkbd.c
 )
 
 target_include_directories(keyd PRIVATE
