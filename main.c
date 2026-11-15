@@ -10,6 +10,7 @@
 #include "tusb.h"
 #include "ff.h"
 #include "tusb/descriptors.h"
+#include "tusb/hid.h"
 
 #include "tusb/stdio_cdc.h"
 
@@ -21,7 +22,6 @@
 #include "flash.h"
 #include "devmon.h"
 #include "keyd.h"
-#include "vkbd/vkbd_event.h"
 #include "jconfig.h"
 #include "ui/ui.h"
 #include "pointing/pointer.h"

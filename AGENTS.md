@@ -31,7 +31,7 @@
 - Platform-neutral interfaces live under `platform/include/platform/`; RP2 and ESP-IDF implementations live under `platform/rp2/` and `platform/esp-idf/common/`.
 - `mode`, `hid_output_profile`, `vkbd_event_queue`, `input_event_queue`, `log_mutex`, and `fatfs_mutex` are defined in `main.c`.
 - The motion IRQ task handle is private to `pointing/pointer.c` and is bound by `pointing_motion_irq_init(...)`.
-- `keyd/port/daemon.c` owns `active_kbd` and its `vkbd` pointer; `keyd/port/vkbd/vkbd.c` owns the static virtual-device object.
+- `keyd/port/daemon.c` owns `active_kbd` and its `vkbd` pointer; `tusb/hid.c` implements keyd's vkbd interface and owns the static virtual-device object.
 - Shared storage logic lives under `storage/`; platform backends and FatFs disk I/O live in the platform directories.
 - TinyUSB device tasks call `tud_task()` and `platform_cdc_poll()` from the platform USB implementations.
 - Consumer Page usages use the separate `REPORT_ID_CONSUMER`; Keyboard/Keypad usages remain in the keyboard report.
@@ -44,6 +44,7 @@
 
 ## Codex Environment
 
+- Before committing, verify both author and committer against this repository's local `user.name` and `user.email`; server-injected Git identity must not replace the repository owner's identity.
 - If a Git operation fails because `.git` is read-only or `index.lock` cannot be created, stop and do not modify working files as a workaround.
 - In Codex, treat that failure as a possible sandbox restriction rather than evidence that the repository mount or permissions are broken.
 - Request escalation for the exact Git command that failed. If escalation is unavailable or declined, ask the user to run that command locally.

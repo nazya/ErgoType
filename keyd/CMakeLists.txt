@@ -23,7 +23,6 @@ add_library(keyd
   ${KEYD_PORT_DIR}/hooks.c
   ${KEYD_PORT_DIR}/task.c
   ${KEYD_SRC_DIR}/unicode.c
-  ${KEYD_PORT_DIR}/vkbd/vkbd.c
 )
 
 set_source_files_properties(${KEYD_PORT_DIR}/device.c PROPERTIES

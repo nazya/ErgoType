@@ -122,11 +122,10 @@ Documentation:
 The firmware currently sends scroll to the host as legacy HID mouse wheel/pan:
 
 - `keyd/port/daemon.c`
-- `keyd/port/vkbd/vkbd.c`
-- `keyd/port/vkbd/tusb_hid.c`
-- `tusb/usb_descriptors.c`
+- `tusb/hid.c`
+- `tusb/descriptors.c`
 
-`keyd/port/vkbd/tusb_hid.c` sends scroll through:
+`tusb/hid.c` sends scroll through:
 
 ```c
 tud_hid_n_mouse_report(..., wheel, pan)
@@ -156,7 +155,7 @@ USB mouse/trackball/etc.
   -> acceleration/filter layer
   -> keyd/port/daemon.c
   -> keyd keyboard actions / scroll actions / vkbd
-  -> keyd/port/vkbd/*
+  -> tusb/hid.c
   -> TinyUSB HID device reports
 ```
 
@@ -941,8 +940,8 @@ Required checks:
 
 Forbidden without separate confirmation:
 
-- changing `tusb/usb_descriptors.c`;
-- changing `tusb/usb_descriptors.h`;
+- changing `tusb/descriptors.c`;
+- changing `tusb/descriptors.h`;
 - adding a high-resolution HID output descriptor;
 - rewriting Linux HID wheel handling;
 - moving acceleration only into `pointing/pointer.c`.
