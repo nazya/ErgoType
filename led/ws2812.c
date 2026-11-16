@@ -47,18 +47,25 @@ static inline void init_sm(PIO pio, uint sm, uint off, uint pin, float freq, boo
 
 bool ws2812_hw_init(int8_t pin)
 {
-    ws_pio = pio0;
-    ws_sm = 0;
+    ws_pio = pio1;
     ws_ready = false;
 
-    const uint pin_value = (uint)(uint8_t)pin;
-    if (pio_can_add_program(ws_pio, &ws2812_program)) {
-        uint off = pio_add_program(ws_pio, &ws2812_program);
-        init_sm(ws_pio, ws_sm, off, pin_value, (float)FREQ, IS_RGBW);
-        ws_ready = true;
+    int sm = pio_claim_unused_sm(ws_pio, false);
+    if (sm < 0)
+        return false;
+
+    int off = pio_add_program(ws_pio, &ws2812_program);
+    if (off < 0) {
+        pio_sm_unclaim(ws_pio, (uint)sm);
+        return false;
     }
 
-    return ws_ready;
+    ws_sm = (uint)sm;
+    const uint pin_value = (uint)(uint8_t)pin;
+    init_sm(ws_pio, ws_sm, (uint)off, pin_value, (float)FREQ, IS_RGBW);
+    ws_ready = true;
+
+    return true;
 }
 
 void ws2812_hw_put(uint32_t color)
