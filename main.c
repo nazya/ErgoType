@@ -14,7 +14,7 @@
 #include "tusb/descriptors.h"
 
 #include "keyd.h"
-#include "vkbd/vkbd_event.h"
+#include "tusb/hid.h"
 #include "jconfig.h"
 #include "platform/storage.h"
 #include "ui/ui.h"

@@ -79,6 +79,8 @@ extern uint8_t mode; // owned by main.c
 #define UI_OUTPUT_EVENTS_ROW0_NO_STATUS 1u
 #define UI_OUTPUT_EVENTS_ROWS_NO_STATUS 7u
 #define UI_OUTPUT_EVENTS_MAX_ROWS UI_OUTPUT_EVENTS_ROWS_NO_STATUS
+// 128px / 4px = 32 chars max for one full-width 4x8 UI line.
+#define UI_OUTPUT_EVENT_LINE_LEN 32u
 
 enum {
     UI_EVT_LED0            = 1u << 0,
@@ -106,7 +108,13 @@ static volatile uint32_t ui_cdc_drop_writes;
 static volatile uint32_t ui_cdc_drop_bytes;
 static volatile bool ui_cdc_connected;
 static char ui_layout_name[UI_LAYOUT_NAME_LEN + 1u];
-static char ui_output_events[UI_OUTPUT_EVENTS_MAX_ROWS][UI_OUTPUT_EVENT_LINE_LEN + 1u];
+typedef struct {
+    const char *name;
+    bool pressed;
+} ui_output_event_t;
+
+/* Best-effort display history; producer may overwrite entries during redraw. */
+static ui_output_event_t ui_output_events[UI_OUTPUT_EVENTS_MAX_ROWS];
 static volatile uint8_t ui_output_events_head;
 static volatile uint8_t ui_output_events_count;
 
@@ -164,16 +172,12 @@ void ui_notify_cdc_disconnected(void)
     ui_cdc_connected = false;
 }
 
-void ui_notify_output_event(const char *s)
+void ui_notify_output_event(const char *name, bool pressed)
 {
     if (!ui_handle)
         return;
 
-    char line[UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
-
-    (void)snprintf(line, sizeof(line), "%s", s);
-
-    memcpy(ui_output_events[ui_output_events_head], line, sizeof(line));
+    ui_output_events[ui_output_events_head] = (ui_output_event_t){ name, pressed };
     ui_output_events_head++;
     if (ui_output_events_head == UI_OUTPUT_EVENTS_MAX_ROWS)
         ui_output_events_head = 0;
@@ -275,7 +279,7 @@ static void ui_draw_layout(ui_state_t *ui)
 
 static void ui_draw_output_events(ui_state_t *ui)
 {
-    char lines[UI_OUTPUT_EVENTS_MAX_ROWS][UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
+    ui_output_event_t events[UI_OUTPUT_EVENTS_MAX_ROWS] = {0};
     const uint8_t row0 = (ui->err_count || ui->warn_count || ui_output_events_count == 0) ? UI_OUTPUT_EVENTS_ROW0_WITH_STATUS
                                                                                           : UI_OUTPUT_EVENTS_ROW0_NO_STATUS;
     const uint8_t rows = (ui->err_count || ui->warn_count || ui_output_events_count == 0) ? UI_OUTPUT_EVENTS_ROWS_WITH_STATUS
@@ -293,12 +297,17 @@ static void ui_draw_output_events(ui_state_t *ui)
         uint8_t idx = (uint8_t)(head + UI_OUTPUT_EVENTS_MAX_ROWS - count + i);
         if (idx >= UI_OUTPUT_EVENTS_MAX_ROWS)
             idx -= UI_OUTPUT_EVENTS_MAX_ROWS;
-        memcpy(lines[i], ui_output_events[idx], sizeof(lines[i]));
+        events[i] = ui_output_events[idx];
     }
 
     for (uint8_t i = 0; i < rows; ++i) {
+        char line[UI_OUTPUT_EVENT_LINE_LEN + 1u] = {0};
+
+        if (events[i].name)
+            (void)snprintf(line, sizeof(line), "%s %s", events[i].name,
+                           events[i].pressed ? "down" : "up");
         ssd1306_clear_page(ui->disp, row0 + i);
-        ssd1306_putn4x8(ui->disp, row0 + i, 0, lines[i], strlen(lines[i]));
+        ssd1306_putn4x8(ui->disp, row0 + i, 0, line, strlen(line));
     }
 }
 

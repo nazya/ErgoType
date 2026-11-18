@@ -33,7 +33,6 @@ set(ERGOTYPE_SOURCES
     ${ERGOTYPE_ROOT}/keyd/port/daemon.c
     ${ERGOTYPE_ROOT}/keyd/port/hooks.c
     ${ERGOTYPE_ROOT}/keyd/port/task.c
-    ${ERGOTYPE_ROOT}/keyd/port/vkbd/vkbd.c
     ${ERGOTYPE_ROOT}/keyd/src/keys.c
     ${ERGOTYPE_ROOT}/keyd/src/string.c
     ${ERGOTYPE_ROOT}/keyd/src/unicode.c
@@ -72,7 +71,6 @@ idf_component_register(
         ${ERGOTYPE_ROOT}/tusb
         ${ERGOTYPE_ROOT}/display
         ${ERGOTYPE_ROOT}/keyd/port
-        ${ERGOTYPE_ROOT}/keyd/port/vkbd
         ${ERGOTYPE_ROOT}/pointing
         ${ERGOTYPE_ROOT}/pointing/pmw3360
         ${ERGOTYPE_ROOT}/pointing/pmw3389
