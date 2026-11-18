@@ -3,7 +3,7 @@
  *
  * This is "our unique" part vs upstream keyd:
  * instead of emitting OS input events, we enqueue events for the firmware
- * HID task(s) to consume.
+ * USB HID backend to consume.
  */
 
 #include <string.h>
@@ -25,7 +25,12 @@ struct vkbd {
 
 static void enqueue_event(const vkbd_event_t *event)
 {
-	if (xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS) != pdPASS)
+	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
+
+	/* Notify after enqueue, including failure so queued input can progress. */
+	tusb_hid_notify();
+
+	if (result != pdPASS)
 		warn("vkbd: enqueue failed (queue full)");
 }
 

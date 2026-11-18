@@ -70,7 +70,7 @@ extern uint8_t hid_output_profile;
 // Configuration descriptor fields.
 #define USB_CONFIG_NUMBER 1         // bConfigurationValue
 #define USB_CONFIG_STRIDX 0         // iConfiguration (0 = no string)
-#define USB_CONFIG_ATTR 0x80        // bmAttributes (0x80 = bus powered)
+#define USB_CONFIG_ATTR 0xA0        // bmAttributes (bus powered, remote wakeup)
 #define USB_CONFIG_POWER_MA 100     // bMaxPower in mA
 
 // Endpoint packet sizes.

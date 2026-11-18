@@ -1,5 +1,6 @@
 #include "platform/cdc.h"
 #include "platform/usb.h"
+#include "vkbd/vkbd_event.h"
 
 #include <stdio.h>
 
@@ -49,6 +50,7 @@ void platform_usb_device_task(void *pvParameters)
 
     for (;;) {
         tud_task();
+        tusb_hid_handle();
         platform_cdc_poll();
     }
 }
