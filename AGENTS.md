@@ -7,7 +7,7 @@
 - Do not add checks for hypothetical callers, future edits, or states excluded by current code and configuration.
 - Do not write set-then-check control flow such as `x.type = FOO; if (x.type == FOO)`.
 - Do not modify comments unless comment changes are explicitly requested.
-- Do not modify `tusb/usb_descriptors.c` or `tusb/usb_descriptors.h` without explicit confirmation.
+- Do not modify `tusb/descriptors.c` or `tusb/descriptors.h` without explicit confirmation.
 
 ## Upstream Porting
 
@@ -33,7 +33,7 @@
 - The motion IRQ task handle is private to `pointing/pointer.c` and is bound by `pointing_motion_irq_init(...)`.
 - `keyd/port/daemon.c` owns `active_kbd` and its `vkbd` pointer; `tusb/hid.c` implements keyd's vkbd interface and owns the static virtual-device object.
 - Shared storage logic lives under `storage/`; platform backends and FatFs disk I/O live in the platform directories.
-- TinyUSB device tasks call `tud_task()` and `platform_cdc_poll()` from the platform USB implementations.
+- TinyUSB device tasks call `tud_task()` and `platform_cdc_work()` from the platform USB implementations.
 - Consumer Page usages use the separate `REPORT_ID_CONSUMER`; Keyboard/Keypad usages remain in the keyboard report.
 - Logging is serialized and written through buffered platform CDC output.
 

@@ -21,7 +21,7 @@
 #include "log.h"
 #include "keyd.h"
 #include "vkbd.h"
-#include "ui/ui.h"
+#include "ui.h"
 
 #define QUEUE_SEND_TIMEOUT_TICKS 3
 
@@ -441,7 +441,7 @@ static void enqueue_event(const vkbd_event_t *event)
 	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
 
 	/* Notify after enqueue, including failure so queued input can progress.
-	 * A NULL callback only wakes tud_task(); hid_handle() runs after it. */
+	 * A NULL callback only wakes tud_task(); hid_work() runs after it. */
 	usbd_defer_func(NULL, NULL, false);
 
 	if (result != pdPASS)
@@ -771,7 +771,7 @@ static bool process_event(const vkbd_event_t *event)
 	return process_boot_event(event);
 }
 
-void hid_handle(void)
+void hid_work(void)
 {
 	/* USB starts before the HID queue exists; MSC never creates it. */
 	if (!vkbd_event_queue)
@@ -784,14 +784,16 @@ void hid_handle(void)
 	 *
 	 * Yield to queued USB completions/reset before advancing input. When an
 	 * IN transfer completes, the DCD IRQ queues DCD_EVENT_XFER_COMPLETE;
-	 * tud_task() clears the endpoint's busy flag, then tusb_device_task()
+	 * tud_task() clears the endpoint's busy flag, then platform_usb_device_task()
 	 * calls us again to send the retained report.
 	 *
 	 * With successful submissions, keyboard (including consumer keys) and
 	 * mouse each accept one report before their completion is processed.
 	 * We can consume up to two report-producing events for one endpoint,
 	 * or three when mixed: one report per endpoint plus one retained report.
-	 * Busy/suspend returns immediately; this loop does not wait.
+	 * With a shared keyboard/mouse endpoint, only one transfer can be in
+	 * flight before a second report is retained. Busy/suspend returns
+	 * immediately; this loop does not wait.
 	 *
 	 * Skipped inputs may drain all 256 queue entries. That path only reads
 	 * the queue without blocking and checks mappings; no USB transfer or

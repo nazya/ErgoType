@@ -50,7 +50,7 @@ void platform_usb_device_task(void *pvParameters)
 
     for (;;) {
         tud_task();
-        hid_handle();
-        platform_cdc_poll();
+        hid_work();
+        platform_cdc_work();
     }
 }

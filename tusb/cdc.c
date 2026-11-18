@@ -6,7 +6,7 @@
 #include "device/usbd_pvt.h"
 #include "platform/os.h"
 #include "tusb.h"
-#include "ui/ui.h"
+#include "ui.h"
 
 #define CDC_SETTLE_MS 50u
 #define POLL_WRITE_MAX 256u
@@ -169,7 +169,7 @@ void platform_cdc_write_rendered(platform_cdc_render_fn render, void *context)
         usbd_defer_func(platform_cdc_kick_cb, NULL, false);
 }
 
-void platform_cdc_poll(void)
+void platform_cdc_work(void)
 {
     if (!tud_cdc_connected()) {
         cdc_was_connected = false;

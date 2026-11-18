@@ -14,7 +14,7 @@ set(ERGOTYPE_SOURCES
     ${ERGOTYPE_ROOT}/led/led.c
     ${ERGOTYPE_ROOT}/display/ssd1306.c
     ${ERGOTYPE_ROOT}/sensors/vl53l4cd/vl53l4cd.c
-    ${ERGOTYPE_ROOT}/ui/ui.c
+    ${ERGOTYPE_ROOT}/ui.c
     ${ERGOTYPE_ROOT}/pointing/accel/filter.c
     ${ERGOTYPE_ROOT}/pointing/accel/filter-adaptive.c
     ${ERGOTYPE_ROOT}/pointing/accel/filter-adaptive-high-dpi.c
@@ -56,7 +56,7 @@ set(ERGOTYPE_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/storage_diskio.c
     ${CMAKE_CURRENT_LIST_DIR}/time.c
     ${CMAKE_CURRENT_LIST_DIR}/usb_tinyusb.c
-    ${ERGOTYPE_ROOT}/platform/tinyusb/cdc_tinyusb.c
+    ${ERGOTYPE_ROOT}/tusb/cdc.c
     ${ERGOTYPE_ROOT}/platform/tinyusb/hid_tinyusb.c
     ${CMAKE_CURRENT_LIST_DIR}/io.c
     ${CMAKE_CURRENT_LIST_DIR}/led_strip_rmt.c

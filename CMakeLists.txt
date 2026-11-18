@@ -109,7 +109,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/platform/rp2/storage_diskio.c
         ${CMAKE_CURRENT_LIST_DIR}/platform/rp2/time.c
         ${CMAKE_CURRENT_LIST_DIR}/platform/rp2/usb_tinyusb.c
-        ${CMAKE_CURRENT_LIST_DIR}/platform/tinyusb/cdc_tinyusb.c
+        ${CMAKE_CURRENT_LIST_DIR}/tusb/cdc.c
         ${CMAKE_CURRENT_LIST_DIR}/platform/tinyusb/hid_tinyusb.c
         ${CMAKE_CURRENT_LIST_DIR}/rtos/freertos_hook.c
         ${CMAKE_CURRENT_LIST_DIR}/led/led.c
@@ -120,7 +120,7 @@ target_sources(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/platform/rp2/uart_stdio.c
         ${CMAKE_CURRENT_LIST_DIR}/display/ssd1306.c
         ${CMAKE_CURRENT_LIST_DIR}/sensors/vl53l4cd/vl53l4cd.c
-        ${CMAKE_CURRENT_LIST_DIR}/ui/ui.c
+        ${CMAKE_CURRENT_LIST_DIR}/ui.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-adaptive.c
         ${CMAKE_CURRENT_LIST_DIR}/pointing/accel/filter-adaptive-high-dpi.c

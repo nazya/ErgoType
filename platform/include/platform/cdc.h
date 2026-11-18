@@ -13,6 +13,6 @@ typedef void (*platform_cdc_render_fn)(
 
 void platform_cdc_init(void);
 void platform_cdc_write_rendered(platform_cdc_render_fn render, void *context);
-void platform_cdc_poll(void);
+void platform_cdc_work(void);
 
 #endif

@@ -20,7 +20,7 @@ See also: [`docs/logging.md`](logging.md).
 
 ## Status LEDs (`led_pins`)
 
-The GPIO status LEDs are driven as a 32-step pattern advanced every 100 ms (see `ui/ui.c`).
+The GPIO status LEDs are driven as a 32-step pattern advanced every 100 ms (see `ui.c`).
 If two pins are provided, both LEDs show the same pattern.
 
 - USB **unmounted**: fast blink (`LED_PATTERN_FAST`, ~200 ms toggle)
@@ -35,4 +35,4 @@ If `ws2812_pin` is set, a single WS2812/NeoPixel can be used as a status LED.
 - **MSC mode**: **blue** = unmounted/idle, **red** = mounted/active, **green** = safe-ejected.
 - **CDC log drops**: a brief **red** blink is emitted when the CDC log buffer overflows.
 
-WS2812 brightness is currently fixed in code via the hardcoded color constants in `ui/ui.h` (`WS2812_RED/GREEN/BLUE`).
+WS2812 brightness is currently fixed in code via the hardcoded color constants in `ui.h` (`WS2812_RED/GREEN/BLUE`).

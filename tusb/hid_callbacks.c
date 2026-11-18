@@ -1,6 +1,6 @@
 #include "tusb.h"
 
-#include "ui/ui.h"
+#include "ui.h"
 #include "descriptors.h"
 #include "webhid.h"
 

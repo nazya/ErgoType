@@ -8,7 +8,7 @@
 #include "platform/cdc.h"
 #include "platform/os.h"
 #include "platform/printf.h"
-#include "ui/ui.h"
+#include "ui.h"
 
 int log_level = 0;
 int use_colours = 1;

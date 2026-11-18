@@ -1,7 +1,7 @@
 #include <ctype.h>
 #include <tusb.h>
 #include "platform/storage.h"
-#include "ui/ui.h"
+#include "ui.h"
 #include "log.h"
 
 
