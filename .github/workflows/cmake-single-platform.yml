@@ -11,7 +11,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-13
+      CXX: g++-13
 
     steps:
     - name: Checkout Repository
@@ -22,7 +25,19 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt update
-        sudo apt install cmake gcc-arm-none-eabi build-essential -y
+        sudo apt install cmake gcc-13 g++-13 build-essential -y
+
+    - name: Setup Arm GNU Toolchain 14.2.Rel1
+      run: |
+        arm_archive=arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz
+        curl --fail --location --retry 3 \
+          "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/$arm_archive" \
+          --output "$RUNNER_TEMP/$arm_archive"
+        echo "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823  $RUNNER_TEMP/$arm_archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/arm-toolchain"
+        tar -xf "$RUNNER_TEMP/$arm_archive" -C "$RUNNER_TEMP/arm-toolchain" --strip-components=1
+        echo "$RUNNER_TEMP/arm-toolchain/bin" >> "$GITHUB_PATH"
+        echo "PICO_TOOLCHAIN_PATH=$RUNNER_TEMP/arm-toolchain" >> "$GITHUB_ENV"
 
     - name: Setup Pico SDK
       run: |
@@ -41,6 +56,9 @@ jobs:
       env:
         PICO_SDK_PATH: ${{ env.PICO_SDK_PATH }}
       run: |
+        "$CC" --version
+        "$CXX" --version
+        arm-none-eabi-gcc --version
         mkdir build
         cd build
         cmake ..
