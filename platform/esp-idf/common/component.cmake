@@ -34,17 +34,18 @@ set(ERGOTYPE_SOURCES
     ${ERGOTYPE_ROOT}/keyd/port/hooks.c
     ${ERGOTYPE_ROOT}/keyd/port/task.c
     ${ERGOTYPE_ROOT}/keyd/port/vkbd/vkbd.c
-    ${ERGOTYPE_ROOT}/keyd/port/vkbd/tusb_hid.c
     ${ERGOTYPE_ROOT}/keyd/src/keys.c
     ${ERGOTYPE_ROOT}/keyd/src/string.c
     ${ERGOTYPE_ROOT}/keyd/src/unicode.c
     ${ERGOTYPE_ROOT}/coreJSON/source/core_json.c
-    ${ERGOTYPE_ROOT}/tusb/usb_descriptors.c
-    ${ERGOTYPE_ROOT}/tusb/usb_cdc_callbacks.c
-    ${ERGOTYPE_ROOT}/tusb/usb_device_callbacks.c
-    ${ERGOTYPE_ROOT}/tusb/usb_hid_callbacks.c
-    ${ERGOTYPE_ROOT}/tusb/usb_webhid.c
-    ${ERGOTYPE_ROOT}/tusb/usb_msc_callbacks.c
+    ${ERGOTYPE_ROOT}/tusb/descriptors.c
+    ${ERGOTYPE_ROOT}/tusb/cdc_callbacks.c
+    ${ERGOTYPE_ROOT}/tusb/device_callbacks.c
+    ${ERGOTYPE_ROOT}/tusb/device.c
+    ${ERGOTYPE_ROOT}/tusb/hid.c
+    ${ERGOTYPE_ROOT}/tusb/hid_callbacks.c
+    ${ERGOTYPE_ROOT}/tusb/webhid.c
+    ${ERGOTYPE_ROOT}/tusb/msc_callbacks.c
     ${CMAKE_CURRENT_LIST_DIR}/entry.c
     ${ERGOTYPE_ESP_TARGET}/board.c
     ${CMAKE_CURRENT_LIST_DIR}/os.c

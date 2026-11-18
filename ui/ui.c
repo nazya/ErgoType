@@ -8,7 +8,7 @@
 #include "platform/time.h"
 
 #include "jconfig.h"
-#include "usb_descriptors.h"
+#include "tusb/descriptors.h"
 
 #include "led/led.h"
 #include "display/px6x8_font.h"

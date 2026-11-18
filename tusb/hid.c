@@ -5,6 +5,8 @@
  * daemon.c stays close to upstream keyd and only talks to vkbd_*.
  */
 
+#include "hid.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -13,12 +15,14 @@
 #include "tusb.h"
 #include "platform/hid.h"
 #include "device/usbd_pvt.h"
-#include "usb_device.h"
-#include "usb_descriptors.h"
+#include "device.h"
+#include "descriptors.h"
 
 #include "log.h"
 #include "keyd.h"
-#include "vkbd_event.h"
+#include "vkbd/vkbd_event.h"
+
+#define QUEUE_SEND_TIMEOUT_TICKS 3
 
 #define HID_CTRL 0x1
 #define HID_RIGHTCTRL 0x10
@@ -407,22 +411,32 @@ static int update_key_state(uint16_t code, int state, uint8_t page)
 
 /* Prepared once per input event; retained until TinyUSB can copy it. */
 static struct {
-	uint8_t data[HID_NKRO_KEY_BYTES];
+	union {
+		hid_keyboard_report_t boot_keyboard;
+		uint8_t nkro_keyboard[HID_NKRO_KEY_BYTES];
+		uint16_t consumer[6];
+		hid_mouse_report_t boot_mouse;
+		hid_mouse_report_16_t mouse;
+	} data;
 	uint16_t len;
 	uint8_t instance;
 	uint8_t report_id;
 } pending_report;
 
-void tusb_hid_notify(void)
+void vkbd_event_send(const vkbd_event_t *event)
 {
-	/* A NULL function only wakes tud_task(); tusb_hid_handle() runs after it. */
+	BaseType_t result = xQueueSendToBack(vkbd_event_queue, event, QUEUE_SEND_TIMEOUT_TICKS);
+
+	/* Notify after enqueue, including failure so queued input can progress.
+	 * A NULL callback only wakes tud_task(); hid_handle() runs after it. */
 	usbd_defer_func(NULL, NULL, false);
+
+	if (result != pdPASS)
+		warn("vkbd: enqueue failed (queue full)");
 }
 
-static void prepare_report(uint8_t instance, uint8_t report_id,
-			   const void *report, uint16_t len)
+static void prepare_report(uint8_t instance, uint8_t report_id, uint16_t len)
 {
-	memcpy(pending_report.data, report, len);
 	pending_report.len = len;
 	pending_report.instance = instance;
 	pending_report.report_id = report_id;
@@ -430,16 +444,17 @@ static void prepare_report(uint8_t instance, uint8_t report_id,
 
 static void prepare_boot_keyboard_report(void)
 {
-	hid_keyboard_report_t report = { .modifier = mods };
+	pending_report.data.boot_keyboard = (hid_keyboard_report_t){ .modifier = mods };
 
 	for (int i = 0; i < 6; i++) {
 		if (keys[i] == 0)
-			report.keycode[i] = 0;
+			pending_report.data.boot_keyboard.keycode[i] = 0;
 		else
-			report.keycode[i] = keyd_hid_table[keys[i]].usage;
+			pending_report.data.boot_keyboard.keycode[i] = keyd_hid_table[keys[i]].usage;
 	}
 
-	prepare_report(HID_KEYBOARD_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_KEYBOARD_INSTANCE, 0,
+		       sizeof(pending_report.data.boot_keyboard));
 }
 
 static int update_nkro_key_state(uint16_t code, int state, uint8_t page)
@@ -463,46 +478,46 @@ static int update_nkro_key_state(uint16_t code, int state, uint8_t page)
 
 static void prepare_nkro_report(void)
 {
+	/* Preserve keyboard state across mouse/consumer use of the shared payload. */
+	memcpy(pending_report.data.nkro_keyboard, nkro_keys, sizeof(nkro_keys));
 	prepare_report(HID_KEYBOARD_INSTANCE, REPORT_ID_KEYBOARD,
-		       nkro_keys, sizeof(nkro_keys));
+		       sizeof(pending_report.data.nkro_keyboard));
 }
 
 static void prepare_consumer_report(void)
 {
-	uint16_t usages[6];
-
 	for (int i = 0; i < 6; i++) {
 		if (keys[i] == 0)
-			usages[i] = 0;
+			pending_report.data.consumer[i] = 0;
 		else
-			usages[i] = keyd_hid_table[keys[i]].usage;
+			pending_report.data.consumer[i] = keyd_hid_table[keys[i]].usage;
 	}
 
 	prepare_report(HID_KEYBOARD_INSTANCE, REPORT_ID_CONSUMER,
-		       usages, sizeof(usages));
+		       sizeof(pending_report.data.consumer));
 }
 
 static void mouse_scroll(int16_t x, int16_t y)
 {
-	hid_mouse_report_16_t report = {
+	pending_report.data.mouse = (hid_mouse_report_16_t){
 		.buttons = mouse_buttons,
 		.wheel = y,
 		.pan = x,
 	};
 
 	/* TinyUSB: wheel=vertical, pan=horizontal. */
-	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, &report, sizeof(report));
+	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, sizeof(pending_report.data.mouse));
 }
 
 static void mouse_move(int16_t x, int16_t y)
 {
-	hid_mouse_report_16_t report = {
+	pending_report.data.mouse = (hid_mouse_report_16_t){
 		.buttons = mouse_buttons,
 		.x = x,
 		.y = y,
 	};
 
-	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, &report, sizeof(report));
+	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, sizeof(pending_report.data.mouse));
 }
 
 static void mouse_button(uint8_t buttons, int state)
@@ -512,33 +527,33 @@ static void mouse_button(uint8_t buttons, int state)
 	else
 		mouse_buttons &= (uint8_t)~buttons;
 
-	hid_mouse_report_16_t report = {
+	pending_report.data.mouse = (hid_mouse_report_16_t){
 		.buttons = mouse_buttons,
 	};
 
-	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, &report, sizeof(report));
+	prepare_report(HID_NKRO_MOUSE_INSTANCE, HID_NKRO_MOUSE_REPORT_ID, sizeof(pending_report.data.mouse));
 }
 
 static void mouse_scroll_boot(int16_t x, int16_t y)
 {
-	hid_mouse_report_t report = {
+	pending_report.data.boot_mouse = (hid_mouse_report_t){
 		.buttons = mouse_buttons,
 		.wheel = clamp_i16_to_i8(y),
 		.pan = clamp_i16_to_i8(x),
 	};
 
-	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, sizeof(pending_report.data.boot_mouse));
 }
 
 static void mouse_move_boot(int16_t x, int16_t y)
 {
-	hid_mouse_report_t report = {
+	pending_report.data.boot_mouse = (hid_mouse_report_t){
 		.buttons = mouse_buttons,
 		.x = clamp_i16_to_i8(x),
 		.y = clamp_i16_to_i8(y),
 	};
 
-	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, sizeof(pending_report.data.boot_mouse));
 }
 
 static void mouse_button_boot(uint8_t buttons, int state)
@@ -548,9 +563,9 @@ static void mouse_button_boot(uint8_t buttons, int state)
 	else
 		mouse_buttons &= (uint8_t)~buttons;
 
-	hid_mouse_report_t report = { .buttons = mouse_buttons };
+	pending_report.data.boot_mouse = (hid_mouse_report_t){ .buttons = mouse_buttons };
 
-	prepare_report(HID_MOUSE_INSTANCE, 0, &report, sizeof(report));
+	prepare_report(HID_MOUSE_INSTANCE, 0, sizeof(pending_report.data.boot_mouse));
 }
 
 static bool process_nkro_event(const vkbd_event_t *event)
@@ -628,7 +643,7 @@ static bool process_event(const vkbd_event_t *event)
 	return process_boot_event(event);
 }
 
-void tusb_hid_handle(void)
+void hid_handle(void)
 {
 	/* USB starts before the HID queue exists; MSC never creates it. */
 	if (!vkbd_event_queue)
@@ -677,7 +692,7 @@ void tusb_hid_handle(void)
 			return;
 
 		if (!platform_hid_report(pending_report.instance, pending_report.report_id,
-				      pending_report.data, pending_report.len))
+				      &pending_report.data, pending_report.len))
 			warn("vkbd: HID report rejected");
 
 		pending_report.len = 0;

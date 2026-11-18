@@ -1,8 +1,8 @@
 #include "tusb.h"
 
 #include "ui/ui.h"
-#include "usb_descriptors.h"
-#include "usb_webhid.h"
+#include "descriptors.h"
+#include "webhid.h"
 
 // Invoked when sent REPORT successfully to host
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len)

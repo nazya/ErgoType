@@ -11,7 +11,7 @@
 #include "platform/time.h"
 #include "platform/usb.h"
 
-#include "usb_descriptors.h"
+#include "tusb/descriptors.h"
 
 #include "keyd.h"
 #include "vkbd/vkbd_event.h"

@@ -1,10 +1,10 @@
-#include "usb_webhid.h"
+#include "webhid.h"
 
 #include <string.h>
 
 #include "platform/os.h"
 #include "platform/storage.h"
-#include "usb_descriptors.h"
+#include "descriptors.h"
 
 extern SemaphoreHandle_t fatfs_mutex;
 
