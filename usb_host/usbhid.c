@@ -74,6 +74,10 @@ void usbh_port_replace_ready_on_host(uint8_t rhport, uint8_t hub_addr,
 				     uint8_t hub_port);
 bool usbh_port_reenumerate_on_host(uint8_t rhport, uint8_t hub_addr,
 				   uint8_t hub_port);
+bool pio_hcd_port_suspend(uint8_t rhport, bool remote_wakeup);
+bool pio_hcd_port_resume(uint8_t rhport);
+bool pio_hcd_port_is_suspended(uint8_t rhport);
+bool pio_hcd_port_resume_failed(uint8_t rhport);
 
 static const struct hid_ll_driver usb_hid_driver;
 const struct device_type usb_device_type = {
@@ -242,6 +246,40 @@ struct usbhid_reset_coordinator {
 	bool enum_active;
 };
 
+enum usbhid_pm_phase {
+	USBHID_PM_PHASE_ACTIVE,
+	USBHID_PM_PHASE_SUSPEND_PENDING,
+	USBHID_PM_PHASE_SUSPENDING,
+	USBHID_PM_PHASE_SUSPENDED,
+	USBHID_PM_PHASE_RESUME_PENDING,
+	USBHID_PM_PHASE_RESUMING,
+	USBHID_PM_PHASE_FAILED,
+};
+
+struct usbhid_pm_coordinator {
+	enum usbhid_pm_phase phase;
+	usbhid_pm_complete_t complete;
+	void *context;
+	u32 target;
+	u32 failed_target;
+	u32 wakeup_target;
+	int policy_error;
+	bool policy_transition;
+	bool policy_retry;
+	bool wakeup_armed;
+};
+
+enum {
+	USBHID_PM_TARGET_VALID = 1u,
+	USBHID_PM_TARGET_SUSPEND = 2u,
+	USBHID_PM_TARGET_REMOTE = 4u,
+	USBHID_PM_TARGET_FLAGS = 7u,
+	USBHID_PM_TARGET_SERIAL = 8u,
+};
+
+static _Atomic(u32) usbhid_pm_target;
+static atomic_bool usbhid_pm_remote_wakeup;
+
 struct usbhid_usb_device {
 	bool valid;
 	bool retiring;
@@ -277,6 +315,7 @@ struct usbhid_transport_pool {
 	struct usbhid_usb_device devices[USBHID_USB_DEVICE_SLOTS];
 	struct usbhid_probe_slot probes[USBHID_PROBE_SLOTS];
 	struct usbhid_reset_coordinator reset;
+	struct usbhid_pm_coordinator pm;
 	/* Lifecycle-only, word-aligned descriptor scratch; callbacks never own it. */
 	u32 preprobe_buffer_words[
 		USBHID_PREPROBE_BUFFER_SIZE / sizeof(u32)];
@@ -286,6 +325,7 @@ static struct usb_device usbhid_root_hub;
 static bool usbhid_root_hub_valid;
 static struct usbhid_transport_pool *usbhid_transport_pool;
 #define usbhid_reset (&usbhid_transport_pool->reset)
+#define usbhid_pm (&usbhid_transport_pool->pm)
 #define usbhid_preprobe_buffer \
 	((u8 *)usbhid_transport_pool->preprobe_buffer_words)
 static struct usbhid_usb_device *usbhid_usb_devices;
@@ -315,6 +355,8 @@ static bool usbhid_usb_device_has_published_hid(
 		const struct usbhid_usb_device *entry);
 static int usbhid_reset_process(void);
 static TickType_t usbhid_reset_wait_ticks(bool *active);
+static int usbhid_pm_process(void);
+static void usbhid_request_resume(struct hid_device *hid);
 static void hid_free_buffers(struct usb_device *dev, struct hid_device *hid);
 
 static u32 usbhid_next_generation_locked(void)
@@ -480,7 +522,8 @@ static int usbhid_usb_device_interrupt_owner_get(
 
 		if (usbhid && interface_to_usbdev(usbhid->intf) == dev &&
 		    usb_check_int_endpoints(usbhid->intf, ep_addrs)) {
-			if (usbhid->transport_stopping) {
+			if (usbhid->transport_stopping ||
+			    usbhid->transport_suspended) {
 				ret = -ENODEV;
 			} else {
 				usbhid->io_pending++;
@@ -518,7 +561,7 @@ static int usbhid_usb_device_control_owner_get(
 		if (!usbhid || interface_to_usbdev(usbhid->intf) != dev ||
 		    usbhid->ifnum != index)
 			continue;
-		if (usbhid->transport_stopping) {
+		if (usbhid->transport_stopping || usbhid->transport_suspended) {
 			ret = -ENODEV;
 		} else {
 			usbhid->io_pending++;
@@ -2738,6 +2781,547 @@ static TickType_t usbhid_reset_wait_ticks(bool *active)
 	return deadline - now;
 }
 
+enum usbhid_pm_host_operation {
+	USBHID_PM_HOST_SUSPEND,
+	USBHID_PM_HOST_RESUME,
+	USBHID_PM_HOST_QUERY_SUSPENDED,
+	USBHID_PM_HOST_QUERY_ACTIVE,
+};
+
+struct usbhid_pm_host_call {
+	TaskHandle_t waiter;
+	enum usbhid_pm_host_operation operation;
+	int status;
+	bool done;
+	bool remote_wakeup;
+};
+
+static void usbhid_pm_on_host(void *context)
+{
+	struct usbhid_pm_host_call *call = context;
+	TaskHandle_t waiter = call->waiter;
+	bool ok;
+
+	switch (call->operation) {
+	case USBHID_PM_HOST_SUSPEND:
+		ok = pio_hcd_port_suspend(BOARD_TUH_RHPORT, call->remote_wakeup);
+		call->status = ok ? 0 : -EBUSY;
+		break;
+	case USBHID_PM_HOST_RESUME:
+		ok = pio_hcd_port_resume(BOARD_TUH_RHPORT);
+		call->status = ok ? 0 :
+			pio_hcd_port_resume_failed(BOARD_TUH_RHPORT) ?
+			-ETIMEDOUT : -ENODEV;
+		break;
+	case USBHID_PM_HOST_QUERY_SUSPENDED:
+		ok = pio_hcd_port_is_suspended(BOARD_TUH_RHPORT);
+		call->status = ok ? 0 : -ENODEV;
+		break;
+	case USBHID_PM_HOST_QUERY_ACTIVE:
+		if (pio_hcd_port_resume_failed(BOARD_TUH_RHPORT)) {
+			call->status = -ETIMEDOUT;
+		} else {
+			ok = pio_hcd_port_is_suspended(BOARD_TUH_RHPORT);
+			call->status = ok ? -EINPROGRESS : 0;
+		}
+		break;
+	}
+
+	hid_transport_lock();
+	call->done = true;
+	hid_transport_unlock();
+	xTaskNotifyGive(waiter);
+}
+
+static int usbhid_pm_host_call(enum usbhid_pm_host_operation operation)
+{
+	struct usbhid_pm_host_call call = {
+		.waiter = xTaskGetCurrentTaskHandle(),
+		.operation = operation,
+		.remote_wakeup = usbhid_pm->wakeup_armed,
+	};
+	bool done;
+
+	(void)ulTaskNotifyTake(pdTRUE, 0);
+	usbh_defer_func(usbhid_pm_on_host, &call, false);
+	do {
+		hid_transport_lock();
+		done = call.done;
+		hid_transport_unlock();
+		if (!done)
+			(void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	} while (!done);
+	return call.status;
+}
+
+static int usbhid_pm_resume_bus(void)
+{
+	int ret = usbhid_pm_host_call(USBHID_PM_HOST_RESUME);
+
+	while (!ret) {
+		ret = usbhid_pm_host_call(USBHID_PM_HOST_QUERY_ACTIVE);
+		if (ret != -EINPROGRESS)
+			break;
+		(void)xTaskNotifyWaitIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
+					     0, UINT32_MAX, NULL, portMAX_DELAY);
+		ret = 0;
+	}
+	if (ret == -ETIMEDOUT)
+		async_msg("ERR: HID_PM_RESUME_TIMEOUT");
+	return ret;
+}
+
+static int usbhid_pm_collect_generic_locked(struct hid_device **devices,
+					     size_t *count)
+{
+	*count = 0;
+	if (usbhid_reset->state != USBHID_RESET_IDLE ||
+	    usbhid_enum_owner_active)
+		return -EBUSY;
+
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		const struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+
+		if (!entry->valid)
+			continue;
+		if (entry->dev.hub_addr)
+			return -EOPNOTSUPP;
+		if (!entry->mount_complete || entry->reset_request_mask ||
+		    entry->reset_uncancelable)
+			return -EBUSY;
+	}
+
+	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
+		struct hid_device *hid = usbhid_devices[i];
+		struct usbhid_device *usbhid;
+
+		if (!hid)
+			continue;
+		usbhid = hid->driver_data;
+		if (usbhid->disconnect_queued || usbhid->transport_stopping)
+			return -ENODEV;
+		if (!usbhid->driver_ready)
+			return -EBUSY;
+		if (!hid->driver || strcmp(hid->driver->name, "hid-generic"))
+			return -EOPNOTSUPP;
+		devices[(*count)++] = hid;
+	}
+
+	return *count ? 0 : -ENODEV;
+}
+
+static int usbhid_pm_suspended_transport_locked(
+		struct hid_device *const *devices, size_t count)
+{
+	if (usbhid_reset->state != USBHID_RESET_IDLE ||
+	    usbhid_enum_owner_active)
+		return -EBUSY;
+
+	for (size_t i = 0; i < count; i++) {
+		struct usbhid_device *usbhid = devices[i]->driver_data;
+
+		if (usbhid->disconnect_queued || usbhid->transport_stopping)
+			return -ENODEV;
+		if (!usbhid->transport_suspended)
+			return -EBUSY;
+	}
+	for (size_t i = 0; i < USBHID_USB_DEVICE_SLOTS; i++) {
+		const struct usbhid_usb_device *entry = &usbhid_usb_devices[i];
+
+		if (entry->valid && entry->io_pending)
+			return -EBUSY;
+	}
+	return 0;
+}
+
+static void usbhid_pm_resume_interfaces(struct hid_device **devices,
+					 size_t count)
+{
+	for (size_t i = 0; i < count; i++) {
+		if (!usbhid_report_resume(devices[i]))
+			usbhid_request_resume(devices[i]);
+	}
+}
+
+__attribute__((weak)) void usbhid_pm_state_changed_cb(
+		enum usbhid_pm_state state, int status)
+{
+	(void)state;
+	(void)status;
+}
+
+__attribute__((weak)) void usbhid_pm_wakeup_cb(void)
+{
+}
+
+void usbhid_pm_set_target(enum usbhid_pm_state state, bool remote_wakeup)
+{
+	u32 flags = USBHID_PM_TARGET_VALID;
+	u32 previous = atomic_load_explicit(&usbhid_pm_target,
+					    memory_order_relaxed);
+	u32 target;
+
+	if (state == USBHID_PM_SUSPENDED) {
+		flags |= USBHID_PM_TARGET_SUSPEND;
+		if (remote_wakeup)
+			flags |= USBHID_PM_TARGET_REMOTE;
+	}
+	do {
+		if ((previous & USBHID_PM_TARGET_FLAGS) == flags)
+			return;
+		/* Preserve a new sleep episode even if its state matches an old one. */
+		target = ((previous + USBHID_PM_TARGET_SERIAL) &
+			  ~(u32)USBHID_PM_TARGET_FLAGS) | flags;
+	} while (!atomic_compare_exchange_weak_explicit(
+			&usbhid_pm_target, &previous, target,
+			memory_order_release, memory_order_relaxed));
+	usbhid_lifecycle_kick();
+}
+
+void pio_usb_host_port_pm_changed_cb(uint8_t root_idx, bool remote_wakeup)
+{
+	TaskHandle_t task = atomic_load_explicit(&usbhid_lifecycle_task_handle,
+						memory_order_acquire);
+
+	(void)root_idx;
+	if (remote_wakeup)
+		atomic_store_explicit(&usbhid_pm_remote_wakeup, true,
+				      memory_order_release);
+	if (!task)
+		return;
+	if (xPortIsInsideInterrupt()) {
+		BaseType_t woken = pdFALSE;
+
+		(void)xTaskNotifyIndexedFromISR(task, USBHID_LIFECYCLE_NOTIFY_INDEX,
+					       USBHID_LIFECYCLE_NOTIFY_WAKE,
+					       eSetBits, &woken);
+		portYIELD_FROM_ISR(woken);
+	} else {
+		usbhid_lifecycle_kick();
+	}
+}
+
+static int usbhid_pm_set_remote_wakeup(struct usb_device *dev, bool enable)
+{
+	return usb_control_msg(dev, usb_sndctrlpipe(dev, 0),
+			       enable ? TUSB_REQ_SET_FEATURE : TUSB_REQ_CLEAR_FEATURE,
+			       USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+			       TUSB_REQ_FEATURE_REMOTE_WAKEUP, 0, NULL, 0,
+			       USB_CTRL_SET_TIMEOUT);
+}
+
+static int usbhid_pm_configure_remote_wakeup(struct usb_device *dev, bool enable)
+{
+	_Alignas(4) tusb_desc_configuration_t config;
+	int ret = usb_control_msg(dev, usb_rcvctrlpipe(dev, 0),
+				 USB_REQ_GET_DESCRIPTOR, USB_DIR_IN,
+				 TUSB_DESC_CONFIGURATION << 8, 0,
+				 &config, sizeof(config), USB_CTRL_GET_TIMEOUT);
+
+	if (ret < 0)
+		return ret;
+	if (ret != sizeof(config) || config.bLength != sizeof(config) ||
+	    config.bDescriptorType != TUSB_DESC_CONFIGURATION)
+		return -EPROTO;
+	if (!(config.bmAttributes & TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP)) {
+		if (enable)
+			async_msg("WARN: HID_PM_NO_REMOTE_WAKEUP");
+		return 0;
+	}
+	ret = usbhid_pm_set_remote_wakeup(dev, enable);
+	if (!ret)
+		usbhid_pm->wakeup_armed = enable;
+	return ret;
+}
+
+static void usbhid_pm_reconcile_target(void)
+{
+	bool remote = atomic_exchange_explicit(&usbhid_pm_remote_wakeup, false,
+					       memory_order_acq_rel);
+	if (remote)
+		usbhid_pm_wakeup_cb();
+	u32 target = atomic_load_explicit(&usbhid_pm_target, memory_order_acquire);
+	enum usbhid_pm_phase phase;
+
+	hid_transport_lock();
+	phase = usbhid_pm->phase;
+	if (remote)
+		/* Keep this episode awake until the upstream target changes. */
+		usbhid_pm->wakeup_target = usbhid_pm->target;
+	if (!(target & USBHID_PM_TARGET_VALID) ||
+	    (phase != USBHID_PM_PHASE_ACTIVE &&
+	     phase != USBHID_PM_PHASE_SUSPENDED) ||
+	    (target == usbhid_pm->failed_target &&
+	     (!usbhid_pm->policy_retry ||
+	      (usbhid_pm->policy_error != -EBUSY &&
+	       usbhid_pm->policy_error != -ENODEV)))) {
+		hid_transport_unlock();
+		return;
+	}
+	bool suspend = !remote && (target & USBHID_PM_TARGET_SUSPEND) &&
+		       target != usbhid_pm->wakeup_target;
+	if ((suspend && phase == USBHID_PM_PHASE_SUSPENDED) ||
+	    (!suspend && phase == USBHID_PM_PHASE_ACTIVE)) {
+		hid_transport_unlock();
+		return;
+	}
+	if (suspend) {
+		struct hid_device *devices[HID_HOST_MAX_DEVICES];
+		size_t count;
+		int ret = usbhid_pm_collect_generic_locked(devices, &count);
+
+		if (ret) {
+			bool report = ret != -ENODEV && ret != -EBUSY &&
+				      target != usbhid_pm->failed_target;
+
+			if (report) {
+				usbhid_pm->failed_target = target;
+				usbhid_pm->policy_error = ret;
+			}
+			hid_transport_unlock();
+			if (report)
+				usbhid_pm_state_changed_cb(USBHID_PM_SUSPENDED, ret);
+			return;
+		}
+	}
+	usbhid_pm->target = target;
+	usbhid_pm->policy_transition = true;
+	usbhid_pm->policy_retry = false;
+	usbhid_pm->phase = suspend ? USBHID_PM_PHASE_SUSPEND_PENDING :
+				    USBHID_PM_PHASE_RESUME_PENDING;
+	hid_transport_unlock();
+}
+
+static void usbhid_pm_finish(enum usbhid_pm_state target, int status,
+			     enum usbhid_pm_phase terminal)
+{
+	usbhid_pm_complete_t complete;
+	void *context;
+
+	hid_transport_lock();
+	complete = usbhid_pm->complete;
+	context = usbhid_pm->context;
+	usbhid_pm->complete = NULL;
+	usbhid_pm->context = NULL;
+	usbhid_pm->phase = terminal;
+	if (usbhid_pm->policy_transition) {
+		usbhid_pm->failed_target = status ? usbhid_pm->target : 0;
+		usbhid_pm->policy_error = status;
+		usbhid_pm->policy_transition = false;
+	}
+	hid_transport_unlock();
+
+	if (complete)
+		complete(target, status, context);
+	usbhid_pm_state_changed_cb(target, status);
+}
+
+int usbhid_pm_request(enum usbhid_pm_state state,
+		      usbhid_pm_complete_t complete, void *context)
+{
+	enum usbhid_pm_phase phase;
+	int ret = 0;
+
+	if (state != USBHID_PM_ACTIVE && state != USBHID_PM_SUSPENDED)
+		return -EINVAL;
+	if (!usbhid_transport_pool || !atomic_load_explicit(
+			&usbhid_lifecycle_task_handle, memory_order_acquire))
+		return -ENODEV;
+
+	hid_transport_lock();
+	phase = usbhid_pm->phase;
+	if (phase == USBHID_PM_PHASE_SUSPEND_PENDING ||
+	    phase == USBHID_PM_PHASE_SUSPENDING ||
+	    phase == USBHID_PM_PHASE_RESUME_PENDING ||
+	    phase == USBHID_PM_PHASE_RESUMING) {
+		ret = -EBUSY;
+	} else if (phase == USBHID_PM_PHASE_FAILED) {
+		ret = -ETIMEDOUT;
+	} else if ((state == USBHID_PM_ACTIVE &&
+		    phase == USBHID_PM_PHASE_ACTIVE) ||
+		   (state == USBHID_PM_SUSPENDED &&
+		    phase == USBHID_PM_PHASE_SUSPENDED)) {
+		ret = -EALREADY;
+	} else {
+		usbhid_pm->complete = complete;
+		usbhid_pm->context = context;
+		usbhid_pm->phase = state == USBHID_PM_SUSPENDED ?
+			USBHID_PM_PHASE_SUSPEND_PENDING :
+			USBHID_PM_PHASE_RESUME_PENDING;
+	}
+	hid_transport_unlock();
+
+	if (!ret)
+		usbhid_lifecycle_kick();
+	return ret;
+}
+
+static int usbhid_pm_process_suspend(void)
+{
+	struct hid_device *devices[HID_HOST_MAX_DEVICES];
+	size_t suspended = 0;
+	size_t count;
+	bool bus_suspended = false;
+	int ret;
+
+	hid_transport_lock();
+	ret = usbhid_pm_collect_generic_locked(devices, &count);
+	hid_transport_unlock();
+	if (ret)
+		goto finish;
+	usbhid_pm->wakeup_armed = false;
+	if (usbhid_pm->policy_transition) {
+		ret = usbhid_pm_configure_remote_wakeup(
+			hid_to_usb_dev(devices[0]),
+			(usbhid_pm->target & USBHID_PM_TARGET_REMOTE) != 0);
+		if (ret)
+			goto finish;
+	}
+
+	for (; suspended < count; suspended++) {
+		ret = usbhid_report_suspend(devices[suspended]);
+		if (ret)
+			goto rollback;
+		ret = usbhid_wait_io(devices[suspended]);
+		if (ret) {
+			suspended++;
+			goto rollback;
+		}
+	}
+
+	hid_transport_lock();
+	ret = usbhid_pm_suspended_transport_locked(devices, count);
+	hid_transport_unlock();
+	if (ret)
+		goto rollback;
+
+	ret = usbhid_pm_host_call(USBHID_PM_HOST_SUSPEND);
+	if (ret)
+		goto rollback;
+	bus_suspended = true;
+
+	/* Four 1 ms ticks guarantee at least 3 ms without SOF at any tick phase. */
+	vTaskDelay(pdMS_TO_TICKS(4u));
+	ret = usbhid_pm_host_call(USBHID_PM_HOST_QUERY_SUSPENDED);
+	/* A real keyboard may already have woken while lifecycle was asleep. Its
+	 * latched IRQ still requires the resume handoff, not an unplug rollback. */
+	if (ret && !atomic_load_explicit(&usbhid_pm_remote_wakeup,
+					 memory_order_acquire)) {
+		bus_suspended = false;
+		goto rollback;
+	}
+	hid_transport_lock();
+	ret = usbhid_pm_suspended_transport_locked(devices, count);
+	hid_transport_unlock();
+	if (ret)
+		goto rollback;
+
+	usbhid_pm_finish(USBHID_PM_SUSPENDED, 0,
+			 USBHID_PM_PHASE_SUSPENDED);
+	return 1;
+
+rollback:
+	if (bus_suspended) {
+		int resume_ret = usbhid_pm_resume_bus();
+
+		if (resume_ret == -ETIMEDOUT) {
+			usbhid_pm_finish(USBHID_PM_SUSPENDED, resume_ret,
+					 USBHID_PM_PHASE_FAILED);
+			return 1;
+		}
+	}
+	if (usbhid_pm->wakeup_armed) {
+		int clear_ret = usbhid_pm_set_remote_wakeup(
+			hid_to_usb_dev(devices[0]), false);
+		if (clear_ret)
+			async_msg("WARN: HID_PM_WAKEUP_CLEAR");
+		usbhid_pm->wakeup_armed = false;
+	}
+	usbhid_pm_resume_interfaces(devices, suspended);
+finish:
+	usbhid_pm_finish(USBHID_PM_SUSPENDED, ret, USBHID_PM_PHASE_ACTIVE);
+	return 1;
+}
+
+static int usbhid_pm_process_resume(void)
+{
+	struct hid_device *devices[HID_HOST_MAX_DEVICES];
+	size_t count;
+	int ret;
+
+	hid_transport_lock();
+	ret = usbhid_pm_collect_generic_locked(devices, &count);
+	hid_transport_unlock();
+	if (ret)
+		goto finish;
+
+	ret = usbhid_pm_resume_bus();
+	if (ret == -ETIMEDOUT) {
+		/* The failed PHY is still fenced; do not reopen HID admission. */
+		usbhid_pm_finish(USBHID_PM_ACTIVE, ret, USBHID_PM_PHASE_FAILED);
+		return 1;
+	}
+	if (!ret) {
+		hid_transport_lock();
+		ret = usbhid_pm_suspended_transport_locked(devices, count);
+		hid_transport_unlock();
+	}
+	if (usbhid_pm->wakeup_armed && !ret) {
+		int clear_ret = usbhid_pm_set_remote_wakeup(
+			hid_to_usb_dev(devices[0]), false);
+		if (clear_ret)
+			async_msg("WARN: HID_PM_WAKEUP_CLEAR");
+		usbhid_pm->wakeup_armed = false;
+	}
+	if (!ret) {
+		for (size_t i = 0; i < count; i++) {
+			int resume_ret = usbhid_report_resume(devices[i]);
+
+			if (!resume_ret)
+				usbhid_request_resume(devices[i]);
+			else if (!ret)
+				ret = resume_ret;
+		}
+	} else {
+		usbhid_pm_resume_interfaces(devices, count);
+	}
+
+finish:
+	usbhid_pm_finish(USBHID_PM_ACTIVE, ret, USBHID_PM_PHASE_ACTIVE);
+	return 1;
+}
+
+static int usbhid_pm_process(void)
+{
+	enum usbhid_pm_phase phase;
+
+	usbhid_pm_reconcile_target();
+	hid_transport_lock();
+	phase = usbhid_pm->phase;
+	if (phase == USBHID_PM_PHASE_SUSPEND_PENDING)
+		usbhid_pm->phase = USBHID_PM_PHASE_SUSPENDING;
+	else if (phase == USBHID_PM_PHASE_RESUME_PENDING)
+		usbhid_pm->phase = USBHID_PM_PHASE_RESUMING;
+	hid_transport_unlock();
+
+	if (phase == USBHID_PM_PHASE_SUSPEND_PENDING)
+		return usbhid_pm_process_suspend();
+	if (phase == USBHID_PM_PHASE_RESUME_PENDING)
+		return usbhid_pm_process_resume();
+	return 0;
+}
+
+static bool usbhid_pm_is_quiesced(void)
+{
+	bool quiesced;
+
+	hid_transport_lock();
+	quiesced = usbhid_pm->phase == USBHID_PM_PHASE_SUSPENDED ||
+		    usbhid_pm->phase == USBHID_PM_PHASE_FAILED;
+	hid_transport_unlock();
+	return quiesced;
+}
+
 static TickType_t usbhid_preprobe_wait_ticks(void)
 {
 	TickType_t now = xTaskGetTickCount();
@@ -2987,7 +3571,7 @@ int usbhid_backend_queue_device_reset(struct hid_device *hid,
 		 * Close cancels pending reset_work. An already-running equivalent may
 		 * publish across close, matching the upstream outcome; stop still fences it.
 		 */
-		if (usbhid->transport_stopping ||
+		if (usbhid->transport_stopping || usbhid->transport_suspended ||
 		    (!reset_work_running &&
 		     (!usbhid->report_wanted ||
 		      usbhid->report_revision != report_revision))) {
@@ -3102,6 +3686,10 @@ static void usbhid_lifecycle_drain_disconnects(void)
 		if (intf)
 			usbhid_disconnect(intf);
 	}
+	hid_transport_lock();
+	if (usbhid_pm->phase == USBHID_PM_PHASE_ACTIVE)
+		usbhid_pm->wakeup_armed = false;
+	hid_transport_unlock();
 }
 
 static int usbhid_lifecycle_process_ready_probes(void)
@@ -3165,6 +3753,17 @@ void usbhid_lifecycle_task(void *pvParameters)
 		/* Flags/cache slots own work; notification is only a bounded wakeup. */
 		usbhid_lifecycle_drain_disconnects();
 		usbhid_usb_device_release_retired();
+		ret = usbhid_pm_process();
+		if (ret > 0)
+			continue;
+		if (usbhid_pm_is_quiesced()) {
+			usbhid_lifecycle_log_transport_faults();
+			(void)xTaskNotifyWaitIndexed(
+				USBHID_LIFECYCLE_NOTIFY_INDEX, 0, UINT32_MAX,
+				NULL, portMAX_DELAY);
+			usbhid_pm->policy_retry = true;
+			continue;
+		}
 		ret = usbhid_reset_process();
 		if (ret > 0)
 			continue;
@@ -3178,10 +3777,13 @@ void usbhid_lifecycle_task(void *pvParameters)
 		/* One virtual-device work item, then recheck physical teardown/reset. */
 		if (usbhid_lifecycle_process_work())
 			continue;
+		if (usbhid_pm_process() > 0)
+			continue;
 
 		(void)xTaskNotifyWaitIndexed(USBHID_LIFECYCLE_NOTIFY_INDEX,
 					     0, UINT32_MAX, NULL,
 					     usbhid_lifecycle_wait_ticks());
+		usbhid_pm->policy_retry = true;
 	}
 }
 
@@ -3675,6 +4277,14 @@ static void usbhid_backend_device_detach(uint8_t dev_addr)
 	if (!retired)
 		return;
 
+	hid_transport_lock();
+	if (usbhid_pm->phase == USBHID_PM_PHASE_SUSPENDED ||
+	    usbhid_pm->phase == USBHID_PM_PHASE_FAILED)
+		usbhid_pm->phase = USBHID_PM_PHASE_ACTIVE;
+	atomic_store_explicit(&usbhid_pm_remote_wakeup, false,
+			      memory_order_release);
+	hid_transport_unlock();
+
 	/* Host detach revokes every class publication for this device epoch. */
 	usbhid_usb_device_invalidate_hid_publications(retired);
 	for (size_t i = 0; i < HID_HOST_MAX_DEVICES; i++) {
@@ -3903,8 +4513,10 @@ static int usbhid_start(struct hid_device *hid)
 	hid_transport_lock();
 	if (usbhid->disconnect_queued)
 		ret = -ENODEV;
-	else
+	else {
+		usbhid->transport_suspended = false;
 		usbhid->transport_stopping = false;
+	}
 	hid_transport_unlock();
 	if (ret)
 		goto fail;
@@ -4011,7 +4623,7 @@ static int usbhid_open(struct hid_device *hid)
 	// TinyUSB transport state uses an explicit gate under its task mutex. The
 	// non-ALWAYS path starts in RESUMING to retain upstream's initial drain.
 	hid_transport_lock();
-	if (usbhid->transport_stopping) {
+	if (usbhid->transport_stopping || usbhid->transport_suspended) {
 		ret = -ENODEV;
 	} else {
 		usbhid->report_open_state = hid->quirks & HID_QUIRK_ALWAYS_POLL ?
@@ -4407,7 +5019,7 @@ static bool usbhid_io_get(struct hid_device *hid)
 	bool acquired = false;
 
 	hid_transport_lock();
-	if (!usbhid->transport_stopping) {
+	if (!usbhid->transport_stopping && !usbhid->transport_suspended) {
 		usbhid->io_pending++;
 		acquired = true;
 	}
@@ -4453,7 +5065,7 @@ int hid_compat_waitqueue_bind(wait_queue_head_t *wait, struct hid_device *hid)
 	int ret = 0;
 
 	hid_transport_lock();
-	if (usbhid->transport_stopping) {
+	if (usbhid->transport_stopping || usbhid->transport_suspended) {
 		ret = -ENODEV;
 	} else {
 		wait->transport_next = usbhid->protocol_waits;
@@ -4598,6 +5210,7 @@ struct hid_device *usbhid_ifnum_io_get(const struct usb_device *dev,
 
 		if (usbhid && usbhid->driver_ready &&
 		    !usbhid->transport_stopping &&
+		    !usbhid->transport_suspended &&
 		    interface_to_usbdev(usbhid->intf) == dev &&
 		    usbhid->intf->cur_altsetting->desc.bInterfaceNumber == ifnum) {
 			usbhid->io_pending++;
@@ -4637,7 +5250,7 @@ static bool usbhid_request_order_before(u32 left, u32 right)
 static int usbhid_request_charge_locked(struct usbhid_device *usbhid,
 		enum usbhid_report_lane lane, u16 memory_charge)
 {
-	if (usbhid->transport_stopping)
+	if (usbhid->transport_stopping || usbhid->transport_suspended)
 		return -ENODEV;
 	if (usbhid_request_lane_full_locked(usbhid, lane))
 		return -EBUSY;
@@ -4701,6 +5314,35 @@ static void usbhid_request_append_locked(
 				usbhid->usb_altsetting.interrupt_out_endpoint : 0);
 		previous_head->state = USBHID_REPORT_REQUEST_QUEUED;
 	}
+}
+
+static void usbhid_request_resume(struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+	struct usbhid_report_request *heads[2];
+	bool kick = false;
+
+	hid_transport_lock();
+	heads[0] = usbhid->ctrl_head;
+	heads[1] = usbhid->out_head;
+	for (size_t i = 0; i < ARRAY_SIZE(heads); i++) {
+		struct usbhid_report_request *request = heads[i];
+
+		if (!request || request->state != USBHID_REPORT_REQUEST_PARKED)
+			continue;
+		hid_async_admission_logical_link_locked(
+			&request->admission, usbhid->dev_addr,
+			request->device_generation,
+			request->lane == USBHID_REPORT_LANE_OUT,
+			request->lane == USBHID_REPORT_LANE_OUT ?
+				usbhid->usb_altsetting.interrupt_out_endpoint : 0);
+		request->state = USBHID_REPORT_REQUEST_QUEUED;
+		kick = true;
+	}
+	usbhid_report_queue_kick_pending |= kick;
+	hid_transport_unlock();
+	if (kick)
+		hid_async_report_queue_kick();
 }
 
 static void usbhid_request_pop_locked(struct usbhid_report_request *request)
@@ -5407,7 +6049,7 @@ static void usbhid_request(struct hid_device *hid, struct hid_report *report,
 	 * covers both stages, so hid_hw_wait() observes the complete FIFO drain.
 	 */
 	hid_transport_lock();
-	if (usbhid->transport_stopping) {
+	if (usbhid->transport_stopping || usbhid->transport_suspended) {
 		ret = -ENODEV;
 	} else {
 		usbhid_request_append_locked(usbhid, request);

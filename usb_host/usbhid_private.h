@@ -109,6 +109,7 @@ struct usbhid_device {
 	bool driver_ready;
 	/* Driver deliberately opened raw_event-only ingress during probe/remove. */
 	bool probe_raw_event;
+	bool transport_suspended;
 	bool transport_stopping;
 	bool disconnect_queued;
 

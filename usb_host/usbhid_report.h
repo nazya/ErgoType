@@ -18,6 +18,8 @@ int usbhid_control_report_submit(struct hid_device *hid, uint8_t report_type,
 				 usbhid_control_report_done_t done,
 				 void *context);
 int usbhid_report_start(struct hid_device *hid);
+int usbhid_report_suspend(struct hid_device *hid);
+int usbhid_report_resume(struct hid_device *hid);
 void usbhid_report_close(struct hid_device *hid);
 void usbhid_report_stop(struct hid_device *hid);
 void usbhid_report_unplug(struct hid_device *hid);

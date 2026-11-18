@@ -40,6 +40,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/coreJSON/jsonFilePaths.cmake)
 set(PROJECT_NAME ErgoType)
 project(${PROJECT_NAME} C CXX ASM)
 
+option(USBHID_PM_FIXTURE "Run the direct-root generic HID PM hardware test" OFF)
+
 set(FATFS_FFCONF ${PICO_SDK_PATH}/lib/tinyusb/lib/fatfs/source/ffconf.h)
 file(READ ${FATFS_FFCONF} FATFS_FFCONF_CONTENT)
 if(NOT FATFS_FFCONF_CONTENT MATCHES "#define[ \t]+FF_USE_STRFUNC[ \t]+1")
@@ -630,6 +632,23 @@ bool hcd_edpt_clear_stall(uint8_t rhport, uint8_t dev_addr, uint8_t ep_addr) {
   return pio_usb_host_endpoint_reset_data_toggle(pio_rhport, dev_addr, ep_addr);
 }
 
+// Build-local host-PM extension. Pinned TinyUSB has no host suspend API, so
+// the firmware lifecycle calls this only through its single host-owner task.
+bool pio_hcd_port_suspend(uint8_t rhport, bool remote_wakeup) {
+  return pio_usb_host_port_suspend(RHPORT_PIO(rhport), remote_wakeup);
+}
+
+bool pio_hcd_port_resume(uint8_t rhport) {
+  return pio_usb_host_port_resume(RHPORT_PIO(rhport));
+}
+
+bool pio_hcd_port_is_suspended(uint8_t rhport) {
+  return pio_usb_host_port_is_suspended(RHPORT_PIO(rhport));
+}
+
+bool pio_hcd_port_resume_failed(uint8_t rhport) {
+  return pio_usb_host_port_resume_failed(RHPORT_PIO(rhport));
+}
 ]=])
 string(FIND "${TINYUSB_PIO_HCD_CONTENT}"
        "${TINYUSB_PIO_HCD_CLEAR_STALL_UPSTREAM}"
@@ -938,6 +957,13 @@ target_sources(${PROJECT_NAME} PUBLIC
 
 # Route TinyUSB's dcd_remote_wakeup() through tusb/sof_fix.c.
 target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--wrap=dcd_remote_wakeup")
+
+if(USBHID_PM_FIXTURE)
+        target_sources(${PROJECT_NAME} PRIVATE
+                ${CMAKE_CURRENT_LIST_DIR}/usb_host/usbhid_pm_fixture.c
+        )
+        target_compile_definitions(${PROJECT_NAME} PRIVATE USBHID_PM_FIXTURE=1)
+endif()
 
 # Make sure TinyUSB can find tusb_config.h
 target_include_directories(${PROJECT_NAME} PUBLIC

@@ -148,12 +148,117 @@ input/HID++/battery graph, so neither needs another stage.
 
 ## Stage 3: USB suspend and resume
 
-Probe-time SET_IDLE and the ll-driver `.idle` EP0 request are implemented.
-What is missing is the common Linux power-management lifecycle: the firmware
-has no USB host suspend state, PM dispatcher, autosuspend, or remote-wakeup
-policy, and `pm_ptr()` currently removes driver callbacks from their
-descriptors. Hotplug and terminal recovery rebuild a device from a fresh
-generation; they do not prove suspend/resume of the same generation.
+The production boundary is `usbhid_pm_set_target(state, remote_wakeup)`: one
+last-wins desired state, stored before notifying the existing lifecycle task.
+There is no new queue, task, or periodic policy poll. A target written before
+host initialization is retained. An ACTIVE target arriving during suspend is
+handled after that transition completes; it is not discarded as busy.
+`usbhid_pm_state_changed_cb()` runs in lifecycle context. Its state is the
+transition's requested target and its status is the result; an overwritten
+mailbox write does not receive a separate completion.
+`usbhid_pm_wakeup_cb()` reports an actual device wake request in the same
+lifecycle context, independently of whether interface resume succeeds.
+
+The explicit single-transition API `usbhid_pm_request()` remains available for
+ordinary suspend and resume of a direct root-port device whose bound interfaces
+all use `hid-generic`. The caller supplies the policy event and retains the
+callback context until the lifecycle task reports completion. There is one
+outstanding command: a duplicate completed state returns `-EALREADY`, while a
+command overlapping an active transition returns `-EBUSY`.
+
+The request call returns `-EINVAL` for an invalid target and `-ENODEV` before
+the lifecycle owner exists. Once accepted, its completion reports the actual
+transition result: `-EOPNOTSUPP` for a hub child or vendor driver, `-EBUSY` for
+enumeration/reset/recovery ownership which prevents quiescing, `-ENODEV` if the
+device generation disappears, or the existing transport error such as
+`-ETIMEDOUT` while draining accepted I/O.
+
+Suspend closes new interrupt, control, and output admission, aborts the armed
+interrupt-IN request, and drains every control/output request accepted before
+that gate, including its parser completion. The PIO HCD then stops SOF
+generation. Completion is delayed for four 1 ms firmware ticks, which
+guarantees the USB three-frame idle interval at any tick phase.
+
+Resume is a PIO-host state machine rather than a delay in the TinyUSB task:
+
+- the TX state machine holds the correct K polarity for 40 ms, matching the
+  conservative Linux host timeout;
+- the existing TX PIO program terminates K with a standard low-speed EOP: two
+  low-speed bit times of SE0 followed by one low-speed bit time of J;
+- SOF generation restarts immediately after that EOP;
+- endpoint transactions remain fenced for the USB 10 ms resume-recovery
+  interval, after which parked HID traffic is rearmed and the completion is
+  delivered.
+
+The PIO deadlines use unsigned microsecond subtraction, so the 32-bit timer
+wrapping during either interval does not change their ordering. Disconnect can
+replace any suspended or resuming physical state; lifecycle validation then
+returns an error instead of reopening the detached HID generation.
+
+EOP completion waits for the PIO output enables to release D+/D-, not for a
+short-lived program-counter value. DMA completion, the EOP flag, and pin
+release share one 100 us budget. A timeout disables TX, releases the pins, and
+posts a DMA abort without waiting inside the IRQ. SOF and endpoint traffic
+remain closed, and the PM completion returns `-ETIMEDOUT` rather than ACTIVE.
+The failed port can be reused after DMA BUSY and ABORT retire and a physical
+disconnect is observed; if DMA cannot retire, the IRQ still returns and the
+port stays fenced. The source/native checks and the main-image hardware test
+are described in [PIO resume checks](../tests/pio-usb-pm/README.md).
+
+This requires a build-local PIO HCD extension because pinned TinyUSB and
+Pico-PIO-USB expose no host-port suspend/resume operation. The signalling and
+recovery intervals follow USB 2.0 section 7.1.7.7. The 40 ms K interval follows
+Linux's `USB_RESUME_TIMEOUT` interoperability choice instead of using the
+specification's 20 ms minimum.
+
+The ordinary direct-root cycle passed the two-board hardware test with input
+before and after sleep in the same device generation. The host-only remote
+wakeup test also passed with a real full-speed ErgoType NKRO keyboard. The
+current policy and remote-wakeup path implement:
+
+- `tud_suspend_cb()` supplies SUSPENDED and the computer's wakeup permission;
+  `tud_resume_cb()`, mount, and unmount supply ACTIVE;
+- before policy-driven sleep, read the selected configuration's nine-byte
+  header and SET/CLEAR `DEVICE_REMOTE_WAKEUP` when the device supports it;
+  pinned TinyUSB selects configuration index zero;
+- enable the root port's physical K rising-edge GPIO IRQ only for an armed
+  keyboard: D- for full speed, D+ for low speed. The handler verifies the full
+  line state and immediately takes over K, then disables the wake IRQ;
+- the existing bounded resume/EOP/recovery state machine completes the bus
+  transition. Its notifications replace the task-side one-tick status poll;
+- retain the remote-wake override until the upstream target changes, so the
+  keyboard is not immediately suspended again while its computer is waking;
+- deliver the wake-request callback before waiting for downstream resume;
+  production firmware defers `tud_remote_wakeup()` to the upstream USB-device
+  task. TinyUSB enforces the upstream wakeup permission. Transition-result
+  callbacks do not generate wake requests.
+
+The host boundary passed with the real-keyboard fixture while upstream USB
+stayed active. Its final marker required the wake-request callback,
+successful resume, and restored same-generation keyboard input. The laptop's
+upstream runtime-suspend test has not passed and is not a host-only verdict.
+The complete keyboard → remapper → Android test passed: Android woke on a key
+and both devices left their suspend indication. See the
+[Android test](../tests/pio-usb-pm/README.md#android-complete-wakeup-chain-without-cdc).
+
+GPIO input inversion and IRQ inversion are independent in RP2; the K-edge
+selection uses the physical polarity, while the existing line-state helper
+undoes INOVER. The IRQ is shared through a raw handler, not by replacing the
+pointing sensor's GPIO callback. The timing requirements come from USB 2.0
+section 7.1.7.7; see [USB-IF](https://www.usb.org/document-library/usb-20-specification)
+and the [RP2 GPIO API](https://www.raspberrypi.com/documentation/pico-sdk/hardware.html#hardware_gpio).
+
+Hubs, reset-resume, device-family PM callbacks, and MCU low-power mode remain
+outside this generic path. FS/LS polarity and IRQ control flow are native-tested;
+the full-speed host-initiated and real-keyboard host-only wakeup cycles are
+hardware-verified, as is the complete Android wakeup chain. Low-speed hardware
+and the precise signalling waveform remain unqualified.
+
+Probe-time SET_IDLE and the ll-driver `.idle` EP0 request remain implemented.
+`pm_ptr()` still removes driver callbacks from their descriptors, so the next
+code stage is the common Linux driver PM dispatcher. Hotplug and terminal
+recovery rebuild a device from a fresh generation and do not substitute for
+that same-generation callback path.
 
 This affects the complete imported driver tables, not only sources selected in
 the default image:
@@ -177,21 +282,21 @@ the default image:
 The imported Sony controller PM block remains separately gated with the
 controller scope. Do not enable it as part of wired keyboard/mouse PM.
 
-Implement PM as one host-layer contract rather than defining `CONFIG_PM` in
+Continue PM as one host-layer contract rather than defining `CONFIG_PM` in
 isolation:
 
-1. Define the board/USB event that begins suspend and the event that selects
-   ordinary resume versus reset-resume.
-2. Stop new report, control, and output producers, quiesce the backend, and
-   wait for exact completion ownership before invoking driver callbacks.
-3. Release pressed input state and preserve the required LED/output state.
-4. Apply remote-wakeup policy and keep disconnect able to win every race.
-5. Restore transport, dispatch driver callbacks in Linux order, propagate
-   their real return values, then reopen report delivery.
-6. Test disconnect during suspend and resume, failed callbacks, pending
-   control/output, and representative devices for each distinct callback
-   graph. Do not test every VID:PID when another device executes the same
-   graph.
+1. Qualify the generic direct-root path with suspend/resume of the same device
+   generation, pending control/output requests, and disconnect during idle,
+   K-signalling, and recovery.
+2. Dispatch ordinary driver suspend/resume callbacks in Linux order, propagate
+   their real return values, and release pressed input state where upstream
+   requires it.
+3. Add reset-resume and restore required device modes and LED/output state.
+4. Cover denied upstream wake permission and disconnect during suspend.
+   Direct-root wake-on-key with an Android host has passed.
+5. Add hub-port suspend/resume only after the common hub gate is available.
+6. Test one representative for each distinct callback graph; do not test every
+   VID:PID when another device executes the same graph.
 
 ## Stage 4: power-supply queue lifetime
 

@@ -25,7 +25,9 @@ If two pins are provided, both LEDs show the same pattern.
 
 - USB **unmounted**: fast blink (`LED_PATTERN_FAST`, ~200 ms toggle)
 - USB **mounted**: off (`pattern=0`)
-- USB **suspended**: “heartbeat” (one 100 ms on-pulse every ~3.2 s)
+- USB **suspended**, remote wakeup allowed: one 100 ms pulse per 3.2 s period.
+- USB **suspended**, remote wakeup denied: 100 ms on, 100 ms off, 100 ms on,
+  then off for the rest of the same period.
 - HID **CapsLock**: if the host sends the keyboard LED output report, the plain LED mirrors CapsLock (solid on/off).
 
 ## WS2812 status LED (`ws2812_pin`)

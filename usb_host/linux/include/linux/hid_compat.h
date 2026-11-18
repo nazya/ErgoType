@@ -326,7 +326,9 @@ typedef int atomic_t;
 #define EPROTO 71
 #define ENXIO 6
 #define EAGAIN 11
+#define EALREADY 114
 #define EINPROGRESS 115
+#define EOPNOTSUPP 95
 #define EREMOTEIO 121
 #define ETIMEDOUT 110
 #define E2BIG 7

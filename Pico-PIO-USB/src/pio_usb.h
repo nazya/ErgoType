@@ -15,6 +15,12 @@ void pio_usb_host_task(void);
 void pio_usb_host_stop(void);
 void pio_usb_host_restart(void);
 uint32_t pio_usb_host_get_frame_number(void);
+/* Host-owner PM extension; suspended remains true through resume recovery. */
+bool pio_usb_host_port_suspend(uint8_t root_idx, bool remote_wakeup);
+bool pio_usb_host_port_resume(uint8_t root_idx);
+bool pio_usb_host_port_is_suspended(uint8_t root_idx);
+bool pio_usb_host_port_resume_failed(uint8_t root_idx);
+void pio_usb_host_port_pm_changed_cb(uint8_t root_idx, bool remote_wakeup);
 
 /* Host-owner helper: reset only the local data toggle after remote clear-halt. */
 bool pio_usb_host_endpoint_reset_data_toggle(uint8_t root_idx,

@@ -11,9 +11,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hardware/dma.h"
 #include "hardware/sync.h"
 #include "hardware/pio.h"
+#include "hardware/pio_instructions.h"
 #include "hardware/gpio.h"
+#include "hardware/irq.h"
 
 #include "pio_usb.h"
 #include "pio_usb_ll.h"
@@ -29,6 +32,33 @@ static repeating_timer_t sof_rt;
 static volatile uint32_t sof_count = 0;
 static bool timer_active;
 
+/* Port extension: upstream's root->suspended flag is reserved for reset. */
+enum pio_usb_host_port_pm_state {
+  PIO_USB_HOST_PORT_ACTIVE,
+  PIO_USB_HOST_PORT_SUSPENDED,
+  PIO_USB_HOST_PORT_RESUME_SIGNAL,
+  PIO_USB_HOST_PORT_RESUME_RECOVERY,
+  PIO_USB_HOST_PORT_RESUME_FAILED,
+};
+
+static volatile uint8_t port_pm_state[PIO_USB_ROOT_PORT_CNT];
+static volatile uint32_t port_pm_started_us[PIO_USB_ROOT_PORT_CNT];
+static volatile bool port_pm_remote_enabled[PIO_USB_ROOT_PORT_CNT];
+
+static void pio_usb_host_wakeup_irq(void);
+
+__attribute__((weak)) void pio_usb_host_port_pm_changed_cb(uint8_t root_idx,
+                                                         bool remote_wakeup) {
+  (void)root_idx;
+  (void)remote_wakeup;
+}
+
+enum {
+  PIO_USB_HOST_RESUME_SIGNAL_US = 40000,
+  PIO_USB_HOST_RESUME_RECOVERY_US = 10000,
+  PIO_USB_HOST_RESUME_EOP_TIMEOUT_US = 100,
+};
+
 static volatile bool cancel_timer_flag;
 static volatile bool start_timer_flag;
 static __unused uint32_t int_stat;
@@ -36,6 +66,13 @@ static uint8_t sof_packet[4] = {USB_SYNC, USB_PID_SOF, 0x00, 0x10};
 static uint8_t sof_packet_encoded[4 * 2 * 7 / 6 + 2];
 static uint8_t sof_packet_encoded_len;
 static uint8_t keepalive_encoded[1];
+/* RAM-resident IRQ DMA: address 0 supplies SE0; COMP releases after J. */
+static uint8_t resume_eop_encoded[1] = {
+    (PIO_USB_TX_ENCODED_DATA_COMP << 6) |
+    (PIO_USB_TX_ENCODED_DATA_K << 4) |
+    (PIO_USB_TX_ENCODED_DATA_K << 2) |
+    PIO_USB_TX_ENCODED_DATA_K,
+};
 
 static bool sof_timer(repeating_timer_t *_rt);
 
@@ -86,6 +123,17 @@ usb_device_t *pio_usb_host_init(const pio_usb_configuration_t *c) {
   sof_packet_encoded_len =
       pio_usb_ll_encode_tx_data(sof_packet, sizeof(sof_packet), sof_packet_encoded);
   pio_usb_ll_encode_tx_data(NULL, 0, keepalive_encoded);
+
+  for (uint8_t root_idx = 0; root_idx < PIO_USB_ROOT_PORT_CNT; root_idx++) {
+    port_pm_state[root_idx] = PIO_USB_HOST_PORT_ACTIVE;
+    port_pm_started_us[root_idx] = 0;
+    port_pm_remote_enabled[root_idx] = false;
+  }
+
+  gpio_add_raw_irq_handler_masked64((1ull << root->pin_dp) |
+                                      (1ull << root->pin_dm),
+                                    pio_usb_host_wakeup_irq);
+  irq_set_enabled(IO_IRQ_BANK0, true);
 
   if (!c->skip_alarm_pool) {
     _alarm_pool = c->alarm_pool;
@@ -195,6 +243,86 @@ static void __no_inline_not_in_flash_func(configure_root_port)(
   }
 }
 
+static __always_inline uint pio_usb_host_line_state(const root_port_t *root,
+                                                     bool dp_high) {
+  bool const dp_is_low_pin = root->pin_dp < root->pin_dm;
+  return dp_high == dp_is_low_pin ? 0b01 : 0b10;
+}
+
+static void __no_inline_not_in_flash_func(pio_usb_host_resume_signal_start)(
+    pio_port_t *pp, root_port_t *root) {
+  PIO pio = pp->pio_usb_tx;
+  uint sm = pp->sm_tx;
+  uint const resume_k = pio_usb_host_line_state(root, !root->is_fullspeed);
+  uint const sideset_k = pio_encode_sideset(2, resume_k);
+
+  configure_root_port(pp, root);
+  pio_sm_set_enabled(pio, sm, false);
+  pio_sm_clear_fifos(pio, sm);
+  pio_sm_restart(pio, sm);
+  SM_SET_CLKDIV(pio, sm, pp->clk_div_ls_tx);
+  pp->low_speed = true;
+  pio_sm_exec(pio, sm,
+              pio_encode_set(pio_pindirs, 0b11) | sideset_k);
+}
+
+static bool __no_inline_not_in_flash_func(pio_usb_host_resume_signal_end)(
+    pio_port_t *pp, root_port_t *root) {
+  PIO pio = pp->pio_usb_tx;
+  uint sm = pp->sm_tx;
+  uint const resume_k = pio_usb_host_line_state(root, !root->is_fullspeed);
+  uint const sideset_k = pio_encode_sideset(2, resume_k);
+  uint const low_pin = root->pin_dp < root->pin_dm ? root->pin_dp : root->pin_dm;
+  uint32_t const pin_mask = 3u << (low_pin - pio_get_gpio_base(pio));
+  uint32_t const started = get_time_us_32();
+
+  pio_sm_clear_fifos(pio, sm);
+  pio_sm_restart(pio, sm);
+  pio->irq = IRQ_TX_ALL_MASK;
+  dma_channel_transfer_from_buffer_now(pp->tx_ch, resume_eop_encoded,
+                                       sizeof(resume_eop_encoded));
+  while (dma_channel_is_busy(pp->tx_ch)) {
+    if ((uint32_t)(get_time_us_32() - started) >=
+        PIO_USB_HOST_RESUME_EOP_TIMEOUT_US) {
+      goto failed;
+    }
+    tight_loop_contents();
+  }
+
+  /* Enter address 0 directly: K -> 2 LS bits SE0 -> 1 LS bit J. */
+  pio_sm_exec(pio, sm,
+              pio_encode_jmp(pp->offset_tx) | sideset_k);
+  pio_sm_set_enabled(pio, sm, true);
+  while ((pio->irq & IRQ_TX_ALL_MASK) == 0) {
+    if ((uint32_t)(get_time_us_32() - started) >=
+        PIO_USB_HOST_RESUME_EOP_TIMEOUT_US) {
+      goto failed;
+    }
+    tight_loop_contents();
+  }
+  pio->irq = IRQ_TX_ALL_MASK;
+  /* PC returns to 1 after EOP; released output enables remain observable. */
+  while (pio->dbg_padoe & pin_mask) {
+    if ((uint32_t)(get_time_us_32() - started) >=
+        PIO_USB_HOST_RESUME_EOP_TIMEOUT_US) {
+      goto failed;
+    }
+    tight_loop_contents();
+  }
+
+  configure_root_port(pp, root);
+  return true;
+
+failed:
+  pio_sm_set_enabled(pio, sm, false);
+  pio_sm_exec(pio, sm, pio_encode_set(pio_pindirs, 0) | sideset_k);
+  /* RP2350-E5 requires EN clear before abort. Retire it in later frames,
+   * not in another IRQ-side busy wait; the EOP source buffer stays alive. */
+  hw_clear_bits(&dma_hw->ch[pp->tx_ch].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+  dma_hw->abort = 1u << pp->tx_ch;
+  return false;
+}
+
 static void __no_inline_not_in_flash_func(restore_fs_bus)(pio_port_t *pp) {
   // change bus speed to full-speed
   pp->low_speed = false;
@@ -228,10 +356,20 @@ static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
       // device disconnect
       port->connected = false;
       port->suspended = true;
+      uint8_t root_idx = port - PIO_USB_ROOT_PORT(0);
+      bool const was_suspended =
+          port_pm_state[root_idx] != PIO_USB_HOST_PORT_ACTIVE;
+      gpio_set_irq_enabled(port->pin_dp, GPIO_IRQ_EDGE_RISE, false);
+      gpio_set_irq_enabled(port->pin_dm, GPIO_IRQ_EDGE_RISE, false);
+      port_pm_remote_enabled[root_idx] = false;
+      port_pm_state[root_idx] = PIO_USB_HOST_PORT_ACTIVE;
+      port_pm_started_us[root_idx] = 0;
       port->ints |= PIO_USB_INTS_DISCONNECT_BITS;
+      if (was_suspended) {
+        pio_usb_host_port_pm_changed_cb(root_idx, false);
+      }
 
       // failed/retired all queuing transfer in this root
-      uint8_t root_idx = port - PIO_USB_ROOT_PORT(0);
       for (int ep_idx = 0; ep_idx < PIO_USB_EP_POOL_CNT; ep_idx++) {
         endpoint_t *ep = PIO_USB_ENDPOINT(ep_idx);
         if ((ep->root_idx == root_idx) && ep->size && ep->has_transfer) {
@@ -244,6 +382,145 @@ static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
   }
 
   return true;
+}
+
+static void __no_inline_not_in_flash_func(pio_usb_host_resume_begin)(
+    uint8_t root_idx, bool remote_wakeup) {
+  root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+  pio_port_t *pp = PIO_USB_PIO_PORT(0);
+
+  gpio_set_irq_enabled(root->pin_dp, GPIO_IRQ_EDGE_RISE, false);
+  gpio_set_irq_enabled(root->pin_dm, GPIO_IRQ_EDGE_RISE, false);
+  port_pm_remote_enabled[root_idx] = false;
+  pio_usb_host_resume_signal_start(pp, root);
+  port_pm_started_us[root_idx] = get_time_us_32();
+  port_pm_state[root_idx] = PIO_USB_HOST_PORT_RESUME_SIGNAL;
+  if (remote_wakeup) {
+    pio_usb_host_port_pm_changed_cb(root_idx, true);
+  }
+}
+
+static void __no_inline_not_in_flash_func(pio_usb_host_wakeup_irq)(void) {
+  for (uint8_t root_idx = 0; root_idx < PIO_USB_ROOT_PORT_CNT; root_idx++) {
+    root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+    if (!root->initialized) {
+      continue;
+    }
+    uint const pin = root->is_fullspeed ? root->pin_dm : root->pin_dp;
+    if (!(gpio_get_irq_event_mask(pin) & GPIO_IRQ_EDGE_RISE)) {
+      continue;
+    }
+    gpio_acknowledge_irq(pin, GPIO_IRQ_EDGE_RISE);
+    /* GPIO IRQ sees the physical rising edge; INOVER only inverts gpio_get().
+     * Take over K here, within USB's 1 ms response window, without a task wait. */
+    port_pin_status_t const k =
+        root->is_fullspeed ? PORT_PIN_LS_IDLE : PORT_PIN_FS_IDLE;
+    if (port_pm_state[root_idx] == PIO_USB_HOST_PORT_SUSPENDED &&
+        port_pm_remote_enabled[root_idx] &&
+        pio_usb_bus_get_line_state(root) == k) {
+      pio_usb_host_resume_begin(root_idx, true);
+    }
+  }
+}
+
+bool pio_usb_host_port_suspend(uint8_t root_idx, bool remote_wakeup) {
+  root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool idle = root->initialized && root->connected && !root->suspended &&
+              port_pm_state[root_idx] == PIO_USB_HOST_PORT_ACTIVE;
+
+  if (idle && !connection_check(root)) {
+    idle = false;
+  }
+  for (int ep_idx = 0; idle && ep_idx < PIO_USB_EP_POOL_CNT; ep_idx++) {
+    endpoint_t *ep = PIO_USB_ENDPOINT(ep_idx);
+    if (ep->root_idx == root_idx && ep->size &&
+        (ep->has_transfer || ep->transfer_started)) {
+      idle = false;
+    }
+  }
+  if (idle) {
+    /* The caller observes USB's 3 ms suspend interval before completing. */
+    port_pm_state[root_idx] = PIO_USB_HOST_PORT_SUSPENDED;
+    port_pm_remote_enabled[root_idx] = remote_wakeup;
+    if (remote_wakeup) {
+      uint const pin = root->is_fullspeed ? root->pin_dm : root->pin_dp;
+      gpio_set_irq_enabled(pin, GPIO_IRQ_EDGE_RISE, true);
+    }
+  }
+  restore_interrupts(irq_state);
+  return idle;
+}
+
+bool pio_usb_host_port_resume(uint8_t root_idx) {
+  root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool connected = root->initialized && root->connected && !root->suspended;
+
+  if (!connected) {
+    port_pm_state[root_idx] = PIO_USB_HOST_PORT_ACTIVE;
+    port_pm_started_us[root_idx] = 0;
+    restore_interrupts(irq_state);
+    return false;
+  }
+  if (!connection_check(root) ||
+      port_pm_state[root_idx] == PIO_USB_HOST_PORT_RESUME_FAILED) {
+    restore_interrupts(irq_state);
+    return false;
+  }
+
+  if (port_pm_state[root_idx] == PIO_USB_HOST_PORT_SUSPENDED) {
+    pio_usb_host_resume_begin(root_idx, false);
+  }
+  restore_interrupts(irq_state);
+  return true;
+}
+
+bool pio_usb_host_port_is_suspended(uint8_t root_idx) {
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool suspended = port_pm_state[root_idx] != PIO_USB_HOST_PORT_ACTIVE;
+  restore_interrupts(irq_state);
+  return suspended;
+}
+
+bool pio_usb_host_port_resume_failed(uint8_t root_idx) {
+  uint32_t irq_state = save_and_disable_interrupts();
+  bool failed = port_pm_state[root_idx] == PIO_USB_HOST_PORT_RESUME_FAILED;
+  restore_interrupts(irq_state);
+  return failed;
+}
+
+static uint8_t __no_inline_not_in_flash_func(pio_usb_host_port_pm_step)(
+    pio_port_t *pp, root_port_t *root, uint8_t root_idx) {
+  uint8_t state = port_pm_state[root_idx];
+
+  if (state != PIO_USB_HOST_PORT_RESUME_SIGNAL &&
+      state != PIO_USB_HOST_PORT_RESUME_RECOVERY) {
+    return state;
+  }
+  uint32_t now = get_time_us_32();
+  uint32_t elapsed = now - port_pm_started_us[root_idx];
+
+  if (state == PIO_USB_HOST_PORT_RESUME_SIGNAL &&
+      elapsed >= PIO_USB_HOST_RESUME_SIGNAL_US) {
+    if (!pio_usb_host_resume_signal_end(pp, root)) {
+      port_pm_started_us[root_idx] = 0;
+      port_pm_state[root_idx] = PIO_USB_HOST_PORT_RESUME_FAILED;
+      pio_usb_host_port_pm_changed_cb(root_idx, false);
+      return PIO_USB_HOST_PORT_RESUME_FAILED;
+    }
+    port_pm_started_us[root_idx] = get_time_us_32();
+    port_pm_state[root_idx] = PIO_USB_HOST_PORT_RESUME_RECOVERY;
+    state = PIO_USB_HOST_PORT_RESUME_RECOVERY;
+  } else if (state == PIO_USB_HOST_PORT_RESUME_RECOVERY &&
+             elapsed >= PIO_USB_HOST_RESUME_RECOVERY_US) {
+    port_pm_started_us[root_idx] = 0;
+    port_pm_state[root_idx] = PIO_USB_HOST_PORT_ACTIVE;
+    state = PIO_USB_HOST_PORT_ACTIVE;
+    pio_usb_host_port_pm_changed_cb(root_idx, false);
+  }
+
+  return state;
 }
 
 //--------------------------------------------------------------------+
@@ -263,6 +540,28 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
   // Send SOF
   for (int root_idx = 0; root_idx < PIO_USB_ROOT_PORT_CNT; root_idx++) {
     root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+    uint8_t const pm_state =
+        pio_usb_host_port_pm_step(pp, root, root_idx);
+    if (pm_state == PIO_USB_HOST_PORT_RESUME_FAILED) {
+      /* RP2040-E13 can clear ABORT early: BUSY must also retire before reuse. */
+      if (!dma_channel_is_busy(pp->tx_ch) &&
+          !(dma_hw->abort & (1u << pp->tx_ch)) &&
+          root->initialized && root->connected && !connection_check(root)) {
+        configure_root_port(pp, root);
+        hw_set_bits(&dma_hw->ch[pp->tx_ch].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+        pio_sm_set_enabled(pp->pio_usb_tx, pp->sm_tx, true);
+      }
+      continue;
+    }
+    if (pm_state == PIO_USB_HOST_PORT_SUSPENDED ||
+        pm_state == PIO_USB_HOST_PORT_RESUME_SIGNAL) {
+      if (pm_state == PIO_USB_HOST_PORT_SUSPENDED && root->initialized &&
+          root->connected) {
+        connection_check(root);
+      }
+      continue;
+    }
+    /* Recovery carries SOF/keep-alive, while the endpoint loop stays gated. */
     if (!(root->initialized && root->connected && !root->suspended &&
           connection_check(root))) {
       continue;
@@ -280,7 +579,8 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
   // Carry out all queued endpoint transaction
   for (int root_idx = 0; root_idx < PIO_USB_ROOT_PORT_CNT; root_idx++) {
     root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
-    if (!(root->initialized && root->connected && !root->suspended)) {
+    if (port_pm_state[root_idx] != PIO_USB_HOST_PORT_ACTIVE ||
+        !(root->initialized && root->connected && !root->suspended)) {
       continue;
     }
 

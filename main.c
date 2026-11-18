@@ -67,6 +67,9 @@ int hid_workqueue_init(void); // usb_host/hid_workqueue.c
 void hid_workqueue_task(void *pvParameters); // usb_host/hid_workqueue.c
 int hid_timer_init(void); // usb_host/hid_timer.c
 void hid_timer_task(void *pvParameters); // usb_host/hid_timer.c
+#ifdef USBHID_PM_FIXTURE
+void usbhid_pm_fixture_task(void *pvParameters);
+#endif
 void keyscan_task(void* pvParameters); // keyscan.c
 void keyd_task(void *pvParameters); // keyd/port/task.c:
 uint8_t count_pressed_keys(config_t *config, uint8_t *single_code); // keyscan.c
@@ -323,6 +326,13 @@ static void app_task(void *pvParameters)
                                                               NULL, TUSB_PRIORITY, CORE1, NULL);
             if (host_task_ret != pdPASS)
                 err("tusb host task create failed ret=%ld", (long)host_task_ret);
+#ifdef USBHID_PM_FIXTURE
+            else if (xTaskCreateAffinitySet(usbhid_pm_fixture_task, "hid-pm-test",
+                                             MIN_STACK_SIZE, NULL,
+                                             IDLE_PRIORITY + 5, CORE1,
+                                             NULL) != pdPASS)
+                async_msg("ERR: HID_PM_TEST_TASK");
+#endif
         } else {
             async_msg("ERR: TUH_RUNTIME_OWNER_MISSING");
         }

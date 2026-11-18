@@ -831,9 +831,13 @@ contains a hypothetical NULL check that no current caller can exercise.
   a future backend cancel/quiesce-completion contract; the active TinyUSB/Linux
   glue must not compensate with polling.
 - Linux runtime PM, autosuspend, remote-wakeup policy, and in-place usbcore
-  reset are not present. The lifecycle coordinator deliberately performs a
-  stronger teardown/re-enumeration because pinned TinyUSB cannot restore class
-  state in place; this costs continuity but leaves no half-restored HID graph.
+  reset are not present. A first-stage firmware-boundary API now quiesces and
+  resumes a direct root-port `hid-generic` generation, including real PIO USB
+  suspend/resume signalling. The ordinary cycle passed the two-board test; it does not
+  dispatch vendor PM callbacks. The lifecycle coordinator still uses stronger
+  teardown/re-enumeration for terminal recovery because pinned TinyUSB cannot
+  restore class state in place; this costs continuity but leaves no
+  half-restored HID graph.
   This boundary does not remove HID SET_IDLE: probe-time SET_IDLE and the
   ll-driver `.idle` EP0 implementation are present. The only imported
   driver-level `hid_hw_idle()` caller is `hid-multitouch::mt_resume()`, which is
@@ -846,9 +850,23 @@ contains a hypothetical NULL check that no current caller can exercise.
   input resolution, ALPS U1/T4 modes, ASUS multitouch/backlight state, Lenovo
   Compact/TPII TrackPoint settings, Logitech receiver DJ mode, UC-Logic tablet
   parameters, and Wacom mode/LED state.
-  Any future sleep/resume stage must add host-backend quiesce, wake policy,
-  report-producer fencing, and ordered driver callback dispatch together rather
-  than defining `CONFIG_PM` in isolation.
+  The generic stage adds backend quiesce and report-producer fencing.
+  PIO resume EOP waits share a 100 us bound and use persistent pin release,
+  not a transient PC value. Timeout leaves admission closed and completes the
+  PM request with `-ETIMEDOUT`; the failed backend is not published as ACTIVE.
+  DMA abort retirement and physical removal precede reuse of the TX channel.
+  `usbhid_pm_set_target()` provides a last-wins desired-state mailbox without
+  allocating a queue or task, including updates before host initialization.
+  Upstream USB suspend/resume drives that mailbox. An armed direct keyboard's
+  remote-wakeup K is detected by GPIO IRQ, which starts downstream resume;
+  lifecycle delivers `usbhid_pm_wakeup_cb()` independently of interface resume
+  results. Production firmware forwards that request to the upstream TinyUSB
+  device task; `usbhid_pm_state_changed_cb()` reports only transition results.
+  The direct full-speed host-only wake-on-key test passed with a real generic
+  keyboard and restored same-generation input. The complete keyboard →
+  remapper → Android wakeup chain also passed. Reset-resume, hub ports,
+  and ordered driver callback dispatch remain deferred rather than being
+  enabled piecemeal through `CONFIG_PM`.
 - Compatibility `atomic_t`, device refcounts, semaphore-owner metadata, and
   atomic bitops use GCC `__atomic` operations rather than FreeRTOS task critical
   regions. The `__*` bitops are again deliberately non-atomic like upstream.

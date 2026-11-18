@@ -57,13 +57,23 @@ input devices and releasing the HID graph. A fast reconnect receives a new
 device generation, so a late completion from the old attachment cannot be
 delivered to the new one.
 
-The current host does not suspend and resume a live USB device generation.
-Linux PM callbacks for generic HID, multitouch, ALPS, ASUS, Lenovo, Logitech
-DJ, UC-Logic, and Wacom are retained in source but are not dispatched. Normal
-operation, hotplug, and error recovery are supported; recovery tears the old
-generation down and enumerates a fresh one. The support symbols in the device
-tables therefore do not claim sleep or remote-wakeup continuity. The remaining
-host PM work is tracked in
+Directly connected devices whose interfaces use `hid-generic` can be suspended
+and resumed without reconnecting. The host-initiated cycle has passed the
+two-board test. The firmware now forwards its upstream USB suspend/resume to
+this host path. If the computer permits remote wakeup, the host also enables
+it on a capable keyboard; a key can then request resume of both USB links.
+The wake request is delivered separately from the resume result, so a failure
+restoring one HID interface cannot suppress the request. The
+[host-only test](../../tests/pio-usb-pm/README.md#real-keyboard-host-only-remote-wakeup-test)
+passed with a real ErgoType NKRO keyboard: key-triggered resume restored input
+without reconnecting. The complete keyboard → remapper → Android wakeup chain
+also passed: a key woke Android and both devices left their suspend indication.
+See the [Android test](../../tests/pio-usb-pm/README.md#android-complete-wakeup-chain-without-cdc).
+
+Linux PM callbacks for multitouch, ALPS, ASUS, Lenovo, Logitech DJ, UC-Logic,
+and Wacom remain retained in source but are not dispatched. Hubs and
+reset-resume are not implemented. The support tables do not yet claim general
+sleep or remote-wakeup continuity. The remaining host PM work is tracked in
 [`linux-hid-remaining-work.md`](../../usb_host/linux-hid-remaining-work.md#stage-3-usb-suspend-and-resume).
 
 OUTPUT reports use interrupt OUT when the interface provides it and otherwise
