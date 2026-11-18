@@ -27,8 +27,7 @@ void tud_umount_cb(void)
 // Invoked when USB bus is suspended
 void tud_suspend_cb(bool remote_wakeup_en)
 {
-    (void) remote_wakeup_en;
-    ui_led_set_pattern(0, 0x00000001u, true);
+    ui_led_set_pattern(0, remote_wakeup_en ? 0x00000001u : 0x00000005u, true);
     usb_device_on_suspend();
 }
 
